@@ -10,8 +10,23 @@ export enum NodeType {
   CAMERA_ANGLE = 'Camera Angle',
   // Local open-source model nodes
   LOCAL_IMAGE_MODEL = 'Local Image Model',
-  LOCAL_VIDEO_MODEL = 'Local Video Model'
+  LOCAL_VIDEO_MODEL = 'Local Video Model',
+  // AI 漫剧 0-1 生产节点（取值需与 shared/manifest.js 的 MANGA_NODE_TYPES 一致）
+  SFX = 'SFX',            // 音效
+  BGM = 'BGM',            // 背景音乐
+  SUBTITLE = 'Subtitle',  // 字幕
+  RENDER = 'Render'       // Remotion 成片
 }
+
+/** 判断是否为漫剧生产节点（AUDIO 复用为配音节点） */
+export const MANGA_NODE_TYPES_SET = new Set<NodeType>([
+  NodeType.AUDIO,
+  NodeType.SFX,
+  NodeType.BGM,
+  NodeType.SUBTITLE,
+  NodeType.RENDER,
+]);
+export const isMangaNode = (t: NodeType) => MANGA_NODE_TYPES_SET.has(t);
 
 export enum NodeStatus {
   IDLE = 'idle',
@@ -105,6 +120,48 @@ export interface NodeData {
 
   // Storyboard Generator specific
   characterReferenceUrls?: string[]; // URLs of character images for reference in generation
+
+  // ==========================================================================
+  // AI 漫剧生产节点字段（配音/音效/BGM/字幕/成片）
+  // ==========================================================================
+  mediaUrl?: string;        // 音频/视频素材地址（音频类节点用）
+  durationSec?: number;     // 素材真实时长（秒），由音频探测或 TTS 返回
+
+  // 镜头(Video)在成片中的参数
+  order?: number;           // 镜头顺序（成片节点排序用）
+  shotVolume?: number;      // 镜头原声音量（默认 0 静音）
+
+  // 音轨(Audio/SFX/BGM)时间轴与混音参数（时间轴绝对秒）
+  timelineStart?: number;
+  timelineEnd?: number;
+  audioVolume?: number;
+  fadeIn?: number;
+  fadeOut?: number;
+  loop?: boolean;
+  ducking?: boolean;        // 仅 BGM：对白期间自动压低
+  speaker?: string;         // 角色名（配音/字幕）
+
+  // 配音(TTS)参数
+  ttsText?: string;
+  voiceId?: string;
+  voiceSpeed?: number;
+  voiceEmotion?: string;
+
+  // 字幕
+  subtitleText?: string;
+
+  // 成片(Render)节点状态
+  compWidth?: number;
+  compHeight?: number;
+  compFps?: number;
+  endFadeToBlack?: number;
+  renderJobId?: string;
+  renderStatus?: string;      // queued|rendering|success|failed|cancelled
+  renderStage?: string;
+  renderProgress?: number;
+  renderOutputUrl?: string;
+  renderError?: string;
+  renderMissing?: { kind: string; raw: string; reason: string }[];
 }
 
 export interface ContextMenuState {
@@ -112,6 +169,9 @@ export interface ContextMenuState {
   x: number;
   y: number;
   type: 'global' | 'node-connector' | 'node-options' | 'add-nodes'; // 'global' = right click on canvas, 'add-nodes' = double click
+  /** 节点实际生成位置。工具栏菜单可固定在左上方，但节点仍生成在画布中央。 */
+  canvasX?: number;
+  canvasY?: number;
   sourceNodeId?: string; // If 'node-connector' or 'node-options', which node originated the click
   connectorSide?: 'left' | 'right';
 }

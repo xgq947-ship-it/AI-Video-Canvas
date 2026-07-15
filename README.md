@@ -5,6 +5,96 @@
 
 A modern, AI-powered canvas application for generating and manipulating images and videos using OpenAI GPT Image, Google Gemini, Kling AI, Hailuo AI (MiniMax), and Fal.ai. Built with React, TypeScript, and Vite.
 
+---
+
+## 🎬 AI 漫剧 0—1 生产工作台（中文）
+
+在 TwitCanva 无限画布的基础上，本项目增量扩展为**「AI 漫剧 0—1 生产工作台」**：
+在同一个本地画布里，从一句故事一路做到一条可播放的 MP4 成片。
+
+### 这是什么
+
+```
+输入故事 → AI 生成剧本 → AI 拆解分镜 → 生成角色与场景图 → 生成镜头关键帧
+→ 图片生成视频 → 生成角色配音 → 添加字幕 → 添加音乐/环境音/音效
+→ 配置镜头顺序和时长 → Remotion 自动渲染 → 输出最终 MP4 成片
+```
+
+- 生图 / 生视频 / 配音调用线上官方 API；本地只运行画布、素材库、项目管理与 **Remotion 渲染**。
+- 保留 TwitCanva 原有画布、故事板、素材库和图片/视频生成功能。
+- 最终渲染引擎为 [Remotion](https://www.remotion.dev/) 4.0.489，**完全由 project-manifest 驱动**，无单片硬编码。
+
+### 安装
+
+```bash
+npm install           # 安装依赖（含 Remotion 渲染引擎）
+cp .env.example .env  # 配置密钥（可留空，见下）
+```
+
+需系统已安装 `ffmpeg` 与 `ffprobe`（响度母带与成片验收用）。
+
+### 配置 .env
+
+见 [`.env.example`](.env.example)。所有密钥**只在服务端读取**，不进入前端/工作流 JSON/Git。
+**没有任何密钥时，应用仍可启动、编辑画布、导入本地素材、并用本地素材完成 Remotion 渲染。**
+
+| 功能 | 需要的密钥 |
+|---|---|
+| 图片生成 | `GEMINI_API_KEY` / `OPENAI_API_KEY` |
+| 视频生成 | `HAILUO_API_KEY` / `KLING_ACCESS_KEY`+`KLING_SECRET_KEY` / `FAL_API_KEY` |
+| 剧本 / 分镜 | `GEMINI_API_KEY` |
+| 配音 (TTS) | `MINIMAX_API_KEY` + `MINIMAX_GROUP_ID`（可回退 `HAILUO_API_KEY`）|
+| 画布 / 导入本地素材 / Remotion 渲染 / ffmpeg 母带 | **完全本地，无需密钥** |
+
+> **API 费用由谁产生**：生图/生视频/配音调用线上 API，费用由对应密钥所属账号承担。
+> 画布编辑、导入本地素材、Remotion 渲染与 ffmpeg 母带完全本地、不产生费用。
+> 测试与本地验收（`npm run render:e2e-test`）只用 ffmpeg 生成的素材，**不调用任何付费 API**。
+
+### 启动
+
+```bash
+npm run dev     # 同时启动后端(:3001) 与前端(:5173)
+```
+
+浏览器打开 http://localhost:5173 。
+
+### 如何创建完整视频工作流
+
+双击画布空白处（或点左侧 `+`）添加节点。「AI 漫剧 · 声音与成片」组新增：
+**配音(TTS) / 音效 / 背景音乐 / 字幕 / Remotion 成片** 五个节点。
+
+把 视频镜头 / 配音 / 音效 / 背景音乐 / 字幕 节点都连接到「Remotion 成片」节点，
+在成片节点上点「开始渲染成片」即可。完整分步教程见
+[docs/AI漫剧0-1工作流.md](docs/AI漫剧0-1工作流.md)。
+
+- 每个节点的用途、连接规则、生成配音、配置字幕与声音：[docs/AI漫剧0-1工作流.md](docs/AI漫剧0-1工作流.md)
+- 渲染管线、渲染任务 API、本地验收：[docs/Remotion渲染说明.md](docs/Remotion渲染说明.md)
+- 统一 manifest 数据格式与路径安全：[docs/项目数据格式.md](docs/项目数据格式.md)
+
+### 成片保存位置
+
+成功渲染的 MP4 保存在 **`library/renders/`**（已被 `.gitignore` 忽略）。成片节点可内嵌预览、
+下载、在 Finder 中显示、重新渲染。
+
+### 本地验收 / 测试（不产生 API 费用）
+
+```bash
+npm run build            # 生产构建必须通过
+npm test                 # 单元测试：manifest 转换 / 路径校验 / 渲染任务逻辑
+npm run render:e2e-test  # 用 ffmpeg 生成测试素材并端到端渲染出 MP4
+```
+
+### 常见错误
+
+见 [docs/AI漫剧0-1工作流.md](docs/AI漫剧0-1工作流.md#八常见错误)。首次渲染会自动下载一次
+Chrome Headless Shell（约 90MB）。
+
+> **Seedance**：仅当存在正式官方 API 与用户凭证时才接入；当前仅保留标准 Provider 适配接口
+> 与 UI 占位，不伪造可用状态，也不使用任何逆向破解的即梦接口。
+
+---
+
+
 ![TwitCanva](https://img.shields.io/badge/React-18.3.1-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.6.2-blue)
 ![Vite](https://img.shields.io/badge/Vite-6.4.1-purple)

@@ -9,11 +9,14 @@ import React from 'react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { NodeConnectors } from './NodeConnectors';
 import { NodeContent } from './NodeContent';
+import { MangaNode } from './MangaNode';
+import { isMangaNode } from '../../types';
 import { NodeControls } from './NodeControls';
 import { ChangeAnglePanel } from './ChangeAnglePanel';
 
 interface CanvasNodeProps {
   data: NodeData;
+  allNodes?: NodeData[]; // 全部节点（漫剧成片节点用于组装 manifest）
   inputUrl?: string;
   connectedImageNodes?: { id: string; url: string; type?: NodeType }[]; // For frame-to-frame video mode and motion control
   onUpdate: (id: string, updates: Partial<NodeData>) => void;
@@ -52,6 +55,7 @@ interface CanvasNodeProps {
 
 export const CanvasNode: React.FC<CanvasNodeProps> = ({
   data,
+  allNodes,
   inputUrl,
   connectedImageNodes,
   onUpdate,
@@ -470,6 +474,23 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   }
 
   // Special rendering for Video Editor node
+  // AI 漫剧生产节点（配音/音效/BGM/字幕/成片）—— 自包含渲染
+  if (isMangaNode(data.type)) {
+    return (
+      <MangaNode
+        data={data}
+        allNodes={allNodes || []}
+        selected={selected}
+        canvasTheme={canvasTheme}
+        onUpdate={onUpdate}
+        onNodePointerDown={onNodePointerDown}
+        onContextMenu={onContextMenu}
+        onConnectorDown={onConnectorDown}
+        onExpand={onExpand}
+      />
+    );
+  }
+
   if (data.type === NodeType.VIDEO_EDITOR) {
     // Get video URL from parent node or own resultUrl
     const videoUrl = inputUrl || data.resultUrl;

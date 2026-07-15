@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.dasheng.twitcanva</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/npm</string>
+        <string>run</string>
+        <string>dev</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/dasheng/Desktop/AI漫剧电影/05_TwitCanva视频工作流</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>NODE_ENV</key>
+        <string>development</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/dasheng/Library/Logs/TwitCanva/service.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/dasheng/Library/Logs/TwitCanva/service-error.log</string>
+</dict>
+</plist>

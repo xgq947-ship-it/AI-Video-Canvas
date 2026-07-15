@@ -114,9 +114,11 @@ export const useContextMenuHandlers = ({
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
         setContextMenu({
             isOpen: true,
-            x: rect.right + 10,
-            y: rect.top,
-            type: 'global'
+            x: rect.right + 12,
+            y: 76,
+            type: 'global',
+            canvasX: window.innerWidth / 2,
+            canvasY: window.innerHeight / 2
         });
     }, [setContextMenu]);
 

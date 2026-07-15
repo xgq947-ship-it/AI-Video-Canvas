@@ -17,7 +17,14 @@ import {
   Files,
   Layers,
   ChevronRight,
-  HardDrive
+  HardDrive,
+  Mic,
+  Volume2,
+  Captions,
+  Clapperboard,
+  Sparkles,
+  ArrowLeft,
+  SlidersHorizontal
 } from 'lucide-react';
 import { ContextMenuState, NodeType } from '../types';
 
@@ -33,6 +40,9 @@ interface ContextMenuProps {
   onDuplicate?: () => void;
   onCreateAsset?: () => void;
   onAddAssets?: () => void;
+  onCreateMangaWorkflow?: () => void;
+  onOpenStoryboard?: () => void;
+  canCreateMangaWorkflow?: boolean;
   canUndo?: boolean;
   canRedo?: boolean;
   canvasTheme?: 'dark' | 'light';
@@ -50,6 +60,9 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onDuplicate,
   onCreateAsset,
   onAddAssets,
+  onCreateMangaWorkflow,
+  onOpenStoryboard,
+  canCreateMangaWorkflow = true,
   canUndo = false,
   canRedo = false,
   canvasTheme = 'dark'
@@ -119,19 +132,23 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
   if (!state.isOpen) return null;
 
+  const menuLeft = Math.max(12, Math.min(state.x, window.innerWidth - 312));
+  const menuHeight = state.type === 'global' && view === 'main' ? 470 : 620;
+  const menuTop = Math.max(68, Math.min(state.y, window.innerHeight - menuHeight));
+
   // 1. Right Click on Node
   if (state.type === 'node-options') {
     return (
       <div
         ref={menuRef}
-        style={{ position: 'absolute', left: state.x, top: state.y, zIndex: 1000 }}
+        style={{ position: 'fixed', left: menuLeft, top: Math.max(68, Math.min(state.y, window.innerHeight - 320)), zIndex: 1000 }}
         className={`w-48 border rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-100 ${canvasTheme === 'dark' ? 'bg-[#1e1e1e] border-neutral-800' : 'bg-white border-neutral-200'
           }`}
       >
         <div className="p-1.5 flex flex-col gap-0.5">
           <MenuItem
             icon={<ImageIcon size={16} />}
-            label="Create Asset"
+            label="保存到素材库"
             onClick={() => {
               if (onCreateAsset) {
                 onCreateAsset();
@@ -145,8 +162,8 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
           <MenuItem
             icon={<Copy size={16} />}
-            label="Copy"
-            shortcut="CtrlC"
+            label="复制"
+            shortcut="⌘C"
             onClick={() => {
               if (onCopy) {
                 onCopy();
@@ -157,15 +174,15 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           />
           <MenuItem
             icon={<Clipboard size={16} />}
-            label="Paste"
-            shortcut="CtrlV"
+            label="粘贴"
+            shortcut="⌘V"
             onClick={handlePaste}
             disabled={true} // Disabled in screenshot
             canvasTheme={canvasTheme}
           />
           <MenuItem
             icon={<Files size={16} />}
-            label="Duplicate"
+            label="创建副本"
             onClick={() => {
               if (onDuplicate) {
                 onDuplicate();
@@ -178,8 +195,8 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
           <MenuItem
             icon={<Trash2 size={16} />} // Screenshot has text "Delete", icon might be different
-            label="Delete"
-            shortcut="⌫,del"
+            label="删除"
+            shortcut="⌫"
             onClick={() => onSelectType('DELETE')}
             canvasTheme={canvasTheme}
           />
@@ -196,8 +213,8 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     return (
       <div
         ref={menuRef}
-        style={{ position: 'absolute', left: state.x, top: state.y, zIndex: 1000 }}
-        className={`w-64 border rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-100 ${canvasTheme === 'dark' ? 'bg-[#1e1e1e] border-neutral-800' : 'bg-white border-neutral-200'
+        style={{ position: 'fixed', left: menuLeft, top: menuTop, zIndex: 1000 }}
+        className={`w-[292px] border rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-100 ${canvasTheme === 'dark' ? 'bg-[#171717] border-neutral-800' : 'bg-white border-neutral-200'
           }`}
       >
         <input
@@ -207,16 +224,47 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           accept="image/*,video/*"
           onChange={handleFileChange}
         />
-        <div className="p-1.5 flex flex-col gap-0.5">
+        <div className="p-2 flex flex-col gap-1">
+          {canCreateMangaWorkflow && (
+            <button
+              type="button"
+              onClick={() => {
+                onCreateMangaWorkflow?.();
+                onClose();
+              }}
+              className="mb-1 flex w-full items-center gap-3 rounded-xl bg-blue-600 px-3 py-3 text-left text-white transition-colors hover:bg-blue-500"
+            >
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/15">
+                <Sparkles size={18} />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold">创建完整漫剧工作流</span>
+                <span className="mt-0.5 block text-xs text-blue-100">故事到成片，一次搭好</span>
+              </span>
+            </button>
+          )}
+
+          <MenuItem
+            icon={<Film size={16} />}
+            label="AI 生成分镜"
+            onClick={() => {
+              onOpenStoryboard?.();
+              onClose();
+            }}
+            canvasTheme={canvasTheme}
+          />
+
+          <div className={`my-1 border-t mx-1 ${canvasTheme === 'dark' ? 'border-neutral-800' : 'border-neutral-100'}`} />
+
           <MenuItem
             icon={<Upload size={16} />}
-            label="Upload"
+            label="上传本地素材"
             onClick={handleUploadClick}
             canvasTheme={canvasTheme}
           />
           <MenuItem
             icon={<Layers size={16} />}
-            label="Add Assets"
+            label="从素材库选择"
             onClick={() => {
               if (onAddAssets) {
                 onAddAssets();
@@ -225,11 +273,9 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
             }}
             canvasTheme={canvasTheme}
           />
-          <div className={`my-1 border-t mx-1 ${canvasTheme === 'dark' ? 'border-neutral-800' : 'border-neutral-100'}`} />
-
           <MenuItem
             icon={<Plus size={16} />}
-            label="Add Nodes"
+            label="单独添加节点"
             rightSlot={<ChevronRight size={14} className={canvasTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-400'} />}
             onClick={() => setView('add-nodes')}
             active={false}
@@ -240,16 +286,16 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
           <MenuItem
             icon={<Undo2 size={16} />}
-            label="Undo"
-            shortcut="CtrlZ"
+            label="撤销"
+            shortcut="⌘Z"
             onClick={handleUndo}
             disabled={!canUndo}
             canvasTheme={canvasTheme}
           />
           <MenuItem
             icon={<Redo2 size={16} />}
-            label="Redo"
-            shortcut="ShiftCtrlZ"
+            label="重做"
+            shortcut="⇧⌘Z"
             onClick={handleRedo}
             disabled={!canRedo}
             canvasTheme={canvasTheme}
@@ -258,8 +304,8 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
           <MenuItem
             icon={<Clipboard size={16} />}
-            label="Paste"
-            shortcut="CtrlV"
+            label="粘贴"
+            shortcut="⌘V"
             onClick={handlePaste}
             canvasTheme={canvasTheme}
           />
@@ -269,88 +315,108 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   }
 
   // 3. Add Nodes Menu (Global Submenu OR Connector Default)
-  const title = isConnector ? "Generate from this node" : "Add Nodes";
+  const title = isConnector ? '从当前节点继续' : '添加节点';
 
   return (
     <div
       ref={menuRef}
       style={{
-        position: 'absolute',
-        left: state.x,
-        top: state.y,
+        position: 'fixed',
+        left: menuLeft,
+        top: menuTop,
         zIndex: 1000
       }}
-      className={`w-64 border rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-100 ${canvasTheme === 'dark' ? 'bg-[#1e1e1e] border-neutral-800' : 'bg-white border-neutral-200'
+      className={`w-[292px] max-h-[calc(100vh-92px)] border rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-100 ${canvasTheme === 'dark' ? 'bg-[#171717] border-neutral-800' : 'bg-white border-neutral-200'
         }`}
     >
-      <div className={`px-4 py-3 text-sm font-medium border-b ${canvasTheme === 'dark' ? 'text-neutral-400 border-neutral-800' : 'text-neutral-500 border-neutral-100'
+      <div className={`flex items-center gap-2 px-3 py-3 text-sm font-medium border-b ${canvasTheme === 'dark' ? 'text-neutral-300 border-neutral-800' : 'text-neutral-600 border-neutral-100'
         }`}>
+        {!isConnector && (
+          <button
+            type="button"
+            aria-label="返回"
+            onClick={() => setView('main')}
+            className={`flex h-7 w-7 items-center justify-center rounded-lg ${canvasTheme === 'dark' ? 'hover:bg-neutral-800' : 'hover:bg-neutral-100'}`}
+          >
+            <ArrowLeft size={15} />
+          </button>
+        )}
         {title}
       </div>
 
-      <div className="p-2 flex flex-col gap-1 max-h-[400px] overflow-y-auto">
+      <div className="p-2 flex flex-col gap-1 overflow-y-auto">
+        <div className={`px-2 pb-1 pt-0.5 text-[11px] font-medium ${canvasTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-400'}`}>
+          画面主流程
+        </div>
         <MenuItem
           icon={<Type size={18} />}
-          label={isConnector ? "Text Generation" : "Text"}
-          desc={isConnector ? "Script, Ad copy, Brand text" : undefined}
+          label="文字 / 剧本"
           onClick={() => onSelectType(NodeType.TEXT)}
           canvasTheme={canvasTheme}
         />
         <MenuItem
           icon={<ImageIcon size={18} />}
-          label={isConnector ? "Image Generation" : "Image"}
-          desc={isConnector ? undefined : "Promotional image, poster, cover"}
+          label="图片 / 关键帧"
           active={false}
           onClick={() => onSelectType(NodeType.IMAGE)}
           canvasTheme={canvasTheme}
         />
         <MenuItem
           icon={<Video size={18} />}
-          label={isConnector ? "Video Generation" : "Video"}
+          label="视频镜头"
           onClick={() => onSelectType(NodeType.VIDEO)}
           canvasTheme={canvasTheme}
         />
 
-        {!isConnector && (
-          <MenuItem
-            icon={<PenTool size={18} />}
-            label="Image Editor"
-            onClick={() => onSelectType(NodeType.IMAGE_EDITOR)}
-            canvasTheme={canvasTheme}
-          />
-        )}
-
-        {!isConnector && (
-          <MenuItem
-            icon={<Film size={18} />}
-            label="Video Editor"
-            onClick={() => onSelectType(NodeType.VIDEO_EDITOR)}
-            canvasTheme={canvasTheme}
-          />
-        )}
-
-        {/* --- Local Model Section --- */}
-        <div className={`my-2 border-t mx-2 ${canvasTheme === 'dark' ? 'border-neutral-800' : 'border-neutral-100'}`} />
-        <div className={`px-2 py-1 text-xs font-medium ${canvasTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-400'}`}>
-          Local Models (Open Source)
+        <div className={`mx-2 my-1 border-t ${canvasTheme === 'dark' ? 'border-neutral-800' : 'border-neutral-100'}`} />
+        <div className={`px-2 pb-1 pt-0.5 text-[11px] font-medium ${canvasTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-400'}`}>
+          声音与成片
         </div>
+        <MenuItem
+          icon={<Mic size={18} />}
+          label="角色配音"
+          onClick={() => onSelectType(NodeType.AUDIO)}
+          canvasTheme={canvasTheme}
+        />
+        <MenuItem
+          icon={<Volume2 size={18} />}
+          label="音效"
+          onClick={() => onSelectType(NodeType.SFX)}
+          canvasTheme={canvasTheme}
+        />
+        <MenuItem
+          icon={<Music size={18} />}
+          label="背景音乐"
+          onClick={() => onSelectType(NodeType.BGM)}
+          canvasTheme={canvasTheme}
+        />
+        <MenuItem
+          icon={<Captions size={18} />}
+          label="字幕"
+          onClick={() => onSelectType(NodeType.SUBTITLE)}
+          canvasTheme={canvasTheme}
+        />
+        <MenuItem
+          icon={<Clapperboard size={18} />}
+          label="输出成片"
+          onClick={() => onSelectType(NodeType.RENDER)}
+          canvasTheme={canvasTheme}
+        />
 
-        <MenuItem
-          icon={<HardDrive size={18} />}
-          label="Local Image Model"
-          desc="Use downloaded open-source models"
-          badge="NEW"
-          onClick={() => onSelectType(NodeType.LOCAL_IMAGE_MODEL)}
-          canvasTheme={canvasTheme}
-        />
-        <MenuItem
-          icon={<HardDrive size={18} />}
-          label="Local Video Model"
-          desc="AnimateDiff, SVD, and more"
-          badge="NEW"
-          onClick={() => onSelectType(NodeType.LOCAL_VIDEO_MODEL)}
-          canvasTheme={canvasTheme}
-        />
+        {!isConnector && (
+          <details className={`mt-1 rounded-xl border ${canvasTheme === 'dark' ? 'border-neutral-800' : 'border-neutral-200'}`}>
+            <summary className={`flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-xs font-medium ${canvasTheme === 'dark' ? 'text-neutral-400 hover:text-white' : 'text-neutral-500 hover:text-neutral-900'}`}>
+              <SlidersHorizontal size={14} />
+              更多编辑与本地工具
+            </summary>
+            <div className={`border-t p-1 ${canvasTheme === 'dark' ? 'border-neutral-800' : 'border-neutral-100'}`}>
+              <MenuItem icon={<PenTool size={16} />} label="图片编辑器" onClick={() => onSelectType(NodeType.IMAGE_EDITOR)} canvasTheme={canvasTheme} />
+              <MenuItem icon={<Film size={16} />} label="视频编辑器" onClick={() => onSelectType(NodeType.VIDEO_EDITOR)} canvasTheme={canvasTheme} />
+              <MenuItem icon={<HardDrive size={16} />} label="本地图片模型" onClick={() => onSelectType(NodeType.LOCAL_IMAGE_MODEL)} canvasTheme={canvasTheme} />
+              <MenuItem icon={<HardDrive size={16} />} label="本地视频模型" onClick={() => onSelectType(NodeType.LOCAL_VIDEO_MODEL)} canvasTheme={canvasTheme} />
+            </div>
+          </details>
+        )}
       </div>
     </div>
   );

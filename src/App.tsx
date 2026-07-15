@@ -52,6 +52,7 @@ import { useTikTokImport } from './hooks/useTikTokImport';
 import { useStoryboardGenerator } from './hooks/useStoryboardGenerator';
 import { StoryboardGeneratorModal } from './components/modals/StoryboardGeneratorModal';
 import { StoryboardVideoModal } from './components/modals/StoryboardVideoModal';
+import { MangaStartPanel } from './components/MangaStartPanel';
 
 // ============================================================================
 // MAIN COMPONENT
@@ -297,11 +298,79 @@ export default function App() {
     setNodes([]);
     setGroups([]); // Reset groups for new canvas
     setSelectedNodeIds([]);
-    setCanvasTitle('Untitled Canvas');
-    setEditingTitleValue('Untitled Canvas');
+    setCanvasTitle('未命名项目');
+    setEditingTitleValue('未命名项目');
     resetWorkflowId(); // Important: ensures new workflow gets a new ID
     setIsDirty(false);
   };
+
+  /**
+   * 给新手一次性搭好完整的 0-1 漫剧骨架。
+   * 所有原子节点仍可单独增删，模板只负责减少重复搭建。
+   */
+  const handleCreateMangaWorkflow = React.useCallback(() => {
+    const storyId = crypto.randomUUID();
+    const imageId = crypto.randomUUID();
+    const videoId = crypto.randomUUID();
+    const audioId = crypto.randomUUID();
+    const sfxId = crypto.randomUUID();
+    const bgmId = crypto.randomUUID();
+    const subtitleId = crypto.randomUUID();
+    const renderId = crypto.randomUUID();
+
+    const base = {
+      prompt: '',
+      status: NodeStatus.IDLE,
+      model: 'Banana Pro',
+      aspectRatio: '16:9',
+      resolution: 'Auto',
+    };
+
+    const workflowNodes: NodeData[] = [
+      { ...base, id: storyId, type: NodeType.TEXT, title: '1. 故事与剧本', x: 0, y: 0, parentIds: [] },
+      { ...base, id: imageId, type: NodeType.IMAGE, title: '2. 关键帧图片', x: 420, y: 0, parentIds: [storyId], resolution: '1K' },
+      { ...base, id: videoId, type: NodeType.VIDEO, title: '3. 镜头视频', x: 840, y: 0, parentIds: [imageId], videoDuration: 5 },
+      {
+        ...base,
+        id: renderId,
+        type: NodeType.RENDER,
+        title: '8. 输出成片',
+        x: 1260,
+        y: 0,
+        parentIds: [videoId, audioId, sfxId, bgmId, subtitleId],
+        compWidth: 1280,
+        compHeight: 720,
+        compFps: 24,
+      },
+      {
+        ...base,
+        id: audioId,
+        type: NodeType.AUDIO,
+        title: '4. 角色配音',
+        x: 0,
+        y: 440,
+        parentIds: [storyId],
+        speaker: '林默',
+        voiceId: 'yuanboxiaoshu',
+        voiceSpeed: 1,
+        audioVolume: 1,
+      },
+      { ...base, id: sfxId, type: NodeType.SFX, title: '5. 音效', x: 360, y: 440, parentIds: [], audioVolume: 0.9 },
+      { ...base, id: bgmId, type: NodeType.BGM, title: '6. 背景音乐', x: 720, y: 440, parentIds: [], audioVolume: 0.15, fadeIn: 1, fadeOut: 1, ducking: true },
+      { ...base, id: subtitleId, type: NodeType.SUBTITLE, title: '7. 字幕', x: 1080, y: 440, parentIds: [storyId], timelineStart: 0, timelineEnd: 3 },
+    ];
+
+    ignoreNextChange.current = true;
+    setNodes(workflowNodes);
+    setGroups([]);
+    setSelectedNodeIds([]);
+    setCanvasTitle('AI漫剧新项目');
+    setEditingTitleValue('AI漫剧新项目');
+    resetWorkflowId();
+    setViewport({ x: 90, y: 82, zoom: 0.62 });
+    setIsDirty(true);
+    setContextMenu(prev => ({ ...prev, isOpen: false }));
+  }, [resetWorkflowId, setEditingTitleValue, setGroups, setNodes, setSelectedNodeIds, setViewport]);
 
   // Image editor modal
   const {
@@ -939,6 +1008,15 @@ export default function App() {
         />
       )}
 
+      {nodes.length === 0 && !storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
+        <MangaStartPanel
+          canvasTheme={canvasTheme}
+          onCreateWorkflow={handleCreateMangaWorkflow}
+          onOpenStoryboard={storyboardGenerator.openModal}
+          onOpenAssets={handleAssetsClick}
+        />
+      )}
+
       {/* Workflow Panel */}
       <WorkflowPanel
         isOpen={isWorkflowPanelOpen}
@@ -1096,6 +1174,7 @@ export default function App() {
               <CanvasNode
                 key={node.id}
                 data={node}
+                allNodes={nodes}
                 inputUrl={(() => {
                   // Get first parent's result for display (multiple inputs handled in generation)
                   if (!node.parentIds || node.parentIds.length === 0) return undefined;
@@ -1271,6 +1350,9 @@ export default function App() {
         onDuplicate={handleDuplicate}
         onCreateAsset={handleContextMenuCreateAsset}
         onAddAssets={handleContextMenuAddAssets}
+        onCreateMangaWorkflow={handleCreateMangaWorkflow}
+        onOpenStoryboard={storyboardGenerator.openModal}
+        canCreateMangaWorkflow={nodes.length === 0}
         canUndo={canUndo}
         canRedo={canRedo}
         canvasTheme={canvasTheme}

@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "concurrently \"npm run server\" \"vite\"",
     "server": "node server/index.js",
+    "test": "node --test test/*.test.mjs",
+    "generate:test-assets": "node scripts/generate-test-assets.mjs",
+    "render:e2e-test": "node scripts/proof-manifest-render.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "setup:local-models": "node -e \"require('child_process').execSync(process.platform === 'win32' ? 'setup-local-models.bat' : 'bash setup-local-models.sh', {stdio: 'inherit'})\""
@@ -19,6 +22,8 @@
     "@lobehub/icons": "^3.0.2",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
+    "@remotion/bundler": "^4.0.489",
+    "@remotion/renderer": "^4.0.489",
     "@types/three": "^0.182.0",
     "face-api.js": "^0.22.2",
     "form-data": "^4.0.5",
@@ -26,6 +31,7 @@
     "openai": "^6.14.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
+    "remotion": "^4.0.489",
     "sharp": "^0.34.5",
     "three": "^0.182.0",
     "twitter-api-v2": "^1.28.0"

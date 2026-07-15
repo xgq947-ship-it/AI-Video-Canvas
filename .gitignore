@@ -26,6 +26,11 @@ dist-ssr
 #env
 .env
 
+# Local review and generated launcher artifacts
+.superpowers/
+launcher-native/.build/
+TwitCanva工作台.app/
+
 
 # data
 library/

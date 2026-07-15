@@ -17,6 +17,8 @@ import tiktokPostRoutes from './routes/tiktok-post.js';
 import { processTikTokVideo, isValidTikTokUrl } from './tools/tiktok.js';
 import localModelsRoutes from './routes/local-models.js';
 import storyboardRoutes from './routes/storyboard.js';
+import audioRoutes from './routes/audio.js';
+import renderRoutes from './routes/render.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -234,6 +236,12 @@ app.use('/api/local-models', localModelsRoutes);
 
 // Mount Storyboard routes (AI script generation)
 app.use('/api/storyboard', storyboardRoutes);
+
+// Mount Audio routes (MiniMax TTS 配音 / 本地音频导入)
+app.use('/api/audio', audioRoutes);
+
+// Mount Render routes (通用 Remotion 成片渲染任务)
+app.use('/api/render', renderRoutes);
 
 // NOTE: Old Kling helpers removed - now in server/services/kling.js
 

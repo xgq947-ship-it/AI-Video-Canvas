@@ -158,7 +158,13 @@ export const useNodeManagement = () => {
             }
         } else {
             // Global menu - add at click position
-            addNode(type, contextMenu.x, contextMenu.y, undefined, viewport);
+            addNode(
+                type,
+                contextMenu.canvasX ?? contextMenu.x,
+                contextMenu.canvasY ?? contextMenu.y,
+                undefined,
+                viewport
+            );
         }
 
         onCloseMenu();

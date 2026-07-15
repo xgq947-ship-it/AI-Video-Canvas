@@ -87,6 +87,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     <div className={`fixed left-4 top-1/2 -translate-y-1/2 flex flex-col items-center gap-2 p-1 rounded-full shadow-2xl z-50 transition-colors duration-300 ${isDark ? 'bg-[#1a1a1a] border border-neutral-800' : 'bg-white/90 backdrop-blur-sm border border-neutral-200'
       }`}>
       <button
+        aria-label="添加内容"
+        title="添加内容"
         className={`w-10 h-10 rounded-full flex items-center justify-center hover:scale-110 transition-all duration-200 mb-2 ${isDark ? 'bg-white text-black hover:bg-neutral-200' : 'bg-neutral-900 text-white hover:bg-neutral-700'
           }`}
         onClick={onAddClick}
@@ -99,14 +101,16 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           className={`hover:scale-125 transition-all duration-200 ${isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-500 hover:text-neutral-900'
             }`}
           onClick={onWorkflowsClick}
-          title="My Workflows"
+          title="我的工作流"
+          aria-label="我的工作流"
         >
           <LayoutGrid size={20} />
         </button>
         <button
           className={`hover:scale-125 transition-all duration-200 ${isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-500 hover:text-neutral-900'
             }`}
-          title="Assets"
+          title="素材库"
+          aria-label="素材库"
           onClick={onAssetsClick}
         >
           <ImageIcon size={20} />
@@ -115,7 +119,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           className={`hover:scale-125 transition-all duration-200 ${isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-500 hover:text-neutral-900'
             }`}
           onClick={onHistoryClick}
-          title="History"
+          title="生成记录"
+          aria-label="生成记录"
         >
           <History size={20} />
         </button>
@@ -133,7 +138,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               }
               setIsToolsOpen(!isToolsOpen);
             }}
-            title="Tools"
+            title="创作工具"
+            aria-label="创作工具"
           >
             <Wrench size={20} />
           </button>
@@ -151,8 +157,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                   <TikTokIcon size={16} className={isDark ? 'text-white' : 'text-neutral-700'} />
                 </div>
                 <div className="text-left">
-                  <p className={`text-sm ${isDark ? 'text-neutral-200 group-hover:text-white' : 'text-neutral-700 group-hover:text-neutral-900'}`}>Import TikTok</p>
-                  <p className={`text-xs ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>Download without watermark</p>
+                  <p className={`text-sm ${isDark ? 'text-neutral-200 group-hover:text-white' : 'text-neutral-700 group-hover:text-neutral-900'}`}>导入 TikTok 视频</p>
+                  <p className={`text-xs ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>下载无水印素材</p>
                 </div>
               </button>
 
@@ -166,8 +172,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                   <Film size={16} className={isDark ? 'text-white' : 'text-neutral-700'} />
                 </div>
                 <div className="text-left">
-                  <p className={`text-sm ${isDark ? 'text-neutral-200 group-hover:text-white' : 'text-neutral-700 group-hover:text-neutral-900'}`}>Storyboard Generator</p>
-                  <p className={`text-xs ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>Create scenes with AI</p>
+                  <p className={`text-sm ${isDark ? 'text-neutral-200 group-hover:text-white' : 'text-neutral-700 group-hover:text-neutral-900'}`}>AI 生成分镜</p>
+                  <p className={`text-xs ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>从故事生成分镜画面</p>
                 </div>
               </button>
             </div>

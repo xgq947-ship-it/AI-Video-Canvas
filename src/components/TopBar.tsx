@@ -122,7 +122,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                         <span
                             className={`font-semibold cursor-pointer transition-colors ${canvasTheme === 'dark' ? 'text-neutral-300 hover:text-white' : 'text-neutral-900 hover:text-neutral-600'}`}
                             onDoubleClick={handleTitleDoubleClick}
-                            title="Double-click to rename"
+                            title="双击重命名"
                         >
                             {canvasTitle}
                         </span>
@@ -137,7 +137,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                             ? 'text-neutral-500 border-neutral-800'
                             : 'text-neutral-400 border-neutral-100'
                             }`}>
-                            Auto-saved {new Date(lastAutoSaveTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            已自动保存 {new Date(lastAutoSaveTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </div>
                     )}
                     <button
@@ -148,7 +148,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                             }`}
                     >
                         <Save size={16} />
-                        Save
+                        保存
                     </button>
                     <button
                         onClick={handleNewClick}
@@ -158,7 +158,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                             }`}
                     >
                         <Plus size={16} />
-                        New
+                        新建
                     </button>
                     <button
                         onClick={onToggleTheme}
@@ -166,7 +166,8 @@ export const TopBar: React.FC<TopBarProps> = ({
                             ? 'bg-neutral-900 border-neutral-700 text-yellow-400 hover:bg-neutral-800'
                             : 'bg-white border-neutral-200 text-orange-500 hover:bg-neutral-50 shadow-sm'
                             }`}
-                        title={canvasTheme === 'dark' ? "Switch to Day Mode" : "Switch to Night Mode"}
+                        title={canvasTheme === 'dark' ? "切换浅色模式" : "切换深色模式"}
+                        aria-label={canvasTheme === 'dark' ? "切换浅色模式" : "切换深色模式"}
                     >
                         {canvasTheme === 'dark' ? (
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5" /><line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" /><line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" /><line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" /><line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" /></svg>
@@ -181,9 +182,9 @@ export const TopBar: React.FC<TopBarProps> = ({
             {showNewConfirm && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100]">
                     <div className="bg-[#1a1a1a] border border-neutral-700 rounded-2xl p-6 w-[400px] shadow-2xl">
-                        <h3 className="text-lg font-semibold text-white mb-2">Unsaved Changes</h3>
+                        <h3 className="text-lg font-semibold text-white mb-2">当前内容尚未保存</h3>
                         <p className="text-neutral-400 text-sm mb-6">
-                            You have unsaved changes. Would you like to save before creating a new canvas?
+                            新建项目会清空当前画布，是否先保存？
                         </p>
                         <div className="flex gap-3 justify-end">
                             <button
@@ -191,14 +192,14 @@ export const TopBar: React.FC<TopBarProps> = ({
                                 disabled={isSaving}
                                 className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-white text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                Cancel
+                                取消
                             </button>
                             <button
                                 onClick={handleDiscardAndNew}
                                 disabled={isSaving}
                                 className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                Discard
+                                不保存
                             </button>
                             <button
                                 onClick={handleSaveAndNew}
@@ -208,10 +209,10 @@ export const TopBar: React.FC<TopBarProps> = ({
                                 {isSaving ? (
                                     <>
                                         <Loader2 className="w-4 h-4 animate-spin" />
-                                        Saving...
+                                        保存中...
                                     </>
                                 ) : (
-                                    'Save & New'
+                                    '保存并新建'
                                 )}
                             </button>
                         </div>

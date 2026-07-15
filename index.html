@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TwitCanva</title>
+  <title>TwitCanva · AI漫剧工作台</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico" />
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
   <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
@@ -31,11 +31,28 @@
       background: #444;
     }
 
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+    }
+
+    body,
+    #root {
+      position: fixed;
+      inset: 0;
+    }
+
+    #root {
+      overflow: hidden;
+    }
+
     body {
       background-color: #050505;
       color: #e5e5e5;
-      overflow: hidden;
-      /* Prevent body scroll, handle in canvas */
+      overscroll-behavior: none;
     }
   </style>
 

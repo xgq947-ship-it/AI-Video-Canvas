@@ -240,6 +240,7 @@ export const useAssetHandlers = ({
                 const detectAndCreateNode = async () => {
                     let resultAspectRatio: string | undefined;
                     let aspectRatio: string = '16:9'; // Default
+                    let detectedDuration: number | undefined;
 
                     if (isImage) {
                         // Detect image dimensions
@@ -254,12 +255,15 @@ export const useAssetHandlers = ({
                             img.src = resultUrl;
                         });
                     } else if (isVideo) {
-                        // Detect video dimensions
+                        // Detect video dimensions + duration
                         const video = document.createElement('video');
                         await new Promise<void>((resolve) => {
                             video.onloadedmetadata = () => {
                                 resultAspectRatio = `${video.videoWidth}/${video.videoHeight}`;
                                 aspectRatio = getClosestAspectRatio(video.videoWidth, video.videoHeight);
+                                if (isFinite(video.duration) && video.duration > 0) {
+                                    detectedDuration = Math.round(video.duration * 100) / 100;
+                                }
                                 resolve();
                             };
                             video.onerror = () => resolve();
@@ -279,6 +283,8 @@ export const useAssetHandlers = ({
                         model: 'Upload',
                         aspectRatio,
                         resolution: 'Auto',
+                        // 导入本地视频镜头的真实时长（秒），供漫剧成片按真实长度拼接
+                        ...(isVideo && detectedDuration ? { videoDuration: detectedDuration } : {}),
                     };
 
                     setNodes(prev => [...prev, newNode]);

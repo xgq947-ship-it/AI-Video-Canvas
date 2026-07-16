@@ -47,7 +47,8 @@ const CODEX_IMAGE_JOBS_DIR = path.join(LIBRARY_DIR, 'codex-image-jobs');
 
 // Enable CORS for all routes (must come before static file serving)
 app.use(cors());
-app.use(express.json({ limit: '100mb' }));
+// Base64 会比原始文件大约多三分之一；150MB 的请求上限对应前端 100MB 的本地素材限制。
+app.use(express.json({ limit: '150mb' }));
 
 // Serve static assets from library with CORS headers for cross-origin image access
 app.use('/library', (req, res, next) => {
@@ -816,7 +817,7 @@ app.post('/api/gemini/optimize-prompt', async (req, res) => {
 app.post('/api/assets/:type', async (req, res) => {
     try {
         const { type } = req.params;
-        const { data, prompt } = req.body;
+        const { data, prompt, originalFilename, mimeType } = req.body;
 
         if (!['images', 'videos'].includes(type)) {
             return res.status(400).json({ error: 'Invalid asset type' });
@@ -824,7 +825,19 @@ app.post('/api/assets/:type', async (req, res) => {
 
         const targetDir = type === 'images' ? IMAGES_DIR : VIDEOS_DIR;
         const id = Date.now().toString();
-        const ext = type === 'images' ? 'png' : 'mp4';
+        const requestedVideoExtension = path.extname(originalFilename || '').toLowerCase().replace('.', '');
+        const supportedVideoExtensions = new Set(['mp4', 'webm', 'mov', 'm4v']);
+        const mimeVideoExtension = {
+            'video/mp4': 'mp4',
+            'video/webm': 'webm',
+            'video/quicktime': 'mov',
+            'video/x-m4v': 'm4v',
+        }[mimeType];
+        const ext = type === 'images'
+            ? 'png'
+            : supportedVideoExtensions.has(requestedVideoExtension)
+                ? requestedVideoExtension
+                : mimeVideoExtension || 'mp4';
         const filename = `${id}.${ext}`;
         const metaFilename = `${id}.json`;
 
@@ -837,6 +850,8 @@ app.post('/api/assets/:type', async (req, res) => {
             id,
             filename,
             prompt: prompt || '',
+            originalFilename: originalFilename || undefined,
+            mimeType: mimeType || undefined,
             createdAt: new Date().toISOString(),
             type
         };

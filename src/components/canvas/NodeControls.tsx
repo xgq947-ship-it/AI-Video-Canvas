@@ -7,7 +7,7 @@
  */
 
 import React, { useState, useRef, useEffect, memo } from 'react';
-import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Film, Clock, Expand, Shrink, Monitor, Crop, HardDrive } from 'lucide-react';
+import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Film, Clock, Expand, Shrink, Monitor, Crop, HardDrive, Upload, Loader2 } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { OpenAIIcon, GoogleIcon, KlingIcon, HailuoIcon } from '../icons/BrandIcons';
 import { useFaceDetection } from '../../hooks/useFaceDetection';
@@ -192,12 +192,14 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const [showResolutionDropdown, setShowResolutionDropdown] = useState(false);
     const [showModelDropdown, setShowModelDropdown] = useState(false);
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+    const [isUploadingVideo, setIsUploadingVideo] = useState(false);
     const [localPrompt, setLocalPrompt] = useState(data.prompt || '');
     const dropdownRef = useRef<HTMLDivElement>(null);
     const aspectRatioDropdownRef = useRef<HTMLDivElement>(null);
     const durationDropdownRef = useRef<HTMLDivElement>(null);
     const resolutionDropdownRef = useRef<HTMLDivElement>(null);
     const modelDropdownRef = useRef<HTMLDivElement>(null);
+    const videoUploadInputRef = useRef<HTMLInputElement>(null);
     const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const lastSentPromptRef = useRef<string | undefined>(data.prompt); // Track what we sent
 
@@ -535,6 +537,99 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const handleResolutionSelect = (value: string) => {
         onUpdate(data.id, { resolution: value });
         setShowResolutionDropdown(false);
+    };
+
+    const handleLocalVideoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        event.target.value = '';
+        if (!file) return;
+
+        const supportedExtension = /\.(mp4|webm|mov|m4v)$/i.test(file.name);
+        if (!file.type.startsWith('video/') && !supportedExtension) {
+            alert('请选择视频文件。');
+            return;
+        }
+
+        if (file.size > 100 * 1024 * 1024) {
+            alert('视频文件不能超过 100MB。');
+            return;
+        }
+
+        setIsUploadingVideo(true);
+        try {
+            const metadata = await new Promise<{ duration?: number; width?: number; height?: number }>((resolve) => {
+                const video = document.createElement('video');
+                const objectUrl = URL.createObjectURL(file);
+                video.preload = 'metadata';
+                video.onloadedmetadata = () => {
+                    const result = {
+                        duration: Number.isFinite(video.duration) ? Math.round(video.duration * 100) / 100 : undefined,
+                        width: video.videoWidth || undefined,
+                        height: video.videoHeight || undefined,
+                    };
+                    URL.revokeObjectURL(objectUrl);
+                    resolve(result);
+                };
+                video.onerror = () => {
+                    URL.revokeObjectURL(objectUrl);
+                    resolve({});
+                };
+                video.src = objectUrl;
+            });
+
+            const dataUrl = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result as string);
+                reader.onerror = () => reject(new Error('读取视频文件失败'));
+                reader.readAsDataURL(file);
+            });
+
+            const response = await fetch('/api/assets/videos', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    data: dataUrl,
+                    prompt: file.name,
+                    originalFilename: file.name,
+                    mimeType: file.type,
+                }),
+            });
+            const result = await response.json().catch(() => null);
+            if (!response.ok || !result?.url) {
+                throw new Error(result?.error || '上传视频失败');
+            }
+
+            let resultAspectRatio: string | undefined;
+            let aspectRatio = data.aspectRatio || '16:9';
+            let resolution = data.resolution || 'Auto';
+            if (metadata.width && metadata.height) {
+                resultAspectRatio = `${metadata.width}/${metadata.height}`;
+                const greatestCommonDivisor = (a: number, b: number): number => b === 0 ? a : greatestCommonDivisor(b, a % b);
+                const divisor = greatestCommonDivisor(metadata.width, metadata.height);
+                aspectRatio = `${metadata.width / divisor}:${metadata.height / divisor}`;
+                resolution = `${Math.min(metadata.width, metadata.height)}p`;
+            }
+
+            onUpdate(data.id, {
+                resultUrl: result.url,
+                resultAspectRatio,
+                aspectRatio,
+                resolution,
+                videoDuration: metadata.duration || data.videoDuration,
+                model: '本地上传',
+                status: NodeStatus.SUCCESS,
+                errorMessage: undefined,
+                generationStartTime: undefined,
+                lastFrame: undefined,
+                trimStart: undefined,
+                trimEnd: undefined,
+            });
+        } catch (error) {
+            console.error('本地视频上传失败:', error);
+            alert(error instanceof Error ? error.message : '上传视频失败，请稍后重试。');
+        } finally {
+            setIsUploadingVideo(false);
+        }
     };
 
     // Get frame inputs with their image URLs
@@ -975,6 +1070,32 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                     </div>
                                 )}
                             </div>
+                        )}
+
+                        {isVideoNode && (
+                            <>
+                                <input
+                                    ref={videoUploadInputRef}
+                                    type="file"
+                                    accept="video/mp4,video/webm,video/quicktime,video/x-m4v,.mp4,.webm,.mov,.m4v"
+                                    className="hidden"
+                                    onChange={handleLocalVideoUpload}
+                                />
+                                <button
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        videoUploadInputRef.current?.click();
+                                    }}
+                                    disabled={isUploadingVideo}
+                                    className="flex items-center gap-1.5 text-xs font-medium bg-[#252525] hover:bg-[#333] disabled:cursor-wait disabled:opacity-60 border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
+                                    title="上传本地生成的视频，并保存到个人素材库"
+                                >
+                                    {isUploadingVideo
+                                        ? <Loader2 size={12} className="animate-spin text-cyan-400" />
+                                        : <Upload size={12} className="text-cyan-400" />}
+                                    <span>{isUploadingVideo ? '上传中' : '本地上传'}</span>
+                                </button>
+                            </>
                         )}
                     </div>
 

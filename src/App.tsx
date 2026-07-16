@@ -39,7 +39,6 @@ import { extractVideoLastFrame } from './utils/videoHelpers';
 import { SelectionBoundingBox } from './components/canvas/SelectionBoundingBox';
 import { WorkflowPanel } from './components/WorkflowPanel';
 import { HistoryPanel } from './components/HistoryPanel';
-import { ChatPanel, ChatBubble } from './components/ChatPanel';
 import { ImageEditorModal } from './components/modals/ImageEditorModal';
 import { VideoEditorModal } from './components/modals/VideoEditorModal';
 import { ExpandedMediaModal } from './components/modals/ExpandedMediaModal';
@@ -100,7 +99,7 @@ export default function App() {
   const [sidebarAssetPreview, setSidebarAssetPreview] = useState<(SidebarAssetPreview & { panelY: number }) | null>(null);
   const [isMinimapOpen, setIsMinimapOpen] = useState(false);
 
-  // Panel state management (history, chat, asset library, expand)
+  // Panel state management (history, asset library, expand)
   const {
     isHistoryPanelOpen,
     historyPanelY,
@@ -109,18 +108,12 @@ export default function App() {
     expandedImageUrl,
     handleExpandImage,
     handleCloseExpand,
-    isChatOpen,
-    toggleChat,
-    closeChat,
     isAssetLibraryOpen,
     assetLibraryY,
     assetLibraryVariant,
     handleAssetsClick: panelAssetsClick,
     closeAssetLibrary,
-    openAssetLibraryModal,
-    isDraggingNodeToChat,
-    handleNodeDragStart,
-    handleNodeDragEnd
+    openAssetLibraryModal
   } = usePanelState();
 
   const [canvasHoveredNodeId, setCanvasHoveredNodeId] = useState<string | null>(null);
@@ -985,7 +978,6 @@ export default function App() {
     closeAssetLibrary();
     closeHistoryPanel();
     closeWorkflowPanel();
-    closeChat();
   };
 
   /**
@@ -1561,14 +1553,6 @@ export default function App() {
         onCreateNodes={storyboardGenerator.createStoryboardNodes}
       />
 
-      {/* Agent Chat */}
-      {!storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
-        <>
-          <ChatBubble onClick={toggleChat} isOpen={isChatOpen} />
-          <ChatPanel isOpen={isChatOpen} onClose={closeChat} isDraggingNode={isDraggingNodeToChat} canvasTheme={canvasTheme} />
-        </>
-      )}
-
       {/* Top Bar */}
       {/* Top Bar */}
       {!storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
@@ -1583,7 +1567,6 @@ export default function App() {
           onSave={handleSaveWithTracking}
           onNew={handleNewCanvas}
           hasUnsavedChanges={hasUnsavedChanges}
-          isChatOpen={isChatOpen}
           canvasTheme={canvasTheme}
           onToggleTheme={() => setCanvasTheme(prev => prev === 'dark' ? 'light' : 'dark')}
           lastAutoSaveTime={lastAutoSaveTime}
@@ -1719,8 +1702,6 @@ export default function App() {
                 onOpenEditor={handleOpenEditor}
                 onUpload={handleUpload}
                 onExpand={handleExpandImage}
-                onDragStart={handleNodeDragStart}
-                onDragEnd={handleNodeDragEnd}
                 onWriteContent={handleWriteContent}
                 onTextToVideo={handleTextToVideo}
                 onTextToImage={handleTextToImage}

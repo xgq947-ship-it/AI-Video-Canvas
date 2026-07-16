@@ -10,7 +10,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
-import chatAgent from './agent/index.js';
 import generationRoutes from './routes/generation.js';
 import twitterRoutes from './routes/twitter.js';
 import tiktokPostRoutes from './routes/tiktok-post.js';
@@ -35,11 +34,10 @@ const LIBRARY_DIR = path.join(__dirname, '..', 'library');
 const WORKFLOWS_DIR = path.join(LIBRARY_DIR, 'workflows');
 const IMAGES_DIR = path.join(LIBRARY_DIR, 'images');
 const VIDEOS_DIR = path.join(LIBRARY_DIR, 'videos');
-const CHATS_DIR = path.join(LIBRARY_DIR, 'chats');
 const LIBRARY_ASSETS_DIR = path.join(LIBRARY_DIR, 'assets');
 const CODEX_IMAGE_JOBS_DIR = path.join(LIBRARY_DIR, 'codex-image-jobs');
 
-[LIBRARY_DIR, WORKFLOWS_DIR, IMAGES_DIR, VIDEOS_DIR, CHATS_DIR, LIBRARY_ASSETS_DIR, CODEX_IMAGE_JOBS_DIR].forEach(dir => {
+[LIBRARY_DIR, WORKFLOWS_DIR, IMAGES_DIR, VIDEOS_DIR, LIBRARY_ASSETS_DIR, CODEX_IMAGE_JOBS_DIR].forEach(dir => {
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
@@ -1166,79 +1164,6 @@ app.post('/api/trim-video', async (req, res) => {
             error: error.message || 'Failed to trim video',
             details: error.toString()
         });
-    }
-});
-
-// ============================================================================
-// CHAT AGENT API
-// NOTE: Currently using LangGraph.js. If more complex agent capabilities
-// are needed (multi-agent, advanced tools), consider migrating to Python.
-// ============================================================================
-
-// Send a message to the chat agent
-app.post('/api/chat', async (req, res) => {
-    try {
-        const { sessionId, message, media } = req.body;
-
-        if (!API_KEY) {
-            return res.status(500).json({ error: "Server missing API Key config" });
-        }
-
-        if (!sessionId) {
-            return res.status(400).json({ error: "sessionId is required" });
-        }
-
-        if (!message && !media) {
-            return res.status(400).json({ error: "message or media is required" });
-        }
-
-        const result = await chatAgent.sendMessage(sessionId, message, media, API_KEY);
-
-        res.json({
-            success: true,
-            response: result.response,
-            topic: result.topic,
-            messageCount: result.messageCount
-        });
-    } catch (error) {
-        console.error("Chat API Error:", error);
-        res.status(500).json({ error: error.message || "Chat failed" });
-    }
-});
-
-// List all chat sessions
-app.get('/api/chat/sessions', async (req, res) => {
-    try {
-        const sessions = chatAgent.listSessions();
-        res.json(sessions);
-    } catch (error) {
-        console.error("List sessions error:", error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Delete a chat session
-app.delete('/api/chat/sessions/:id', async (req, res) => {
-    try {
-        chatAgent.deleteSession(req.params.id);
-        res.json({ success: true });
-    } catch (error) {
-        console.error("Delete session error:", error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Get full session data (for loading a specific chat)
-app.get('/api/chat/sessions/:id', async (req, res) => {
-    try {
-        const sessionData = chatAgent.getSessionData(req.params.id);
-        if (!sessionData) {
-            return res.status(404).json({ error: "Session not found" });
-        }
-        res.json(sessionData);
-    } catch (error) {
-        console.error("Get session error:", error);
-        res.status(500).json({ error: error.message });
     }
 });
 

@@ -16,8 +16,7 @@ export type NodeHoverToolbarAction =
   | 'expand'
   | 'postToX'
   | 'postToTikTok'
-  | 'download'
-  | 'dragToChat';
+  | 'download';
 
 interface NodeHoverToolbarProps {
   data: NodeData;
@@ -31,8 +30,6 @@ interface NodeHoverToolbarProps {
   onGridSplit?: (nodeId: string, cols: number, rows: number) => void;
   onPostToX?: (nodeId: string, mediaUrl: string, mediaType: 'image' | 'video') => void;
   onPostToTikTok?: (nodeId: string, mediaUrl: string) => void;
-  onDragStart?: (nodeId: string, hasContent: boolean) => void;
-  onDragEnd?: () => void;
 }
 
 const GridSplitMenu: React.FC<{ onSplit: (cols: number, rows: number) => void }> = ({ onSplit }) => {
@@ -138,8 +135,6 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
   onGridSplit,
   onPostToX,
   onPostToTikTok,
-  onDragStart,
-  onDragEnd,
 }) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const resultUrl = data.resultUrl!;
@@ -290,35 +285,6 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
                     <line x1="12" y1="15" x2="12" y2="3" />
                   </svg>
                 </button>
-              );
-            case 'dragToChat':
-              return (
-                <div
-                  key={`${action}-${index}`}
-                  draggable
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onDragStart={(event) => {
-                    event.dataTransfer.setData('application/json', JSON.stringify({
-                      nodeId: data.id,
-                      url: resultUrl,
-                      type: mediaType,
-                    }));
-                    event.dataTransfer.effectAllowed = 'copy';
-                    onDragStart?.(data.id, true);
-                  }}
-                  onDragEnd={() => onDragEnd?.()}
-                  className="p-1.5 bg-cyan-500/80 hover:bg-cyan-400 rounded-full text-white cursor-grab active:cursor-grabbing"
-                  title="拖到聊天窗口"
-                >
-                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="9" cy="5" r="1" fill="currentColor" />
-                    <circle cx="9" cy="12" r="1" fill="currentColor" />
-                    <circle cx="9" cy="19" r="1" fill="currentColor" />
-                    <circle cx="15" cy="5" r="1" fill="currentColor" />
-                    <circle cx="15" cy="12" r="1" fill="currentColor" />
-                    <circle cx="15" cy="19" r="1" fill="currentColor" />
-                  </svg>
-                </div>
               );
           }
         })}

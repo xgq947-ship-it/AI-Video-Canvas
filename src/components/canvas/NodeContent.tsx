@@ -19,8 +19,6 @@ interface NodeContentProps {
     getAspectRatioStyle: () => { aspectRatio: string };
     onUpload?: (nodeId: string, imageDataUrl: string) => void;
     onExpand?: (imageUrl: string) => void;
-    onDragStart?: (nodeId: string, hasContent: boolean) => void;
-    onDragEnd?: () => void;
     // Text node callbacks
     onWriteContent?: (nodeId: string) => void;
     onTextToVideo?: (nodeId: string) => void;
@@ -44,8 +42,6 @@ export const NodeContent: React.FC<NodeContentProps> = ({
     getAspectRatioStyle,
     onUpload,
     onExpand,
-    onDragStart,
-    onDragEnd,
     onWriteContent,
     onTextToVideo,
     onTextToImage,

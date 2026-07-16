@@ -33,8 +33,6 @@ interface CanvasNodeProps {
   onOpenEditor?: (nodeId: string) => void;
   onUpload?: (nodeId: string, imageDataUrl: string) => void;
   onExpand?: (imageUrl: string) => void;
-  onDragStart?: (nodeId: string, hasContent: boolean) => void;
-  onDragEnd?: () => void;
   // Text node callbacks
   onWriteContent?: (nodeId: string) => void;
   onTextToVideo?: (nodeId: string) => void;
@@ -90,8 +88,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   onOpenEditor,
   onUpload,
   onExpand,
-  onDragStart,
-  onDragEnd,
   onWriteContent,
   onTextToVideo,
   onTextToImage,
@@ -135,7 +131,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
     'expand',
     'postToX',
     'download',
-    'dragToChat',
   ];
   const imageToolbarActions: NodeHoverToolbarAction[] = [
     ...(!(data.prompt && data.prompt.startsWith('Extract panel #'))
@@ -145,14 +140,12 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
     'expand',
     'postToX',
     'download',
-    'dragToChat',
   ];
   const videoToolbarActions: NodeHoverToolbarAction[] = [
     'expand',
     'postToX',
     'postToTikTok',
     'download',
-    'dragToChat',
   ];
 
   // ============================================================================
@@ -334,8 +327,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
               onExpand={onExpand}
               onGridSplit={onGridSplit}
               onPostToX={onPostToX}
-              onDragStart={onDragStart}
-              onDragEnd={onDragEnd}
             />
           )}
 
@@ -522,8 +513,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
             onExpand={onExpand}
             onGridSplit={onGridSplit}
             onPostToX={onPostToX}
-            onDragStart={onDragStart}
-            onDragEnd={onDragEnd}
           />
         )}
 
@@ -538,8 +527,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
             onExpand={onExpand}
             onPostToX={onPostToX}
             onPostToTikTok={onPostToTikTok}
-            onDragStart={onDragStart}
-            onDragEnd={onDragEnd}
           />
         )}
 
@@ -593,8 +580,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
             getAspectRatioStyle={getAspectRatioStyle}
             onUpload={onUpload}
             onExpand={onExpand}
-            onDragStart={onDragStart}
-            onDragEnd={onDragEnd}
             onWriteContent={onWriteContent}
             onTextToVideo={onTextToVideo}
             onTextToImage={onTextToImage}

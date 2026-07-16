@@ -21,8 +21,6 @@ interface TopBarProps {
     onNew: () => void;
     hasUnsavedChanges: boolean;
     lastAutoSaveTime?: number;
-    // Layout
-    isChatOpen?: boolean;
     // Theme
     canvasTheme: 'dark' | 'light';
     onToggleTheme: () => void;
@@ -42,7 +40,6 @@ export const TopBar: React.FC<TopBarProps> = ({
     onNew,
     hasUnsavedChanges,
     lastAutoSaveTime,
-    isChatOpen = false,
     canvasTheme,
     onToggleTheme,
     showBrand = true,
@@ -109,7 +106,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 className="fixed top-0 left-0 h-14 flex items-center justify-between px-6 z-50 pointer-events-none transition-all duration-300"
                 style={{
                     left: sidebarOffset,
-                    width: isChatOpen ? `calc(100% - ${sidebarOffset + 400}px)` : `calc(100% - ${sidebarOffset}px)`
+                    width: `calc(100% - ${sidebarOffset}px)`
                 }}
             >
                 {/* Left: Logo & Title */}

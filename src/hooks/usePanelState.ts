@@ -27,15 +27,6 @@ export const usePanelState = () => {
     const handleCloseExpand = useCallback(() => setExpandedImageUrl(null), []);
 
     // ============================================================================
-    // CHAT PANEL
-    // ============================================================================
-
-    const [isChatOpen, setIsChatOpen] = useState(false);
-
-    const toggleChat = useCallback(() => setIsChatOpen(prev => !prev), []);
-    const closeChat = useCallback(() => setIsChatOpen(false), []);
-
-    // ============================================================================
     // ASSET LIBRARY PANEL
     // ============================================================================
 
@@ -44,22 +35,6 @@ export const usePanelState = () => {
     const [assetLibraryVariant, setAssetLibraryVariant] = useState<'panel' | 'modal'>('panel');
 
     const closeAssetLibrary = useCallback(() => setIsAssetLibraryOpen(false), []);
-
-    // ============================================================================
-    // NODE DRAG STATE (for chat highlight)
-    // ============================================================================
-
-    const [isDraggingNodeToChat, setIsDraggingNodeToChat] = useState(false);
-
-    const handleNodeDragStart = useCallback((_nodeId: string, hasContent: boolean) => {
-        if (hasContent) {
-            setIsDraggingNodeToChat(true);
-        }
-    }, []);
-
-    const handleNodeDragEnd = useCallback(() => {
-        setIsDraggingNodeToChat(false);
-    }, []);
 
     // ============================================================================
     // COMBINED HANDLERS (use these in App.tsx to handle mutual exclusivity)
@@ -74,7 +49,6 @@ export const usePanelState = () => {
         setIsHistoryPanelOpen(prev => !prev);
         closeWorkflowPanel();
         setIsAssetLibraryOpen(false);
-        setIsChatOpen(false);
     }, []);
 
     /**
@@ -87,7 +61,6 @@ export const usePanelState = () => {
         setIsAssetLibraryOpen(prev => !prev);
         setIsHistoryPanelOpen(false);
         closeWorkflowPanel();
-        setIsChatOpen(false);
     }, []);
 
     /**
@@ -99,7 +72,6 @@ export const usePanelState = () => {
         setIsAssetLibraryOpen(true);
         setIsHistoryPanelOpen(false);
         closeWorkflowPanel();
-        setIsChatOpen(false);
     }, []);
 
     // ============================================================================
@@ -118,22 +90,12 @@ export const usePanelState = () => {
         handleExpandImage,
         handleCloseExpand,
 
-        // Chat
-        isChatOpen,
-        toggleChat,
-        closeChat,
-
         // Asset library
         isAssetLibraryOpen,
         assetLibraryY,
         assetLibraryVariant,
         handleAssetsClick,
         closeAssetLibrary,
-        openAssetLibraryModal,
-
-        // Node drag
-        isDraggingNodeToChat,
-        handleNodeDragStart,
-        handleNodeDragEnd
+        openAssetLibraryModal
     };
 };

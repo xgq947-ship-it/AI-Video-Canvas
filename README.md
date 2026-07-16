@@ -22,6 +22,7 @@ A modern, AI-powered canvas application for generating and manipulating images a
 
 - 生图 / 生视频 / 配音调用线上官方 API；本地只运行画布、素材库、项目管理与 **Remotion 渲染**。
 - 保留 TwitCanva 原有画布、故事板、素材库和图片/视频生成功能。
+- 角色素材支持“4 张身份库 + 多套服装造型包”，按角色名称和造型名称筛选；造型素材连接下游生图节点时自动携带身份与同造型参考图。
 - 最终渲染引擎为 [Remotion](https://www.remotion.dev/) 4.0.489，**完全由 project-manifest 驱动**，无单片硬编码。
 
 ### 安装
@@ -598,4 +599,3 @@ If you are using this project for commercial purposes or building a commercial p
 ---
 
 **Built with ❤️ using React, TypeScript, and AI APIs from OpenAI, Google, Kling, MiniMax, and Fal.ai (2025)**
-

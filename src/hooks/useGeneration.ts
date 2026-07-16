@@ -142,6 +142,18 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                             addedUrls.add(parent.resultUrl);
                         }
 
+                        // Character-library assets carry their identity face and look-pack
+                        // references. Propagate those references to downstream generation
+                        // nodes so connecting one look asset is enough to lock both face
+                        // identity and wardrobe consistency.
+                        for (const characterUrl of parent.characterReferenceUrls || []) {
+                            if (imageBase64s.length >= 14) break;
+                            if (!addedUrls.has(characterUrl)) {
+                                imageBase64s.push(characterUrl);
+                                addedUrls.add(characterUrl);
+                            }
+                        }
+
                         for (const ancestorId of parent.parentIds || []) {
                             if (!visitedParentIds.has(ancestorId)) {
                                 pendingParentIds.push(ancestorId);

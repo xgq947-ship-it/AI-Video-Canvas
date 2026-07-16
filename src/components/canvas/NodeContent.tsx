@@ -141,8 +141,10 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                             <Loader2 size={40} className="animate-spin text-blue-400" />
                             <span className="mt-3 text-sm text-white font-medium">
                                 {data.imageModel === 'codex-imagegen'
-                                    ? data.codexJobStatus === 'processing' ? 'Codex 正在生成...' : '等待 Codex 处理...'
-                                    : 'Regenerating...'}
+                                    ? data.codexJobStatus === 'processing'
+                                        ? `Codex 正在生成（${data.aspectRatio || '自动比例'}）...`
+                                        : `等待 Codex 处理（${data.aspectRatio || '自动比例'}）...`
+                                    : '正在重新生成...'}
                             </span>
                         </div>
                     )}
@@ -167,7 +169,7 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                                         onUpdate?.(data.id, { prompt: localPrompt });
                                     }
                                 }}
-                                placeholder="Write your text content here..."
+                                placeholder="在这里输入文本内容..."
                                 className="w-full bg-transparent text-white text-sm resize-none outline-none placeholder:text-neutral-600"
                                 style={{ minHeight: data.isPromptExpanded ? '300px' : '150px' }}
                                 autoFocus
@@ -178,10 +180,10 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                                     onClick={() => onUpdate?.(data.id, { isPromptExpanded: !data.isPromptExpanded })}
                                     onPointerDown={(e) => e.stopPropagation()}
                                     className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] text-neutral-500 hover:text-white hover:bg-neutral-700 rounded transition-colors"
-                                    title={data.isPromptExpanded ? 'Shrink text area' : 'Expand text area'}
+                                    title={data.isPromptExpanded ? '收起文本框' : '展开文本框'}
                                 >
                                     {data.isPromptExpanded ? <Shrink size={12} /> : <Expand size={12} />}
-                                    <span>{data.isPromptExpanded ? 'Shrink' : 'Expand'}</span>
+                                    <span>{data.isPromptExpanded ? '收起' : '展开'}</span>
                                 </button>
                             </div>
                         </div>
@@ -190,24 +192,24 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                         <div className="p-5 flex flex-col gap-4">
                             {/* Header */}
                             <div className="text-neutral-500 text-sm font-medium">
-                                Try to:
+                                你可以：
                             </div>
 
                             {/* Menu Options */}
                             <div className="flex flex-col gap-1">
                                 <TextNodeMenuItem
                                     icon={<Pencil size={16} />}
-                                    label="Write your own content"
+                                    label="输入文本内容"
                                     onClick={() => onWriteContent?.(data.id)}
                                 />
                                 <TextNodeMenuItem
                                     icon={<Video size={16} />}
-                                    label="Text to Video"
+                                    label="文本生成视频"
                                     onClick={() => onTextToVideo?.(data.id)}
                                 />
                                 <TextNodeMenuItem
                                     icon={<ImageIcon size={16} />}
-                                    label="Text to Image"
+                                    label="文本生成图片"
                                     onClick={() => onTextToImage?.(data.id)}
                                 />
                             </div>
@@ -227,7 +229,7 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                             <div className="absolute inset-0 bg-black/40" />
                             <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 rounded text-[10px] text-white font-medium flex items-center gap-1">
                                 <ImageIcon size={10} />
-                                Input Frame
+                                输入画面
                             </div>
                         </div>
                     )}
@@ -237,8 +239,10 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                             <Loader2 size={32} className="animate-spin text-blue-400" />
                             <span className="text-xs text-neutral-500 font-medium">
                                 {data.imageModel === 'codex-imagegen'
-                                    ? data.codexJobStatus === 'processing' ? 'Codex 正在生成...' : '等待 Codex 处理...'
-                                    : 'Generating...'}
+                                    ? data.codexJobStatus === 'processing'
+                                        ? `Codex 正在生成（${data.aspectRatio || '自动比例'}）...`
+                                        : `等待 Codex 处理（${data.aspectRatio || '自动比例'}）...`
+                                    : '正在生成...'}
                             </span>
                         </div>
                     ) : data.status === NodeStatus.ERROR ? (
@@ -284,7 +288,7 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                                         className="flex items-center gap-2 px-4 py-2 bg-neutral-800/80 hover:bg-neutral-700 rounded-lg text-white text-sm font-medium transition-colors"
                                     >
                                         <Upload size={16} />
-                                        Upload
+                                        上传
                                     </button>
                                 </>
                             )}
@@ -300,24 +304,24 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                                 <>
                                     <div className="text-neutral-500 text-sm font-medium">
                                         {isVideoType && inputUrl
-                                            ? "Ready to animate"
+                                            ? "可以开始生成动画"
                                             : isVideoType
-                                                ? "Waiting for input..."
+                                                ? "等待输入..."
                                                 : isLocalModel
-                                                    ? "Select a model and enter prompt"
-                                                    : "Try to:"
+                                                    ? "请选择模型并输入提示词"
+                                                    : "你可以："
                                         }
                                     </div>
                                     {!isVideoType && !isLocalModel && (
                                         <div className="flex flex-col gap-1 w-full px-2">
                                             <TextNodeMenuItem
                                                 icon={<ImageIcon size={16} />}
-                                                label="Image to Image"
+                                                label="图片生成图片"
                                                 onClick={() => onImageToImage?.(data.id)}
                                             />
                                             <TextNodeMenuItem
                                                 icon={<Film size={16} />}
-                                                label="Image to Video"
+                                                label="图片生成视频"
                                                 onClick={() => onImageToVideo?.(data.id)}
                                             />
                                         </div>

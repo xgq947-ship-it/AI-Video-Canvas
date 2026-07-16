@@ -12,11 +12,13 @@ import {
   Grid2X2,
   Image as ImageIcon,
   LayoutList,
+  Loader2,
   LocateFixed,
   MoreHorizontal,
   Search,
   SlidersHorizontal,
   Sparkles,
+  Trash2,
 } from 'lucide-react';
 import { NodeData, NodeType } from '../types';
 
@@ -33,6 +35,17 @@ interface SidebarAsset {
   type: 'image' | 'video';
   category?: string;
   prompt?: string;
+  characterId?: string;
+  characterName?: string;
+  characterAssetRole?: NodeData['characterAssetRole'];
+  lookId?: string;
+  lookName?: string;
+}
+
+export interface SidebarAssetPreview {
+  name: string;
+  url: string;
+  type: 'image' | 'video';
 }
 
 interface ProjectSidebarProps {
@@ -46,6 +59,7 @@ interface ProjectSidebarProps {
   onOpenWorkflows: (e: React.MouseEvent) => void;
   onOpenHistory: (e: React.MouseEvent) => void;
   onOpenAssets: (e: React.MouseEvent) => void;
+  onPreviewAsset: (asset: SidebarAssetPreview, e: React.MouseEvent<HTMLElement>) => void;
   onOpenStoryboard: () => void;
   onCreateProject: () => void;
   onDeleteProject: () => void;
@@ -81,6 +95,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   onOpenWorkflows,
   onOpenHistory,
   onOpenAssets,
+  onPreviewAsset,
   onOpenStoryboard,
   onCreateProject,
   onDeleteProject,
@@ -97,6 +112,11 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   const [collapsed, setCollapsed] = useState(false);
   const [assets, setAssets] = useState<SidebarAsset[]>([]);
   const [assetsLoading, setAssetsLoading] = useState(false);
+  const [assetMenuId, setAssetMenuId] = useState<string | null>(null);
+  const [assetMenuPosition, setAssetMenuPosition] = useState({ top: 0, left: 0 });
+  const [deleteConfirmAssetId, setDeleteConfirmAssetId] = useState<string | null>(null);
+  const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
+  const [assetDeleteError, setAssetDeleteError] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const isDark = canvasTheme === 'dark';
 
@@ -105,6 +125,10 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   useEffect(() => {
     const close = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) setProjectMenuOpen(false);
+      if (!(event.target as HTMLElement).closest('[data-asset-menu]')) {
+        setAssetMenuId(null);
+        setDeleteConfirmAssetId(null);
+      }
     };
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
@@ -151,6 +175,29 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
     load();
     return () => { cancelled = true; };
   }, [activeTab, assetScope]);
+
+  const handleDeleteLocalImage = async (asset: SidebarAsset) => {
+    if (assetScope !== 'personal' || asset.type !== 'image' || deletingAssetId) return;
+    setDeletingAssetId(asset.id);
+    setAssetDeleteError(null);
+    try {
+      const response = await fetch(`/api/assets/images/${encodeURIComponent(asset.id)}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error || '删除失败');
+      }
+      setAssets(prev => prev.filter(item => !(item.id === asset.id && item.type === asset.type)));
+      setAssetMenuId(null);
+      setDeleteConfirmAssetId(null);
+    } catch (error) {
+      console.error('Failed to delete local image:', error);
+      setAssetDeleteError(error instanceof Error ? error.message : '删除失败，请稍后重试');
+    } finally {
+      setDeletingAssetId(null);
+    }
+  };
 
   const visibleNodes = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -281,7 +328,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
           <div className="shrink-0 p-3">
             <div className="grid grid-cols-2 rounded-xl border border-[#333] bg-[#202020] p-1">
               <button onClick={() => setAssetScope('personal')} className={`rounded-lg py-2 text-sm ${assetScope === 'personal' ? 'bg-[#343434] text-white' : muted}`}>个人</button>
-              <button onClick={() => setAssetScope('agent')} className={`rounded-lg py-2 text-sm ${assetScope === 'agent' ? 'bg-[#343434] text-white' : muted}`}>Agent</button>
+              <button onClick={() => setAssetScope('agent')} className={`rounded-lg py-2 text-sm ${assetScope === 'agent' ? 'bg-[#343434] text-white' : muted}`}>智能体</button>
             </div>
             <div className="mt-4 flex items-center gap-3">
               <SearchBox value={query} onChange={setQuery} placeholder="请输入搜索内容" />
@@ -289,14 +336,32 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 sidebar-scrollbar">
+            {assetDeleteError && (
+              <div className="mx-2 mb-2 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                {assetDeleteError}
+              </div>
+            )}
             {assetsLoading ? <EmptyState label="正在加载资产" /> : visibleAssets.length === 0 ? <EmptyState label="暂无资产" /> : visibleAssets.map(asset => {
               const dragType = asset.type === 'video' ? 'video' : 'image';
               const draggable = Boolean(asset.url);
+              const canDeleteLocalImage = assetScope === 'personal' && asset.type === 'image';
+              const usedByCanvas = nodes.some(node => [node.resultUrl, node.mediaUrl, node.lastFrame].some(url => url === asset.url || url?.endsWith(asset.url)));
               return (
-                <button
+                <div
                   key={`${asset.type}-${asset.id}`}
-                  className={`group mb-1 flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-left ${hover} ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
-                  onClick={onOpenAssets}
+                  role="button"
+                  tabIndex={0}
+                  className={`group relative mb-1 flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-left ${hover} ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                  onClick={event => onPreviewAsset({ name: asset.name, url: asset.url, type: asset.type }, event)}
+                  onKeyDown={event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      onPreviewAsset(
+                        { name: asset.name, url: asset.url, type: asset.type },
+                        event as unknown as React.MouseEvent<HTMLElement>
+                      );
+                    }
+                  }}
                   draggable={draggable}
                   onDragStart={draggable ? (event) => {
                     event.dataTransfer.effectAllowed = 'copy';
@@ -305,18 +370,91 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                       type: dragType,
                       name: asset.name,
                       prompt: asset.prompt,
+                      category: asset.category,
+                      characterId: asset.characterId,
+                      characterName: asset.characterName,
+                      characterAssetRole: asset.characterAssetRole,
+                      lookId: asset.lookId,
+                      lookName: asset.lookName,
                     }));
                     const thumb = (event.currentTarget as HTMLElement).querySelector('img');
                     if (thumb) event.dataTransfer.setDragImage(thumb, 24, 24);
                   } : undefined}
-                  title={draggable ? '拖到画布添加节点，或点击打开素材库' : undefined}
+                  title={draggable ? '拖到画布添加节点，或点击预览' : undefined}
                 >
                   <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-neutral-700 bg-neutral-800">
                     {asset.type === 'image' ? <img src={asset.url} alt="" className="h-full w-full object-cover" draggable={false} /> : <Film size={20} className={muted} />}
                   </div>
                   <span className="min-w-0 flex-1 truncate text-sm">{asset.name}</span>
-                  <MoreHorizontal size={18} className={muted} />
-                </button>
+                  {canDeleteLocalImage ? (
+                    <div className="relative shrink-0" data-asset-menu>
+                      <button
+                        type="button"
+                        aria-label={`素材操作：${asset.name}`}
+                        className={`rounded-lg p-1.5 ${muted} ${hover}`}
+                        onClick={event => {
+                          event.stopPropagation();
+                          setAssetDeleteError(null);
+                          setDeleteConfirmAssetId(null);
+                          const rect = event.currentTarget.getBoundingClientRect();
+                          setAssetMenuPosition({
+                            top: Math.min(window.innerHeight - 76, rect.bottom + 4),
+                            left: Math.max(12, rect.right - 210),
+                          });
+                          setAssetMenuId(current => current === asset.id ? null : asset.id);
+                        }}
+                      >
+                        <MoreHorizontal size={18} />
+                      </button>
+                      {assetMenuId === asset.id && (
+                        <div
+                          className="fixed z-50 w-[210px] rounded-2xl border border-[#414141] bg-[#252525] p-2 shadow-2xl"
+                          style={{
+                            top: deleteConfirmAssetId === asset.id
+                              ? Math.min(window.innerHeight - 174, assetMenuPosition.top)
+                              : assetMenuPosition.top,
+                            left: assetMenuPosition.left,
+                          }}
+                          data-asset-menu
+                        >
+                          {deleteConfirmAssetId === asset.id ? (
+                            <div className="p-2">
+                              <p className="text-sm font-medium text-white">确认删除本地图片？</p>
+                              <p className="mt-1 text-xs leading-5 text-neutral-400">
+                                图片文件和元数据会永久删除{usedByCanvas ? '，画布中的引用将失效' : ''}。
+                              </p>
+                              <div className="mt-3 flex justify-end gap-2">
+                                <button
+                                  type="button"
+                                  className="rounded-lg px-3 py-1.5 text-xs text-neutral-300 hover:bg-neutral-700"
+                                  onClick={event => { event.stopPropagation(); setDeleteConfirmAssetId(null); }}
+                                >取消</button>
+                                <button
+                                  type="button"
+                                  disabled={deletingAssetId === asset.id}
+                                  className="flex items-center gap-1.5 rounded-lg bg-red-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-400 disabled:opacity-60"
+                                  onClick={event => { event.stopPropagation(); handleDeleteLocalImage(asset); }}
+                                >
+                                  {deletingAssetId === asset.id && <Loader2 size={13} className="animate-spin" />}
+                                  删除
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm text-red-300 hover:bg-red-500/10"
+                              onClick={event => { event.stopPropagation(); setDeleteConfirmAssetId(asset.id); }}
+                            >
+                              <Trash2 size={16} />
+                              删除本地图片
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ) : <MoreHorizontal size={18} className={muted} />}
+                </div>
               );
             })}
           </div>

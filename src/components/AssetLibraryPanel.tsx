@@ -1,22 +1,28 @@
 import React, { useState, useEffect } from 'react';
 import { X, Search, Filter, Trash2 } from 'lucide-react';
 
-interface LibraryAsset {
+export interface LibraryAsset {
     id: string;
     name: string;
     category: string;
     url: string;
     type: 'image' | 'video';
+    characterId?: string;
+    characterName?: string;
+    characterAssetRole?: 'identity-face' | 'identity-fullbody' | 'identity-expression' | 'identity-board' | 'look-fullbody' | 'look-board';
+    lookId?: string;
+    lookName?: string;
 }
 
 interface AssetLibraryPanelProps {
     isOpen: boolean;
     onClose: () => void;
-    onSelectAsset: (url: string, type: 'image' | 'video') => void;
+    onSelectAsset: (asset: LibraryAsset) => void;
     panelY?: number;
     panelLeft?: number;
     variant?: 'panel' | 'modal';
     canvasTheme?: 'dark' | 'light';
+    previewAsset?: { name: string; url: string; type: 'image' | 'video' } | null;
 }
 
 // 分类的内部值保持英文（作为 library/assets/<分类>/ 的文件夹名与存储值），
@@ -38,17 +44,18 @@ export const AssetLibraryPanel: React.FC<AssetLibraryPanelProps> = ({
     panelY = 100,
     panelLeft = 80,
     variant = 'panel',
-    canvasTheme = 'dark'
+    canvasTheme = 'dark',
+    previewAsset = null
 }) => {
     const [selectedCategory, setSelectedCategory] = useState('All');
     const [assets, setAssets] = useState<LibraryAsset[]>([]);
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
-        if (isOpen) {
+        if (isOpen && !previewAsset) {
             fetchLibrary();
         }
-    }, [isOpen]);
+    }, [isOpen, previewAsset]);
 
     const fetchLibrary = async () => {
         setLoading(true);
@@ -86,6 +93,39 @@ export const AssetLibraryPanel: React.FC<AssetLibraryPanelProps> = ({
 
     // Theme helper
     const isDark = canvasTheme === 'dark';
+
+    if (previewAsset && variant === 'panel') {
+        const top = Math.min(Math.max(72, window.innerHeight - 520), Math.max(72, panelY));
+        return (
+            <div
+                className={`fixed z-40 flex flex-col overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-xl animate-in slide-in-from-left-4 duration-200 ${isDark ? 'border-neutral-800 bg-[#0a0a0a]/95' : 'border-neutral-200 bg-white/95'}`}
+                style={{
+                    left: panelLeft,
+                    width: Math.max(320, Math.min(700, window.innerWidth - panelLeft - 24)),
+                    height: Math.max(260, Math.min(500, window.innerHeight - top - 24)),
+                    top,
+                }}
+            >
+                <div className={`flex h-14 shrink-0 items-center justify-between border-b px-4 ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}>
+                    <span className={`min-w-0 truncate text-sm font-medium ${isDark ? 'text-neutral-200' : 'text-neutral-800'}`}>
+                        {previewAsset.name || '素材预览'}
+                    </span>
+                    <button onClick={onClose} className={`rounded-lg p-2 transition-colors ${isDark ? 'text-neutral-400 hover:bg-neutral-800 hover:text-white' : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900'}`} title="关闭预览">
+                        <X size={18} />
+                    </button>
+                </div>
+                <div className={`min-h-0 flex-1 p-5 ${isDark ? 'bg-black/30' : 'bg-neutral-100'}`}>
+                    <div className={`flex h-full w-full items-center justify-center overflow-hidden rounded-xl ${isDark ? 'bg-[#111]' : 'bg-white'}`}>
+                        {previewAsset.type === 'video' ? (
+                            <video src={previewAsset.url} controls className="max-h-full max-w-full object-contain" />
+                        ) : (
+                            <img src={previewAsset.url} alt={previewAsset.name} className="max-h-full max-w-full object-contain" />
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     if (variant === 'modal') {
         return (
@@ -147,11 +187,33 @@ const AssetLibraryContent = ({
     assets, loading, onSelectAsset, onDeleteAsset, variant, canvasTheme = 'dark'
 }: any) => {
     const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+    const [characterFilter, setCharacterFilter] = useState('All');
+    const [lookFilter, setLookFilter] = useState('All');
     const isDark = canvasTheme === 'dark';
 
-    const filteredAssets = assets.filter((asset: any) =>
-        selectedCategory === 'All' || asset.category === selectedCategory
-    );
+    // 显式标注 Set<string>：assets 为 any，否则 Set 会被推断成 Set<unknown>，导致 localeCompare 报错
+    const characterNames = [...new Set<string>(
+        assets.filter((asset: LibraryAsset) => asset.category === 'Character' && asset.characterName)
+            .map((asset: LibraryAsset) => asset.characterName as string)
+    )].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+
+    const lookNames = [...new Set<string>(
+        assets.filter((asset: LibraryAsset) =>
+            asset.category === 'Character' &&
+            asset.lookName &&
+            (characterFilter === 'All' || asset.characterName === characterFilter)
+        ).map((asset: LibraryAsset) => asset.lookName as string)
+    )].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+
+    const filteredAssets = assets.filter((asset: LibraryAsset) =>
+        (selectedCategory === 'All' || asset.category === selectedCategory) &&
+        (selectedCategory !== 'Character' || characterFilter === 'All' || asset.characterName === characterFilter) &&
+        (selectedCategory !== 'Character' || lookFilter === 'All' || (lookFilter === 'identity' ? !asset.lookName : asset.lookName === lookFilter))
+    ).sort((a: LibraryAsset, b: LibraryAsset) => {
+        if (selectedCategory !== 'Character') return 0;
+        return `${a.characterName || ''}|${a.lookName || '身份库'}|${a.name}`
+            .localeCompare(`${b.characterName || ''}|${b.lookName || '身份库'}|${b.name}`, 'zh-CN');
+    });
 
     const handleDeleteClick = (e: React.MouseEvent, id: string) => {
         e.stopPropagation();
@@ -188,6 +250,31 @@ const AssetLibraryContent = ({
                     ))}
                 </div>
 
+                {selectedCategory === 'Character' && (
+                    <div className="grid grid-cols-2 gap-2">
+                        <select
+                            value={characterFilter}
+                            onChange={(event) => {
+                                setCharacterFilter(event.target.value);
+                                setLookFilter('All');
+                            }}
+                            className={`rounded-lg border px-2.5 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#1a1a1a] text-neutral-200' : 'border-neutral-200 bg-white text-neutral-700'}`}
+                        >
+                            <option value="All">全部角色</option>
+                            {characterNames.map(name => <option key={name} value={name}>{name}</option>)}
+                        </select>
+                        <select
+                            value={lookFilter}
+                            onChange={(event) => setLookFilter(event.target.value)}
+                            className={`rounded-lg border px-2.5 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#1a1a1a] text-neutral-200' : 'border-neutral-200 bg-white text-neutral-700'}`}
+                        >
+                            <option value="All">全部造型</option>
+                            <option value="identity">身份库</option>
+                            {lookNames.map(name => <option key={name} value={name}>{name}</option>)}
+                        </select>
+                    </div>
+                )}
+
                 {/* Content */}
                 <div
                     className="flex-1 overflow-y-auto pr-2 grid gap-3 pb-4 content-start grid-cols-4"
@@ -203,11 +290,11 @@ const AssetLibraryContent = ({
                             该分类下暂无素材
                         </div>
                     ) : (
-                        filteredAssets.map((asset: any) => (
+                        filteredAssets.map((asset: LibraryAsset) => (
                             <div
                                 key={asset.id}
                                 className="group relative aspect-square bg-neutral-900 rounded-lg overflow-hidden border border-neutral-800 hover:border-neutral-600 cursor-pointer"
-                                onClick={() => onSelectAsset(asset.url, asset.type)}
+                                onClick={() => onSelectAsset(asset)}
                             >
                                 <img
                                     src={asset.url}
@@ -223,6 +310,17 @@ const AssetLibraryContent = ({
                                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-2 pointer-events-none">
                                     <span className="text-white text-xs font-medium truncate">{asset.name}</span>
                                 </div>
+
+                                {asset.category === 'Character' && asset.characterName && (
+                                    <div className="pointer-events-none absolute left-1.5 top-1.5 flex max-w-[calc(100%-12px)] flex-col items-start gap-1">
+                                        <span className="max-w-full truncate rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
+                                            {asset.characterName}
+                                        </span>
+                                        <span className={`max-w-full truncate rounded-md px-1.5 py-0.5 text-[9px] font-medium backdrop-blur-sm ${asset.lookName ? 'bg-fuchsia-500/80 text-white' : 'bg-blue-500/80 text-white'}`}>
+                                            {asset.lookName || '身份库'}
+                                        </span>
+                                    </div>
+                                )}
 
                                 {/* Delete Button or Confirmation */}
                                 {deleteConfirmId === asset.id ? (

@@ -111,6 +111,9 @@ export const useGenerationRecovery = ({
                 updateNode(nodeId, {
                     status: NodeStatus.SUCCESS,
                     resultUrl,
+                    resultAspectRatio: job.outputDimensions
+                        ? `${job.outputDimensions.width}/${job.outputDimensions.height}`
+                        : node.resultAspectRatio,
                     codexJobStatus: 'completed',
                     imageVersions,
                     errorMessage: undefined,

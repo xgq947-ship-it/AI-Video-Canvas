@@ -43,6 +43,21 @@ export interface CodexImageJob {
   prompt: string;
   aspectRatio: string;
   resolution: string;
+  outputSpec?: {
+    aspectRatio: string;
+    ratioWidth?: number;
+    ratioHeight?: number;
+    orientation?: 'square' | 'landscape' | 'portrait';
+    resolution: string;
+    enforceExactAspectRatio: boolean;
+    tolerance?: number;
+    instruction: string;
+  };
+  sourceDimensions?: { width: number; height: number };
+  outputDimensions?: { width: number; height: number };
+  aspectRatioVerified?: boolean;
+  aspectRatioAdjusted?: boolean;
+  aspectRatioAdjustmentMode?: string;
   resultUrl?: string;
   error?: string;
   createdAt: string;

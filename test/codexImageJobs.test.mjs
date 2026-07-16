@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import sharp from 'sharp';
 import test from 'node:test';
 import {
     claimCodexImageJob,
     completeCodexImageJob,
     createCodexImageJob,
     getCodexImageJob,
+    inspectCodexImageOutput,
     listCodexImageJobs
 } from '../server/services/codexImageJobs.js';
 
@@ -39,6 +41,9 @@ test('creates versioned jobs and freezes library reference images', t => {
     });
 
     assert.equal(first.status, 'pending');
+    assert.equal(first.aspectRatio, '16:9');
+    assert.equal(first.outputSpec.enforceExactAspectRatio, true);
+    assert.match(first.outputSpec.instruction, /HARD OUTPUT REQUIREMENT/);
     assert.equal(first.attempt, 1);
     assert.equal(second.attempt, 2);
     assert.equal(first.references.length, 1);
@@ -46,7 +51,7 @@ test('creates versioned jobs and freezes library reference images', t => {
     assert.deepEqual(listCodexImageJobs(dirs.jobsDir, 'pending').map(job => job.id), [first.id, second.id]);
 });
 
-test('claims and completes a job without overwriting another attempt', t => {
+test('claims and completes a job without overwriting another attempt', async t => {
     const dirs = fixture();
     t.after(() => fs.rmSync(dirs.root, { recursive: true, force: true }));
 
@@ -54,17 +59,17 @@ test('claims and completes a job without overwriting another attempt', t => {
     const second = createCodexImageJob({ ...dirs, nodeId: 'node/unsafe', prompt: '第二版' });
     const sourceOne = path.join(dirs.root, 'generated-one.png');
     const sourceTwo = path.join(dirs.root, 'generated-two.png');
-    fs.writeFileSync(sourceOne, Buffer.from('one'));
-    fs.writeFileSync(sourceTwo, Buffer.from('two'));
+    await sharp({ create: { width: 64, height: 64, channels: 3, background: { r: 255, g: 0, b: 0 } } }).png().toFile(sourceOne);
+    await sharp({ create: { width: 80, height: 48, channels: 3, background: { r: 0, g: 0, b: 255 } } }).png().toFile(sourceTwo);
 
     assert.equal(claimCodexImageJob(dirs.jobsDir, first.id).status, 'processing');
-    const completedOne = completeCodexImageJob({
+    const completedOne = await completeCodexImageJob({
         jobsDir: dirs.jobsDir,
         imagesDir: dirs.imagesDir,
         jobId: first.id,
         sourceImage: sourceOne
     });
-    const completedTwo = completeCodexImageJob({
+    const completedTwo = await completeCodexImageJob({
         jobsDir: dirs.jobsDir,
         imagesDir: dirs.imagesDir,
         jobId: second.id,
@@ -74,7 +79,47 @@ test('claims and completes a job without overwriting another attempt', t => {
     assert.equal(completedOne.status, 'completed');
     assert.equal(completedTwo.status, 'completed');
     assert.notEqual(completedOne.resultUrl, completedTwo.resultUrl);
-    assert.equal(fs.readFileSync(completedOne.resultPath, 'utf8'), 'one');
-    assert.equal(fs.readFileSync(completedTwo.resultPath, 'utf8'), 'two');
+    assert.deepEqual(await sharp(completedOne.resultPath).metadata().then(({ width, height }) => ({ width, height })), { width: 64, height: 64 });
+    assert.deepEqual(await sharp(completedTwo.resultPath).metadata().then(({ width, height }) => ({ width, height })), { width: 80, height: 48 });
     assert.equal(getCodexImageJob(dirs.jobsDir, first.id).resultUrl, completedOne.resultUrl);
+});
+
+test('verifies and normalizes ignored Codex aspect ratios to exact output pixels', async t => {
+    const dirs = fixture();
+    t.after(() => fs.rmSync(dirs.root, { recursive: true, force: true }));
+
+    const job = createCodexImageJob({
+        ...dirs,
+        nodeId: 'portrait-node',
+        prompt: '全身人物定妆照',
+        aspectRatio: '4:5'
+    });
+    const source = path.join(dirs.root, 'wrong-ratio.png');
+    await sharp({
+        create: {
+            width: 90,
+            height: 176,
+            channels: 3,
+            background: { r: 80, g: 90, b: 100 }
+        }
+    }).png().toFile(source);
+
+    const before = await inspectCodexImageOutput({ imagePath: source, aspectRatio: job.aspectRatio });
+    assert.equal(before.matches, false);
+
+    const completed = await completeCodexImageJob({
+        jobsDir: dirs.jobsDir,
+        imagesDir: dirs.imagesDir,
+        jobId: job.id,
+        sourceImage: source
+    });
+    const after = await inspectCodexImageOutput({ imagePath: completed.resultPath, aspectRatio: job.aspectRatio });
+
+    assert.equal(after.matches, true);
+    assert.equal(after.width / after.height, 4 / 5);
+    assert.equal(completed.aspectRatioVerified, true);
+    assert.equal(completed.aspectRatioAdjusted, true);
+    assert.equal(completed.aspectRatioAdjustmentMode, 'contain-with-blurred-edge-fill');
+    assert.deepEqual(completed.sourceDimensions, { width: 90, height: 176 });
+    assert.deepEqual(completed.outputDimensions, { width: 144, height: 180 });
 });

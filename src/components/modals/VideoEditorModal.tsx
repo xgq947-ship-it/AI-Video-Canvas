@@ -194,7 +194,7 @@ export const VideoEditorModal: React.FC<VideoEditorModalProps> = ({
         >
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-800">
-                <h2 className="text-lg font-semibold text-white">Video Editor</h2>
+                <h2 className="text-lg font-semibold text-white">视频编辑器</h2>
                 <button
                     onClick={onClose}
                     className="p-2 rounded-lg hover:bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
@@ -228,8 +228,8 @@ export const VideoEditorModal: React.FC<VideoEditorModalProps> = ({
                     </div>
                 ) : (
                     <div className="text-neutral-500 text-center">
-                        <p>No video connected</p>
-                        <p className="text-sm mt-2">Connect a Video node to edit</p>
+                        <p>未连接视频</p>
+                        <p className="text-sm mt-2">请连接一个视频节点后再编辑</p>
                     </div>
                 )}
 

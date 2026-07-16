@@ -6,6 +6,7 @@ import {
     completeCodexImageJob,
     failCodexImageJob,
     getCodexImageJob,
+    inspectCodexImageOutput,
     listCodexImageJobs
 } from '../server/services/codexImageJobs.js';
 
@@ -46,13 +47,20 @@ try {
         const jobId = args[1];
         const sourceImage = option('--image');
         if (!jobId || !sourceImage) throw new Error('Usage: complete <jobId> --image <path>');
-        print(completeCodexImageJob({ jobsDir, imagesDir, jobId, sourceImage }));
+        print(await completeCodexImageJob({ jobsDir, imagesDir, jobId, sourceImage }));
+    } else if (command === 'verify') {
+        const jobId = args[1];
+        const sourceImage = option('--image');
+        if (!jobId || !sourceImage) throw new Error('Usage: verify <jobId> --image <path>');
+        const job = getCodexImageJob(jobsDir, jobId);
+        if (!job) throw new Error(`Job not found: ${jobId}`);
+        print(await inspectCodexImageOutput({ imagePath: sourceImage, aspectRatio: job.aspectRatio }));
     } else if (command === 'fail') {
         const jobId = args[1];
         if (!jobId) throw new Error('Usage: fail <jobId> --message <reason>');
         print(failCodexImageJob(jobsDir, jobId, option('--message')));
     } else {
-        throw new Error('Commands: list, show, claim, complete, fail');
+        throw new Error('Commands: list, show, claim, verify, complete, fail');
     }
 } catch (error) {
     process.stderr.write(`${error.message}\n`);

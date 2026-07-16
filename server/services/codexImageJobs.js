@@ -1,8 +1,98 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import sharp from 'sharp';
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
+const ASPECT_RATIO_PATTERN = /^(\d+):(\d+)$/;
+
+function parseAspectRatio(value) {
+    if (!value || value === 'Auto') return null;
+    const match = String(value).match(ASPECT_RATIO_PATTERN);
+    if (!match) throw new Error(`Invalid aspect ratio: ${value}`);
+    const width = Number(match[1]);
+    const height = Number(match[2]);
+    if (!width || !height) throw new Error(`Invalid aspect ratio: ${value}`);
+    return { label: `${width}:${height}`, width, height, value: width / height };
+}
+
+function buildOutputSpec(aspectRatio, resolution) {
+    const ratio = parseAspectRatio(aspectRatio);
+    if (!ratio) {
+        return {
+            aspectRatio: 'Auto',
+            resolution: resolution || 'Auto',
+            enforceExactAspectRatio: false,
+            instruction: 'Use the composition and dimensions best suited to the prompt.'
+        };
+    }
+    const orientation = ratio.width === ratio.height ? 'square' : ratio.width > ratio.height ? 'landscape' : 'portrait';
+    return {
+        aspectRatio: ratio.label,
+        ratioWidth: ratio.width,
+        ratioHeight: ratio.height,
+        orientation,
+        resolution: resolution || 'Auto',
+        enforceExactAspectRatio: true,
+        tolerance: 0.005,
+        instruction: `HARD OUTPUT REQUIREMENT: generate exactly one ${orientation} image in ${ratio.label} aspect ratio. The final pixel width divided by height must equal ${ratio.width}/${ratio.height}. Do not substitute another portrait, landscape, or square ratio.`
+    };
+}
+
+export async function inspectCodexImageOutput({ imagePath, aspectRatio }) {
+    const ratio = parseAspectRatio(aspectRatio);
+    const metadata = await sharp(imagePath).metadata();
+    if (!metadata.width || !metadata.height) throw new Error('Generated image has no readable dimensions');
+    const actualRatio = metadata.width / metadata.height;
+    const exactMatch = !ratio || metadata.width * ratio.height === metadata.height * ratio.width;
+    return {
+        requestedAspectRatio: ratio?.label || 'Auto',
+        width: metadata.width,
+        height: metadata.height,
+        actualRatio,
+        matches: exactMatch,
+        withinTolerance: !ratio || Math.abs(actualRatio - ratio.value) / ratio.value <= 0.005
+    };
+}
+
+async function writeAspectRatioSafeImage({ sourceImage, destination, aspectRatio }) {
+    const inspection = await inspectCodexImageOutput({ imagePath: sourceImage, aspectRatio });
+    const ratio = parseAspectRatio(aspectRatio);
+    if (!ratio || inspection.matches) {
+        fs.copyFileSync(sourceImage, destination);
+        return {
+            inspection,
+            outputWidth: inspection.width,
+            outputHeight: inspection.height,
+            adjusted: false,
+            adjustmentMode: 'none'
+        };
+    }
+
+    // Use the smallest exact-ratio canvas that fully contains the generated image.
+    // A blurred edge fill preserves the entire composition instead of cropping faces,
+    // feet, subtitles, or other content when a model ignores the requested ratio.
+    const unit = Math.ceil(Math.max(inspection.width / ratio.width, inspection.height / ratio.height));
+    const outputWidth = unit * ratio.width;
+    const outputHeight = unit * ratio.height;
+    const background = await sharp(sourceImage)
+        .resize(outputWidth, outputHeight, { fit: 'cover', position: 'attention' })
+        .blur(Math.max(12, Math.round(Math.min(outputWidth, outputHeight) * 0.025)))
+        .toBuffer();
+    const foreground = await sharp(sourceImage).toBuffer();
+
+    await sharp(background)
+        .composite([{ input: foreground, gravity: 'centre' }])
+        .toFile(destination);
+
+    return {
+        inspection,
+        outputWidth,
+        outputHeight,
+        adjusted: true,
+        adjustmentMode: 'contain-with-blurred-edge-fill'
+    };
+}
 
 function writeJsonAtomic(filePath, value) {
     const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
@@ -139,16 +229,19 @@ export function createCodexImageJob({
         jobId: id
     });
 
+    const normalizedAspectRatio = parseAspectRatio(aspectRatio)?.label || 'Auto';
+    const normalizedResolution = resolution || 'Auto';
     const job = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         id,
         type: 'codex-image-generation',
         nodeId,
         attempt,
         status: 'pending',
         prompt: prompt.trim(),
-        aspectRatio,
-        resolution,
+        aspectRatio: normalizedAspectRatio,
+        resolution: normalizedResolution,
+        outputSpec: buildOutputSpec(normalizedAspectRatio, normalizedResolution),
         references,
         createdAt: now,
         updatedAt: now
@@ -168,7 +261,7 @@ export function claimCodexImageJob(jobsDir, jobId) {
     return updated;
 }
 
-export function completeCodexImageJob({ jobsDir, imagesDir, jobId, sourceImage }) {
+export async function completeCodexImageJob({ jobsDir, imagesDir, jobId, sourceImage }) {
     const job = getCodexImageJob(jobsDir, jobId);
     if (!job) throw new Error(`Job not found: ${jobId}`);
     if (!['pending', 'processing'].includes(job.status)) {
@@ -186,7 +279,11 @@ export function completeCodexImageJob({ jobsDir, imagesDir, jobId, sourceImage }
     const nodeSegment = safeSegment(job.nodeId);
     const filename = `codex_${nodeSegment}_v${String(job.attempt).padStart(3, '0')}_${job.id.slice(-8)}${extension}`;
     const destination = path.join(imagesDir, filename);
-    fs.copyFileSync(absoluteSource, destination);
+    const normalizedOutput = await writeAspectRatioSafeImage({
+        sourceImage: absoluteSource,
+        destination,
+        aspectRatio: job.aspectRatio
+    });
 
     const now = new Date().toISOString();
     const resultUrl = `/library/images/${filename}`;
@@ -195,6 +292,17 @@ export function completeCodexImageJob({ jobsDir, imagesDir, jobId, sourceImage }
         status: 'completed',
         resultUrl,
         resultPath: destination,
+        sourceDimensions: {
+            width: normalizedOutput.inspection.width,
+            height: normalizedOutput.inspection.height
+        },
+        outputDimensions: {
+            width: normalizedOutput.outputWidth,
+            height: normalizedOutput.outputHeight
+        },
+        aspectRatioVerified: true,
+        aspectRatioAdjusted: normalizedOutput.adjusted,
+        aspectRatioAdjustmentMode: normalizedOutput.adjustmentMode,
         completedAt: now,
         updatedAt: now
     };
@@ -207,6 +315,10 @@ export function completeCodexImageJob({ jobsDir, imagesDir, jobId, sourceImage }
         model: 'codex-built-in-imagegen',
         nodeId: job.nodeId,
         attempt: job.attempt,
+        aspectRatio: job.aspectRatio,
+        sourceDimensions: updated.sourceDimensions,
+        outputDimensions: updated.outputDimensions,
+        aspectRatioAdjusted: updated.aspectRatioAdjusted,
         createdAt: now,
         type: 'images'
     };

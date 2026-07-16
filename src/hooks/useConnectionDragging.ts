@@ -15,6 +15,11 @@ interface ConnectionStart {
     handle: 'left' | 'right';
 }
 
+interface CanvasOffset {
+    left: number;
+    top: number;
+}
+
 export const useConnectionDragging = () => {
     // ============================================================================
     // STATE
@@ -44,10 +49,11 @@ export const useConnectionDragging = () => {
         mouseX: number,
         mouseY: number,
         nodes: NodeData[],
-        viewport: Viewport
+        viewport: Viewport,
+        canvasOffset: CanvasOffset = { left: 0, top: 0 }
     ) => {
-        const canvasX = (mouseX - viewport.x) / viewport.zoom;
-        const canvasY = (mouseY - viewport.y) / viewport.zoom;
+        const canvasX = (mouseX - canvasOffset.left - viewport.x) / viewport.zoom;
+        const canvasY = (mouseY - canvasOffset.top - viewport.y) / viewport.zoom;
 
         const found = nodes.find(n => {
             if (n.id === connectionStart?.nodeId) return false;
@@ -84,6 +90,9 @@ export const useConnectionDragging = () => {
     ) => {
         e.stopPropagation();
         e.preventDefault();
+        if (e.currentTarget instanceof HTMLElement) {
+            e.currentTarget.setPointerCapture(e.pointerId);
+        }
         dragStartTime.current = Date.now();
         setIsDraggingConnection(true);
         setConnectionStart({ nodeId, handle: side });
@@ -96,12 +105,13 @@ export const useConnectionDragging = () => {
     const updateConnectionDrag = (
         e: React.PointerEvent,
         nodes: NodeData[],
-        viewport: Viewport
+        viewport: Viewport,
+        canvasOffset?: CanvasOffset
     ) => {
         if (!isDraggingConnection) return false;
 
         setTempConnectionEnd({ x: e.clientX, y: e.clientY });
-        checkHoveredNode(e.clientX, e.clientY, nodes, viewport);
+        checkHoveredNode(e.clientX, e.clientY, nodes, viewport, canvasOffset);
         return true;
     };
 

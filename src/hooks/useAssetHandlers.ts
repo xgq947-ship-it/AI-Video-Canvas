@@ -172,7 +172,11 @@ export const useAssetHandlers = ({
     /**
      * Save asset to library
      */
-    const handleSaveAssetToLibrary = useCallback(async (name: string, category: string) => {
+    const handleSaveAssetToLibrary = useCallback(async (
+        name: string,
+        category: string,
+        meta?: Record<string, string | undefined>
+    ) => {
         if (!nodeToSnapshot?.resultUrl) return;
 
         try {
@@ -182,7 +186,8 @@ export const useAssetHandlers = ({
                 body: JSON.stringify({
                     sourceUrl: nodeToSnapshot.resultUrl,
                     name: name,
-                    category: category
+                    category: category,
+                    meta
                 })
             });
 

@@ -130,6 +130,13 @@ export interface NodeData {
   // Storyboard Generator specific
   characterReferenceUrls?: string[]; // URLs of character images for reference in generation
 
+  // Character identity + wardrobe pack metadata
+  characterId?: string;
+  characterName?: string;
+  characterAssetRole?: 'identity-face' | 'identity-fullbody' | 'identity-expression' | 'identity-board' | 'look-fullbody' | 'look-board';
+  lookId?: string;
+  lookName?: string;
+
   // ==========================================================================
   // AI 漫剧生产节点字段（配音/音效/BGM/字幕/成片）
   // ==========================================================================

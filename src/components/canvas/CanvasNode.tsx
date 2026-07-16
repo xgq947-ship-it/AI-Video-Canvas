@@ -42,6 +42,7 @@ interface CanvasNodeProps {
   onImageToImage?: (nodeId: string) => void;
   onImageToVideo?: (nodeId: string) => void;
   onChangeAngleGenerate?: (nodeId: string) => void;
+  onGridSplit?: (nodeId: string, cols: number, rows: number) => void;
   zoom: number;
   // Mouse event callbacks for chat panel drag functionality
   onMouseEnter?: () => void;
@@ -52,6 +53,79 @@ interface CanvasNodeProps {
   onPostToX?: (nodeId: string, mediaUrl: string, mediaType: 'image' | 'video') => void;
   onPostToTikTok?: (nodeId: string, mediaUrl: string) => void;
 }
+
+// 宫格切分预设：把整图等分成 N 宫格（纯前端切图，无需 AI）
+const GRID_SPLIT_OPTIONS = [
+  { label: '4宫格 (2×2)', cols: 2, rows: 2 },
+  { label: '9宫格 (3×3)', cols: 3, rows: 3 },
+  { label: '16宫格 (4×4)', cols: 4, rows: 4 },
+  { label: '25宫格 (5×5)', cols: 5, rows: 5 },
+];
+
+const NODE_TYPE_LABELS: Record<NodeType, string> = {
+  [NodeType.TEXT]: '文本',
+  [NodeType.IMAGE]: '图片',
+  [NodeType.VIDEO]: '视频',
+  [NodeType.AUDIO]: '配音',
+  [NodeType.IMAGE_EDITOR]: '图片编辑器',
+  [NodeType.VIDEO_EDITOR]: '视频编辑器',
+  [NodeType.STORYBOARD]: '分镜管理',
+  [NodeType.CAMERA_ANGLE]: '镜头角度',
+  [NodeType.LOCAL_IMAGE_MODEL]: '本地图片模型',
+  [NodeType.LOCAL_VIDEO_MODEL]: '本地视频模型',
+  [NodeType.SFX]: '音效',
+  [NodeType.BGM]: '背景音乐',
+  [NodeType.SUBTITLE]: '字幕',
+  [NodeType.RENDER]: '成片',
+};
+
+const GridSplitMenu: React.FC<{ onSplit: (cols: number, rows: number) => void }> = ({ onSplit }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
+        onPointerDown={(e) => e.stopPropagation()}
+        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${open ? 'bg-blue-500 text-white' : 'text-neutral-300 hover:bg-neutral-700 hover:text-white'}`}
+        title="把整图等分切成多张独立图片"
+      >
+        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <line x1="9" y1="3" x2="9" y2="21" />
+          <line x1="15" y1="3" x2="15" y2="21" />
+          <line x1="3" y1="9" x2="21" y2="9" />
+          <line x1="3" y1="15" x2="21" y2="15" />
+        </svg>
+        宫格切分
+      </button>
+      {open && (
+        <div
+          className="absolute top-full mt-2 left-1/2 -translate-x-1/2 w-40 rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl py-1 z-30"
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          {GRID_SPLIT_OPTIONS.map(o => (
+            <button
+              key={o.label}
+              onClick={(e) => { e.stopPropagation(); onSplit(o.cols, o.rows); setOpen(false); }}
+              className="w-full text-left px-3 py-2 text-xs text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors"
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const CanvasNode: React.FC<CanvasNodeProps> = ({
   data,
@@ -79,6 +153,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   onImageToImage,
   onImageToVideo,
   onChangeAngleGenerate,
+  onGridSplit,
   zoom,
   onMouseEnter,
   onMouseLeave,
@@ -230,7 +305,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
         >
           {/* Header */}
           <div className="absolute -top-8 left-0 text-sm px-2 py-0.5 rounded font-medium text-neutral-600">
-            Image Editor
+            图片编辑器
           </div>
 
           {/* Content Area */}
@@ -248,7 +323,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
               />
             ) : (
               <div className="text-neutral-500 text-center text-sm">
-                Double click to open editor
+                双击打开编辑器
               </div>
             )}
           </div>
@@ -303,8 +378,12 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                     <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
                     <line x1="12" y1="22.08" x2="12" y2="12" />
                   </svg>
-                  Change Angle
+                  调整角度
                 </button>
+                {/* Grid Split Button - slice the image into N×N separate image nodes */}
+                {onGridSplit && (
+                  <GridSplitMenu onSplit={(cols, rows) => onGridSplit(data.id, cols, rows)} />
+                )}
                 {/* Separator */}
                 <div className="w-px h-4 bg-neutral-600 mx-1" />
 
@@ -313,7 +392,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                   onClick={() => onExpand?.(data.resultUrl!)}
                   onPointerDown={(e) => e.stopPropagation()}
                   className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                  title="View full size"
+                  title="查看原图"
                 >
                   <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                     <polyline points="15 3 21 3 21 9" />
@@ -327,7 +406,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                   onClick={(e) => { e.stopPropagation(); onPostToX?.(data.id, data.resultUrl!, 'image'); }}
                   onPointerDown={(e) => e.stopPropagation()}
                   className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                  title="Post to X"
+                  title="发布到 X"
                 >
                   <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="currentColor">
                     <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
@@ -374,7 +453,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
                   className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                  title="Download"
+                  title="下载"
                 >
                   <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -397,7 +476,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                   }}
                   onDragEnd={() => onDragEnd?.()}
                   className="p-1.5 bg-cyan-500/80 hover:bg-cyan-400 rounded-full text-white cursor-grab active:cursor-grabbing"
-                  title="Drag to chat"
+                  title="拖到聊天窗口"
                 >
                   <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                     <circle cx="9" cy="5" r="1" fill="currentColor" />
@@ -439,7 +518,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
               ) : (
                 <div className="flex flex-col items-center gap-3 text-neutral-500">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-                  <span className="text-sm">Generating new angle...</span>
+                  <span className="text-sm">正在生成新角度...</span>
                 </div>
               )}
             </div>
@@ -524,7 +603,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
         >
           {/* Header */}
           <div className="absolute -top-8 left-0 text-sm px-2 py-0.5 rounded font-medium text-purple-400">
-            Video Editor
+            视频编辑器
           </div>
 
           {/* Content Area */}
@@ -548,8 +627,8 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
               />
             ) : (
               <div className="text-neutral-500 text-center text-sm">
-                <p>Connect a Video node</p>
-                <p className="text-xs mt-1 text-neutral-600">Double click to open editor</p>
+                <p>请连接视频节点</p>
+                <p className="text-xs mt-1 text-neutral-600">双击打开编辑器</p>
               </div>
             )}
           </div>
@@ -613,7 +692,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                       <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
                       <line x1="12" y1="22.08" x2="12" y2="12" />
                     </svg>
-                    Change Angle
+                    调整角度
                   </button>
                   {/* Separator */}
                   <div className="w-px h-4 bg-neutral-600 mx-1" />
@@ -622,14 +701,14 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                     onClick={() => fileInputRef.current?.click()}
                     onPointerDown={(e) => e.stopPropagation()}
                     className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                    title="Upload image"
+                    title="上传图片"
                   >
                     <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                       <polyline points="17 8 12 3 7 8" />
                       <line x1="12" y1="3" x2="12" y2="15" />
                     </svg>
-                    Upload
+                    上传
                   </button>
                   {/* Hidden file input for upload */}
                   <input
@@ -652,12 +731,19 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                   />
                 </>
               )}
+              {/* Grid Split Button - slice the image into N×N separate image nodes */}
+              {onGridSplit && (
+                <>
+                  <GridSplitMenu onSplit={(cols, rows) => onGridSplit(data.id, cols, rows)} />
+                  <div className="w-px h-4 bg-neutral-600 mx-1" />
+                </>
+              )}
               {/* Expand Button */}
               <button
                 onClick={() => onExpand?.(data.resultUrl!)}
                 onPointerDown={(e) => e.stopPropagation()}
                 className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                title="View full size"
+                title="查看原图"
               >
                 <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                   <polyline points="15 3 21 3 21 9" />
@@ -671,7 +757,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                 onClick={(e) => { e.stopPropagation(); onPostToX?.(data.id, data.resultUrl!, 'image'); }}
                 onPointerDown={(e) => e.stopPropagation()}
                 className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                title="Post to X"
+                title="发布到 X"
               >
                 <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="currentColor">
                   <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
@@ -718,7 +804,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
                 className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                title="Download"
+                title="下载"
               >
                 <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -741,7 +827,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                 }}
                 onDragEnd={() => onDragEnd?.()}
                 className="p-1.5 bg-cyan-500/80 hover:bg-cyan-400 rounded-full text-white cursor-grab active:cursor-grabbing"
-                title="Drag to chat"
+                title="拖到聊天窗口"
               >
                 <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                   <circle cx="9" cy="5" r="1" fill="currentColor" />
@@ -771,7 +857,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                 onClick={() => onExpand?.(data.resultUrl!)}
                 onPointerDown={(e) => e.stopPropagation()}
                 className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                title="View full size"
+                title="查看原图"
               >
                 <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                   <polyline points="15 3 21 3 21 9" />
@@ -785,7 +871,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                 onClick={(e) => { e.stopPropagation(); onPostToX?.(data.id, data.resultUrl!, 'video'); }}
                 onPointerDown={(e) => e.stopPropagation()}
                 className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                title="Post to X"
+                title="发布到 X"
               >
                 <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="currentColor">
                   <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
@@ -796,7 +882,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                 onClick={(e) => { e.stopPropagation(); onPostToTikTok?.(data.id, data.resultUrl!); }}
                 onPointerDown={(e) => e.stopPropagation()}
                 className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                title="Post to TikTok"
+                title="发布到 TikTok"
               >
                 <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="currentColor">
                   <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z" />
@@ -834,7 +920,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
                 className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                title="Download"
+                title="下载"
               >
                 <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -857,7 +943,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                 }}
                 onDragEnd={() => onDragEnd?.()}
                 className="p-1.5 bg-cyan-500/80 hover:bg-cyan-400 rounded-full text-white cursor-grab active:cursor-grabbing"
-                title="Drag to chat"
+                title="拖到聊天窗口"
               >
                 <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                   <circle cx="9" cy="5" r="1" fill="currentColor" />
@@ -905,9 +991,9 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
                 e.stopPropagation();
                 setIsEditingTitle(true);
               }}
-              title="Double-click to edit"
+              title="双击编辑"
             >
-              {data.title || data.type}
+              {data.title || NODE_TYPE_LABELS[data.type]}
             </div>
           )}
 

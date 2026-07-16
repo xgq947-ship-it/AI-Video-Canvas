@@ -20,6 +20,8 @@ import storyboardRoutes from './routes/storyboard.js';
 import audioRoutes from './routes/audio.js';
 import renderRoutes from './routes/render.js';
 import codexImageJobRoutes from './routes/codex-image-jobs.js';
+import { normalizeCharacterAssetMeta } from './services/characterAssets.js';
+import { createUniqueAssetFilename } from './services/assetFilenames.js';
 import { scanAssetLibrary } from './utils/scanAssetLibrary.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -267,11 +269,9 @@ app.post('/api/library', async (req, res) => {
             fs.mkdirSync(destDir, { recursive: true });
         }
 
-        // Sanitize name for filesystem
-        const safeName = name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-
         let destFilename;
         let destPath;
+        const assetId = crypto.randomUUID();
 
         // HANDLE DATA URL (Base64)
         if (sourceUrl.startsWith('data:')) {
@@ -290,7 +290,7 @@ app.post('/api/library', async (req, res) => {
             else if (mimeType === 'video/mp4') ext = '.mp4';
             // Add more as needed
 
-            destFilename = `${safeName}${ext}`;
+            destFilename = createUniqueAssetFilename(name, ext, assetId);
             destPath = path.join(destDir, destFilename);
 
             fs.writeFileSync(destPath, buffer);
@@ -338,7 +338,7 @@ app.post('/api/library', async (req, res) => {
 
             // Copy file
             const ext = path.extname(sourcePath);
-            destFilename = `${safeName}${ext}`;
+            destFilename = createUniqueAssetFilename(name, ext, assetId);
             destPath = path.join(destDir, destFilename);
 
             fs.copyFileSync(sourcePath, destPath);
@@ -351,14 +351,16 @@ app.post('/api/library', async (req, res) => {
             libraryData = JSON.parse(fs.readFileSync(libraryJsonPath, 'utf8'));
         }
 
+        const normalizedMeta = normalizeCharacterAssetMeta({ category, meta, libraryData });
+
         const newEntry = {
-            id: crypto.randomUUID(),
+            id: assetId,
             name: name,
             category: category,
             url: `/library/assets/${category}/${destFilename}`,
             type: sourceUrl.includes('video') || (sourceUrl.startsWith('data:video')) ? 'video' : 'image',
             createdAt: new Date().toISOString(),
-            ...meta
+            ...normalizedMeta
         };
 
         libraryData.push(newEntry);

@@ -18,7 +18,7 @@ import { calculateConnectionPath } from '../../utils/connectionHelpers';
  * @param node - The node to calculate width for
  * @param parentNode - Optional parent node (used for Editor nodes to determine width when they have input content)
  */
-const getNodeWidth = (node: NodeData, parentNode?: NodeData): number => {
+export const getNodeWidth = (node: NodeData, parentNode?: NodeData): number => {
     // Image Editor with input from parent: width depends on aspect ratio
     if (node.type === NodeType.IMAGE_EDITOR) {
         const hasInput = parentNode && parentNode.status === NodeStatus.SUCCESS && parentNode.resultUrl;
@@ -68,7 +68,7 @@ const getNodeWidth = (node: NodeData, parentNode?: NodeData): number => {
  * @param node - The node to calculate height for
  * @param parentNode - Optional parent node (used for Editor nodes to determine if they have input content)
  */
-const getNodeHeight = (node: NodeData, parentNode?: NodeData): number => {
+export const getNodeHeight = (node: NodeData, parentNode?: NodeData): number => {
     const baseWidth = getNodeWidth(node, parentNode);
     const hasContent = node.status === NodeStatus.SUCCESS && node.resultUrl;
 
@@ -164,6 +164,7 @@ interface ConnectionsLayerProps {
     isDraggingConnection: boolean;
     connectionStart: { nodeId: string; handle: 'left' | 'right' } | null;
     tempConnectionEnd: { x: number; y: number } | null;
+    canvasOffset?: { left: number; top: number };
     // Selection
     selectedConnection: Connection | null;
     onEdgeClick: (e: React.MouseEvent, parentId: string, childId: string) => void;
@@ -176,6 +177,7 @@ export const ConnectionsLayer: React.FC<ConnectionsLayerProps> = ({
     isDraggingConnection,
     connectionStart,
     tempConnectionEnd,
+    canvasOffset = { left: 0, top: 0 },
     selectedConnection,
     onEdgeClick,
     canvasTheme = 'dark'
@@ -226,8 +228,8 @@ export const ConnectionsLayer: React.FC<ConnectionsLayerProps> = ({
         if (startNode) {
             const startX = connectionStart.handle === 'right' ? startNode.x + getNodeWidth(startNode) : startNode.x;
             const startY = startNode.y + getNodeHeight(startNode) / 2;
-            const endX = (tempConnectionEnd.x - viewport.x) / viewport.zoom;
-            const endY = (tempConnectionEnd.y - viewport.y) / viewport.zoom;
+            const endX = (tempConnectionEnd.x - canvasOffset.left - viewport.x) / viewport.zoom;
+            const endY = (tempConnectionEnd.y - canvasOffset.top - viewport.y) / viewport.zoom;
 
             const path = calculateConnectionPath(
                 startX,

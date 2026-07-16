@@ -8,7 +8,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { TopBar } from './components/TopBar';
-import { COLLAPSED_SIDEBAR_WIDTH, EXPANDED_SIDEBAR_WIDTH, ProjectSidebar } from './components/ProjectSidebar';
+import { COLLAPSED_SIDEBAR_WIDTH, EXPANDED_SIDEBAR_WIDTH, ProjectSidebar, type SidebarAssetPreview } from './components/ProjectSidebar';
 import { CanvasNode } from './components/canvas/CanvasNode';
 import { ConnectionsLayer } from './components/canvas/ConnectionsLayer';
 import { ContextMenu } from './components/ContextMenu';
@@ -47,13 +47,15 @@ import { CreateAssetModal } from './components/modals/CreateAssetModal';
 import { TikTokImportModal } from './components/modals/TikTokImportModal';
 import { TwitterPostModal } from './components/modals/TwitterPostModal';
 import { TikTokPostModal } from './components/modals/TikTokPostModal';
-import { AssetLibraryPanel } from './components/AssetLibraryPanel';
+import { AssetLibraryPanel, type LibraryAsset } from './components/AssetLibraryPanel';
 import { useTikTokImport } from './hooks/useTikTokImport';
 import { useStoryboardGenerator } from './hooks/useStoryboardGenerator';
 import { StoryboardGeneratorModal } from './components/modals/StoryboardGeneratorModal';
 import { StoryboardVideoModal } from './components/modals/StoryboardVideoModal';
 import { MangaStartPanel } from './components/MangaStartPanel';
 import { isValidNodeConnection } from '@/shared/connectionRules.js';
+import { MapPinned } from 'lucide-react';
+import { CanvasMinimap } from './components/canvas/CanvasMinimap';
 
 // ============================================================================
 // MAIN COMPONENT
@@ -93,6 +95,8 @@ export default function App() {
 
   const [canvasTheme, setCanvasTheme] = useState<'dark' | 'light'>('dark');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarAssetPreview, setSidebarAssetPreview] = useState<(SidebarAssetPreview & { panelY: number }) | null>(null);
+  const [isMinimapOpen, setIsMinimapOpen] = useState(false);
 
   // Panel state management (history, chat, asset library, expand)
   const {
@@ -963,11 +967,22 @@ export default function App() {
   };
 
   const handleAssetsClick = (e: React.MouseEvent) => {
+    setSidebarAssetPreview(null);
     panelAssetsClick(e, closeWorkflowPanel);
   };
 
   const handleContextMenuAddAssets = () => {
+    setSidebarAssetPreview(null);
     openAssetLibraryModal(contextMenu.y, closeWorkflowPanel);
+  };
+
+  const handleSidebarAssetPreview = (asset: SidebarAssetPreview, e: React.MouseEvent<HTMLElement>) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setSidebarAssetPreview({ ...asset, panelY: rect.top });
+    closeAssetLibrary();
+    closeHistoryPanel();
+    closeWorkflowPanel();
+    closeChat();
   };
 
   /**
@@ -1020,7 +1035,8 @@ export default function App() {
     url: string,
     prompt: string,
     model?: string,
-    dropPosition?: { x: number; y: number }
+    dropPosition?: { x: number; y: number },
+    metadata?: Partial<NodeData>
   ) => {
     // Calculate position: use the drop point when provided, otherwise center of canvas
     const centerX = (window.innerWidth / 2 - viewport.x) / viewport.zoom - 170;
@@ -1048,7 +1064,8 @@ export default function App() {
         videoModel: isVideo ? nodeModel : undefined,
         imageModel: !isVideo ? nodeModel : undefined,
         aspectRatio: aspectRatio || '16:9',
-        resolution: isVideo ? 'Auto' : '1K'
+        resolution: isVideo ? 'Auto' : '1K',
+        ...metadata
       };
 
       setNodes(prev => [...prev, newNode]);
@@ -1088,9 +1105,128 @@ export default function App() {
     }
   };
 
-  const handleLibrarySelect = (url: string, type: 'image' | 'video') => {
-    handleSelectAsset(type === 'image' ? 'images' : 'videos', url, 'Asset Library Item');
+  const resolveCharacterNodeMetadata = async (asset: Partial<LibraryAsset>): Promise<Partial<NodeData>> => {
+    let characterReferenceUrls: string[] | undefined;
+
+    if (asset.category === 'Character' && asset.characterId) {
+      try {
+        const response = await fetch('/api/library');
+        const libraryAssets: LibraryAsset[] = response.ok ? await response.json() : [];
+        const sameCharacter = libraryAssets.filter(item =>
+          item.type === 'image' && item.characterId === asset.characterId
+        );
+        const identityFace = sameCharacter.find(item => item.characterAssetRole === 'identity-face');
+        const sameLook = asset.lookId
+          ? sameCharacter.filter(item => item.lookId === asset.lookId)
+          : [];
+
+        characterReferenceUrls = [
+          identityFace?.url,
+          ...sameLook.map(item => item.url),
+          asset.url
+        ].filter((url, index, urls): url is string => Boolean(url) && urls.indexOf(url) === index);
+      } catch (error) {
+        console.error('Failed to resolve character references:', error);
+      }
+    }
+
+    return {
+      characterId: asset.characterId,
+      characterName: asset.characterName,
+      characterAssetRole: asset.characterAssetRole,
+      lookId: asset.lookId,
+      lookName: asset.lookName,
+      characterReferenceUrls
+    };
+  };
+
+  const handleLibrarySelect = async (asset: LibraryAsset) => {
+    const characterMetadata = await resolveCharacterNodeMetadata(asset);
+    handleSelectAsset(
+      asset.type === 'image' ? 'images' : 'videos',
+      asset.url,
+      asset.name || 'Asset Library Item',
+      undefined,
+      undefined,
+      characterMetadata
+    );
     closeAssetLibrary();
+  };
+
+  /**
+   * 宫格切分：把一张图片等分成 cols×rows 块，每块存成真实素材并在画布生成图片节点。
+   * 纯前端切图（canvas），不调用任何 AI 接口。切片持久化到 library/images/，刷新后仍在。
+   */
+  const handleGridSplit = async (nodeId: string, cols: number, rows: number) => {
+    const node = nodes.find(n => n.id === nodeId);
+    if (!node?.resultUrl) return;
+    const src = node.resultUrl;
+
+    // 加载图片；/library 资源带 CORS 头，设 crossOrigin 避免画布被污染导致 toDataURL 抛错
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    const loaded = await new Promise<HTMLImageElement | null>((resolve) => {
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = src.startsWith('data:') ? src : src.split('?')[0];
+    });
+    if (!loaded) { alert('无法加载图片，切分失败'); return; }
+
+    const sliceW = Math.floor(loaded.naturalWidth / cols);
+    const sliceH = Math.floor(loaded.naturalHeight / rows);
+    if (sliceW < 1 || sliceH < 1) { alert('图片太小，无法切分'); return; }
+
+    const cellGapX = 380;
+    const cellGapY = 440;
+    const baseX = node.x + 460; // 放在源节点右侧，按行列排布
+    const baseY = node.y;
+    const namePrefix = (node.title || node.prompt || '切分').slice(0, 20);
+
+    try {
+      const tasks: Promise<NodeData | null>[] = [];
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const idx = r * cols + c + 1;
+          tasks.push((async () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = sliceW;
+            canvas.height = sliceH;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return null;
+            ctx.drawImage(loaded, c * sliceW, r * sliceH, sliceW, sliceH, 0, 0, sliceW, sliceH);
+            const dataUrl = canvas.toDataURL('image/png');
+            const resp = await fetch('/api/assets/images', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ data: dataUrl, prompt: `${namePrefix}_${cols}x${rows}_${idx}` }),
+            });
+            if (!resp.ok) return null;
+            const saved = await resp.json();
+            if (!saved?.url) return null;
+            return {
+              id: crypto.randomUUID(),
+              type: NodeType.IMAGE,
+              x: baseX + c * cellGapX,
+              y: baseY + r * cellGapY,
+              prompt: `${namePrefix} 宫格${idx}`,
+              status: NodeStatus.SUCCESS,
+              resultUrl: saved.url,
+              resultAspectRatio: `${sliceW}/${sliceH}`,
+              model: 'Grid Split',
+              aspectRatio: getClosestAspectRatio(sliceW, sliceH),
+              resolution: 'Auto',
+            } as NodeData;
+          })());
+        }
+      }
+      const results = (await Promise.all(tasks)).filter((n): n is NodeData => n !== null);
+      if (results.length === 0) { alert('切分失败：切片未能保存'); return; }
+      setNodes(prev => [...prev, ...results]);
+      setSelectedNodeIds(results.map(n => n.id));
+    } catch (e) {
+      console.error('Grid split failed', e);
+      alert('切分失败');
+    }
   };
 
   // Custom MIME type used when dragging an asset out of the sidebar onto the canvas
@@ -1105,12 +1241,12 @@ export default function App() {
   };
 
   /** Create an image/video node where a sidebar asset was dropped on the canvas */
-  const handleCanvasDrop = (e: React.DragEvent) => {
+  const handleCanvasDrop = async (e: React.DragEvent) => {
     const raw = e.dataTransfer.getData(ASSET_DRAG_TYPE);
     if (!raw) return;
     e.preventDefault();
 
-    let asset: { url?: string; type?: string; name?: string; prompt?: string };
+    let asset: Partial<LibraryAsset> & { prompt?: string };
     try {
       asset = JSON.parse(raw);
     } catch {
@@ -1125,12 +1261,14 @@ export default function App() {
     const canvasX = (e.clientX - left - viewport.x) / viewport.zoom - 170;
     const canvasY = (e.clientY - top - viewport.y) / viewport.zoom - 150;
 
+    const characterMetadata = await resolveCharacterNodeMetadata(asset);
     handleSelectAsset(
       asset.type === 'video' ? 'videos' : 'images',
       asset.url,
       asset.prompt || asset.name || 'Asset Library Item',
       undefined,
-      { x: canvasX, y: canvasY }
+      { x: canvasX, y: canvasY },
+      characterMetadata
     );
   };
 
@@ -1223,6 +1361,7 @@ export default function App() {
         closeWorkflowPanel();
         closeHistoryPanel();
         closeAssetLibrary();
+        setSidebarAssetPreview(null);
       }
       // Middle-click (button 1) or other: Start panning
       else {
@@ -1241,7 +1380,8 @@ export default function App() {
     if (updateNodeDrag(e, viewport, setNodes, selectedNodeIds)) return;
 
     // 3. Handle Connection Dragging
-    if (updateConnectionDrag(e, nodes, viewport)) return;
+    const canvasRect = canvasRef.current?.getBoundingClientRect();
+    if (updateConnectionDrag(e, nodes, viewport, canvasRect ? { left: canvasRect.left, top: canvasRect.top } : undefined)) return;
 
     // 4. Handle Canvas Panning (disabled when selection box is active)
     if (!isSelecting) {
@@ -1308,6 +1448,7 @@ export default function App() {
           onOpenWorkflows={handleWorkflowsClick}
           onOpenHistory={handleHistoryClick}
           onOpenAssets={handleAssetsClick}
+          onPreviewAsset={handleSidebarAssetPreview}
           onOpenStoryboard={storyboardGenerator.openModal}
           onCreateProject={handleNewCanvas}
           onDeleteProject={handleDeleteCurrentProject}
@@ -1355,6 +1496,17 @@ export default function App() {
         panelLeft={(sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH) + 20}
         variant={assetLibraryVariant}
         canvasTheme={canvasTheme}
+      />
+
+      <AssetLibraryPanel
+        isOpen={Boolean(sidebarAssetPreview)}
+        onClose={() => setSidebarAssetPreview(null)}
+        onSelectAsset={handleLibrarySelect}
+        panelY={sidebarAssetPreview?.panelY ?? 100}
+        panelLeft={(sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH) + 20}
+        variant="panel"
+        canvasTheme={canvasTheme}
+        previewAsset={sidebarAssetPreview}
       />
 
       <CreateAssetModal
@@ -1480,6 +1632,10 @@ export default function App() {
               isDraggingConnection={isDraggingConnection}
               connectionStart={connectionStart}
               tempConnectionEnd={tempConnectionEnd}
+              canvasOffset={(() => {
+                const rect = canvasRef.current?.getBoundingClientRect();
+                return rect ? { left: rect.left, top: rect.top } : undefined;
+              })()}
               selectedConnection={selectedConnection}
               onEdgeClick={handleEdgeClick}
             />
@@ -1566,6 +1722,7 @@ export default function App() {
                 onImageToImage={handleImageToImage}
                 onImageToVideo={handleImageToVideo}
                 onChangeAngleGenerate={handleChangeAngleGenerate}
+                onGridSplit={handleGridSplit}
                 zoom={viewport.zoom}
                 onMouseEnter={() => setCanvasHoveredNodeId(node.id)}
                 onMouseLeave={() => setCanvasHoveredNodeId(null)}
@@ -1646,23 +1803,24 @@ export default function App() {
             );
           })}
         </div>
-      </div >
 
-      {/* Selection Box Overlay - Outside transformed canvas for screen-space coordinates */}
-      {selectionBox.isActive && (
-        <div
-          className="absolute pointer-events-none"
-          style={{
-            left: Math.min(selectionBox.startX, selectionBox.endX),
-            top: Math.min(selectionBox.startY, selectionBox.endY),
-            width: Math.abs(selectionBox.endX - selectionBox.startX),
-            height: Math.abs(selectionBox.endY - selectionBox.startY),
-            border: '2px solid #3b82f6',
-            backgroundColor: 'rgba(59, 130, 246, 0.1)',
-            zIndex: 1000
-          }}
-        />
-      )}
+        {/* Selection Box Overlay — 直接放在 #canvas-background 内（变换层的兄弟），
+            使其 left/top 与 marquee 坐标同源（相对画布左上角），避免被侧边栏宽度整体偏移。 */}
+        {selectionBox.isActive && (
+          <div
+            className="absolute pointer-events-none"
+            style={{
+              left: Math.min(selectionBox.startX, selectionBox.endX),
+              top: Math.min(selectionBox.startY, selectionBox.endY),
+              width: Math.abs(selectionBox.endX - selectionBox.startX),
+              height: Math.abs(selectionBox.endY - selectionBox.startY),
+              border: '2px solid #3b82f6',
+              backgroundColor: 'rgba(59, 130, 246, 0.1)',
+              zIndex: 1000
+            }}
+          />
+        )}
+      </div >
 
       {/* Context Menu */}
       <ContextMenu
@@ -1685,24 +1843,53 @@ export default function App() {
         canvasTheme={canvasTheme}
       />
 
-      {/* Zoom Slider */}
-      {/* Zoom Slider */}
+      {/* Canvas navigation controls */}
       {!storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
         <div
-          className={`fixed bottom-6 rounded-full px-4 py-2 flex items-center gap-3 z-50 transition-all duration-300 ${canvasTheme === 'dark' ? 'bg-neutral-900 border border-neutral-700' : 'bg-white/90 backdrop-blur-sm border border-neutral-200'}`}
+          className="fixed bottom-6 z-50 flex flex-col items-start gap-2 transition-all duration-300"
           style={{ left: (sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH) + 24 }}
         >
-          <span className={`text-xs ${canvasTheme === 'dark' ? 'text-neutral-400' : 'text-neutral-500'}`}>Zoom</span>
-          <input
-            type="range"
-            min="0.1"
-            max="2"
-            step="0.1"
-            value={viewport.zoom}
-            onChange={handleSliderZoom}
-            className="w-32"
-          />
-          <span className={`text-xs w-10 ${canvasTheme === 'dark' ? 'text-neutral-300' : 'text-neutral-600'}`}>{Math.round(viewport.zoom * 100)}%</span>
+          {isMinimapOpen && (
+            <CanvasMinimap
+              nodes={nodes}
+              viewport={viewport}
+              setViewport={setViewport}
+              canvasWidth={Math.max(1, window.innerWidth - (sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH))}
+              canvasHeight={window.innerHeight}
+              canvasTheme={canvasTheme}
+            />
+          )}
+          <div className={`flex items-center gap-3 rounded-full border px-2.5 py-2 shadow-xl ${canvasTheme === 'dark' ? 'border-neutral-700 bg-neutral-900/95' : 'border-neutral-200 bg-white/95 backdrop-blur-sm'}`}>
+            <div className="group relative">
+              <button
+                type="button"
+                aria-label="画布小地图"
+                aria-pressed={isMinimapOpen}
+                onClick={() => setIsMinimapOpen(open => !open)}
+                className={`flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${isMinimapOpen
+                  ? canvasTheme === 'dark' ? 'bg-neutral-700 text-white' : 'bg-neutral-200 text-neutral-900'
+                  : canvasTheme === 'dark' ? 'text-neutral-300 hover:bg-neutral-800 hover:text-white' : 'text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900'
+                  }`}
+              >
+                <MapPinned size={19} />
+              </button>
+              <div className={`pointer-events-none absolute bottom-full left-1/2 mb-3 -translate-x-1/2 whitespace-nowrap rounded-lg border px-3 py-1.5 text-xs opacity-0 shadow-xl transition-opacity group-hover:opacity-100 ${canvasTheme === 'dark' ? 'border-neutral-700 bg-[#242424] text-white' : 'border-neutral-200 bg-white text-neutral-800'}`}>
+                画布小地图
+              </div>
+            </div>
+            <span className={`text-xs ${canvasTheme === 'dark' ? 'text-neutral-400' : 'text-neutral-500'}`}>缩放</span>
+            <input
+              type="range"
+              min="0.1"
+              max="2"
+              step="0.1"
+              value={viewport.zoom}
+              onChange={handleSliderZoom}
+              className="w-28"
+              aria-label="画布缩放"
+            />
+            <span className={`w-11 text-xs ${canvasTheme === 'dark' ? 'text-neutral-300' : 'text-neutral-600'}`}>{Math.round(viewport.zoom * 100)}%</span>
+          </div>
         </div>
       )}
 

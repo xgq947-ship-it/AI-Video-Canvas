@@ -6,8 +6,19 @@ interface CreateAssetModalProps {
     isOpen: boolean;
     onClose: () => void;
     nodeToSnapshot: NodeData | null;
-    onSave: (name: string, category: string) => Promise<void>;
+    onSave: (name: string, category: string, meta?: Record<string, string | undefined>) => Promise<void>;
 }
+
+type CharacterAssetRole = 'identity-face' | 'identity-fullbody' | 'identity-expression' | 'identity-board' | 'look-fullbody' | 'look-board';
+
+const CHARACTER_ROLES: { value: CharacterAssetRole; label: string }[] = [
+    { value: 'identity-face', label: '身份库 · 面部特写' },
+    { value: 'identity-fullbody', label: '身份库 · 基础全身' },
+    { value: 'identity-expression', label: '身份库 · 表情九宫格' },
+    { value: 'identity-board', label: '身份库 · 人物呈现板' },
+    { value: 'look-fullbody', label: '造型包 · 全身定妆' },
+    { value: 'look-board', label: '造型包 · 人物呈现板' },
+];
 
 // 分类内部值保持英文（与 AssetLibraryPanel、library/assets/<分类>/ 文件夹一致），仅显示中文标签
 const CATEGORIES: { value: string; label: string }[] = [
@@ -27,6 +38,9 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
 }) => {
     const [name, setName] = useState('我的素材');
     const [category, setCategory] = useState(CATEGORIES[0].value);
+    const [characterName, setCharacterName] = useState('');
+    const [characterAssetRole, setCharacterAssetRole] = useState<CharacterAssetRole>('identity-face');
+    const [lookName, setLookName] = useState('');
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
     const [status, setStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
 
@@ -36,6 +50,9 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
             setStatus('idle');
             setName('我的素材');
             setCategory(CATEGORIES[0].value);
+            setCharacterName('');
+            setCharacterAssetRole('identity-face');
+            setLookName('');
         }
     }, [isOpen]);
 
@@ -43,10 +60,18 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
 
     const handleSubmit = async () => {
         if (!name.trim()) return;
+        const isCharacter = category === 'Character';
+        const isLookAsset = characterAssetRole.startsWith('look-');
+        if (isCharacter && !characterName.trim()) return;
+        if (isCharacter && isLookAsset && !lookName.trim()) return;
 
         setStatus('saving');
         try {
-            await onSave(name, category);
+            await onSave(name, category, isCharacter ? {
+                characterName: characterName.trim(),
+                characterAssetRole,
+                lookName: isLookAsset ? lookName.trim() : undefined
+            } : undefined);
             setStatus('success');
             setTimeout(() => {
                 onClose();
@@ -59,7 +84,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
 
     return (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-[#121212] border border-neutral-800 rounded-2xl w-[600px] shadow-2xl overflow-hidden flex flex-col">
+            <div className="flex max-h-[90vh] w-[680px] flex-col overflow-hidden rounded-2xl border border-neutral-800 bg-[#121212] shadow-2xl">
 
                 {/* Header */}
                 <div className="px-6 pt-6 pb-2">
@@ -69,7 +94,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
                     </div>
                 </div>
 
-                <div className="p-6 flex gap-6">
+                <div className="flex gap-6 overflow-y-auto p-6">
                     {/* Left: Cover Image */}
                     <div className="w-1/2 flex flex-col gap-2">
                         <label className="text-sm font-medium text-neutral-200">封面 <span className="text-red-400">*</span></label>
@@ -86,7 +111,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
                     </div>
 
                     {/* Right: Form */}
-                    <div className="w-1/2 flex flex-col gap-6">
+                    <div className="flex w-1/2 flex-col gap-4">
 
                         {/* Name Input */}
                         <div className="flex flex-col gap-2">
@@ -130,6 +155,47 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
                             )}
                         </div>
 
+                        {category === 'Character' && (
+                            <>
+                                <div className="flex flex-col gap-2">
+                                    <label className="text-sm font-medium text-neutral-200">角色名称 <span className="text-red-400">*</span></label>
+                                    <input
+                                        type="text"
+                                        value={characterName}
+                                        onChange={(e) => setCharacterName(e.target.value)}
+                                        className="w-full rounded-lg border border-neutral-700 bg-[#1a1a1a] px-3 py-2 text-white outline-none transition-colors focus:border-blue-500"
+                                        placeholder="例如：林默"
+                                    />
+                                </div>
+
+                                <div className="flex flex-col gap-2">
+                                    <label className="text-sm font-medium text-neutral-200">素材用途</label>
+                                    <select
+                                        value={characterAssetRole}
+                                        onChange={(e) => setCharacterAssetRole(e.target.value as CharacterAssetRole)}
+                                        className="w-full rounded-lg border border-neutral-700 bg-[#1a1a1a] px-3 py-2 text-white outline-none transition-colors focus:border-blue-500"
+                                    >
+                                        {CHARACTER_ROLES.map(role => (
+                                            <option key={role.value} value={role.value}>{role.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {characterAssetRole.startsWith('look-') && (
+                                    <div className="flex flex-col gap-2">
+                                        <label className="text-sm font-medium text-neutral-200">造型名称 <span className="text-red-400">*</span></label>
+                                        <input
+                                            type="text"
+                                            value={lookName}
+                                            onChange={(e) => setLookName(e.target.value)}
+                                            className="w-full rounded-lg border border-neutral-700 bg-[#1a1a1a] px-3 py-2 text-white outline-none transition-colors focus:border-blue-500"
+                                            placeholder="例如：LOOK_B · 晚宴西装裙"
+                                        />
+                                    </div>
+                                )}
+                            </>
+                        )}
+
                     </div>
                 </div>
 
@@ -143,7 +209,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
                     </button>
                     <button
                         onClick={handleSubmit}
-                        disabled={status === 'saving' || status === 'success'}
+                        disabled={status === 'saving' || status === 'success' || !name.trim() || (category === 'Character' && (!characterName.trim() || (characterAssetRole.startsWith('look-') && !lookName.trim())))}
                         className={`flex items-center gap-2 px-6 py-2 rounded-lg font-medium transition-all duration-200 ${status === 'success' ? 'bg-green-600 text-white' :
                                 status === 'error' ? 'bg-red-600 text-white' :
                                     status === 'saving' ? 'bg-neutral-700 text-neutral-300' :

@@ -6,6 +6,7 @@ interface MangaStartPanelProps {
   onCreateWorkflow: () => void;
   onOpenStoryboard: () => void;
   onOpenAssets: (e: React.MouseEvent) => void;
+  sidebarOffset?: number;
 }
 
 const steps = ['故事', '分镜', '图片', '视频', '声音', '字幕', '成片'];
@@ -15,11 +16,12 @@ export const MangaStartPanel: React.FC<MangaStartPanelProps> = ({
   onCreateWorkflow,
   onOpenStoryboard,
   onOpenAssets,
+  sidebarOffset = 0,
 }) => {
   const isDark = canvasTheme === 'dark';
 
   return (
-    <div className="fixed inset-0 z-20 flex items-center justify-center pointer-events-none px-6">
+    <div className="fixed inset-y-0 right-0 z-20 flex items-center justify-center pointer-events-none px-6 transition-[left] duration-300" style={{ left: sidebarOffset }}>
       <section
         className={`pointer-events-auto w-full max-w-[620px] rounded-3xl border p-7 shadow-2xl backdrop-blur-xl ${
           isDark

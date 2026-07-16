@@ -14,18 +14,21 @@ interface AssetLibraryPanelProps {
     onClose: () => void;
     onSelectAsset: (url: string, type: 'image' | 'video') => void;
     panelY?: number;
+    panelLeft?: number;
     variant?: 'panel' | 'modal';
     canvasTheme?: 'dark' | 'light';
 }
 
-const CATEGORIES = [
-    'All',
-    'Character',
-    'Scene',
-    'Item',
-    'Style',
-    'Sound Effect',
-    'Others'
+// 分类的内部值保持英文（作为 library/assets/<分类>/ 的文件夹名与存储值），
+// 仅显示中文标签，避免中文文件夹名带来的兼容问题，也让新旧数据一致。
+const CATEGORIES: { value: string; label: string }[] = [
+    { value: 'All', label: '全部' },
+    { value: 'Character', label: '角色' },
+    { value: 'Scene', label: '场景' },
+    { value: 'Item', label: '道具' },
+    { value: 'Style', label: '风格' },
+    { value: 'Sound Effect', label: '音效' },
+    { value: 'Others', label: '其他' },
 ];
 
 export const AssetLibraryPanel: React.FC<AssetLibraryPanelProps> = ({
@@ -33,6 +36,7 @@ export const AssetLibraryPanel: React.FC<AssetLibraryPanelProps> = ({
     onClose,
     onSelectAsset,
     panelY = 100,
+    panelLeft = 80,
     variant = 'panel',
     canvasTheme = 'dark'
 }) => {
@@ -91,7 +95,7 @@ export const AssetLibraryPanel: React.FC<AssetLibraryPanelProps> = ({
                     onClick={(e) => e.stopPropagation()}
                 >
                     <div className={`flex items-center justify-between p-4 border-b ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}>
-                        <h2 className={`text-lg font-medium pl-2 ${isDark ? 'text-white' : 'text-neutral-900'}`}>Asset Library</h2>
+                        <h2 className={`text-lg font-medium pl-2 ${isDark ? 'text-white' : 'text-neutral-900'}`}>素材库</h2>
                         <button onClick={onClose} className={`p-2 rounded-lg transition-colors ${isDark ? 'hover:bg-neutral-800 text-neutral-400 hover:text-white' : 'hover:bg-neutral-100 text-neutral-500 hover:text-neutral-900'}`}>
                             <X size={20} />
                         </button>
@@ -116,8 +120,12 @@ export const AssetLibraryPanel: React.FC<AssetLibraryPanelProps> = ({
 
     return (
         <div
-            className={`fixed left-20 z-40 w-[700px] backdrop-blur-xl border rounded-2xl shadow-2xl flex flex-col max-h-[500px] overflow-hidden animate-in slide-in-from-left-4 duration-200 transition-colors ${isDark ? 'bg-[#0a0a0a]/95 border-neutral-800' : 'bg-white/95 border-neutral-200'}`}
-            style={{ top: Math.min(window.innerHeight - 510, Math.max(20, panelY)) }}
+            className={`fixed z-40 backdrop-blur-xl border rounded-2xl shadow-2xl flex flex-col max-h-[500px] overflow-hidden animate-in slide-in-from-left-4 duration-200 transition-colors ${isDark ? 'bg-[#0a0a0a]/95 border-neutral-800' : 'bg-white/95 border-neutral-200'}`}
+            style={{
+                left: panelLeft,
+                width: Math.max(320, Math.min(700, window.innerWidth - panelLeft - 24)),
+                top: Math.min(Math.max(72, window.innerHeight - 520), Math.max(72, panelY))
+            }}
         >
             <AssetLibraryContent
                 selectedCategory={selectedCategory}
@@ -168,14 +176,14 @@ const AssetLibraryContent = ({
                 <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide shrink-0">
                     {CATEGORIES.map(cat => (
                         <button
-                            key={cat}
-                            onClick={() => setSelectedCategory(cat)}
-                            className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors border ${selectedCategory === cat
+                            key={cat.value}
+                            onClick={() => setSelectedCategory(cat.value)}
+                            className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors border ${selectedCategory === cat.value
                                 ? isDark ? 'bg-neutral-100 text-black border-white' : 'bg-neutral-900 text-white border-neutral-900'
                                 : isDark ? 'bg-neutral-900 text-neutral-400 border-neutral-800 hover:border-neutral-600' : 'bg-white text-neutral-600 border-neutral-200 hover:border-neutral-300'
                                 }`}
                         >
-                            {cat}
+                            {cat.label}
                         </button>
                     ))}
                 </div>
@@ -189,10 +197,10 @@ const AssetLibraryContent = ({
                     }}
                 >
                     {loading ? (
-                        <div className="col-span-full text-center py-10 text-neutral-500">Loading...</div>
+                        <div className="col-span-full text-center py-10 text-neutral-500">加载中...</div>
                     ) : filteredAssets.length === 0 ? (
                         <div className="col-span-full text-center py-10 text-neutral-500 text-sm">
-                            No assets found in this category.
+                            该分类下暂无素材
                         </div>
                     ) : (
                         filteredAssets.map((asset: any) => (
@@ -219,19 +227,19 @@ const AssetLibraryContent = ({
                                 {/* Delete Button or Confirmation */}
                                 {deleteConfirmId === asset.id ? (
                                     <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center gap-2 z-20 animate-in fade-in duration-200" onClick={(e) => e.stopPropagation()}>
-                                        <span className="text-white text-xs font-medium">Delete?</span>
+                                        <span className="text-white text-xs font-medium">确认删除？</span>
                                         <div className="flex gap-2">
                                             <button
                                                 className="px-2 py-1 bg-red-500 hover:bg-red-600 text-white text-xs rounded transition-colors"
                                                 onClick={(e) => handleConfirmDelete(e, asset.id)}
                                             >
-                                                Yes
+                                                删除
                                             </button>
                                             <button
                                                 className="px-2 py-1 bg-neutral-700 hover:bg-neutral-600 text-white text-xs rounded transition-colors"
                                                 onClick={handleCancelDelete}
                                             >
-                                                No
+                                                取消
                                             </button>
                                         </div>
                                     </div>
@@ -239,7 +247,7 @@ const AssetLibraryContent = ({
                                     <button
                                         className="absolute top-1 right-1 p-1.5 bg-black/60 text-white rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500/80 z-10"
                                         onClick={(e) => handleDeleteClick(e, asset.id)}
-                                        title="Delete Asset"
+                                        title="删除素材"
                                     >
                                         <Trash2 size={14} />
                                     </button>

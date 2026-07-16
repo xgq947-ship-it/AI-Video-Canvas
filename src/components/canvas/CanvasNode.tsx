@@ -929,6 +929,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
             onTextToImage={onTextToImage}
             onImageToImage={onImageToImage}
             onImageToVideo={onImageToVideo}
+            onGenerate={onGenerate}
             onUpdate={onUpdate}
             onPostToX={onPostToX}
           />

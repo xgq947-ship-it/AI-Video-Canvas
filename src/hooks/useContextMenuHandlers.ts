@@ -36,11 +36,14 @@ export const useContextMenuHandlers = ({
 
     const handleDoubleClick = useCallback((e: React.MouseEvent) => {
         if ((e.target as HTMLElement).id === 'canvas-background') {
+            const rect = e.currentTarget.getBoundingClientRect();
             setContextMenu({
                 isOpen: true,
                 x: e.clientX,
                 y: e.clientY,
-                type: 'add-nodes'
+                type: 'add-nodes',
+                canvasX: e.clientX - rect.left,
+                canvasY: e.clientY - rect.top
             });
         }
     }, [setContextMenu]);
@@ -48,11 +51,14 @@ export const useContextMenuHandlers = ({
     const handleGlobalContextMenu = useCallback((e: React.MouseEvent) => {
         e.preventDefault();
         if ((e.target as HTMLElement).id === 'canvas-background') {
+            const rect = e.currentTarget.getBoundingClientRect();
             setContextMenu({
                 isOpen: true,
                 x: e.clientX,
                 y: e.clientY,
-                type: 'global'
+                type: 'global',
+                canvasX: e.clientX - rect.left,
+                canvasY: e.clientY - rect.top
             });
         }
     }, [setContextMenu]);

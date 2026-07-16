@@ -33,6 +33,55 @@ export interface GenerateVideoParams {
   nodeId?: string; // ID of the node initiating generation
 }
 
+export type CodexImageJobStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+export interface CodexImageJob {
+  id: string;
+  nodeId: string;
+  attempt: number;
+  status: CodexImageJobStatus;
+  prompt: string;
+  aspectRatio: string;
+  resolution: string;
+  resultUrl?: string;
+  error?: string;
+  createdAt: string;
+  completedAt?: string;
+}
+
+export interface QueueCodexImageParams {
+  nodeId: string;
+  prompt: string;
+  aspectRatio?: string;
+  resolution?: string;
+  referenceImages?: string[];
+}
+
+export const queueCodexImage = async (params: QueueCodexImageParams): Promise<CodexImageJob> => {
+  const response = await fetch('/api/codex-image-jobs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || response.statusText);
+  }
+  return response.json();
+};
+
+export const getCodexImageJob = async (jobId: string): Promise<CodexImageJob> => {
+  const response = await fetch(`/api/codex-image-jobs/${encodeURIComponent(jobId)}`, {
+    cache: 'no-store'
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || response.statusText);
+  }
+  return response.json();
+};
+
 /**
  * Generates an image by calling the backend API
  */

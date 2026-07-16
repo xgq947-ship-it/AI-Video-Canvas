@@ -26,6 +26,8 @@ interface TopBarProps {
     // Theme
     canvasTheme: 'dark' | 'light';
     onToggleTheme: () => void;
+    showBrand?: boolean;
+    sidebarOffset?: number;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -42,7 +44,9 @@ export const TopBar: React.FC<TopBarProps> = ({
     lastAutoSaveTime,
     isChatOpen = false,
     canvasTheme,
-    onToggleTheme
+    onToggleTheme,
+    showBrand = true,
+    sidebarOffset = 0
 }) => {
     const [showNewConfirm, setShowNewConfirm] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
@@ -103,10 +107,13 @@ export const TopBar: React.FC<TopBarProps> = ({
         <>
             <div
                 className="fixed top-0 left-0 h-14 flex items-center justify-between px-6 z-50 pointer-events-none transition-all duration-300"
-                style={{ width: isChatOpen ? 'calc(100% - 400px)' : '100%' }}
+                style={{
+                    left: sidebarOffset,
+                    width: isChatOpen ? `calc(100% - ${sidebarOffset + 400}px)` : `calc(100% - ${sidebarOffset}px)`
+                }}
             >
                 {/* Left: Logo & Title */}
-                <div className="flex items-center gap-3 pointer-events-auto">
+                {showBrand ? <div className="flex items-center gap-3 pointer-events-auto">
                     <img src="/TwitCanva-logo.png" alt="TwitCanva Logo" className="w-8 h-8 rounded-lg object-contain bg-black/20" />
                     {isEditingTitle ? (
                         <input
@@ -127,7 +134,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                             {canvasTitle}
                         </span>
                     )}
-                </div>
+                </div> : <div />}
 
                 {/* Right: Actions */}
                 <div className="flex items-center gap-3 pointer-events-auto">

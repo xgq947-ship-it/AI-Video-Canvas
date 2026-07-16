@@ -9,13 +9,14 @@ interface CreateAssetModalProps {
     onSave: (name: string, category: string) => Promise<void>;
 }
 
-const CATEGORIES = [
-    'Character',
-    'Scene',
-    'Item',
-    'Style',
-    'Sound Effect',
-    'Others'
+// 分类内部值保持英文（与 AssetLibraryPanel、library/assets/<分类>/ 文件夹一致），仅显示中文标签
+const CATEGORIES: { value: string; label: string }[] = [
+    { value: 'Character', label: '角色' },
+    { value: 'Scene', label: '场景' },
+    { value: 'Item', label: '道具' },
+    { value: 'Style', label: '风格' },
+    { value: 'Sound Effect', label: '音效' },
+    { value: 'Others', label: '其他' },
 ];
 
 export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
@@ -24,8 +25,8 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
     nodeToSnapshot,
     onSave
 }) => {
-    const [name, setName] = useState('My Assets');
-    const [category, setCategory] = useState(CATEGORIES[0]);
+    const [name, setName] = useState('我的素材');
+    const [category, setCategory] = useState(CATEGORIES[0].value);
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
     const [status, setStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
 
@@ -33,8 +34,8 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
     useEffect(() => {
         if (isOpen) {
             setStatus('idle');
-            setName('My Assets');
-            setCategory(CATEGORIES[0]);
+            setName('我的素材');
+            setCategory(CATEGORIES[0].value);
         }
     }, [isOpen]);
 
@@ -63,15 +64,15 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
                 {/* Header */}
                 <div className="px-6 pt-6 pb-2">
                     <div className="flex items-center gap-6 border-b border-neutral-700 pb-2">
-                        <button className="text-white font-medium border-b-2 border-white pb-2 -mb-2.5">Create Asset</button>
-                        <button className="text-neutral-500 font-medium pb-2 hover:text-neutral-300 transition-colors">Add to Existing</button>
+                        <button className="text-white font-medium border-b-2 border-white pb-2 -mb-2.5">新建素材</button>
+                        <button className="text-neutral-500 font-medium pb-2 hover:text-neutral-300 transition-colors">加入已有</button>
                     </div>
                 </div>
 
                 <div className="p-6 flex gap-6">
                     {/* Left: Cover Image */}
                     <div className="w-1/2 flex flex-col gap-2">
-                        <label className="text-sm font-medium text-neutral-200">Cover <span className="text-red-400">*</span></label>
+                        <label className="text-sm font-medium text-neutral-200">封面 <span className="text-red-400">*</span></label>
                         <div className="aspect-[3/4] rounded-lg overflow-hidden border border-neutral-800 bg-neutral-900 relative group">
                             <img
                                 src={nodeToSnapshot.resultUrl || ''}
@@ -89,24 +90,24 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
 
                         {/* Name Input */}
                         <div className="flex flex-col gap-2">
-                            <label className="text-sm font-medium text-neutral-200">Name <span className="text-red-400">*</span></label>
+                            <label className="text-sm font-medium text-neutral-200">名称 <span className="text-red-400">*</span></label>
                             <input
                                 type="text"
                                 value={name}
                                 onChange={(e) => setName(e.target.value)}
                                 className="w-full bg-[#1a1a1a] border border-neutral-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 transition-colors"
-                                placeholder="Asset Name"
+                                placeholder="素材名称"
                             />
                         </div>
 
                         {/* Category Dropdown */}
                         <div className="flex flex-col gap-2 relative">
-                            <label className="text-sm font-medium text-neutral-200">Category <span className="text-red-400">*</span></label>
+                            <label className="text-sm font-medium text-neutral-200">分类 <span className="text-red-400">*</span></label>
                             <button
                                 onClick={() => setIsDropdownOpen(!isDropdownOpen)}
                                 className="w-full bg-[#1a1a1a] border border-neutral-700 rounded-lg px-3 py-2 text-white focus:outline-none flex items-center justify-between hover:bg-[#252525] transition-colors"
                             >
-                                <span>{category}</span>
+                                <span>{CATEGORIES.find(c => c.value === category)?.label ?? category}</span>
                                 <ChevronDown size={16} className="text-neutral-400" />
                             </button>
 
@@ -114,15 +115,15 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
                                 <div className="absolute top-[70px] left-0 right-0 bg-[#1a1a1a] border border-neutral-700 rounded-lg shadow-xl z-10 py-1">
                                     {CATEGORIES.map(cat => (
                                         <button
-                                            key={cat}
+                                            key={cat.value}
                                             onClick={() => {
-                                                setCategory(cat);
+                                                setCategory(cat.value);
                                                 setIsDropdownOpen(false);
                                             }}
                                             className="w-full px-3 py-2 text-left hover:bg-[#252525] flex items-center justify-between group"
                                         >
-                                            <span className="text-neutral-300 group-hover:text-white">{cat}</span>
-                                            {category === cat && <Check size={14} className="text-white" />}
+                                            <span className="text-neutral-300 group-hover:text-white">{cat.label}</span>
+                                            {category === cat.value && <Check size={14} className="text-white" />}
                                         </button>
                                     ))}
                                 </div>
@@ -138,7 +139,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
                         onClick={onClose}
                         className="px-4 py-2 text-neutral-400 hover:text-white transition-colors"
                     >
-                        Cancel
+                        取消
                     </button>
                     <button
                         onClick={handleSubmit}
@@ -151,10 +152,10 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
                     >
                         {status === 'saving' && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
                         {status === 'success' && <Check size={16} />}
-                        {status === 'idle' && 'Create'}
-                        {status === 'saving' && 'Saving...'}
-                        {status === 'success' && 'Saved!'}
-                        {status === 'error' && 'Failed'}
+                        {status === 'idle' && '创建'}
+                        {status === 'saving' && '保存中...'}
+                        {status === 'success' && '已保存！'}
+                        {status === 'error' && '失败'}
                     </button>
                 </div>
 

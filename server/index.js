@@ -19,12 +19,14 @@ import localModelsRoutes from './routes/local-models.js';
 import storyboardRoutes from './routes/storyboard.js';
 import audioRoutes from './routes/audio.js';
 import renderRoutes from './routes/render.js';
+import codexImageJobRoutes from './routes/codex-image-jobs.js';
+import { scanAssetLibrary } from './utils/scanAssetLibrary.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3001;
+const PORT = Number(process.env.PORT) || 3001;
 
 // Ensure library directories exist
 const LIBRARY_DIR = path.join(__dirname, '..', 'library');
@@ -33,8 +35,9 @@ const IMAGES_DIR = path.join(LIBRARY_DIR, 'images');
 const VIDEOS_DIR = path.join(LIBRARY_DIR, 'videos');
 const CHATS_DIR = path.join(LIBRARY_DIR, 'chats');
 const LIBRARY_ASSETS_DIR = path.join(LIBRARY_DIR, 'assets');
+const CODEX_IMAGE_JOBS_DIR = path.join(LIBRARY_DIR, 'codex-image-jobs');
 
-[LIBRARY_DIR, WORKFLOWS_DIR, IMAGES_DIR, VIDEOS_DIR, CHATS_DIR, LIBRARY_ASSETS_DIR].forEach(dir => {
+[LIBRARY_DIR, WORKFLOWS_DIR, IMAGES_DIR, VIDEOS_DIR, CHATS_DIR, LIBRARY_ASSETS_DIR, CODEX_IMAGE_JOBS_DIR].forEach(dir => {
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
@@ -114,6 +117,7 @@ app.locals.FAL_API_KEY = FAL_API_KEY;
 app.locals.IMAGES_DIR = IMAGES_DIR;
 app.locals.VIDEOS_DIR = VIDEOS_DIR;
 app.locals.LIBRARY_DIR = LIBRARY_DIR;
+app.locals.CODEX_IMAGE_JOBS_DIR = CODEX_IMAGE_JOBS_DIR;
 
 // ============================================================================
 // WORKFLOW SANITIZATION HELPERS
@@ -224,6 +228,7 @@ function sanitizeWorkflowNodes(nodes) {
 
 // Mount generation routes (image and video generation)
 app.use('/api', generationRoutes);
+app.use('/api', codexImageJobRoutes);
 
 // Mount Twitter routes (Post to X feature)
 app.use('/api/twitter', twitterRoutes);
@@ -1229,6 +1234,18 @@ if (process.env.NODE_ENV === 'production') {
     app.get('*', (req, res) => {
         res.sendFile(path.join(distPath, 'index.html'));
     });
+}
+
+// 启动时自动扫描 library/assets/ 并同步 assets.json，手动放进分类文件夹的素材无需重启即可被登记
+try {
+    const scan = scanAssetLibrary(LIBRARY_ASSETS_DIR);
+    if (scan.changed) {
+        console.log(`[asset-scan] 素材库已同步：新增 ${scan.added}，清理 ${scan.removed}，当前共 ${scan.total} 条`);
+    } else {
+        console.log(`[asset-scan] 素材库无变化，当前共 ${scan.total} 条`);
+    }
+} catch (e) {
+    console.warn(`[asset-scan] 扫描素材库失败：${e.message}`);
 }
 
 app.listen(PORT, () => {

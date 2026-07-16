@@ -73,6 +73,15 @@ export interface NodeData {
   isPromptExpanded?: boolean; // Whether the prompt editing area is expanded
   resultAspectRatio?: string; // Actual aspect ratio of the generated image (e.g., '16/9')
   generationStartTime?: number; // Timestamp when generation started (for recovery race condition prevention)
+  codexJobId?: string; // Active local Codex image-generation job
+  codexJobStatus?: 'pending' | 'processing' | 'completed' | 'failed';
+  imageVersions?: Array<{
+    jobId: string;
+    url: string;
+    prompt: string;
+    attempt: number;
+    createdAt: string;
+  }>;
 
   // Kling V1.5 Image Reference Settings
   klingReferenceMode?: 'subject' | 'face'; // Reference type for image-to-image

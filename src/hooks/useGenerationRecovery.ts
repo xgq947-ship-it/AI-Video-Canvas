@@ -8,6 +8,7 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { NodeData, NodeStatus } from '../types';
 import { extractVideoLastFrame } from '../utils/videoHelpers';
+import { getCodexImageJob } from '../services/generationService';
 
 interface UseGenerationRecoveryOptions {
     nodes: NodeData[];
@@ -69,10 +70,67 @@ export const useGenerationRecovery = ({
         }
     }, [updateNode]); // Only updateNode as dependency, nodes accessed via ref
 
+    const checkCodexStatus = useCallback(async (nodeId: string, jobId: string) => {
+        try {
+            const job = await getCodexImageJob(jobId);
+            const node = nodesRef.current.find(n => n.id === nodeId);
+
+            // A newer regeneration request owns this node now. Keep the old result as history only.
+            if (!node || node.codexJobId !== jobId) return;
+
+            if (job.status === 'pending' || job.status === 'processing') {
+                if (node.codexJobStatus !== job.status) {
+                    updateNode(nodeId, { codexJobStatus: job.status });
+                }
+                return;
+            }
+
+            if (job.status === 'failed') {
+                updateNode(nodeId, {
+                    status: node.resultUrl ? NodeStatus.SUCCESS : NodeStatus.ERROR,
+                    codexJobStatus: 'failed',
+                    errorMessage: job.error || 'Codex image generation failed',
+                    generationStartTime: undefined
+                });
+                return;
+            }
+
+            if (job.status === 'completed' && job.resultUrl) {
+                const resultUrl = `${job.resultUrl}?t=${Date.now()}`;
+                const existingVersions = node.imageVersions || [];
+                const imageVersions = existingVersions.some(version => version.jobId === job.id)
+                    ? existingVersions
+                    : [...existingVersions, {
+                        jobId: job.id,
+                        url: resultUrl,
+                        prompt: job.prompt,
+                        attempt: job.attempt,
+                        createdAt: job.completedAt || new Date().toISOString()
+                    }];
+
+                updateNode(nodeId, {
+                    status: NodeStatus.SUCCESS,
+                    resultUrl,
+                    codexJobStatus: 'completed',
+                    imageVersions,
+                    errorMessage: undefined,
+                    generationStartTime: undefined
+                });
+            }
+        } catch (error) {
+            console.error(`[Codex Image] Error checking job ${jobId}:`, error);
+        }
+    }, [updateNode]);
+
     // Track loading node IDs for stable dependency
     const loadingNodeIds = nodes
-        .filter(n => n.status === NodeStatus.LOADING)
+        .filter(n => n.status === NodeStatus.LOADING && !n.codexJobId)
         .map(n => n.id)
+        .join(',');
+
+    const codexLoadingJobs = nodes
+        .filter(n => n.status === NodeStatus.LOADING && n.codexJobId)
+        .map(n => `${n.id}:${n.codexJobId}`)
         .join(',');
 
     useEffect(() => {
@@ -91,5 +149,18 @@ export const useGenerationRecovery = ({
 
         return () => clearInterval(interval);
     }, [loadingNodeIds, checkStatus]); // Stable string dependency instead of nodes array
-};
 
+    useEffect(() => {
+        if (!codexLoadingJobs) return;
+
+        const jobs = codexLoadingJobs.split(',').map(value => {
+            const separator = value.indexOf(':');
+            return { nodeId: value.slice(0, separator), jobId: value.slice(separator + 1) };
+        });
+        const checkAll = () => jobs.forEach(job => checkCodexStatus(job.nodeId, job.jobId));
+
+        checkAll();
+        const interval = setInterval(checkAll, 1500);
+        return () => clearInterval(interval);
+    }, [codexLoadingJobs, checkCodexStatus]);
+};

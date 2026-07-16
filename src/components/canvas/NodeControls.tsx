@@ -70,6 +70,16 @@ const VIDEO_MODELS = [
 // aspectRatios: Supported aspect ratios for the model
 const IMAGE_MODELS = [
     {
+        id: 'codex-imagegen',
+        name: 'Codex 生图（Plus）',
+        provider: 'codex',
+        supportsImageToImage: true,
+        supportsMultiImage: true,
+        recommended: true,
+        resolutions: ["Auto"],
+        aspectRatios: ["Auto", "1:1", "9:16", "16:9", "3:4", "4:3", "3:2", "2:3", "5:4", "4:5", "21:9"]
+    },
+    {
         id: 'gpt-image-1.5',
         name: 'GPT Image 1.5',
         provider: 'openai',
@@ -645,6 +655,12 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                 </div>
             )}
 
+            {data.imageModel === 'codex-imagegen' && !isVideoNode && (
+                <div className="text-blue-300 text-xs mb-2 p-2 bg-blue-900/20 rounded border border-blue-800/50">
+                    点击生成后，在 Codex 发送：AI漫剧图片生成
+                </div>
+            )}
+
             {/* Motion Control Warning - when motion mode detected but no character image */}
             {isVideoNode && videoGenerationMode === 'motion-control' && imageInputCount === 0 && (
                 <div className="text-amber-400 text-xs mb-2 p-2 bg-amber-900/20 rounded border border-amber-700/50 flex items-start gap-2">
@@ -832,6 +848,8 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                         <GoogleIcon size={12} className="text-white" />
                                     ) : currentImageModel.id === 'gemini-pro' ? (
                                         <Banana size={12} className="text-yellow-400" />
+                                    ) : currentImageModel.provider === 'codex' ? (
+                                        <Sparkles size={12} className="text-blue-400" />
                                     ) : currentImageModel.provider === 'openai' ? (
                                         <OpenAIIcon size={12} className="text-green-400" />
                                     ) : currentImageModel.provider === 'kling' ? (
@@ -855,6 +873,28 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                                 imageGenerationMode === 'image-to-image' ? `Image → Image` :
                                                     `${inputCount} Images → Image`}
                                         </div>
+                                        {/* Codex Plus bridge */}
+                                        {availableImageModels.filter(m => m.provider === 'codex').length > 0 && (
+                                            <>
+                                                <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f]">
+                                                    Codex（无需 API Key）
+                                                </div>
+                                                {availableImageModels.filter(m => m.provider === 'codex').map(model => (
+                                                    <button
+                                                        key={model.id}
+                                                        onClick={() => handleImageModelChange(model.id)}
+                                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${currentImageModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'}`}
+                                                    >
+                                                        <span className="flex items-center gap-2">
+                                                            <Sparkles size={12} className="text-blue-400" />
+                                                            {model.name}
+                                                            <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">REC</span>
+                                                        </span>
+                                                        {currentImageModel.id === model.id && <Check size={12} />}
+                                                    </button>
+                                                ))}
+                                            </>
+                                        )}
                                         {/* OpenAI Models */}
                                         {availableImageModels.filter(m => m.provider === 'openai').length > 0 && (
                                             <>

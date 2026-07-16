@@ -6,7 +6,7 @@
  */
 
 import { NodeData, NodeType, NodeStatus } from '../types';
-import { generateImage, generateVideo } from '../services/generationService';
+import { generateImage, generateVideo, queueCodexImage } from '../services/generationService';
 import { generateLocalImage } from '../services/localModelService';
 import { extractVideoLastFrame } from '../utils/videoHelpers';
 
@@ -108,31 +108,43 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
 
         if (!combinedPrompt && !isKlingFrameToFrame) return;
 
-        updateNode(id, { status: NodeStatus.LOADING, generationStartTime: Date.now() });
+        updateNode(id, {
+            status: NodeStatus.LOADING,
+            generationStartTime: Date.now(),
+            codexJobId: undefined,
+            codexJobStatus: undefined
+        });
 
         try {
             if (node.type === NodeType.IMAGE || node.type === NodeType.IMAGE_EDITOR) {
                 // Collect ALL parent images for multi-input generation
                 const imageBase64s: string[] = [];
 
-                // Get images from all direct parents (excluding TEXT nodes)
+                // Collect successful direct parents and all successful image ancestors.
+                // A linear role workflow therefore keeps the original face identity image
+                // in every downstream request instead of replacing it with only the
+                // immediately preceding composite/full-body output.
                 if (node.parentIds && node.parentIds.length > 0) {
-                    for (const parentId of node.parentIds) {
-                        let currentId: string | undefined = parentId;
+                    const pendingParentIds = [...node.parentIds];
+                    const visitedParentIds = new Set<string>();
+                    const addedUrls = new Set<string>();
 
-                        // Traverse up the chain to find an image source (skip TEXT nodes)
-                        while (currentId && imageBase64s.length < 14) { // Gemini 3 Pro limit
-                            const parent = nodes.find(n => n.id === currentId);
-                            // Skip TEXT nodes - they provide prompts, not images
-                            if (parent?.type === NodeType.TEXT) {
-                                break;
-                            }
-                            if (parent?.resultUrl) {
-                                imageBase64s.push(parent.resultUrl);
-                                break; // Found image for this parent chain
-                            } else {
-                                // Continue up this chain
-                                currentId = parent?.parentIds?.[0];
+                    while (pendingParentIds.length > 0 && imageBase64s.length < 14) {
+                        const parentId = pendingParentIds.shift()!;
+                        if (visitedParentIds.has(parentId)) continue;
+                        visitedParentIds.add(parentId);
+
+                        const parent = nodes.find(n => n.id === parentId);
+                        if (!parent || parent.type === NodeType.TEXT) continue;
+
+                        if (parent.resultUrl && !addedUrls.has(parent.resultUrl)) {
+                            imageBase64s.push(parent.resultUrl);
+                            addedUrls.add(parent.resultUrl);
+                        }
+
+                        for (const ancestorId of parent.parentIds || []) {
+                            if (!visitedParentIds.has(ancestorId)) {
+                                pendingParentIds.push(ancestorId);
                             }
                         }
                     }
@@ -141,10 +153,30 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                 // Add character reference URLs from storyboard nodes (for maintaining character consistency)
                 if (node.characterReferenceUrls && node.characterReferenceUrls.length > 0) {
                     for (const charUrl of node.characterReferenceUrls) {
-                        if (imageBase64s.length < 14) { // Respect Gemini's limit
+                        if (imageBase64s.length < 14 && !imageBase64s.includes(charUrl)) { // Respect Gemini's limit
                             imageBase64s.push(charUrl);
                         }
                     }
+                }
+
+                // Plus-only bridge: queue the request for interactive Codex image generation.
+                // The recovery hook polls this job and applies the finished image automatically.
+                if (node.imageModel === 'codex-imagegen') {
+                    const job = await queueCodexImage({
+                        nodeId: id,
+                        prompt: combinedPrompt,
+                        aspectRatio: node.aspectRatio,
+                        resolution: node.resolution,
+                        referenceImages: imageBase64s.length > 0 ? imageBase64s : undefined
+                    });
+                    updateNode(id, {
+                        status: NodeStatus.LOADING,
+                        codexJobId: job.id,
+                        codexJobStatus: job.status,
+                        generationStartTime: Date.now(),
+                        errorMessage: undefined
+                    });
+                    return;
                 }
 
                 // Generate image with all parent images and character references
@@ -374,7 +406,13 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                 errorMessage = '⚠️ Input image incompatible. Veo requires: JPEG format, 16:9 or 9:16 aspect ratio. Try a different image or generate without input.';
             }
 
-            updateNode(id, { status: NodeStatus.ERROR, errorMessage });
+            updateNode(id, {
+                status: node.resultUrl ? NodeStatus.SUCCESS : NodeStatus.ERROR,
+                errorMessage,
+                codexJobId: undefined,
+                codexJobStatus: undefined,
+                generationStartTime: undefined
+            });
             console.error('Generation failed:', error);
         }
     };

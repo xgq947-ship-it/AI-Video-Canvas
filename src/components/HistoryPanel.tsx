@@ -36,6 +36,7 @@ interface HistoryPanelProps {
     onClose: () => void;
     onSelectAsset: (type: 'images' | 'videos', url: string, prompt: string, model?: string) => void;
     panelY?: number;
+    panelLeft?: number;
     canvasTheme?: 'dark' | 'light';
 }
 
@@ -48,6 +49,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
     onClose,
     onSelectAsset,
     panelY = 200,
+    panelLeft = 80,
     canvasTheme = 'dark'
 }) => {
     // --- State ---
@@ -223,8 +225,12 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
         <>
             {/* Main Panel */}
             <div
-                className={`fixed left-20 w-[700px] backdrop-blur-xl border rounded-2xl shadow-2xl z-40 flex flex-col overflow-hidden max-h-[500px] transition-colors duration-300 ${isDark ? 'bg-[#0a0a0a]/95 border-neutral-800' : 'bg-white/95 border-neutral-200'}`}
-                style={{ top: panelY }}
+                className={`fixed backdrop-blur-xl border rounded-2xl shadow-2xl z-40 flex flex-col overflow-hidden max-h-[500px] transition-colors duration-300 ${isDark ? 'bg-[#0a0a0a]/95 border-neutral-800' : 'bg-white/95 border-neutral-200'}`}
+                style={{
+                    left: panelLeft,
+                    width: Math.max(320, Math.min(700, window.innerWidth - panelLeft - 24)),
+                    top: Math.min(Math.max(72, window.innerHeight - 520), Math.max(72, panelY))
+                }}
             >
                 {/* Header */}
                 <div className={`flex items-center justify-between px-5 py-4 border-b ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}>

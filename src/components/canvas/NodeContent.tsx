@@ -6,7 +6,7 @@
  */
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Loader2, Maximize2, ImageIcon as ImageIcon, Film, Upload, Pencil, Video, GripVertical, Download, Expand, Shrink, HardDrive } from 'lucide-react';
+import { Loader2, Maximize2, ImageIcon as ImageIcon, Film, Upload, Pencil, Video, GripVertical, Download, Expand, Shrink, HardDrive, RotateCcw, CircleAlert } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 
 interface NodeContentProps {
@@ -28,6 +28,7 @@ interface NodeContentProps {
     // Image node callbacks
     onImageToImage?: (nodeId: string) => void;
     onImageToVideo?: (nodeId: string) => void;
+    onGenerate?: (nodeId: string) => void;
     onUpdate?: (nodeId: string, updates: Partial<NodeData>) => void;
     // Social sharing
     onPostToX?: (nodeId: string, mediaUrl: string, mediaType: 'image' | 'video') => void;
@@ -50,6 +51,7 @@ export const NodeContent: React.FC<NodeContentProps> = ({
     onTextToImage,
     onImageToImage,
     onImageToVideo,
+    onGenerate,
     onUpdate,
     onPostToX
 }) => {
@@ -137,7 +139,11 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                     {isLoading && (
                         <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center z-20">
                             <Loader2 size={40} className="animate-spin text-blue-400" />
-                            <span className="mt-3 text-sm text-white font-medium">Regenerating...</span>
+                            <span className="mt-3 text-sm text-white font-medium">
+                                {data.imageModel === 'codex-imagegen'
+                                    ? data.codexJobStatus === 'processing' ? 'Codex 正在生成...' : '等待 Codex 处理...'
+                                    : 'Regenerating...'}
+                            </span>
                         </div>
                     )}
                 </div>
@@ -229,7 +235,36 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                     {isLoading ? (
                         <div className="relative z-10 flex flex-col items-center gap-2">
                             <Loader2 size={32} className="animate-spin text-blue-400" />
-                            <span className="text-xs text-neutral-500 font-medium">Generating...</span>
+                            <span className="text-xs text-neutral-500 font-medium">
+                                {data.imageModel === 'codex-imagegen'
+                                    ? data.codexJobStatus === 'processing' ? 'Codex 正在生成...' : '等待 Codex 处理...'
+                                    : 'Generating...'}
+                            </span>
+                        </div>
+                    ) : data.status === NodeStatus.ERROR ? (
+                        <div className="relative z-10 flex max-w-[85%] flex-col items-center gap-3 text-center">
+                            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-red-500/10 text-red-400">
+                                <CircleAlert size={22} />
+                            </div>
+                            <div>
+                                <div className="text-sm font-medium text-neutral-200">图片生成失败</div>
+                                <div className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">
+                                    {data.errorMessage || '生成任务未完成，请重新生成。'}
+                                </div>
+                            </div>
+                            {onGenerate && (
+                                <button
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        onGenerate(data.id);
+                                    }}
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                    className="flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-medium text-neutral-900 transition-colors hover:bg-neutral-200 active:scale-[0.98]"
+                                >
+                                    <RotateCcw size={15} />
+                                    重新生成
+                                </button>
+                            )}
                         </div>
                     ) : (
                         <div className="relative z-10 flex flex-col items-center gap-3">

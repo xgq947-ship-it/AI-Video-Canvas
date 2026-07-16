@@ -7,8 +7,8 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Toolbar } from './components/Toolbar';
 import { TopBar } from './components/TopBar';
+import { COLLAPSED_SIDEBAR_WIDTH, EXPANDED_SIDEBAR_WIDTH, ProjectSidebar } from './components/ProjectSidebar';
 import { CanvasNode } from './components/canvas/CanvasNode';
 import { ConnectionsLayer } from './components/canvas/ConnectionsLayer';
 import { ContextMenu } from './components/ContextMenu';
@@ -53,6 +53,7 @@ import { useStoryboardGenerator } from './hooks/useStoryboardGenerator';
 import { StoryboardGeneratorModal } from './components/modals/StoryboardGeneratorModal';
 import { StoryboardVideoModal } from './components/modals/StoryboardVideoModal';
 import { MangaStartPanel } from './components/MangaStartPanel';
+import { isValidNodeConnection } from '@/shared/connectionRules.js';
 
 // ============================================================================
 // MAIN COMPONENT
@@ -91,6 +92,7 @@ export default function App() {
   });
 
   const [canvasTheme, setCanvasTheme] = useState<'dark' | 'light'>('dark');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // Panel state management (history, chat, asset library, expand)
   const {
@@ -281,12 +283,152 @@ export default function App() {
     setIsDirty(false);
   };
 
-  const { handleGenerate } = useGeneration({
+  const nodesRef = React.useRef(nodes);
+  React.useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
+  const { handleGenerate: handleGenerateNow } = useGeneration({
     nodes,
     updateNode
   });
 
-  // Keep a ref to handleGenerate so setTimeout callbacks can access the latest version
+  // Keep the low-level generator current. Dependency orchestration below always
+  // calls the latest render so completed parent outputs become real references.
+  const handleGenerateNowRef = React.useRef(handleGenerateNow);
+  React.useEffect(() => {
+    handleGenerateNowRef.current = handleGenerateNow;
+  }, [handleGenerateNow]);
+
+  const generationPromisesRef = React.useRef(new Map<string, Promise<NodeData>>());
+
+  const waitForNodeResult = React.useCallback((
+    nodeId: string,
+    before?: Pick<NodeData, 'status' | 'resultUrl' | 'codexJobId' | 'generationStartTime'>
+  ): Promise<NodeData> => new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    let observedNewAttempt = !before;
+
+    const timer = window.setInterval(() => {
+      const current = nodesRef.current.find(node => node.id === nodeId);
+      if (!current) {
+        window.clearInterval(timer);
+        reject(new Error('等待生成时节点已被删除'));
+        return;
+      }
+
+      if (before && (
+        current.status === NodeStatus.LOADING ||
+        current.resultUrl !== before.resultUrl ||
+        current.codexJobId !== before.codexJobId ||
+        current.generationStartTime !== before.generationStartTime
+      )) {
+        observedNewAttempt = true;
+      }
+
+      if (observedNewAttempt && current.status === NodeStatus.ERROR) {
+        window.clearInterval(timer);
+        reject(new Error(current.errorMessage || '上游节点生成失败'));
+        return;
+      }
+
+      if (
+        observedNewAttempt &&
+        current.status !== NodeStatus.LOADING &&
+        current.errorMessage
+      ) {
+        window.clearInterval(timer);
+        reject(new Error(current.errorMessage));
+        return;
+      }
+
+      if (
+        observedNewAttempt &&
+        current.status === NodeStatus.SUCCESS &&
+        current.resultUrl &&
+        (!before || current.resultUrl !== before.resultUrl || current.codexJobId !== before.codexJobId)
+      ) {
+        window.clearInterval(timer);
+        resolve(current);
+        return;
+      }
+
+      if (Date.now() - startedAt > 60 * 60 * 1000) {
+        window.clearInterval(timer);
+        reject(new Error('等待上游节点超时，请检查图片生成队列'));
+      }
+    }, 300);
+  }), []);
+
+  const runNodeWithDependencies = React.useCallback(async function runNodeWithDependencies(
+    nodeId: string,
+    ancestry: string[] = []
+  ): Promise<NodeData> {
+    if (ancestry.includes(nodeId)) {
+      throw new Error('节点连线存在循环，无法执行工作流');
+    }
+
+    const existing = generationPromisesRef.current.get(nodeId);
+    if (existing) return existing;
+
+    const task = (async () => {
+      let current = nodesRef.current.find(node => node.id === nodeId);
+      if (!current) throw new Error('找不到需要生成的节点');
+
+      const parentIds = (current.parentIds || []).filter(parentId => {
+        const parent = nodesRef.current.find(node => node.id === parentId);
+        return parent && parent.type !== NodeType.TEXT;
+      });
+
+      for (const parentId of parentIds) {
+        const parent = nodesRef.current.find(node => node.id === parentId);
+        if (!parent) continue;
+
+        if (parent.status === NodeStatus.LOADING) {
+          await waitForNodeResult(parentId);
+        } else if (parent.status !== NodeStatus.SUCCESS || !parent.resultUrl) {
+          await runNodeWithDependencies(parentId, [...ancestry, nodeId]);
+        }
+      }
+
+      current = nodesRef.current.find(node => node.id === nodeId);
+      if (!current) throw new Error('生成前节点已被删除');
+
+      if (current.status === NodeStatus.LOADING) {
+        return waitForNodeResult(nodeId);
+      }
+
+      const before = {
+        status: current.status,
+        resultUrl: current.resultUrl,
+        codexJobId: current.codexJobId,
+        generationStartTime: current.generationStartTime
+      };
+
+      await handleGenerateNowRef.current(nodeId);
+      return waitForNodeResult(nodeId, before);
+    })();
+
+    generationPromisesRef.current.set(nodeId, task);
+    try {
+      return await task;
+    } finally {
+      if (generationPromisesRef.current.get(nodeId) === task) {
+        generationPromisesRef.current.delete(nodeId);
+      }
+    }
+  }, [waitForNodeResult]);
+
+  const handleGenerate = React.useCallback(async (nodeId: string) => {
+    try {
+      await runNodeWithDependencies(nodeId);
+    } catch (error: any) {
+      console.error('[Workflow Generation]', error);
+      window.alert(error?.message || '工作流生成失败');
+    }
+  }, [runNodeWithDependencies]);
+
+  // All node-generation entry points use the dependency-aware wrapper.
   const handleGenerateRef = React.useRef(handleGenerate);
   React.useEffect(() => {
     handleGenerateRef.current = handleGenerate;
@@ -303,6 +445,19 @@ export default function App() {
     resetWorkflowId(); // Important: ensures new workflow gets a new ID
     setIsDirty(false);
   };
+
+  const handleDeleteCurrentProject = React.useCallback(async () => {
+    if (!workflowId) return;
+    if (!window.confirm(`确定删除“${canvasTitle}”吗？此操作无法撤销。`)) return;
+    try {
+      const response = await fetch(`/api/workflows/${workflowId}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error('删除项目失败');
+      handleNewCanvas();
+    } catch (error) {
+      console.error('Failed to delete current workflow:', error);
+      window.alert('项目删除失败，请稍后重试。');
+    }
+  }, [workflowId, canvasTitle]);
 
   /**
    * 给新手一次性搭好完整的 0-1 漫剧骨架。
@@ -427,10 +582,97 @@ export default function App() {
   } = useAssetHandlers({ nodes, viewport, contextMenu, setNodes });
 
   // Keyboard shortcuts (copy/paste/delete/undo/redo)
+  const groupSelected = React.useCallback(() => {
+    if (selectedNodeIds.length >= 2) groupNodes(selectedNodeIds, setNodes);
+  }, [selectedNodeIds, groupNodes, setNodes]);
+
+  const ungroupSelected = React.useCallback(() => {
+    const groupIds = [...new Set(nodes
+      .filter(node => selectedNodeIds.includes(node.id) && node.groupId)
+      .map(node => node.groupId!))];
+    groupIds.forEach(groupId => ungroupNodes(groupId, setNodes));
+  }, [nodes, selectedNodeIds, ungroupNodes, setNodes]);
+
+  const connectSelected = React.useCallback(() => {
+    if (selectedNodeIds.length < 2) return;
+    const ordered = nodes
+      .filter(node => selectedNodeIds.includes(node.id))
+      .sort((a, b) => a.x - b.x || a.y - b.y);
+    setNodes(prev => prev.map(node => {
+      const childIndex = ordered.findIndex(item => item.id === node.id);
+      if (childIndex <= 0) return node;
+      const parent = ordered[childIndex - 1];
+      if (!isValidNodeConnection(parent.type, node.type)) return node;
+      const parentIds = node.parentIds || [];
+      return parentIds.includes(parent.id)
+        ? node
+        : { ...node, parentIds: [...parentIds, parent.id] };
+    }));
+  }, [nodes, selectedNodeIds, setNodes]);
+
+  const generateSelected = React.useCallback(async () => {
+    const generatableTypes = new Set([
+      NodeType.IMAGE,
+      NodeType.IMAGE_EDITOR,
+      NodeType.LOCAL_IMAGE_MODEL,
+      NodeType.VIDEO
+    ]);
+    const selected = nodes.filter(node =>
+      selectedNodeIds.includes(node.id) &&
+      generatableTypes.has(node.type)
+    );
+    if (selected.length === 0) return;
+
+    await Promise.all(selected.map(node => handleGenerateRef.current(node.id)));
+  }, [nodes, selectedNodeIds]);
+
+  const openNewNodeMenu = React.useCallback(() => {
+    const sidebarWidth = sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH;
+    const canvasCenterX = (window.innerWidth - sidebarWidth) / 2;
+    setContextMenu({
+      isOpen: true,
+      x: sidebarWidth + canvasCenterX,
+      y: window.innerHeight / 2,
+      canvasX: canvasCenterX,
+      canvasY: window.innerHeight / 2,
+      type: 'add-nodes'
+    });
+  }, [sidebarCollapsed]);
+
+  const arrangeCanvas = React.useCallback(() => {
+    const ids = selectedNodeIds.length > 1 ? selectedNodeIds : nodes.map(node => node.id);
+    if (ids.length < 2) return;
+    const ordered = nodes
+      .filter(node => ids.includes(node.id))
+      .sort((a, b) => a.y - b.y || a.x - b.x);
+    const columns = Math.max(1, Math.ceil(Math.sqrt(ordered.length)));
+    const startX = Math.min(...ordered.map(node => node.x));
+    const startY = Math.min(...ordered.map(node => node.y));
+    const positions = new Map(ordered.map((node, index) => [node.id, {
+      x: startX + (index % columns) * 440,
+      y: startY + Math.floor(index / columns) * 520
+    }]));
+    setNodes(prev => prev.map(node => positions.has(node.id) ? { ...node, ...positions.get(node.id)! } : node));
+  }, [nodes, selectedNodeIds, setNodes]);
+
+  const locateNodeFromSidebar = React.useCallback((id: string) => {
+    const node = nodes.find(item => item.id === id);
+    if (!node) return;
+    const sidebarWidth = sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH;
+    const usableWidth = window.innerWidth - sidebarWidth;
+    setSelectedNodeIds([id]);
+    setViewport(prev => ({
+      ...prev,
+      x: usableWidth / 2 - (node.x + 182) * prev.zoom,
+      y: window.innerHeight / 2 - (node.y + 220) * prev.zoom,
+    }));
+  }, [nodes, sidebarCollapsed, setSelectedNodeIds, setViewport]);
+
   const {
     handleCopy,
     handlePaste,
-    handleDuplicate
+    handleDuplicate,
+    isSpacePressedRef
   } = useKeyboardShortcuts({
     nodes,
     selectedNodeIds,
@@ -443,7 +685,14 @@ export default function App() {
     clearSelection,
     clearSelectionBox,
     undo,
-    redo
+    redo,
+    groupSelected,
+    ungroupSelected,
+    connectSelected,
+    generateSelected,
+    openNewNodeMenu,
+    arrangeCanvas,
+    setViewport
   });
 
   // Auto-Save Management
@@ -766,10 +1015,18 @@ export default function App() {
   /**
    * Handle selecting an asset from history - creates new node with the image/video
    */
-  const handleSelectAsset = (type: 'images' | 'videos', url: string, prompt: string, model?: string) => {
-    // Calculate position at center of canvas
+  const handleSelectAsset = (
+    type: 'images' | 'videos',
+    url: string,
+    prompt: string,
+    model?: string,
+    dropPosition?: { x: number; y: number }
+  ) => {
+    // Calculate position: use the drop point when provided, otherwise center of canvas
     const centerX = (window.innerWidth / 2 - viewport.x) / viewport.zoom - 170;
     const centerY = (window.innerHeight / 2 - viewport.y) / viewport.zoom - 150;
+    const posX = dropPosition ? dropPosition.x : centerX;
+    const posY = dropPosition ? dropPosition.y : centerY;
 
     // Create node with detected aspect ratio
     const createNode = (resultAspectRatio?: string, aspectRatio?: string) => {
@@ -781,8 +1038,8 @@ export default function App() {
       const newNode: NodeData = {
         id: Date.now().toString(),
         type: isVideo ? NodeType.VIDEO : NodeType.IMAGE,
-        x: centerX,
-        y: centerY,
+        x: posX,
+        y: posY,
         prompt: prompt,
         status: NodeStatus.SUCCESS,
         resultUrl: url,
@@ -834,6 +1091,47 @@ export default function App() {
   const handleLibrarySelect = (url: string, type: 'image' | 'video') => {
     handleSelectAsset(type === 'image' ? 'images' : 'videos', url, 'Asset Library Item');
     closeAssetLibrary();
+  };
+
+  // Custom MIME type used when dragging an asset out of the sidebar onto the canvas
+  const ASSET_DRAG_TYPE = 'application/x-twitcanva-asset';
+
+  /** Allow dropping sidebar assets onto the canvas (must preventDefault to enable drop) */
+  const handleCanvasDragOver = (e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes(ASSET_DRAG_TYPE)) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  };
+
+  /** Create an image/video node where a sidebar asset was dropped on the canvas */
+  const handleCanvasDrop = (e: React.DragEvent) => {
+    const raw = e.dataTransfer.getData(ASSET_DRAG_TYPE);
+    if (!raw) return;
+    e.preventDefault();
+
+    let asset: { url?: string; type?: string; name?: string; prompt?: string };
+    try {
+      asset = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (!asset?.url) return;
+
+    // Convert the drop point (screen coords) to canvas coords, centering the node on the cursor.
+    const rect = canvasRef.current?.getBoundingClientRect();
+    const left = rect?.left ?? 0;
+    const top = rect?.top ?? 0;
+    const canvasX = (e.clientX - left - viewport.x) / viewport.zoom - 170;
+    const canvasY = (e.clientY - top - viewport.y) / viewport.zoom - 150;
+
+    handleSelectAsset(
+      asset.type === 'video' ? 'videos' : 'images',
+      asset.url,
+      asset.prompt || asset.name || 'Asset Library Item',
+      undefined,
+      { x: canvasX, y: canvasY }
+    );
   };
 
   // Create asset modal (isCreateAssetModalOpen, handleOpenCreateAsset, handleSaveAssetToLibrary) provided by useAssetHandlers hook
@@ -909,6 +1207,13 @@ export default function App() {
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).id === 'canvas-background') {
+      if (e.button === 0 && isSpacePressedRef.current) {
+        e.preventDefault();
+        startPanning(e);
+        setSelectedConnection(null);
+        setContextMenu(prev => ({ ...prev, isOpen: false }));
+        return;
+      }
       // Left-click (button 0): Start selection box
       if (e.button === 0) {
         startSelection(e);
@@ -992,18 +1297,21 @@ export default function App() {
   return (
     <div className={`w-screen h-screen ${canvasTheme === 'dark' ? 'bg-[#050505] text-white' : 'bg-neutral-50 text-neutral-900'} overflow-hidden select-none font-sans transition-colors duration-300`}>
       {!storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
-        <Toolbar
-          onAddClick={handleToolbarAdd}
-          onWorkflowsClick={handleWorkflowsClick}
-          onHistoryClick={handleHistoryClick}
-          onAssetsClick={handleAssetsClick}
-          onTikTokClick={openTikTokModal}
-          onStoryboardClick={storyboardGenerator.openModal}
-          onToolsOpen={() => {
-            closeWorkflowPanel();
-            closeHistoryPanel();
-            closeAssetLibrary();
-          }}
+        <ProjectSidebar
+          nodes={nodes}
+          selectedNodeIds={selectedNodeIds}
+          canvasTitle={canvasTitle}
+          workflowId={workflowId}
+          onSelectNode={(id) => setSelectedNodeIds([id])}
+          onLocateNode={locateNodeFromSidebar}
+          onAddNode={openNewNodeMenu}
+          onOpenWorkflows={handleWorkflowsClick}
+          onOpenHistory={handleHistoryClick}
+          onOpenAssets={handleAssetsClick}
+          onOpenStoryboard={storyboardGenerator.openModal}
+          onCreateProject={handleNewCanvas}
+          onDeleteProject={handleDeleteCurrentProject}
+          onCollapsedChange={setSidebarCollapsed}
           canvasTheme={canvasTheme}
         />
       )}
@@ -1014,6 +1322,7 @@ export default function App() {
           onCreateWorkflow={handleCreateMangaWorkflow}
           onOpenStoryboard={storyboardGenerator.openModal}
           onOpenAssets={handleAssetsClick}
+          sidebarOffset={sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH}
         />
       )}
 
@@ -1024,6 +1333,7 @@ export default function App() {
         onLoadWorkflow={handleLoadWithTracking}
         currentWorkflowId={workflowId || undefined}
         panelY={workflowPanelY}
+        panelLeft={(sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH) + 20}
         canvasTheme={canvasTheme}
       />
 
@@ -1033,6 +1343,7 @@ export default function App() {
         onClose={closeHistoryPanel}
         onSelectAsset={handleSelectAsset}
         panelY={historyPanelY}
+        panelLeft={(sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH) + 20}
         canvasTheme={canvasTheme}
       />
 
@@ -1041,6 +1352,7 @@ export default function App() {
         onClose={closeAssetLibrary}
         onSelectAsset={handleLibrarySelect}
         panelY={assetLibraryY}
+        panelLeft={(sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH) + 20}
         variant={assetLibraryVariant}
         canvasTheme={canvasTheme}
       />
@@ -1118,6 +1430,8 @@ export default function App() {
           canvasTheme={canvasTheme}
           onToggleTheme={() => setCanvasTheme(prev => prev === 'dark' ? 'light' : 'dark')}
           lastAutoSaveTime={lastAutoSaveTime}
+          showBrand={false}
+          sidebarOffset={sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH}
         />
       )}
 
@@ -1126,12 +1440,15 @@ export default function App() {
         ref={canvasRef}
         id="canvas-background"
         className="absolute inset-0 cursor-grab active:cursor-grabbing"
+        style={{ left: sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH }}
         onPointerDown={handlePointerDown}
         onPointerMove={handleGlobalPointerMove}
         onPointerUp={handleGlobalPointerUp}
         onWheel={handleWheel}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleGlobalContextMenu}
+        onDragOver={handleCanvasDragOver}
+        onDrop={handleCanvasDrop}
       >
         <div
           style={{
@@ -1209,6 +1526,16 @@ export default function App() {
                 selected={selectedNodeIds.includes(node.id)}
                 showControls={selectedNodeIds.length === 1 && selectedNodeIds.includes(node.id)}
                 onNodePointerDown={(e) => {
+                  if (e.altKey) {
+                    const sourceIds = selectedNodeIds.includes(node.id) && selectedNodeIds.length > 1
+                      ? selectedNodeIds
+                      : [node.id];
+                    const duplicatedIds = handleDuplicate(sourceIds);
+                    if (duplicatedIds.length > 0) {
+                      handleNodePointerDown(e, duplicatedIds[0], undefined);
+                    }
+                    return;
+                  }
                   // If shift is held, preserve selection for multi-drag/multi-select
                   if (e.shiftKey) {
                     if (selectedNodeIds.includes(node.id)) {
@@ -1361,7 +1688,10 @@ export default function App() {
       {/* Zoom Slider */}
       {/* Zoom Slider */}
       {!storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
-        <div className={`fixed bottom-6 left-16 rounded-full px-4 py-2 flex items-center gap-3 z-50 transition-colors duration-300 ${canvasTheme === 'dark' ? 'bg-neutral-900 border border-neutral-700' : 'bg-white/90 backdrop-blur-sm border border-neutral-200'}`} >
+        <div
+          className={`fixed bottom-6 rounded-full px-4 py-2 flex items-center gap-3 z-50 transition-all duration-300 ${canvasTheme === 'dark' ? 'bg-neutral-900 border border-neutral-700' : 'bg-white/90 backdrop-blur-sm border border-neutral-200'}`}
+          style={{ left: (sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH) + 24 }}
+        >
           <span className={`text-xs ${canvasTheme === 'dark' ? 'text-neutral-400' : 'text-neutral-500'}`}>Zoom</span>
           <input
             type="range"

@@ -33,6 +33,9 @@ export const useGroupManagement = () => {
     ): string => {
         const groupId = crypto.randomUUID();
 
+        // Regrouping selected nodes replaces any groups they previously belonged to.
+        setGroups(prev => prev.filter(group => !group.nodeIds.some(id => nodeIds.includes(id))));
+
         const newGroup: NodeGroup = {
             id: groupId,
             nodeIds,

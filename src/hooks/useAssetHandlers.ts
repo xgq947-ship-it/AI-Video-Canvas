@@ -8,6 +8,8 @@
 
 import React, { useState, useCallback } from 'react';
 import { NodeData, NodeType, NodeStatus, Viewport, ContextMenuState } from '../types';
+import { canvasViewCenter, centerNodeAt, paneToCanvas } from '@/shared/canvasCoords.js';
+import { getCanvasRect } from '../utils/canvasRect';
 
 interface UseAssetHandlersOptions {
     nodes: NodeData[];
@@ -80,9 +82,10 @@ export const useAssetHandlers = ({
         closeHistoryPanel: () => void,
         closeAssetLibrary: () => void
     ) => {
-        // Calculate position at center of canvas
-        const centerX = (window.innerWidth / 2 - viewport.x) / viewport.zoom - 170;
-        const centerY = (window.innerHeight / 2 - viewport.y) / viewport.zoom - 150;
+        // 画布可视区中心（用 canvasViewCenter，避免把 window 中心当成画布中心而漏掉侧边栏宽度）
+        const center = centerNodeAt(canvasViewCenter(getCanvasRect(), viewport));
+        const centerX = center.x;
+        const centerY = center.y;
 
         // Detect aspect ratio for images/videos
         const createNode = (resultAspectRatio?: string, aspectRatio?: string) => {
@@ -237,9 +240,14 @@ export const useAssetHandlers = ({
                 const responseData = await response.json();
                 const resultUrl = responseData.url;
 
-                // Convert screen/menu coordinates to canvas coordinates
-                const canvasX = (contextMenu.x - viewport.x) / viewport.zoom;
-                const canvasY = (contextMenu.y - viewport.y) / viewport.zoom;
+                // 右键菜单位置 → 画布坐标。
+                // 必须用 canvasX/canvasY（面板坐标，已扣除侧边栏）；此前直接用 contextMenu.x
+                // （屏幕坐标）会让上传的节点偏出光标一个侧边栏宽度。
+                const { x: canvasX, y: canvasY } = paneToCanvas(
+                    contextMenu.canvasX ?? contextMenu.x,
+                    contextMenu.canvasY ?? contextMenu.y,
+                    viewport
+                );
 
                 // Detect aspect ratio for images/videos and set both resultAspectRatio and aspectRatio
                 const detectAndCreateNode = async () => {

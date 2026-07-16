@@ -7,6 +7,8 @@
 
 import { useState, useCallback } from 'react';
 import { NodeData, NodeStatus, NodeType, Viewport } from '../types';
+import { canvasViewCenter } from '@/shared/canvasCoords.js';
+import { getCanvasRect } from '../utils/canvasRect';
 
 // ============================================================================
 // TYPES
@@ -375,9 +377,8 @@ export const useStoryboardGenerator = ({ onCreateNodes, viewport }: UseStoryboar
             return;
         }
 
-        // Calculate center position
-        const centerX = (window.innerWidth / 2 - viewport.x) / viewport.zoom;
-        const centerY = (window.innerHeight / 2 - viewport.y) / viewport.zoom;
+        // 画布可视区中心（避免用 window 中心而漏掉侧边栏宽度）
+        const { x: centerX, y: centerY } = canvasViewCenter(getCanvasRect(), viewport);
 
         // Calculate node layout (horizontal, with spacing)
         const NODE_WIDTH = 340;

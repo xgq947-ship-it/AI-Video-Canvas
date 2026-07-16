@@ -42,8 +42,8 @@ test('creates versioned jobs and freezes library reference images', t => {
 
     assert.equal(first.status, 'pending');
     assert.equal(first.aspectRatio, '16:9');
-    assert.equal(first.outputSpec.enforceExactAspectRatio, true);
-    assert.match(first.outputSpec.instruction, /HARD OUTPUT REQUIREMENT/);
+    assert.equal(first.outputSpec.enforceExactAspectRatio, false);
+    assert.match(first.outputSpec.instruction, /Prefer a landscape image/);
     assert.equal(first.attempt, 1);
     assert.equal(second.attempt, 2);
     assert.equal(first.references.length, 1);
@@ -84,7 +84,7 @@ test('claims and completes a job without overwriting another attempt', async t =
     assert.equal(getCodexImageJob(dirs.jobsDir, first.id).resultUrl, completedOne.resultUrl);
 });
 
-test('verifies and normalizes ignored Codex aspect ratios to exact output pixels', async t => {
+test('records but preserves ignored Codex aspect ratios', async t => {
     const dirs = fixture();
     t.after(() => fs.rmSync(dirs.root, { recursive: true, force: true }));
 
@@ -115,11 +115,11 @@ test('verifies and normalizes ignored Codex aspect ratios to exact output pixels
     });
     const after = await inspectCodexImageOutput({ imagePath: completed.resultPath, aspectRatio: job.aspectRatio });
 
-    assert.equal(after.matches, true);
-    assert.equal(after.width / after.height, 4 / 5);
+    assert.equal(after.matches, false);
+    assert.deepEqual({ width: after.width, height: after.height }, { width: 90, height: 176 });
     assert.equal(completed.aspectRatioVerified, true);
-    assert.equal(completed.aspectRatioAdjusted, true);
-    assert.equal(completed.aspectRatioAdjustmentMode, 'contain-with-blurred-edge-fill');
+    assert.equal(completed.aspectRatioAdjusted, false);
+    assert.equal(completed.aspectRatioAdjustmentMode, 'accepted-source-ratio');
     assert.deepEqual(completed.sourceDimensions, { width: 90, height: 176 });
-    assert.deepEqual(completed.outputDimensions, { width: 144, height: 180 });
+    assert.deepEqual(completed.outputDimensions, { width: 90, height: 176 });
 });

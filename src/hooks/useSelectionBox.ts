@@ -7,6 +7,7 @@
 
 import React, { useState, useRef } from 'react';
 import { SelectionBox, NodeData, Viewport } from '../types';
+import { paneToCanvas, screenToPane } from '@/shared/canvasCoords.js';
 
 export const useSelectionBox = () => {
     // ============================================================================
@@ -45,11 +46,13 @@ export const useSelectionBox = () => {
         const boxTop = Math.min(box.startY, box.endY);
         const boxBottom = Math.max(box.startY, box.endY);
 
-        // Convert to canvas space
-        const canvasBoxLeft = (boxLeft - viewport.x) / viewport.zoom;
-        const canvasBoxRight = (boxRight - viewport.x) / viewport.zoom;
-        const canvasBoxTop = (boxTop - viewport.y) / viewport.zoom;
-        const canvasBoxBottom = (boxBottom - viewport.y) / viewport.zoom;
+        // 框选坐标是面板坐标（相对画布容器）→ 换算成节点世界坐标
+        const topLeft = paneToCanvas(boxLeft, boxTop, viewport);
+        const bottomRight = paneToCanvas(boxRight, boxBottom, viewport);
+        const canvasBoxLeft = topLeft.x;
+        const canvasBoxTop = topLeft.y;
+        const canvasBoxRight = bottomRight.x;
+        const canvasBoxBottom = bottomRight.y;
 
         // Node dimensions (340x300 from CanvasNode component)
         const nodeLeft = node.x;
@@ -75,10 +78,9 @@ export const useSelectionBox = () => {
      * @param e - Pointer event
      */
     const startSelection = (e: React.PointerEvent) => {
-        // Get canvas container position to calculate relative coordinates
+        // 屏幕坐标 → 面板坐标（相对画布容器，扣除侧边栏宽度）
         const rect = e.currentTarget.getBoundingClientRect();
-        const relativeX = e.clientX - rect.left;
-        const relativeY = e.clientY - rect.top;
+        const { x: relativeX, y: relativeY } = screenToPane(e.clientX, e.clientY, rect);
 
         isSelecting.current = true;
         setSelectionBox({
@@ -98,10 +100,9 @@ export const useSelectionBox = () => {
     const updateSelection = (e: React.PointerEvent): boolean => {
         if (!isSelecting.current) return false;
 
-        // Get canvas container position to calculate relative coordinates
+        // 屏幕坐标 → 面板坐标（相对画布容器，扣除侧边栏宽度）
         const rect = e.currentTarget.getBoundingClientRect();
-        const relativeX = e.clientX - rect.left;
-        const relativeY = e.clientY - rect.top;
+        const { x: relativeX, y: relativeY } = screenToPane(e.clientX, e.clientY, rect);
 
         setSelectionBox(prev => ({
             ...prev,

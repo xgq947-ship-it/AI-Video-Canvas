@@ -54,6 +54,8 @@ import { StoryboardGeneratorModal } from './components/modals/StoryboardGenerato
 import { StoryboardVideoModal } from './components/modals/StoryboardVideoModal';
 import { MangaStartPanel } from './components/MangaStartPanel';
 import { isValidNodeConnection } from '@/shared/connectionRules.js';
+import { canvasViewCenter, centerNodeAt, screenToCanvas } from '@/shared/canvasCoords.js';
+import { getCanvasRect } from './utils/canvasRect';
 import { MapPinned } from 'lucide-react';
 import { CanvasMinimap } from './components/canvas/CanvasMinimap';
 
@@ -1038,11 +1040,10 @@ export default function App() {
     dropPosition?: { x: number; y: number },
     metadata?: Partial<NodeData>
   ) => {
-    // Calculate position: use the drop point when provided, otherwise center of canvas
-    const centerX = (window.innerWidth / 2 - viewport.x) / viewport.zoom - 170;
-    const centerY = (window.innerHeight / 2 - viewport.y) / viewport.zoom - 150;
-    const posX = dropPosition ? dropPosition.x : centerX;
-    const posY = dropPosition ? dropPosition.y : centerY;
+    // 有落点用落点，否则放画布可视区中心（canvasViewCenter 已扣除侧边栏宽度）
+    const center = centerNodeAt(canvasViewCenter(getCanvasRect(), viewport));
+    const posX = dropPosition ? dropPosition.x : center.x;
+    const posY = dropPosition ? dropPosition.y : center.y;
 
     // Create node with detected aspect ratio
     const createNode = (resultAspectRatio?: string, aspectRatio?: string) => {
@@ -1254,12 +1255,10 @@ export default function App() {
     }
     if (!asset?.url) return;
 
-    // Convert the drop point (screen coords) to canvas coords, centering the node on the cursor.
-    const rect = canvasRef.current?.getBoundingClientRect();
-    const left = rect?.left ?? 0;
-    const top = rect?.top ?? 0;
-    const canvasX = (e.clientX - left - viewport.x) / viewport.zoom - 170;
-    const canvasY = (e.clientY - top - viewport.y) / viewport.zoom - 150;
+    // 落点（屏幕坐标）→ 画布坐标，并让节点居中于光标
+    const { x: canvasX, y: canvasY } = centerNodeAt(
+      screenToCanvas(e.clientX, e.clientY, getCanvasRect(), viewport)
+    );
 
     const characterMetadata = await resolveCharacterNodeMetadata(asset);
     handleSelectAsset(

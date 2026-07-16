@@ -33,9 +33,9 @@ function buildOutputSpec(aspectRatio, resolution) {
         ratioHeight: ratio.height,
         orientation,
         resolution: resolution || 'Auto',
-        enforceExactAspectRatio: true,
+        enforceExactAspectRatio: false,
         tolerance: 0.005,
-        instruction: `HARD OUTPUT REQUIREMENT: generate exactly one ${orientation} image in ${ratio.label} aspect ratio. The final pixel width divided by height must equal ${ratio.width}/${ratio.height}. Do not substitute another portrait, landscape, or square ratio.`
+        instruction: `Prefer a ${orientation} image near ${ratio.label} aspect ratio, but preserve the generated composition if the model returns different dimensions.`
     };
 }
 
@@ -57,40 +57,13 @@ export async function inspectCodexImageOutput({ imagePath, aspectRatio }) {
 
 async function writeAspectRatioSafeImage({ sourceImage, destination, aspectRatio }) {
     const inspection = await inspectCodexImageOutput({ imagePath: sourceImage, aspectRatio });
-    const ratio = parseAspectRatio(aspectRatio);
-    if (!ratio || inspection.matches) {
-        fs.copyFileSync(sourceImage, destination);
-        return {
-            inspection,
-            outputWidth: inspection.width,
-            outputHeight: inspection.height,
-            adjusted: false,
-            adjustmentMode: 'none'
-        };
-    }
-
-    // Use the smallest exact-ratio canvas that fully contains the generated image.
-    // A blurred edge fill preserves the entire composition instead of cropping faces,
-    // feet, subtitles, or other content when a model ignores the requested ratio.
-    const unit = Math.ceil(Math.max(inspection.width / ratio.width, inspection.height / ratio.height));
-    const outputWidth = unit * ratio.width;
-    const outputHeight = unit * ratio.height;
-    const background = await sharp(sourceImage)
-        .resize(outputWidth, outputHeight, { fit: 'cover', position: 'attention' })
-        .blur(Math.max(12, Math.round(Math.min(outputWidth, outputHeight) * 0.025)))
-        .toBuffer();
-    const foreground = await sharp(sourceImage).toBuffer();
-
-    await sharp(background)
-        .composite([{ input: foreground, gravity: 'centre' }])
-        .toFile(destination);
-
+    fs.copyFileSync(sourceImage, destination);
     return {
         inspection,
-        outputWidth,
-        outputHeight,
-        adjusted: true,
-        adjustmentMode: 'contain-with-blurred-edge-fill'
+        outputWidth: inspection.width,
+        outputHeight: inspection.height,
+        adjusted: false,
+        adjustmentMode: inspection.matches ? 'none' : 'accepted-source-ratio'
     };
 }
 

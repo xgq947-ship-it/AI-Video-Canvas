@@ -7,6 +7,7 @@
 
 import { useState } from 'react';
 import { NodeData, NodeType, NodeStatus, Viewport } from '../types';
+import { DEFAULT_NODE_WIDTH, paneToCanvas } from '@/shared/canvasCoords.js';
 
 export const useNodeManagement = () => {
     // ============================================================================
@@ -35,13 +36,16 @@ export const useNodeManagement = () => {
         parentId: string | undefined,
         viewport: Viewport
     ) => {
-        const canvasX = (x - viewport.x) / viewport.zoom;
-        const canvasY = (y - viewport.y) / viewport.zoom;
+        // x/y 是面板坐标（相对画布容器，已扣除侧边栏），由 contextMenu.canvasX/canvasY 提供
+        const { x: canvasX, y: canvasY } = paneToCanvas(x, y, viewport);
+        // 新建节点居中于点击处：横向用卡片真实宽度（365，此前硬编码 340 导致偏 12.5px）；
+        // 纵向沿用历史常量 100 —— 节点高度随类型与内容变化（待生成 ~214、出图后 auto），无统一值。
+        const halfWidth = DEFAULT_NODE_WIDTH / 2;
 
         const newNode: NodeData = {
             id: crypto.randomUUID(),
             type,
-            x: parentId ? canvasX : canvasX - 170,
+            x: parentId ? canvasX : canvasX - halfWidth,
             y: parentId ? canvasY : canvasY - 100,
             prompt: '',
             status: NodeStatus.IDLE,

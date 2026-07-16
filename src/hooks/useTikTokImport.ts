@@ -8,6 +8,8 @@
 import { useState, useCallback } from 'react';
 import { NodeData, NodeType, NodeStatus } from '../types';
 import { TikTokVideoInfo } from '../components/modals/TikTokImportModal';
+import { canvasViewCenter, centerNodeAt, VIDEO_NODE_WIDTH } from '@/shared/canvasCoords.js';
+import { getCanvasRect } from '../utils/canvasRect';
 
 // ============================================================================
 // TYPES
@@ -56,9 +58,11 @@ export const useTikTokImport = ({
      * Creates a new video node on the canvas
      */
     const handleVideoImported = useCallback((videoUrl: string, videoInfo: TikTokVideoInfo) => {
-        // Calculate position at center of viewport
-        const centerX = (window.innerWidth / 2 - viewport.x) / viewport.zoom - 170;
-        const centerY = (window.innerHeight / 2 - viewport.y) / viewport.zoom - 150;
+        // 画布可视区中心（避免用 window 中心而漏掉侧边栏宽度）；视频节点宽 385
+        const { x: centerX, y: centerY } = centerNodeAt(
+            canvasViewCenter(getCanvasRect(), viewport),
+            VIDEO_NODE_WIDTH
+        );
 
         // Create prompt from video info
         const prompt = videoInfo.title || 'TikTok Video';

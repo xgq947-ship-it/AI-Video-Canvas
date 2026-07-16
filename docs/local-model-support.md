@@ -202,7 +202,6 @@ models/
 | API Route | `server/routes/local-models.js` | ✅ Done |
 | Inference Service | `server/services/local-inference.js` | ✅ Done |
 | Python Script | `scripts/inference.py` | ✅ Done |
-| Hook | `src/hooks/useLocalModelNodeHandlers.ts` | ✅ Done |
 | Model Registry | `config/model-registry.json` | ⏳ TODO |
 | Multi-architecture | `scripts/inference.py` | ⏳ TODO |
 

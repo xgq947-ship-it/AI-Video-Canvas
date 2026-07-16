@@ -8,8 +8,7 @@
 
 import React, { useState, useCallback } from 'react';
 import { NodeData, NodeType, NodeStatus, Viewport, ContextMenuState } from '../types';
-import { canvasViewCenter, centerNodeAt, paneToCanvas } from '@/shared/canvasCoords.js';
-import { getCanvasRect } from '../utils/canvasRect';
+import { paneToCanvas } from '@/shared/canvasCoords.js';
 
 interface UseAssetHandlersOptions {
     nodes: NodeData[];
@@ -70,94 +69,6 @@ export const useAssetHandlers = ({
 
         return closest.label;
     };
-
-    /**
-     * Handle selecting an asset from history - creates new node with the image/video
-     * closeHistoryPanel and closeAssetLibrary passed as params to avoid dependency
-     */
-    const handleSelectAsset = useCallback((
-        type: 'images' | 'videos',
-        url: string,
-        prompt: string,
-        closeHistoryPanel: () => void,
-        closeAssetLibrary: () => void
-    ) => {
-        // 画布可视区中心（用 canvasViewCenter，避免把 window 中心当成画布中心而漏掉侧边栏宽度）
-        const center = centerNodeAt(canvasViewCenter(getCanvasRect(), viewport));
-        const centerX = center.x;
-        const centerY = center.y;
-
-        // Detect aspect ratio for images/videos
-        const createNode = (resultAspectRatio?: string, aspectRatio?: string) => {
-            const isVideo = type === 'videos';
-            const newNode: NodeData = {
-                id: Date.now().toString(),
-                type: isVideo ? NodeType.VIDEO : NodeType.IMAGE,
-                x: centerX,
-                y: centerY,
-                prompt: prompt,
-                status: NodeStatus.SUCCESS,
-                resultUrl: url,
-                resultAspectRatio,
-                model: isVideo ? 'veo-3.1' : 'imagen-3.0-generate-002',
-                videoModel: isVideo ? 'veo-3.1' : undefined,
-                aspectRatio: aspectRatio || '16:9',
-                resolution: isVideo ? 'Auto' : '1024x1024'
-            };
-
-            setNodes(prev => [...prev, newNode]);
-            closeHistoryPanel();
-            closeAssetLibrary();
-        };
-
-        if (type === 'images') {
-            // Detect image dimensions
-            const img = new Image();
-            img.onload = () => {
-                const resultAspectRatio = `${img.naturalWidth}/${img.naturalHeight}`;
-                const aspectRatio = getClosestAspectRatio(img.naturalWidth, img.naturalHeight);
-                console.log(`[AssetHandler] Image loaded: ${img.naturalWidth}x${img.naturalHeight} -> ${aspectRatio}`);
-                createNode(resultAspectRatio, aspectRatio);
-            };
-            img.onerror = (e) => {
-                console.log('[AssetHandler] Image load error, using default 16:9', e);
-                createNode(undefined, '16:9');
-            };
-            img.src = url;
-        } else {
-            // Detect video dimensions
-            const video = document.createElement('video');
-            video.onloadedmetadata = () => {
-                const resultAspectRatio = `${video.videoWidth}/${video.videoHeight}`;
-                const aspectRatio = getClosestAspectRatio(video.videoWidth, video.videoHeight);
-                console.log(`[AssetHandler] Video loaded: ${video.videoWidth}x${video.videoHeight} -> ${aspectRatio}`);
-                createNode(resultAspectRatio, aspectRatio);
-            };
-            video.onerror = (e) => {
-                console.log('[AssetHandler] Video load error, using default 16:9', e);
-                createNode(undefined, '16:9');
-            };
-            video.src = url;
-        }
-    }, [viewport.x, viewport.y, viewport.zoom, setNodes]);
-
-    /**
-     * Handle library item selection
-     */
-    const handleLibrarySelect = useCallback((
-        url: string,
-        type: 'image' | 'video',
-        closeHistoryPanel: () => void,
-        closeAssetLibrary: () => void
-    ) => {
-        handleSelectAsset(
-            type === 'image' ? 'images' : 'videos',
-            url,
-            'Asset Library Item',
-            closeHistoryPanel,
-            closeAssetLibrary
-        );
-    }, [handleSelectAsset]);
 
     /**
      * Open create asset modal for a node
@@ -324,8 +235,6 @@ export const useAssetHandlers = ({
         nodeToSnapshot,
 
         // Handlers
-        handleSelectAsset,
-        handleLibrarySelect,
         handleOpenCreateAsset,
         handleSaveAssetToLibrary,
         handleContextUpload

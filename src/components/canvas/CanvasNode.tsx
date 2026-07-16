@@ -13,6 +13,7 @@ import { MangaNode } from './MangaNode';
 import { isMangaNode } from '../../types';
 import { NodeControls } from './NodeControls';
 import { ChangeAnglePanel } from './ChangeAnglePanel';
+import { NodeHoverToolbar, NodeHoverToolbarAction } from './NodeHoverToolbar';
 
 interface CanvasNodeProps {
   data: NodeData;
@@ -54,14 +55,6 @@ interface CanvasNodeProps {
   onPostToTikTok?: (nodeId: string, mediaUrl: string) => void;
 }
 
-// 宫格切分预设：把整图等分成 N 宫格（纯前端切图，无需 AI）
-const GRID_SPLIT_OPTIONS = [
-  { label: '4宫格 (2×2)', cols: 2, rows: 2 },
-  { label: '9宫格 (3×3)', cols: 3, rows: 3 },
-  { label: '16宫格 (4×4)', cols: 4, rows: 4 },
-  { label: '25宫格 (5×5)', cols: 5, rows: 5 },
-];
-
 const NODE_TYPE_LABELS: Record<NodeType, string> = {
   [NodeType.TEXT]: '文本',
   [NodeType.IMAGE]: '图片',
@@ -77,54 +70,6 @@ const NODE_TYPE_LABELS: Record<NodeType, string> = {
   [NodeType.BGM]: '背景音乐',
   [NodeType.SUBTITLE]: '字幕',
   [NodeType.RENDER]: '成片',
-};
-
-const GridSplitMenu: React.FC<{ onSplit: (cols: number, rows: number) => void }> = ({ onSplit }) => {
-  const [open, setOpen] = React.useState(false);
-  const ref = React.useRef<HTMLDivElement>(null);
-  React.useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [open]);
-  return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={(e) => { e.stopPropagation(); setOpen(o => !o); }}
-        onPointerDown={(e) => e.stopPropagation()}
-        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${open ? 'bg-blue-500 text-white' : 'text-neutral-300 hover:bg-neutral-700 hover:text-white'}`}
-        title="把整图等分切成多张独立图片"
-      >
-        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-          <rect x="3" y="3" width="18" height="18" rx="2" />
-          <line x1="9" y1="3" x2="9" y2="21" />
-          <line x1="15" y1="3" x2="15" y2="21" />
-          <line x1="3" y1="9" x2="21" y2="9" />
-          <line x1="3" y1="15" x2="21" y2="15" />
-        </svg>
-        宫格切分
-      </button>
-      {open && (
-        <div
-          className="absolute top-full mt-2 left-1/2 -translate-x-1/2 w-40 rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl py-1 z-30"
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          {GRID_SPLIT_OPTIONS.map(o => (
-            <button
-              key={o.label}
-              onClick={(e) => { e.stopPropagation(); onSplit(o.cols, o.rows); setOpen(false); }}
-              className="w-full text-left px-3 py-2 text-xs text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors"
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 };
 
 export const CanvasNode: React.FC<CanvasNodeProps> = ({
@@ -168,7 +113,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   const [isEditingTitle, setIsEditingTitle] = React.useState(false);
   const [editedTitle, setEditedTitle] = React.useState(data.title || data.type);
   const titleInputRef = React.useRef<HTMLInputElement>(null);
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const isIdle = data.status === NodeStatus.IDLE || data.status === NodeStatus.ERROR;
   const isLoading = data.status === NodeStatus.LOADING;
@@ -182,6 +126,34 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   const minEffectiveScale = 0.8;
   const effectiveScale = Math.max(zoom, minEffectiveScale);
   const localScale = effectiveScale / zoom;
+
+  // 三种可达渲染分支共用一套工具栏，仅通过动作配置保留原有差异与顺序。
+  const cameraToolbarActions: NodeHoverToolbarAction[] = [
+    'changeAngle',
+    ...(onGridSplit ? ['gridSplit' as const] : []),
+    'separator',
+    'expand',
+    'postToX',
+    'download',
+    'dragToChat',
+  ];
+  const imageToolbarActions: NodeHoverToolbarAction[] = [
+    ...(!(data.prompt && data.prompt.startsWith('Extract panel #'))
+      ? ['changeAngle' as const, 'separator' as const, 'upload' as const]
+      : []),
+    ...(onGridSplit ? ['gridSplit' as const, 'separator' as const] : []),
+    'expand',
+    'postToX',
+    'download',
+    'dragToChat',
+  ];
+  const videoToolbarActions: NodeHoverToolbarAction[] = [
+    'expand',
+    'postToX',
+    'postToTikTok',
+    'download',
+    'dragToChat',
+  ];
 
   // ============================================================================
   // EFFECTS
@@ -351,144 +323,20 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
 
         {/* Relative wrapper for the Card */}
         <div className="relative group/nodecard">
-          {/* Unified Toolbar - Appears above the card on hover */}
           {data.resultUrl && (
-            <div
-              className="absolute -top-20 left-0 right-0 flex justify-center opacity-0 group-hover/nodecard:opacity-100 transition-opacity z-20"
-              style={{
-                transform: `scale(${localScale})`,
-                transformOrigin: 'bottom center'
-              }}
-            >
-              <div className="flex items-center gap-1 px-2 py-1.5 bg-neutral-900/95 rounded-full border border-neutral-700 shadow-xl backdrop-blur-md">
-                {/* Change Angle Button - Re-enable tweaking */}
-                <button
-                  onClick={() => onUpdate(data.id, {
-                    angleMode: !data.angleMode,
-                    angleSettings: data.angleSettings || { rotation: 0, tilt: 0, scale: 0, wideAngle: false }
-                  })}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${data.angleMode
-                    ? 'bg-blue-500 text-white'
-                    : 'text-neutral-300 hover:bg-neutral-700 hover:text-white'
-                    }`}
-                >
-                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-                    <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-                    <line x1="12" y1="22.08" x2="12" y2="12" />
-                  </svg>
-                  调整角度
-                </button>
-                {/* Grid Split Button - slice the image into N×N separate image nodes */}
-                {onGridSplit && (
-                  <GridSplitMenu onSplit={(cols, rows) => onGridSplit(data.id, cols, rows)} />
-                )}
-                {/* Separator */}
-                <div className="w-px h-4 bg-neutral-600 mx-1" />
-
-                {/* Expand Button */}
-                <button
-                  onClick={() => onExpand?.(data.resultUrl!)}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                  title="查看原图"
-                >
-                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                    <polyline points="15 3 21 3 21 9" />
-                    <polyline points="9 21 3 21 3 15" />
-                    <line x1="21" y1="3" x2="14" y2="10" />
-                    <line x1="3" y1="21" x2="10" y2="14" />
-                  </svg>
-                </button>
-                {/* Post to X Button */}
-                <button
-                  onClick={(e) => { e.stopPropagation(); onPostToX?.(data.id, data.resultUrl!, 'image'); }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                  title="发布到 X"
-                >
-                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="currentColor">
-                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-                  </svg>
-                </button>
-                {/* Download Button */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (data.resultUrl) {
-                      const filename = `image_${data.id}.png`;
-                      const cleanUrl = data.resultUrl.split('?')[0];
-                      if (data.resultUrl.startsWith('data:')) {
-                        const link = document.createElement('a');
-                        link.href = data.resultUrl;
-                        link.download = filename;
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                      } else {
-                        fetch(cleanUrl, { cache: 'no-store' })
-                          .then(res => res.blob())
-                          .then(blob => {
-                            const url = window.URL.createObjectURL(blob);
-                            const link = document.createElement('a');
-                            link.href = url;
-                            link.download = filename;
-                            document.body.appendChild(link);
-                            link.click();
-                            document.body.removeChild(link);
-                            window.URL.revokeObjectURL(url);
-                          })
-                          .catch(() => {
-                            const link = document.createElement('a');
-                            link.href = cleanUrl;
-                            link.download = filename;
-                            link.target = '_blank';
-                            document.body.appendChild(link);
-                            link.click();
-                            document.body.removeChild(link);
-                          });
-                      }
-                    }
-                  }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                  title="下载"
-                >
-                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="7 10 12 15 17 10" />
-                    <line x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
-                </button>
-                {/* Drag to Chat Handle */}
-                <div
-                  draggable
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData('application/json', JSON.stringify({
-                      nodeId: data.id,
-                      url: data.resultUrl,
-                      type: 'image'
-                    }));
-                    e.dataTransfer.effectAllowed = 'copy';
-                    onDragStart?.(data.id, true);
-                  }}
-                  onDragEnd={() => onDragEnd?.()}
-                  className="p-1.5 bg-cyan-500/80 hover:bg-cyan-400 rounded-full text-white cursor-grab active:cursor-grabbing"
-                  title="拖到聊天窗口"
-                >
-                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="9" cy="5" r="1" fill="currentColor" />
-                    <circle cx="9" cy="12" r="1" fill="currentColor" />
-                    <circle cx="9" cy="19" r="1" fill="currentColor" />
-                    <circle cx="15" cy="5" r="1" fill="currentColor" />
-                    <circle cx="15" cy="12" r="1" fill="currentColor" />
-                    <circle cx="15" cy="19" r="1" fill="currentColor" />
-                  </svg>
-                </div>
-              </div>
-            </div>
+            <NodeHoverToolbar
+              data={data}
+              localScale={localScale}
+              topClassName="-top-20"
+              mediaType="image"
+              actions={cameraToolbarActions}
+              onUpdate={onUpdate}
+              onExpand={onExpand}
+              onGridSplit={onGridSplit}
+              onPostToX={onPostToX}
+              onDragStart={onDragStart}
+              onDragEnd={onDragEnd}
+            />
           )}
 
           {/* Node Card */}
@@ -662,300 +510,37 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
 
       {/* Relative wrapper for the Image Card to allow absolute positioning of controls below it */}
       <div className="relative group/nodecard">
-        {/* Unified Toolbar - Appears above the card for Image nodes on hover */}
         {data.type === NodeType.IMAGE && isSuccess && data.resultUrl && (
-          <div
-            className="absolute -top-12 left-0 right-0 flex justify-center opacity-0 group-hover/nodecard:opacity-100 transition-opacity z-20"
-            style={{
-              transform: `scale(${localScale})`,
-              transformOrigin: 'bottom center'
-            }}
-          >
-            <div className="flex items-center gap-1 px-2 py-1.5 bg-neutral-900/95 rounded-full border border-neutral-700 shadow-xl backdrop-blur-md">
-              {/* Change Angle and Upload buttons - Hidden for storyboard-generated scenes */}
-              {!(data.prompt && data.prompt.startsWith('Extract panel #')) && (
-                <>
-                  {/* Change Angle Button */}
-                  <button
-                    onClick={() => onUpdate(data.id, {
-                      angleMode: !data.angleMode,
-                      angleSettings: data.angleSettings || { rotation: 0, tilt: 0, scale: 0, wideAngle: false }
-                    })}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${data.angleMode
-                      ? 'bg-blue-500 text-white'
-                      : 'text-neutral-300 hover:bg-neutral-700 hover:text-white'
-                      }`}
-                  >
-                    <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-                      <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-                      <line x1="12" y1="22.08" x2="12" y2="12" />
-                    </svg>
-                    调整角度
-                  </button>
-                  {/* Separator */}
-                  <div className="w-px h-4 bg-neutral-600 mx-1" />
-                  {/* Upload Button */}
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                    title="上传图片"
-                  >
-                    <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                      <polyline points="17 8 12 3 7 8" />
-                      <line x1="12" y1="3" x2="12" y2="15" />
-                    </svg>
-                    上传
-                  </button>
-                  {/* Hidden file input for upload */}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file && onUpload) {
-                        const reader = new FileReader();
-                        reader.onload = (ev) => {
-                          const dataUrl = ev.target?.result as string;
-                          onUpload(data.id, dataUrl);
-                        };
-                        reader.readAsDataURL(file);
-                      }
-                      e.target.value = ''; // Reset for re-upload
-                    }}
-                  />
-                </>
-              )}
-              {/* Grid Split Button - slice the image into N×N separate image nodes */}
-              {onGridSplit && (
-                <>
-                  <GridSplitMenu onSplit={(cols, rows) => onGridSplit(data.id, cols, rows)} />
-                  <div className="w-px h-4 bg-neutral-600 mx-1" />
-                </>
-              )}
-              {/* Expand Button */}
-              <button
-                onClick={() => onExpand?.(data.resultUrl!)}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                title="查看原图"
-              >
-                <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="15 3 21 3 21 9" />
-                  <polyline points="9 21 3 21 3 15" />
-                  <line x1="21" y1="3" x2="14" y2="10" />
-                  <line x1="3" y1="21" x2="10" y2="14" />
-                </svg>
-              </button>
-              {/* Post to X Button */}
-              <button
-                onClick={(e) => { e.stopPropagation(); onPostToX?.(data.id, data.resultUrl!, 'image'); }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                title="发布到 X"
-              >
-                <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="currentColor">
-                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-                </svg>
-              </button>
-              {/* Download Button */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (data.resultUrl) {
-                    const filename = `image_${data.id}.png`;
-                    const cleanUrl = data.resultUrl.split('?')[0];
-                    if (data.resultUrl.startsWith('data:')) {
-                      const link = document.createElement('a');
-                      link.href = data.resultUrl;
-                      link.download = filename;
-                      document.body.appendChild(link);
-                      link.click();
-                      document.body.removeChild(link);
-                    } else {
-                      fetch(cleanUrl, { cache: 'no-store' })
-                        .then(res => res.blob())
-                        .then(blob => {
-                          const url = window.URL.createObjectURL(blob);
-                          const link = document.createElement('a');
-                          link.href = url;
-                          link.download = filename;
-                          document.body.appendChild(link);
-                          link.click();
-                          document.body.removeChild(link);
-                          window.URL.revokeObjectURL(url);
-                        })
-                        .catch(() => {
-                          const link = document.createElement('a');
-                          link.href = cleanUrl;
-                          link.download = filename;
-                          link.target = '_blank';
-                          document.body.appendChild(link);
-                          link.click();
-                          document.body.removeChild(link);
-                        });
-                    }
-                  }
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                title="下载"
-              >
-                <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                  <polyline points="7 10 12 15 17 10" />
-                  <line x1="12" y1="15" x2="12" y2="3" />
-                </svg>
-              </button>
-              {/* Drag to Chat Handle */}
-              <div
-                draggable
-                onPointerDown={(e) => e.stopPropagation()}
-                onDragStart={(e) => {
-                  e.dataTransfer.setData('application/json', JSON.stringify({
-                    nodeId: data.id,
-                    url: data.resultUrl,
-                    type: 'image'
-                  }));
-                  e.dataTransfer.effectAllowed = 'copy';
-                  onDragStart?.(data.id, true);
-                }}
-                onDragEnd={() => onDragEnd?.()}
-                className="p-1.5 bg-cyan-500/80 hover:bg-cyan-400 rounded-full text-white cursor-grab active:cursor-grabbing"
-                title="拖到聊天窗口"
-              >
-                <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="9" cy="5" r="1" fill="currentColor" />
-                  <circle cx="9" cy="12" r="1" fill="currentColor" />
-                  <circle cx="9" cy="19" r="1" fill="currentColor" />
-                  <circle cx="15" cy="5" r="1" fill="currentColor" />
-                  <circle cx="15" cy="12" r="1" fill="currentColor" />
-                  <circle cx="15" cy="19" r="1" fill="currentColor" />
-                </svg>
-              </div>
-            </div>
-          </div>
+          <NodeHoverToolbar
+            data={data}
+            localScale={localScale}
+            topClassName="-top-12"
+            mediaType="image"
+            actions={imageToolbarActions}
+            onUpdate={onUpdate}
+            onUpload={onUpload}
+            onExpand={onExpand}
+            onGridSplit={onGridSplit}
+            onPostToX={onPostToX}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
+          />
         )}
 
-        {/* Video Toolbar - Appears above the card for Video nodes on hover */}
         {data.type === NodeType.VIDEO && isSuccess && data.resultUrl && (
-          <div
-            className="absolute -top-20 left-0 right-0 flex justify-center opacity-0 group-hover/nodecard:opacity-100 transition-opacity z-20"
-            style={{
-              transform: `scale(${localScale})`,
-              transformOrigin: 'bottom center'
-            }}
-          >
-            <div className="flex items-center gap-1 px-2 py-1.5 bg-neutral-900/95 rounded-full border border-neutral-700 shadow-xl backdrop-blur-md">
-              {/* Expand Button */}
-              <button
-                onClick={() => onExpand?.(data.resultUrl!)}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                title="查看原图"
-              >
-                <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="15 3 21 3 21 9" />
-                  <polyline points="9 21 3 21 3 15" />
-                  <line x1="21" y1="3" x2="14" y2="10" />
-                  <line x1="3" y1="21" x2="10" y2="14" />
-                </svg>
-              </button>
-              {/* Post to X Button */}
-              <button
-                onClick={(e) => { e.stopPropagation(); onPostToX?.(data.id, data.resultUrl!, 'video'); }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                title="发布到 X"
-              >
-                <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="currentColor">
-                  <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-                </svg>
-              </button>
-              {/* Post to TikTok Button */}
-              <button
-                onClick={(e) => { e.stopPropagation(); onPostToTikTok?.(data.id, data.resultUrl!); }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                title="发布到 TikTok"
-              >
-                <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="currentColor">
-                  <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z" />
-                </svg>
-              </button>
-              {/* Download Button */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (data.resultUrl) {
-                    const filename = `video_${data.id}.mp4`;
-                    const cleanUrl = data.resultUrl.split('?')[0];
-                    fetch(cleanUrl, { cache: 'no-store' })
-                      .then(res => res.blob())
-                      .then(blob => {
-                        const url = window.URL.createObjectURL(blob);
-                        const link = document.createElement('a');
-                        link.href = url;
-                        link.download = filename;
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                        window.URL.revokeObjectURL(url);
-                      })
-                      .catch(() => {
-                        const link = document.createElement('a');
-                        link.href = cleanUrl;
-                        link.download = filename;
-                        link.target = '_blank';
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                      });
-                  }
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-                className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                title="下载"
-              >
-                <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                  <polyline points="7 10 12 15 17 10" />
-                  <line x1="12" y1="15" x2="12" y2="3" />
-                </svg>
-              </button>
-              {/* Drag to Chat Handle */}
-              <div
-                draggable
-                onPointerDown={(e) => e.stopPropagation()}
-                onDragStart={(e) => {
-                  e.dataTransfer.setData('application/json', JSON.stringify({
-                    nodeId: data.id,
-                    url: data.resultUrl,
-                    type: 'video'
-                  }));
-                  e.dataTransfer.effectAllowed = 'copy';
-                  onDragStart?.(data.id, true);
-                }}
-                onDragEnd={() => onDragEnd?.()}
-                className="p-1.5 bg-cyan-500/80 hover:bg-cyan-400 rounded-full text-white cursor-grab active:cursor-grabbing"
-                title="拖到聊天窗口"
-              >
-                <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="9" cy="5" r="1" fill="currentColor" />
-                  <circle cx="9" cy="12" r="1" fill="currentColor" />
-                  <circle cx="9" cy="19" r="1" fill="currentColor" />
-                  <circle cx="15" cy="5" r="1" fill="currentColor" />
-                  <circle cx="15" cy="12" r="1" fill="currentColor" />
-                  <circle cx="15" cy="19" r="1" fill="currentColor" />
-                </svg>
-              </div>
-            </div>
-          </div>
+          <NodeHoverToolbar
+            data={data}
+            localScale={localScale}
+            topClassName="-top-20"
+            mediaType="video"
+            actions={videoToolbarActions}
+            onUpdate={onUpdate}
+            onExpand={onExpand}
+            onPostToX={onPostToX}
+            onPostToTikTok={onPostToTikTok}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
+          />
         )}
 
         {/* Main Node Card - Video nodes are wider to fit more controls */}

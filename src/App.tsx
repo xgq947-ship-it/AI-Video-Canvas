@@ -512,6 +512,7 @@ export default function App() {
         y: 440,
         parentIds: [storyId],
         speaker: '林默',
+        ttsProvider: 'minimax',
         voiceId: 'yuanboxiaoshu',
         voiceSpeed: 1,
         audioVolume: 1,
@@ -1438,10 +1439,15 @@ export default function App() {
       {!storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
         <ProjectSidebar
           nodes={nodes}
+          groups={groups}
           selectedNodeIds={selectedNodeIds}
           canvasTitle={canvasTitle}
           workflowId={workflowId}
           onSelectNode={(id) => setSelectedNodeIds([id])}
+          onSelectNodes={setSelectedNodeIds}
+          onCreateGroup={() => { if (selectedNodeIds.length >= 2) groupNodes(selectedNodeIds, setNodes, '新分组'); }}
+          onRenameGroup={renameGroup}
+          onUngroup={(groupId) => ungroupNodes(groupId, setNodes)}
           onLocateNode={locateNodeFromSidebar}
           onAddNode={openNewNodeMenu}
           onOpenWorkflows={handleWorkflowsClick}

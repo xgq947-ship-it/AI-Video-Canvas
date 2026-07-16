@@ -7,6 +7,7 @@
 
 import React, { useState, useRef } from 'react';
 import { Viewport, NodeData, NodeType } from '../types';
+import { clampZoom, zoomFactorFromWheel } from '@/shared/zoom.js';
 
 export const useCanvasNavigation = () => {
     // ============================================================================
@@ -27,8 +28,8 @@ export const useCanvasNavigation = () => {
      */
     const handleWheel = (e: React.WheelEvent, hoveredNode?: NodeData) => {
         if (e.ctrlKey || e.metaKey) {
-            // Zoom with Ctrl/Cmd + Wheel
-            const s = Math.exp(-e.deltaY * 0.001);
+            // 缩放倍率按设备类型区分灵敏度（触控板 delta 小而密集，鼠标滚轮大而离散）
+            const s = zoomFactorFromWheel(e.deltaY, e.deltaMode);
             let targetZoom = viewport.zoom * s;
 
             // Apply size limit if hovering over a node
@@ -44,7 +45,7 @@ export const useCanvasNavigation = () => {
                 targetZoom = Math.min(targetZoom, maxNodeZoom);
             }
 
-            const newZoom = Math.min(Math.max(0.1, targetZoom), 2.0);
+            const newZoom = clampZoom(targetZoom);
 
             const rect = canvasRef.current?.getBoundingClientRect();
             if (rect) {

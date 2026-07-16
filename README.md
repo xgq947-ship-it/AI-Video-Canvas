@@ -44,7 +44,7 @@ cp .env.example .env  # 配置密钥（可留空，见下）
 | 图片生成 | `GEMINI_API_KEY` / `OPENAI_API_KEY` |
 | 视频生成 | `HAILUO_API_KEY` / `KLING_ACCESS_KEY`+`KLING_SECRET_KEY` / `FAL_API_KEY` |
 | 剧本 / 分镜 | `GEMINI_API_KEY` |
-| 配音 (TTS) | `MINIMAX_API_KEY` + `MINIMAX_GROUP_ID`（可回退 `HAILUO_API_KEY`）|
+| 配音 (TTS) | MiniMax 画布直连需要 `MINIMAX_API_KEY` + `MINIMAX_GROUP_ID`（可回退 `HAILUO_API_KEY`）；ChatCut/ElevenLabs、豆包、Fish、本地 Qwen 与其他平台可生成后导入 |
 | 画布 / 导入本地素材 / Remotion 渲染 / ffmpeg 母带 | **完全本地，无需密钥** |
 
 > **API 费用由谁产生**：生图/生视频/配音调用线上 API，费用由对应密钥所属账号承担。

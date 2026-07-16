@@ -4,23 +4,28 @@ import {
   BookOpen,
   Boxes,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   CirclePlus,
   Film,
   Filter,
+  Folder,
+  FolderMinus,
   FolderOpen,
+  FolderPlus,
   Grid2X2,
   Image as ImageIcon,
   LayoutList,
   Loader2,
   LocateFixed,
   MoreHorizontal,
+  Pencil,
   Search,
   SlidersHorizontal,
   Sparkles,
   Trash2,
 } from 'lucide-react';
-import { NodeData, NodeType } from '../types';
+import { NodeData, NodeGroup, NodeType } from '../types';
 
 type SidebarTab = 'canvas' | 'assets';
 type AssetScope = 'personal' | 'agent';
@@ -50,10 +55,18 @@ export interface SidebarAssetPreview {
 
 interface ProjectSidebarProps {
   nodes: NodeData[];
+  /** 画布分组（与画布上的 NodeGroup 是同一份数据，侧边栏只做展示/命名/成组入口） */
+  groups: NodeGroup[];
   selectedNodeIds: string[];
   canvasTitle: string;
   workflowId?: string | null;
   onSelectNode: (id: string) => void;
+  /** 选中一组节点（点分组标题时选中该组全部节点） */
+  onSelectNodes: (ids: string[]) => void;
+  /** 把当前选中的节点成组（复用画布的成组逻辑） */
+  onCreateGroup: () => void;
+  onRenameGroup: (groupId: string, label: string) => void;
+  onUngroup: (groupId: string) => void;
   onLocateNode: (id: string) => void;
   onAddNode: () => void;
   onOpenWorkflows: (e: React.MouseEvent) => void;
@@ -86,10 +99,15 @@ const nodeThumbnail = (node: NodeData) => node.resultUrl || node.mediaUrl || nod
 
 export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   nodes,
+  groups,
   selectedNodeIds,
   canvasTitle,
   workflowId,
   onSelectNode,
+  onSelectNodes,
+  onCreateGroup,
+  onRenameGroup,
+  onUngroup,
   onLocateNode,
   onAddNode,
   onOpenWorkflows,
@@ -108,6 +126,9 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   const [nodeSearchOpen, setNodeSearchOpen] = useState(false);
   const [nodeFilter, setNodeFilter] = useState('all');
   const [sortNewestFirst, setSortNewestFirst] = useState(false);
+  const [collapsedGroupIds, setCollapsedGroupIds] = useState<Set<string>>(new Set());
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [editingGroupLabel, setEditingGroupLabel] = useState('');
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [assets, setAssets] = useState<SidebarAsset[]>([]);
@@ -209,6 +230,45 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
     return sortNewestFirst ? [...filtered].reverse() : filtered;
   }, [nodes, nodeFilter, query, sortNewestFirst]);
 
+  /**
+   * 把可见节点按画布分组归类。
+   * 分组数据来自画布上的 NodeGroup（同一份），侧边栏不另建概念。
+   * 搜索/筛选后为空的分组不显示；没有任何分组时退化为原来的扁平列表。
+   */
+  const nodeSections = useMemo(() => {
+    const byGroup = new Map<string, NodeData[]>();
+    const ungrouped: NodeData[] = [];
+    for (const node of visibleNodes) {
+      if (node.groupId && groups.some(g => g.id === node.groupId)) {
+        const list = byGroup.get(node.groupId) || [];
+        list.push(node);
+        byGroup.set(node.groupId, list);
+      } else {
+        ungrouped.push(node);
+      }
+    }
+    const grouped = groups
+      .map(group => ({ group, items: byGroup.get(group.id) || [] }))
+      .filter(section => section.items.length > 0);
+    return { grouped, ungrouped };
+  }, [visibleNodes, groups]);
+
+  const toggleGroupCollapsed = (groupId: string) => {
+    setCollapsedGroupIds(prev => {
+      const next = new Set(prev);
+      next.has(groupId) ? next.delete(groupId) : next.add(groupId);
+      return next;
+    });
+  };
+
+  const commitGroupRename = () => {
+    if (editingGroupId) {
+      const label = editingGroupLabel.trim();
+      if (label) onRenameGroup(editingGroupId, label);
+    }
+    setEditingGroupId(null);
+  };
+
   const visibleAssets = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return assets.filter(asset => `${asset.name || ''} ${asset.prompt || ''} ${asset.category || ''}`.toLowerCase().includes(normalizedQuery));
@@ -274,53 +334,128 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
 
       {activeTab === 'canvas' ? (
         <>
-          <div className="flex shrink-0 items-center gap-3 px-5 py-5">
+          <div className="flex shrink-0 items-center gap-2 px-4 py-5">
             {nodeSearchOpen ? (
               <SearchBox value={query} onChange={setQuery} compact onCompactClose={() => { setNodeSearchOpen(false); setQuery(''); }} />
             ) : (
               <>
-                <span className={`text-sm font-semibold ${muted}`}>画布元素</span>
-                <button onClick={() => setSortNewestFirst(value => !value)} className={`rounded-lg p-1.5 ${muted} ${hover}`} title="切换排序"><LayoutList size={18} /></button>
+                <span className={`shrink-0 whitespace-nowrap text-sm font-semibold ${muted}`}>画布元素</span>
+                <button onClick={() => setSortNewestFirst(value => !value)} className={`shrink-0 rounded-lg p-1.5 ${muted} ${hover}`} title="切换排序"><LayoutList size={18} /></button>
                 <select
                   value={nodeFilter}
                   onChange={event => setNodeFilter(event.target.value)}
-                  className="ml-auto bg-transparent text-sm outline-none"
+                  className="ml-auto min-w-0 max-w-[72px] shrink bg-transparent text-sm outline-none"
                 >
                   <option value="all">全部</option>
                   {[...new Set(nodes.map(node => node.type))].map(type => <option key={type} value={type}>{typeLabel[type] || type}</option>)}
                 </select>
-                <button onClick={() => setNodeSearchOpen(true)} className={`rounded-lg p-1.5 ${muted} ${hover}`} title="搜索节点"><Search size={21} /></button>
+                <button onClick={() => setNodeSearchOpen(true)} className={`shrink-0 rounded-lg p-1.5 ${muted} ${hover}`} title="搜索节点"><Search size={20} /></button>
               </>
             )}
-            <button onClick={onAddNode} className={`rounded-lg p-1.5 ${hover}`} title="新建节点"><CirclePlus size={20} /></button>
+            <button
+              onClick={onCreateGroup}
+              disabled={selectedNodeIds.length < 2}
+              className={`shrink-0 rounded-lg p-1.5 transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${hover}`}
+              title={selectedNodeIds.length < 2 ? '新建分组：先在画布上选中 2 个及以上节点' : `把选中的 ${selectedNodeIds.length} 个节点组成新分组`}
+            ><FolderPlus size={19} /></button>
+            <button onClick={onAddNode} className={`shrink-0 rounded-lg p-1.5 ${hover}`} title="新建节点"><CirclePlus size={19} /></button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 sidebar-scrollbar">
             {visibleNodes.length === 0 ? (
               <EmptyState label={nodes.length === 0 ? '画布暂无节点' : '没有匹配的节点'} />
-            ) : visibleNodes.map(node => {
-              const thumb = nodeThumbnail(node);
-              const selected = selectedNodeIds.includes(node.id);
-              return (
-                <button
-                  key={node.id}
-                  onClick={() => onSelectNode(node.id)}
-                  className={`group mb-1 flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-left transition-colors ${selected ? 'bg-[#292929]' : hover}`}
-                >
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-neutral-700 bg-neutral-800">
-                    {thumb && node.type !== NodeType.VIDEO ? <img src={thumb} alt="" className="h-full w-full object-cover" /> : node.type === NodeType.VIDEO ? <Film size={20} className={muted} /> : node.type === NodeType.IMAGE ? <ImageIcon size={20} className={muted} /> : <Sparkles size={20} className={muted} />}
-                  </div>
-                  <span className="min-w-0 flex-1 truncate text-[15px]">{node.title || node.prompt || typeLabel[node.type] || node.type}</span>
-                  <MoreHorizontal size={18} className={`${muted} opacity-0 transition-opacity group-hover:opacity-100`} />
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    onClick={event => { event.stopPropagation(); onLocateNode(node.id); }}
-                    className={`rounded-lg p-1.5 ${muted} opacity-0 transition-opacity group-hover:opacity-100 ${hover}`}
-                    title="定位节点"
-                  ><LocateFixed size={18} /></span>
-                </button>
-              );
-            })}
+            ) : (
+              <>
+                {nodeSections.grouped.map(({ group, items }) => {
+                  const isCollapsed = collapsedGroupIds.has(group.id);
+                  const allSelected = items.every(node => selectedNodeIds.includes(node.id));
+                  return (
+                    <div key={group.id} className="mb-2">
+                      <div className={`group/gh flex items-center gap-1 rounded-xl px-2 py-1.5 ${allSelected ? 'bg-[#292929]' : hover}`}>
+                        <button
+                          onClick={() => toggleGroupCollapsed(group.id)}
+                          className={`rounded-md p-0.5 ${muted}`}
+                          title={isCollapsed ? '展开分组' : '收起分组'}
+                        >
+                          {isCollapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+                        </button>
+                        <Folder size={15} className={muted} />
+                        {editingGroupId === group.id ? (
+                          <input
+                            autoFocus
+                            value={editingGroupLabel}
+                            onChange={event => setEditingGroupLabel(event.target.value)}
+                            onBlur={commitGroupRename}
+                            onKeyDown={event => {
+                              if (event.key === 'Enter') commitGroupRename();
+                              if (event.key === 'Escape') setEditingGroupId(null);
+                            }}
+                            className="min-w-0 flex-1 rounded bg-[#1f1f1f] px-1.5 py-0.5 text-sm text-white outline-none ring-1 ring-neutral-600"
+                          />
+                        ) : (
+                          <button
+                            onClick={() => onSelectNodes(items.map(node => node.id))}
+                            onDoubleClick={() => { setEditingGroupId(group.id); setEditingGroupLabel(group.label); }}
+                            className="min-w-0 flex-1 truncate text-left text-sm font-medium"
+                            title="点击选中该组全部节点，双击重命名"
+                          >
+                            {group.label}
+                          </button>
+                        )}
+                        <span className={`shrink-0 text-xs ${muted}`}>{items.length}</span>
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => { setEditingGroupId(group.id); setEditingGroupLabel(group.label); }}
+                          className={`rounded-md p-1 ${muted} opacity-0 transition-opacity group-hover/gh:opacity-100 ${hover}`}
+                          title="重命名分组"
+                        ><Pencil size={13} /></span>
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => onUngroup(group.id)}
+                          className={`rounded-md p-1 ${muted} opacity-0 transition-opacity group-hover/gh:opacity-100 ${hover}`}
+                          title="解散分组（不会删除节点）"
+                        ><FolderMinus size={13} /></span>
+                      </div>
+                      {!isCollapsed && (
+                        <div className="mt-1 pl-3">
+                          {items.map(node => (
+                            <NodeRow
+                              key={node.id}
+                              node={node}
+                              selected={selectedNodeIds.includes(node.id)}
+                              hover={hover}
+                              muted={muted}
+                              onSelect={onSelectNode}
+                              onLocate={onLocateNode}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {nodeSections.ungrouped.length > 0 && (
+                  <>
+                    {nodeSections.grouped.length > 0 && (
+                      <div className={`mb-1 mt-2 px-2 text-xs font-medium ${muted}`}>未分组</div>
+                    )}
+                    {nodeSections.ungrouped.map(node => (
+                      <NodeRow
+                        key={node.id}
+                        node={node}
+                        selected={selectedNodeIds.includes(node.id)}
+                        hover={hover}
+                        muted={muted}
+                        onSelect={onSelectNode}
+                        onLocate={onLocateNode}
+                      />
+                    ))}
+                  </>
+                )}
+              </>
+            )}
           </div>
         </>
       ) : (
@@ -470,6 +605,43 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
         </div>
       </footer>
     </aside>
+  );
+};
+
+/** 侧边栏里的单个节点行（分组内与未分组共用，行为与原扁平列表一致） */
+const NodeRow = ({
+  node, selected, hover, muted, onSelect, onLocate,
+}: {
+  node: NodeData;
+  selected: boolean;
+  hover: string;
+  muted: string;
+  onSelect: (id: string) => void;
+  onLocate: (id: string) => void;
+}) => {
+  const thumb = nodeThumbnail(node);
+  return (
+    <button
+      onClick={() => onSelect(node.id)}
+      className={`group mb-1 flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-left transition-colors ${selected ? 'bg-[#292929]' : hover}`}
+    >
+      <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-neutral-700 bg-neutral-800">
+        {thumb && node.type !== NodeType.VIDEO
+          ? <img src={thumb} alt="" className="h-full w-full object-cover" />
+          : node.type === NodeType.VIDEO ? <Film size={20} className={muted} />
+            : node.type === NodeType.IMAGE ? <ImageIcon size={20} className={muted} />
+              : <Sparkles size={20} className={muted} />}
+      </div>
+      <span className="min-w-0 flex-1 truncate text-[15px]">{node.title || node.prompt || typeLabel[node.type] || node.type}</span>
+      <MoreHorizontal size={18} className={`${muted} opacity-0 transition-opacity group-hover:opacity-100`} />
+      <span
+        role="button"
+        tabIndex={0}
+        onClick={event => { event.stopPropagation(); onLocate(node.id); }}
+        className={`rounded-lg p-1.5 ${muted} opacity-0 transition-opacity group-hover:opacity-100 ${hover}`}
+        title="定位节点"
+      ><LocateFixed size={18} /></span>
+    </button>
   );
 };
 

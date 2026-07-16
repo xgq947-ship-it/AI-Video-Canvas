@@ -9,14 +9,22 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { synthesizeSpeech, DEFAULT_VOICE_ID } from '../services/minimaxTts.js';
+import {
+  DEFAULT_TTS_PROVIDER,
+  getTtsProvider,
+  isKnownTtsProvider,
+  normalizeTtsProvider,
+} from '../../shared/ttsProviders.js';
 
 const router = express.Router();
 
-router.post('/minimax/tts', async (req, res) => {
+const handleTts = async (req, res) => {
   try {
     const {
+      provider: requestedProvider,
       text,
       voiceId,
+      voiceName,
       speaker,
       speed,
       vol,
@@ -26,6 +34,23 @@ router.post('/minimax/tts', async (req, res) => {
       model,
       format,
     } = req.body || {};
+
+    if (requestedProvider && !isKnownTtsProvider(requestedProvider)) {
+      return res.status(400).json({
+        error: `不支持的配音供应商: ${requestedProvider}`,
+        code: 'TTS_PROVIDER_UNSUPPORTED',
+      });
+    }
+    const provider = normalizeTtsProvider(requestedProvider || DEFAULT_TTS_PROVIDER);
+    const providerDefinition = getTtsProvider(provider);
+    if (providerDefinition.mode !== 'direct') {
+      return res.status(422).json({
+        error: `${providerDefinition.label} 当前使用“平台生成后导入”模式`,
+        code: 'TTS_EXTERNAL_IMPORT_REQUIRED',
+        provider,
+        mode: providerDefinition.mode,
+      });
+    }
 
     const apiKey = process.env.MINIMAX_API_KEY || req.app.locals.HAILUO_API_KEY || process.env.HAILUO_API_KEY;
     const groupId = process.env.MINIMAX_GROUP_ID;
@@ -66,8 +91,13 @@ router.post('/minimax/tts', async (req, res) => {
       subtype: 'dialogue',
       text,
       speaker: speaker || '',
+      provider,
+      providerLabel: providerDefinition.label,
+      model: model || 'speech-2.8-hd',
       voiceId: voiceId || DEFAULT_VOICE_ID,
+      voiceName: voiceName || '',
       durationSec,
+      source: 'generated',
       createdAt: new Date().toISOString(),
     };
     fs.writeFileSync(path.join(audioDir, `${id}.json`), JSON.stringify(metadata, null, 2));
@@ -78,17 +108,37 @@ router.post('/minimax/tts', async (req, res) => {
       filename,
       durationSec,
       speaker: speaker || '',
+      provider,
+      model: metadata.model,
+      voiceId: metadata.voiceId,
     });
   } catch (err) {
     console.error('[MiniMax TTS] Error:', err);
     res.status(500).json({ error: err.message || 'TTS 失败' });
   }
+};
+
+// 供应商中立入口；旧 MiniMax 路径继续保留，兼容已有项目与调用方。
+router.post('/tts', handleTts);
+router.post('/minimax/tts', (req, res) => {
+  req.body = { ...(req.body || {}), provider: 'minimax' };
+  return handleTts(req, res);
 });
 
 // 导入本地音频（音效/背景音乐/配音）到素材库
 router.post('/upload', (req, res) => {
   try {
-    const { dataUrl, filename, subtype } = req.body || {};
+    const {
+      dataUrl,
+      filename,
+      subtype,
+      provider: requestedProvider,
+      model,
+      voiceId,
+      voiceName,
+      speaker,
+      text,
+    } = req.body || {};
     if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
       return res.status(400).json({ error: '需要 base64 data URL 的 dataUrl' });
     }
@@ -110,14 +160,24 @@ router.post('/upload', (req, res) => {
     const outName = `${id}_${path.basename(safeBase, path.extname(safeBase))}${ext}`;
     fs.writeFileSync(path.join(audioDir, outName), buffer);
 
+    const provider = isKnownTtsProvider(requestedProvider) ? requestedProvider : 'import';
     const metadata = {
       id, filename: outName, type: 'audio',
-      subtype: subtype || 'sfx',
+      subtype: subtype || 'sfx', provider,
+      providerLabel: getTtsProvider(provider).label,
+      model: model || '', voiceId: voiceId || '', voiceName: voiceName || '',
+      speaker: speaker || '', text: text || '', source: 'imported',
       originalName: filename || '', createdAt: new Date().toISOString(),
     };
     fs.writeFileSync(path.join(audioDir, `${id}.json`), JSON.stringify(metadata, null, 2));
 
-    res.json({ success: true, url: `/library/audio/${outName}`, filename: outName });
+    res.json({
+      success: true,
+      url: `/library/audio/${outName}`,
+      filename: outName,
+      provider,
+      metadata,
+    });
   } catch (err) {
     console.error('[Audio Upload] Error:', err);
     res.status(500).json({ error: err.message || '音频上传失败' });

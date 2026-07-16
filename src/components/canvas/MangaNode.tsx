@@ -17,6 +17,8 @@ import { NodeData, NodeType } from '../../types';
 import { NodeConnectors } from './NodeConnectors';
 // @ts-ignore — 纯 JS 共享模块，类型由 shared/manifest.d.ts 提供
 import { buildManifestFromNodes } from '@/shared/manifest.js';
+// @ts-ignore — 纯 JS 共享模块，类型由 shared/ttsProviders.d.ts 提供
+import { TTS_PROVIDERS, canGenerateTtsDirectly, getTtsProvider } from '@/shared/ttsProviders.js';
 
 interface MangaNodeProps {
   data: NodeData;
@@ -77,6 +79,8 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const up = (u: Partial<NodeData>) => onUpdate(data.id, u);
+  const ttsProvider = getTtsProvider(data.ttsProvider);
+  const canGenerateHere = canGenerateTtsDirectly(data.ttsProvider);
 
   // 探测音频真实时长并回填 timelineEnd
   const probeDuration = (url: string) => {
@@ -101,11 +105,21 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
       const subtype = data.type === NodeType.BGM ? 'bgm' : data.type === NodeType.SFX ? 'sfx' : 'dialogue';
       const res = await fetch('/api/audio/upload', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataUrl, filename: file.name, subtype }),
+        body: JSON.stringify({
+          dataUrl,
+          filename: file.name,
+          subtype,
+          provider: data.type === NodeType.AUDIO ? ttsProvider.id : 'import',
+          model: data.ttsModel,
+          voiceId: data.voiceId,
+          voiceName: data.ttsVoiceName,
+          speaker: data.speaker,
+          text: data.ttsText || data.subtitleText || data.prompt || '',
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || '上传失败');
-      up({ mediaUrl: json.url });
+      up({ mediaUrl: json.url, ttsProvider: json.provider || ttsProvider.id, ttsSource: 'imported' });
       probeDuration(json.url);
       setMsg('已导入');
     } catch (e: any) { setMsg('错误: ' + e.message); }
@@ -115,21 +129,33 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
   const generateTts = async () => {
     const text = data.ttsText || data.subtitleText || data.prompt || '';
     if (!text.trim()) { setMsg('请先输入配音文本'); return; }
+    if (!canGenerateHere) {
+      setMsg(`请在 ${ttsProvider.label} 生成后点击“导入配音”`);
+      return;
+    }
     setBusy(true); setMsg('合成配音中…');
     try {
-      const res = await fetch('/api/audio/minimax/tts', {
+      const res = await fetch('/api/audio/tts', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          provider: ttsProvider.id,
           text, speaker: data.speaker, voiceId: data.voiceId,
+          voiceName: data.ttsVoiceName, model: data.ttsModel,
           speed: data.voiceSpeed, emotion: data.voiceEmotion,
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'TTS 失败');
-      up({ mediaUrl: json.url, durationSec: json.durationSec });
+      up({ mediaUrl: json.url, durationSec: json.durationSec, ttsProvider: json.provider, ttsSource: 'generated' });
       if (json.durationSec) {
         const start = NUM(data.timelineStart, 0);
-        up({ mediaUrl: json.url, durationSec: json.durationSec, timelineEnd: Math.round((start + json.durationSec) * 100) / 100 });
+        up({
+          mediaUrl: json.url,
+          durationSec: json.durationSec,
+          timelineEnd: Math.round((start + json.durationSec) * 100) / 100,
+          ttsProvider: json.provider,
+          ttsSource: 'generated',
+        });
       }
       setMsg('配音完成');
     } catch (e: any) { setMsg('错误: ' + e.message); }
@@ -243,18 +269,35 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
             <>
               {data.type === NodeType.AUDIO && (
                 <div className="flex flex-col gap-1.5 pb-2 border-b border-neutral-800/60">
+                  <label className={labelCls}>配音来源</label>
+                  <select
+                    value={ttsProvider.id}
+                    onChange={(e) => up({ ttsProvider: e.target.value as NodeData['ttsProvider'] })}
+                    onPointerDown={stop}
+                    className={inputCls}
+                  >
+                    {TTS_PROVIDERS.map((provider) => (
+                      <option key={provider.id} value={provider.id}>{provider.label}</option>
+                    ))}
+                  </select>
                   <label className={labelCls}>配音文本</label>
                   <textarea
                     value={data.ttsText ?? data.subtitleText ?? ''}
                     onChange={(e) => up({ ttsText: e.target.value })}
                     onPointerDown={stop}
-                    placeholder="输入台词，用 MiniMax TTS 合成配音"
+                    placeholder={canGenerateHere ? `输入台词，用 ${ttsProvider.label} 合成配音` : '输入台词，去所选平台生成后导入'}
                     className={inputCls + ' resize-none'} style={{ minHeight: 48 }}
                   />
-                  <button onClick={generateTts} onPointerDown={stop} disabled={busy}
-                    className="flex items-center justify-center gap-1.5 py-1.5 rounded bg-emerald-600/90 hover:bg-emerald-500 text-white text-xs font-medium disabled:opacity-50">
-                    {busy ? <Loader2 size={13} className="animate-spin" /> : <Mic size={13} />} 生成配音
-                  </button>
+                  {canGenerateHere ? (
+                    <button onClick={generateTts} onPointerDown={stop} disabled={busy}
+                      className="flex items-center justify-center gap-1.5 py-1.5 rounded bg-emerald-600/90 hover:bg-emerald-500 text-white text-xs font-medium disabled:opacity-50">
+                      {busy ? <Loader2 size={13} className="animate-spin" /> : <Mic size={13} />} 用 {ttsProvider.label} 生成
+                    </button>
+                  ) : (
+                    <div className="rounded border border-neutral-800 bg-[#171717] px-2 py-1.5 text-[10px] leading-4 text-neutral-400">
+                      {ttsProvider.description}。下载 MP3/WAV 后使用下方导入，画布会保留来源与音色信息。
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -280,6 +323,12 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
                           onPointerDown={stop} placeholder="角色名" className={inputCls} />
                         <input value={data.voiceId ?? ''} onChange={(e) => up({ voiceId: e.target.value })}
                           onPointerDown={stop} placeholder="音色 ID" className={inputCls} />
+                      </div>
+                      <div className="flex gap-1.5">
+                        <input value={data.ttsVoiceName ?? ''} onChange={(e) => up({ ttsVoiceName: e.target.value })}
+                          onPointerDown={stop} placeholder="音色名称" className={inputCls} />
+                        <input value={data.ttsModel ?? ''} onChange={(e) => up({ ttsModel: e.target.value })}
+                          onPointerDown={stop} placeholder="模型版本" className={inputCls} />
                       </div>
                       <div className="flex gap-1.5">
                         <NumField label="语速" value={data.voiceSpeed ?? 1} onChange={(v) => up({ voiceSpeed: v })} step={0.1} />

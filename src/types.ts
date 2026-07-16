@@ -159,6 +159,10 @@ export interface NodeData {
 
   // 配音(TTS)参数
   ttsText?: string;
+  ttsProvider?: 'minimax' | 'chatcut-elevenlabs' | 'doubao' | 'fish-audio' | 'qwen-local' | 'import';
+  ttsModel?: string;
+  ttsVoiceName?: string;
+  ttsSource?: 'generated' | 'imported';
   voiceId?: string;
   voiceSpeed?: number;
   voiceEmotion?: string;

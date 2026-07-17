@@ -42,6 +42,7 @@ interface CanvasNodeProps {
   onImageToVideo?: (nodeId: string) => void;
   onChangeAngleGenerate?: (nodeId: string) => void;
   onGridSplit?: (nodeId: string, cols: number, rows: number) => void;
+  onExtractLastFrame?: (nodeId: string) => void;
   zoom: number;
   // Mouse event callbacks for chat panel drag functionality
   onMouseEnter?: () => void;
@@ -95,6 +96,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   onImageToVideo,
   onChangeAngleGenerate,
   onGridSplit,
+  onExtractLastFrame,
   zoom,
   onMouseEnter,
   onMouseLeave,
@@ -142,6 +144,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
     'download',
   ];
   const videoToolbarActions: NodeHoverToolbarAction[] = [
+    ...(onExtractLastFrame ? ['lastFrame' as const, 'separator' as const] : []),
     'expand',
     'postToX',
     'postToTikTok',
@@ -525,6 +528,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
             actions={videoToolbarActions}
             onUpdate={onUpdate}
             onExpand={onExpand}
+            onExtractLastFrame={onExtractLastFrame}
             onPostToX={onPostToX}
             onPostToTikTok={onPostToTikTok}
           />

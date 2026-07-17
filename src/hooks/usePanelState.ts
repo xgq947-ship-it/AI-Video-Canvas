@@ -36,6 +36,13 @@ export const usePanelState = () => {
 
     const closeAssetLibrary = useCallback(() => setIsAssetLibraryOpen(false), []);
 
+    const openHistoryPanel = useCallback((y: number, closeWorkflowPanel: () => void) => {
+        setHistoryPanelY(y);
+        setIsHistoryPanelOpen(true);
+        closeWorkflowPanel();
+        setIsAssetLibraryOpen(false);
+    }, []);
+
     // ============================================================================
     // COMBINED HANDLERS (use these in App.tsx to handle mutual exclusivity)
     // ============================================================================
@@ -83,6 +90,7 @@ export const usePanelState = () => {
         isHistoryPanelOpen,
         historyPanelY,
         handleHistoryClick,
+        openHistoryPanel,
         closeHistoryPanel,
 
         // Fullscreen image

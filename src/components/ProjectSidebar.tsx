@@ -30,8 +30,8 @@ import { NodeData, NodeGroup, NodeType } from '../types';
 type SidebarTab = 'canvas' | 'assets';
 type AssetScope = 'personal' | 'agent';
 
-export const EXPANDED_SIDEBAR_WIDTH = 300;
-export const COLLAPSED_SIDEBAR_WIDTH = 72;
+export const EXPANDED_SIDEBAR_WIDTH = 260;
+export const COLLAPSED_SIDEBAR_WIDTH = 64;
 
 interface SidebarAsset {
   id: string;
@@ -58,7 +58,6 @@ interface ProjectSidebarProps {
   /** 画布分组（与画布上的 NodeGroup 是同一份数据，侧边栏只做展示/命名/成组入口） */
   groups: NodeGroup[];
   selectedNodeIds: string[];
-  canvasTitle: string;
   workflowId?: string | null;
   onSelectNode: (id: string) => void;
   /** 选中一组节点（点分组标题时选中该组全部节点） */
@@ -101,7 +100,6 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   nodes,
   groups,
   selectedNodeIds,
-  canvasTitle,
   workflowId,
   onSelectNode,
   onSelectNodes,
@@ -280,9 +278,9 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
 
   if (collapsed) {
     return (
-      <aside className={`fixed inset-y-0 left-0 z-30 flex w-[72px] flex-col items-center border-r ${surface}`}>
-        <button className={`mt-4 rounded-2xl p-3 ${hover}`} onClick={() => setCollapsed(false)} title="展开侧边栏">
-          <img src="/TwitCanva-logo.png" alt="TwitCanva" className="h-8 w-8 rounded-lg object-contain" />
+      <aside className={`fixed inset-y-0 left-0 z-30 flex w-16 flex-col items-center border-r ${surface}`}>
+        <button className={`mt-3 rounded-xl p-2.5 ${hover}`} onClick={() => setCollapsed(false)} title="展开侧边栏">
+          <img src="/TwitCanva-logo.png" alt="TwitCanva" className="h-7 w-7 rounded-md object-contain" />
         </button>
         <div className="mt-auto mb-5 flex flex-col gap-2">
           <SidebarIcon title="工作流" onClick={onOpenWorkflows}><Grid2X2 size={20} /></SidebarIcon>
@@ -295,46 +293,38 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   }
 
   return (
-    <aside className={`fixed inset-y-0 left-0 z-30 flex w-[300px] flex-col border-r shadow-2xl ${surface}`}>
-      <header className="shrink-0 border-b border-inherit px-4 pb-4 pt-4">
-        <div ref={menuRef} className="relative">
+    <aside className={`fixed inset-y-0 left-0 z-30 flex w-[260px] flex-col border-r shadow-2xl ${surface}`}>
+      <div className="flex shrink-0 items-center border-b border-inherit px-3 py-3">
+        <div className="flex gap-2">
+          <TabButton active={activeTab === 'canvas'} onClick={() => { setActiveTab('canvas'); setQuery(''); }}>画布</TabButton>
+          <TabButton active={activeTab === 'assets'} onClick={() => { setActiveTab('assets'); setQuery(''); }}>资产</TabButton>
+        </div>
+        <div ref={menuRef} className="relative ml-auto">
           <button
+            type="button"
             onClick={() => setProjectMenuOpen(value => !value)}
-            className={`flex items-center gap-2 rounded-xl p-2 transition-colors ${projectMenuOpen ? 'bg-[#2b2b2b]' : hover}`}
+            className={`rounded-lg p-2 transition-colors ${projectMenuOpen ? 'bg-[#2b2b2b] text-white' : `${muted} ${hover}`}`}
+            title="项目菜单"
             aria-label="项目菜单"
+            aria-expanded={projectMenuOpen}
           >
-            <img src="/TwitCanva-logo.png" alt="TwitCanva" className="h-9 w-9 rounded-lg object-contain" />
-            {projectMenuOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+            <BookOpen size={20} />
           </button>
           {projectMenuOpen && (
-            <div className="absolute left-0 top-14 z-50 w-[310px] overflow-hidden rounded-3xl border border-[#404040] bg-[#262626] p-2 shadow-2xl">
+            <div className="absolute right-0 top-11 z-50 w-[228px] overflow-hidden rounded-2xl border border-[#404040] bg-[#262626] p-1.5 shadow-2xl">
               <ProjectMenuButton onClick={() => setProjectMenuOpen(false)}>回到画布</ProjectMenuButton>
               <ProjectMenuButton onClick={(e) => { setProjectMenuOpen(false); onOpenWorkflows(e); }}>全部项目</ProjectMenuButton>
-              <div className="my-2 border-t border-[#3c3c3c]" />
+              <div className="my-1.5 border-t border-[#3c3c3c]" />
               <ProjectMenuButton onClick={() => { setProjectMenuOpen(false); onCreateProject(); }}>创建新项目</ProjectMenuButton>
               <ProjectMenuButton danger disabled={!workflowId} onClick={() => { setProjectMenuOpen(false); onDeleteProject(); }}>删除项目</ProjectMenuButton>
             </div>
           )}
         </div>
-        <div className="mt-4 flex min-w-0 items-center gap-3 px-2 text-sm">
-          <span className="max-w-[145px] truncate font-medium">{canvasTitle}</span>
-          <span className={`h-4 w-px ${isDark ? 'bg-neutral-700' : 'bg-neutral-300'}`} />
-          <span className={`min-w-0 flex-1 truncate ${muted}`}>{workflowId ? '已保存到本地' : '未保存项目'}</span>
-          <ChevronDown size={14} className={muted} />
-        </div>
-      </header>
-
-      <div className="flex shrink-0 items-center border-b border-inherit px-4 py-4">
-        <div className="flex gap-2">
-          <TabButton active={activeTab === 'canvas'} onClick={() => { setActiveTab('canvas'); setQuery(''); }}>画布</TabButton>
-          <TabButton active={activeTab === 'assets'} onClick={() => { setActiveTab('assets'); setQuery(''); }}>资产</TabButton>
-        </div>
-        <button className={`ml-auto rounded-lg p-2 ${muted} ${hover}`} title="使用说明"><BookOpen size={22} /></button>
       </div>
 
       {activeTab === 'canvas' ? (
         <>
-          <div className="flex shrink-0 items-center gap-2 px-4 py-5">
+          <div className="flex shrink-0 items-center gap-1.5 px-3 py-4">
             {nodeSearchOpen ? (
               <SearchBox value={query} onChange={setQuery} compact onCompactClose={() => { setNodeSearchOpen(false); setQuery(''); }} />
             ) : (
@@ -596,7 +586,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
         </>
       )}
 
-      <footer className="flex h-[70px] shrink-0 items-center border-t border-inherit px-5">
+      <footer className="flex h-[60px] shrink-0 items-center border-t border-inherit px-3">
         <button onClick={() => setCollapsed(true)} className={`rounded-lg p-2 ${hover}`} title="收起侧边栏"><ArrowLeftToLine size={20} /></button>
         <span className={`ml-auto text-sm ${muted}`}>共 {nodes.length} 节点</span>
         <div className="ml-4 flex gap-1">
@@ -646,7 +636,7 @@ const NodeRow = ({
 };
 
 const TabButton = ({ active, children, onClick }: { active: boolean; children: React.ReactNode; onClick: () => void }) => (
-  <button onClick={onClick} className={`rounded-xl px-4 py-2 text-sm transition-colors ${active ? 'bg-[#3a3a3a] text-white' : 'text-neutral-400 hover:text-white'}`}>{children}</button>
+  <button onClick={onClick} className={`rounded-xl px-3.5 py-1.5 text-sm transition-colors ${active ? 'bg-[#3a3a3a] text-white' : 'text-neutral-400 hover:text-white'}`}>{children}</button>
 );
 
 const SidebarIcon = ({ title, children, onClick }: { title: string; children: React.ReactNode; onClick: (e: React.MouseEvent) => void }) => (
@@ -654,7 +644,7 @@ const SidebarIcon = ({ title, children, onClick }: { title: string; children: Re
 );
 
 const ProjectMenuButton = ({ children, onClick, danger = false, disabled = false }: { children: React.ReactNode; onClick: (e: React.MouseEvent) => void; danger?: boolean; disabled?: boolean }) => (
-  <button disabled={disabled} onClick={onClick} className={`w-full rounded-xl px-6 py-4 text-left text-base font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${danger ? 'text-red-300 hover:bg-red-500/10' : 'text-white hover:bg-[#333]'}`}>{children}</button>
+  <button disabled={disabled} onClick={onClick} className={`w-full rounded-xl px-4 py-3 text-left text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${danger ? 'text-red-300 hover:bg-red-500/10' : 'text-white hover:bg-[#333]'}`}>{children}</button>
 );
 
 const SearchBox = ({ value, onChange, placeholder = '搜索', compact = false, onCompactClose }: { value: string; onChange: (value: string) => void; placeholder?: string; compact?: boolean; onCompactClose?: () => void }) => (
@@ -665,8 +655,8 @@ const SearchBox = ({ value, onChange, placeholder = '搜索', compact = false, o
 );
 
 const EmptyState = ({ label }: { label: string }) => (
-  <div className="flex h-72 flex-col items-center justify-center text-neutral-500">
-    <FolderOpen size={72} strokeWidth={1.2} />
-    <span className="mt-5 text-sm text-neutral-300">{label}</span>
+  <div className="flex h-60 flex-col items-center justify-center text-neutral-500">
+    <FolderOpen size={56} strokeWidth={1.2} />
+    <span className="mt-4 text-sm text-neutral-300">{label}</span>
   </div>
 );

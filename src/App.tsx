@@ -57,6 +57,7 @@ import { canvasViewCenter, centerNodeAt, screenToCanvas } from '@/shared/canvasC
 import { getCanvasRect } from './utils/canvasRect';
 import { MapPinned } from 'lucide-react';
 import { CanvasMinimap } from './components/canvas/CanvasMinimap';
+import { CanvasZoomControl } from './components/canvas/CanvasZoomControl';
 
 // ============================================================================
 // MAIN COMPONENT
@@ -104,6 +105,7 @@ export default function App() {
     isHistoryPanelOpen,
     historyPanelY,
     handleHistoryClick: panelHistoryClick,
+    openHistoryPanel,
     closeHistoryPanel,
     expandedImageUrl,
     handleExpandImage,
@@ -134,8 +136,7 @@ export default function App() {
     viewport,
     setViewport,
     canvasRef,
-    handleWheel: baseHandleWheel,
-    handleSliderZoom
+    handleWheel: baseHandleWheel
   } = useCanvasNavigation();
 
   // Wrap handleWheel to pass hovered node for zoom-to-center
@@ -972,6 +973,11 @@ export default function App() {
     openAssetLibraryModal(contextMenu.y, closeWorkflowPanel);
   };
 
+  const handleContextMenuOpenHistory = () => {
+    setSidebarAssetPreview(null);
+    openHistoryPanel(contextMenu.y, closeWorkflowPanel);
+  };
+
   const handleSidebarAssetPreview = (asset: SidebarAssetPreview, e: React.MouseEvent<HTMLElement>) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     setSidebarAssetPreview({ ...asset, panelY: rect.top });
@@ -1145,6 +1151,58 @@ export default function App() {
       characterMetadata
     );
     closeAssetLibrary();
+  };
+
+  /**
+   * 尾帧成图：抽取视频最后一帧，存成真实素材并在画布生成一个图片节点。
+   * 复用既有的 extractVideoLastFrame（已设 crossOrigin，不会污染 canvas）。
+   * 帧存到 library/images/ 而非直接用 data URL，保证刷新后仍在、可下载、不撑大存档。
+   * 注意：连接规则不允许 视频→图片，因此新节点不与源视频相连，保持独立。
+   */
+  const handleExtractLastFrame = async (nodeId: string) => {
+    const node = nodes.find(n => n.id === nodeId);
+    if (!node?.resultUrl) return;
+
+    try {
+      const dataUrl = await extractVideoLastFrame(node.resultUrl.split('?')[0]);
+      const namePrefix = (node.title || node.prompt || '视频').slice(0, 20);
+
+      const resp = await fetch('/api/assets/images', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: dataUrl, prompt: `${namePrefix}_尾帧` }),
+      });
+      if (!resp.ok) { alert('尾帧保存失败'); return; }
+      const saved = await resp.json();
+      if (!saved?.url) { alert('尾帧保存失败'); return; }
+
+      // 读取帧尺寸以锁定节点比例
+      const size = await new Promise<{ w: number; h: number } | null>((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+        img.onerror = () => resolve(null);
+        img.src = dataUrl;
+      });
+
+      const newNode: NodeData = {
+        id: crypto.randomUUID(),
+        type: NodeType.IMAGE,
+        x: node.x + 460, // 放在源视频右侧
+        y: node.y,
+        prompt: `${namePrefix} 尾帧`,
+        status: NodeStatus.SUCCESS,
+        resultUrl: saved.url,
+        resultAspectRatio: size ? `${size.w}/${size.h}` : undefined,
+        model: 'Last Frame',
+        aspectRatio: size ? getClosestAspectRatio(size.w, size.h) : '16:9',
+        resolution: 'Auto',
+      };
+      setNodes(prev => [...prev, newNode]);
+      setSelectedNodeIds([newNode.id]);
+    } catch (e) {
+      console.error('Extract last frame failed', e);
+      alert('尾帧提取失败：无法读取该视频');
+    }
   };
 
   /**
@@ -1433,7 +1491,6 @@ export default function App() {
           nodes={nodes}
           groups={groups}
           selectedNodeIds={selectedNodeIds}
-          canvasTitle={canvasTitle}
           workflowId={workflowId}
           onSelectNode={(id) => setSelectedNodeIds([id])}
           onSelectNodes={setSelectedNodeIds}
@@ -1709,6 +1766,7 @@ export default function App() {
                 onImageToVideo={handleImageToVideo}
                 onChangeAngleGenerate={handleChangeAngleGenerate}
                 onGridSplit={handleGridSplit}
+                onExtractLastFrame={handleExtractLastFrame}
                 zoom={viewport.zoom}
                 onMouseEnter={() => setCanvasHoveredNodeId(node.id)}
                 onMouseLeave={() => setCanvasHoveredNodeId(null)}
@@ -1823,6 +1881,7 @@ export default function App() {
         onAddAssets={handleContextMenuAddAssets}
         onCreateMangaWorkflow={handleCreateMangaWorkflow}
         onOpenStoryboard={storyboardGenerator.openModal}
+        onOpenHistory={handleContextMenuOpenHistory}
         canCreateMangaWorkflow={nodes.length === 0}
         canUndo={canUndo}
         canRedo={canRedo}
@@ -1845,7 +1904,7 @@ export default function App() {
               canvasTheme={canvasTheme}
             />
           )}
-          <div className={`flex items-center gap-3 rounded-full border px-2.5 py-2 shadow-xl ${canvasTheme === 'dark' ? 'border-neutral-700 bg-neutral-900/95' : 'border-neutral-200 bg-white/95 backdrop-blur-sm'}`}>
+          <div className={`flex items-center gap-1 rounded-2xl border px-1.5 py-1.5 shadow-xl ${canvasTheme === 'dark' ? 'border-neutral-700 bg-neutral-900/95' : 'border-neutral-200 bg-white/95 backdrop-blur-sm'}`}>
             <div className="group relative">
               <button
                 type="button"
@@ -1863,18 +1922,12 @@ export default function App() {
                 画布小地图
               </div>
             </div>
-            <span className={`text-xs ${canvasTheme === 'dark' ? 'text-neutral-400' : 'text-neutral-500'}`}>缩放</span>
-            <input
-              type="range"
-              min="0.1"
-              max="2"
-              step="0.1"
-              value={viewport.zoom}
-              onChange={handleSliderZoom}
-              className="w-28"
-              aria-label="画布缩放"
+            <CanvasZoomControl
+              nodes={nodes}
+              viewport={viewport}
+              setViewport={setViewport}
+              canvasTheme={canvasTheme}
             />
-            <span className={`w-11 text-xs ${canvasTheme === 'dark' ? 'text-neutral-300' : 'text-neutral-600'}`}>{Math.round(viewport.zoom * 100)}%</span>
           </div>
         </div>
       )}

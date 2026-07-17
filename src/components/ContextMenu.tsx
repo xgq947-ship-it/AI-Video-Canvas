@@ -24,7 +24,11 @@ import {
   Clapperboard,
   Sparkles,
   ArrowLeft,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Scissors,
+  AudioLines,
+  Library,
+  History,
 } from 'lucide-react';
 import { ContextMenuState, NodeType } from '../types';
 
@@ -42,6 +46,7 @@ interface ContextMenuProps {
   onAddAssets?: () => void;
   onCreateMangaWorkflow?: () => void;
   onOpenStoryboard?: () => void;
+  onOpenHistory?: () => void;
   canCreateMangaWorkflow?: boolean;
   canUndo?: boolean;
   canRedo?: boolean;
@@ -62,6 +67,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onAddAssets,
   onCreateMangaWorkflow,
   onOpenStoryboard,
+  onOpenHistory,
   canCreateMangaWorkflow = true,
   canUndo = false,
   canRedo = false,
@@ -314,6 +320,90 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     );
   }
 
+  // 双击画布：使用精简的快捷添加菜单，并以双击点作为左上角。
+  // 纵向不再按菜单预估高度向上回推；空间不足时由菜单内部滚动承载。
+  if (state.type === 'add-nodes') {
+    const addMenuLeft = Math.max(12, Math.min(state.x, window.innerWidth - 284));
+    const addMenuTop = Math.max(12, state.y);
+    const addMenuMaxHeight = Math.max(160, window.innerHeight - addMenuTop - 12);
+
+    return (
+      <div
+        ref={menuRef}
+        style={{
+          position: 'fixed',
+          left: addMenuLeft,
+          top: addMenuTop,
+          maxHeight: addMenuMaxHeight,
+          transformOrigin: 'top left',
+          zIndex: 1000,
+        }}
+        className={`flex w-[272px] flex-col overflow-hidden rounded-[20px] border shadow-2xl animate-in fade-in zoom-in-95 duration-100 ${canvasTheme === 'dark'
+          ? 'border-[#3a3a3a] bg-[#242424] text-white'
+          : 'border-neutral-300 bg-white text-neutral-900'
+          }`}
+      >
+        <input
+          type="file"
+          ref={fileInputRef}
+          className="hidden"
+          accept="image/*,video/*"
+          onChange={handleFileChange}
+        />
+
+        <div className="overflow-y-auto px-3 py-3">
+          <div className={`mb-1 px-2 py-1 text-sm font-semibold ${canvasTheme === 'dark' ? 'text-neutral-400' : 'text-neutral-500'}`}>
+            添加节点
+          </div>
+
+          <AddNodeMenuItem icon={<Type size={19} />} label="文本" onClick={() => onSelectType(NodeType.TEXT)} canvasTheme={canvasTheme} />
+          <AddNodeMenuItem icon={<ImageIcon size={19} />} label="图片" onClick={() => onSelectType(NodeType.IMAGE)} canvasTheme={canvasTheme} />
+          <AddNodeMenuItem icon={<Video size={19} />} label="视频" onClick={() => onSelectType(NodeType.VIDEO)} canvasTheme={canvasTheme} />
+          <AddNodeMenuItem icon={<Scissors size={19} />} label="视频合成" badge="Beta" onClick={() => onSelectType(NodeType.VIDEO_EDITOR)} canvasTheme={canvasTheme} />
+          <AddNodeMenuItem
+            icon={<Layout size={19} />}
+            label="导演台"
+            badge="NEW"
+            badgeTone="cyan"
+            onClick={() => {
+              onOpenStoryboard?.();
+              onClose();
+            }}
+            canvasTheme={canvasTheme}
+          />
+          <AddNodeMenuItem icon={<AudioLines size={19} />} label="音频" onClick={() => onSelectType(NodeType.AUDIO)} canvasTheme={canvasTheme} />
+          <AddNodeMenuItem icon={<Film size={19} />} label="脚本" rightSlot={<ChevronRight size={16} />} onClick={() => onSelectType(NodeType.TEXT)} canvasTheme={canvasTheme} />
+          <AddNodeMenuItem
+            icon={<Library size={19} />}
+            label="素材库"
+            badge="NEW"
+            badgeTone="cyan"
+            rightSlot={<ChevronRight size={16} />}
+            onClick={() => {
+              onAddAssets?.();
+              onClose();
+            }}
+            canvasTheme={canvasTheme}
+          />
+
+          <div className={`mb-1 mt-2 px-2 py-1 text-sm font-semibold ${canvasTheme === 'dark' ? 'text-neutral-400' : 'text-neutral-500'}`}>
+            添加资源
+          </div>
+          <AddNodeMenuItem icon={<Upload size={19} />} label="上传" onClick={handleUploadClick} canvasTheme={canvasTheme} />
+          <AddNodeMenuItem
+            icon={<History size={19} />}
+            label="从生成历史选择"
+            onClick={() => {
+              onOpenHistory?.();
+              onClose();
+            }}
+            canvasTheme={canvasTheme}
+          />
+        </div>
+      </div>
+    );
+  }
+
   // 3. Add Nodes Menu (Global Submenu OR Connector Default)
   const title = isConnector ? '从当前节点继续' : '添加节点';
 
@@ -421,6 +511,51 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
     </div>
   );
 };
+
+interface AddNodeMenuItemProps {
+  icon: React.ReactNode;
+  label: string;
+  badge?: string;
+  badgeTone?: 'neutral' | 'cyan';
+  rightSlot?: React.ReactNode;
+  canvasTheme?: 'dark' | 'light';
+  onClick: () => void;
+}
+
+const AddNodeMenuItem: React.FC<AddNodeMenuItemProps> = ({
+  icon,
+  label,
+  badge,
+  badgeTone = 'neutral',
+  rightSlot,
+  canvasTheme = 'dark',
+  onClick,
+}) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`flex min-h-10 w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition-colors ${canvasTheme === 'dark'
+      ? 'text-neutral-100 hover:bg-white/8'
+      : 'text-neutral-800 hover:bg-neutral-100'
+      }`}
+  >
+    <span className={`flex h-6 w-6 shrink-0 items-center justify-center ${canvasTheme === 'dark' ? 'text-neutral-100' : 'text-neutral-700'}`}>
+      {icon}
+    </span>
+    <span className="min-w-0 flex-1 truncate text-[15px] font-medium">{label}</span>
+    {badge && (
+      <span className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold tracking-wide ${badgeTone === 'cyan'
+        ? 'bg-cyan-400/20 text-cyan-300'
+        : canvasTheme === 'dark'
+          ? 'bg-neutral-700 text-neutral-300'
+          : 'bg-neutral-200 text-neutral-600'
+        }`}>
+        {badge}
+      </span>
+    )}
+    {rightSlot && <span className={canvasTheme === 'dark' ? 'text-neutral-400' : 'text-neutral-500'}>{rightSlot}</span>}
+  </button>
+);
 
 interface MenuItemProps {
   icon: React.ReactNode;

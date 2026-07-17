@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "concurrently \"npm run server\" \"vite\"",
     "server": "node server/index.js",
+    "mcp:claude": "node mcp/twitcanva-mcp.js",
     "test": "node --test test/*.test.mjs",
     "generate:test-assets": "node scripts/generate-test-assets.mjs",
     "render:e2e-test": "node scripts/proof-manifest-render.mjs",
@@ -16,7 +17,9 @@
   "dependencies": {
     "@fal-ai/client": "^1.8.0",
     "@google/genai": "^1.32.0",
+    "@google/generative-ai": "^0.24.1",
     "@lobehub/icons": "^3.0.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
     "@remotion/bundler": "^4.0.489",
@@ -31,7 +34,8 @@
     "remotion": "^4.0.489",
     "sharp": "^0.34.5",
     "three": "^0.182.0",
-    "twitter-api-v2": "^1.28.0"
+    "twitter-api-v2": "^1.28.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

@@ -204,9 +204,10 @@ export const ConnectionsLayer: React.FC<ConnectionsLayerProps> = ({
                 <g
                     key={`${parent.id}-${node.id}`}
                     onClick={(e) => onEdgeClick(e, parent.id, node.id)}
-                    className="cursor-pointer group pointer-events-auto"
+                    className="connection-edge cursor-pointer group pointer-events-auto"
+                    data-connection={`${parent.id}-${node.id}`}
                 >
-                    <path d={path} stroke="transparent" strokeWidth="20" fill="none" />
+                    <path className="connection-hit-area" d={path} stroke="transparent" strokeWidth="20" fill="none" />
                     <path
                         d={path}
                         stroke={isSelected
@@ -215,6 +216,22 @@ export const ConnectionsLayer: React.FC<ConnectionsLayerProps> = ({
                         strokeWidth="2"
                         fill="none"
                         className={`transition-colors ${!isSelected ? (canvasTheme === 'dark' ? 'group-hover:stroke-neutral-300' : 'group-hover:stroke-neutral-500') : ''}`}
+                    />
+                    <path
+                        d={path}
+                        stroke="#2563eb"
+                        strokeWidth="9"
+                        fill="none"
+                        className="connection-energy-glow pointer-events-none"
+                    />
+                    <path
+                        d={path}
+                        stroke="#7dd3fc"
+                        strokeWidth="4"
+                        strokeLinecap="round"
+                        fill="none"
+                        markerEnd="url(#connection-energy-arrow)"
+                        className="connection-energy-flow pointer-events-none"
                     />
                 </g>
             );
@@ -254,6 +271,49 @@ export const ConnectionsLayer: React.FC<ConnectionsLayerProps> = ({
 
     return (
         <>
+            <defs>
+                <marker
+                    id="connection-energy-arrow"
+                    viewBox="0 0 8 8"
+                    refX="7"
+                    refY="4"
+                    markerWidth="5"
+                    markerHeight="5"
+                    orient="auto-start-reverse"
+                >
+                    <path d="M 0 0 L 8 4 L 0 8 z" fill="#7dd3fc" />
+                </marker>
+            </defs>
+            <style>{`
+                @keyframes connection-energy-travel {
+                    from { stroke-dashoffset: 0; }
+                    to { stroke-dashoffset: -40; }
+                }
+
+                .connection-energy-glow,
+                .connection-energy-flow {
+                    opacity: 0;
+                    transition: opacity 160ms ease, stroke-width 160ms ease;
+                }
+
+                .connection-energy-glow {
+                    filter: drop-shadow(0 0 4px #2563eb) drop-shadow(0 0 9px #38bdf8);
+                }
+
+                .connection-energy-flow {
+                    stroke-dasharray: 11 9;
+                    filter: drop-shadow(0 0 3px #7dd3fc);
+                    animation: connection-energy-travel 650ms linear infinite;
+                }
+
+                .connection-edge:hover .connection-energy-glow {
+                    opacity: 0.72;
+                }
+
+                .connection-edge:hover .connection-energy-flow {
+                    opacity: 1;
+                }
+            `}</style>
             {connections}
             {tempLine}
         </>

@@ -19,6 +19,8 @@ import storyboardRoutes from './routes/storyboard.js';
 import audioRoutes from './routes/audio.js';
 import renderRoutes from './routes/render.js';
 import codexImageJobRoutes from './routes/codex-image-jobs.js';
+import settingsRoutes from './routes/settings.js';
+import { applyApiKeysToApp, loadApiKeyOverrides } from './services/apiKeyStore.js';
 import { normalizeCharacterAssetMeta } from './services/characterAssets.js';
 import { createUniqueAssetFilename } from './services/assetFilenames.js';
 import { scanAssetLibrary } from './utils/scanAssetLibrary.js';
@@ -43,6 +45,8 @@ const CODEX_IMAGE_JOBS_DIR = path.join(LIBRARY_DIR, 'codex-image-jobs');
     }
 });
 
+const API_KEY_OVERRIDES = loadApiKeyOverrides(LIBRARY_DIR);
+
 // Enable CORS for all routes (must come before static file serving)
 app.use(cors());
 // Base64 会比原始文件大约多三分之一；150MB 的请求上限对应前端 100MB 的本地素材限制。
@@ -56,33 +60,48 @@ app.use('/library', (req, res, next) => {
 }, express.static(LIBRARY_DIR));
 
 
-const API_KEY = process.env.GEMINI_API_KEY;
+const API_KEY = API_KEY_OVERRIDES.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
 
 if (!API_KEY) {
     console.warn("SERVER WARNING: GEMINI_API_KEY is not set in environment or .env file.");
 }
 
 const getClient = () => {
-    return new GoogleGenAI({ apiKey: API_KEY || '' });
+    return new GoogleGenAI({ apiKey: app.locals.GEMINI_API_KEY || '' });
 };
 
 // ============================================================================
 // KLING AI CONFIGURATION
 // ============================================================================
 
-const KLING_ACCESS_KEY = process.env.KLING_ACCESS_KEY;
-const KLING_SECRET_KEY = process.env.KLING_SECRET_KEY;
+const KLING_ACCESS_KEY = API_KEY_OVERRIDES.KLING_ACCESS_KEY || process.env.KLING_ACCESS_KEY;
+const KLING_SECRET_KEY = API_KEY_OVERRIDES.KLING_SECRET_KEY || process.env.KLING_SECRET_KEY;
+const KLING_API_KEY = API_KEY_OVERRIDES.KLING_API_KEY || process.env.KLING_API_KEY;
 const KLING_BASE_URL = 'https://api-singapore.klingai.com';
 
 if (!KLING_ACCESS_KEY || !KLING_SECRET_KEY) {
     console.warn("SERVER WARNING: KLING_ACCESS_KEY or KLING_SECRET_KEY not set. Kling AI models will not work.");
 }
 
+if (!KLING_API_KEY) {
+    console.warn("SERVER WARNING: KLING_API_KEY not set. Kling 3 models will not work.");
+}
+
+// ============================================================================
+// SEEDANCE / MODELARK CONFIGURATION
+// ============================================================================
+
+const ARK_API_KEY = API_KEY_OVERRIDES.ARK_API_KEY || process.env.ARK_API_KEY;
+
+if (!ARK_API_KEY) {
+    console.warn("SERVER WARNING: ARK_API_KEY not set. Seedance models will not work.");
+}
+
 // ============================================================================
 // HAILUO AI CONFIGURATION
 // ============================================================================
 
-const HAILUO_API_KEY = process.env.HAILUO_API_KEY;
+const HAILUO_API_KEY = API_KEY_OVERRIDES.HAILUO_API_KEY || process.env.HAILUO_API_KEY;
 
 if (!HAILUO_API_KEY) {
     console.warn("SERVER WARNING: HAILUO_API_KEY not set. Hailuo AI models will not work.");
@@ -92,7 +111,7 @@ if (!HAILUO_API_KEY) {
 // OPENAI GPT IMAGE CONFIGURATION
 // ============================================================================
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_API_KEY = API_KEY_OVERRIDES.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
 
 if (!OPENAI_API_KEY) {
     console.warn("SERVER WARNING: OPENAI_API_KEY not set. OpenAI GPT Image models will not work.");
@@ -102,23 +121,18 @@ if (!OPENAI_API_KEY) {
 // FAL.AI CONFIGURATION (for Kling 2.6 Motion Control)
 // ============================================================================
 
-const FAL_API_KEY = process.env.FAL_API_KEY;
+const FAL_API_KEY = API_KEY_OVERRIDES.FAL_API_KEY || process.env.FAL_API_KEY;
 
 if (!FAL_API_KEY) {
     console.warn("SERVER WARNING: FAL_API_KEY not set. Kling 2.6 Motion Control will not work.");
 }
 
 // Set up app.locals for sharing config with route modules
-app.locals.GEMINI_API_KEY = API_KEY;
-app.locals.KLING_ACCESS_KEY = KLING_ACCESS_KEY;
-app.locals.KLING_SECRET_KEY = KLING_SECRET_KEY;
-app.locals.HAILUO_API_KEY = HAILUO_API_KEY;
-app.locals.OPENAI_API_KEY = OPENAI_API_KEY;
-app.locals.FAL_API_KEY = FAL_API_KEY;
 app.locals.IMAGES_DIR = IMAGES_DIR;
 app.locals.VIDEOS_DIR = VIDEOS_DIR;
 app.locals.LIBRARY_DIR = LIBRARY_DIR;
 app.locals.CODEX_IMAGE_JOBS_DIR = CODEX_IMAGE_JOBS_DIR;
+applyApiKeysToApp(app, process.env, API_KEY_OVERRIDES);
 
 // ============================================================================
 // WORKFLOW SANITIZATION HELPERS
@@ -230,6 +244,7 @@ function sanitizeWorkflowNodes(nodes) {
 // Mount generation routes (image and video generation)
 app.use('/api', generationRoutes);
 app.use('/api', codexImageJobRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Mount Twitter routes (Post to X feature)
 app.use('/api/twitter', twitterRoutes);

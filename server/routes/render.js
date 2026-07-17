@@ -84,14 +84,32 @@ router.post('/remotion/:jobId/reveal', (req, res) => {
     return res.status(404).json({ error: '成片不存在' });
   }
   const target = path.resolve(job.outputPath);
-  try {
-    if (process.platform === 'darwin') spawn('open', ['-R', target]);
-    else if (process.platform === 'win32') spawn('explorer', ['/select,', target]);
-    else spawn('xdg-open', [path.dirname(target)]);
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  const command = process.platform === 'darwin'
+    ? '/usr/bin/open'
+    : process.platform === 'win32' ? 'explorer.exe' : 'xdg-open';
+  const args = process.platform === 'darwin'
+    ? ['-R', target]
+    : process.platform === 'win32' ? ['/select,', target] : [path.dirname(target)];
+
+  // spawn 的错误是异步事件，必须等命令真实执行完再向前端报告成功。
+  const child = spawn(command, args, { stdio: 'ignore' });
+  let replied = false;
+  const fail = (message) => {
+    if (replied) return;
+    replied = true;
+    res.status(500).json({ error: '无法在文件管理器中显示成片', detail: message });
+  };
+
+  child.once('error', (error) => fail(error.message));
+  child.once('exit', (code, signal) => {
+    if (replied) return;
+    if (code !== 0) {
+      fail(signal ? `命令被信号 ${signal} 中止` : `命令退出码 ${code}`);
+      return;
+    }
+    replied = true;
+    res.json({ ok: true, path: target });
+  });
 });
 
 export default router;

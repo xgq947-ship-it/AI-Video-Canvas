@@ -52,12 +52,12 @@ const handleTts = async (req, res) => {
       });
     }
 
-    const apiKey = process.env.MINIMAX_API_KEY || req.app.locals.HAILUO_API_KEY || process.env.HAILUO_API_KEY;
-    const groupId = process.env.MINIMAX_GROUP_ID;
+    const apiKey = req.app.locals.MINIMAX_API_KEY || req.app.locals.HAILUO_API_KEY;
+    const groupId = req.app.locals.MINIMAX_GROUP_ID;
 
     if (!apiKey || !groupId) {
       return res.status(400).json({
-        error: 'MiniMax 配音未配置：请在 .env 设置 MINIMAX_API_KEY 与 MINIMAX_GROUP_ID',
+        error: 'MiniMax 配音未配置：请在设置中配置 MINIMAX_API_KEY 与 MINIMAX_GROUP_ID',
         needsConfig: true,
       });
     }

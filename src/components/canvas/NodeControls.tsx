@@ -7,7 +7,7 @@
  */
 
 import React, { useState, useRef, useEffect, memo } from 'react';
-import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Film, Clock, Expand, Shrink, Monitor, Crop, HardDrive, Upload, Loader2 } from 'lucide-react';
+import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Film, Clock, Expand, Shrink, Monitor, Crop, HardDrive, Upload, Loader2, Volume2 } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { OpenAIIcon, GoogleIcon, KlingIcon, HailuoIcon } from '../icons/BrandIcons';
 import { useFaceDetection } from '../../hooks/useFaceDetection';
@@ -48,13 +48,33 @@ const VIDEO_DURATIONS = [5, 6, 8, 10];
 // aspectRatios: Supported aspect ratios (most video models support 16:9 and 9:16)
 const VIDEO_ASPECT_RATIOS = ["16:9", "9:16"];
 
-const VIDEO_MODELS = [
+interface VideoModelOption {
+    id: string;
+    name: string;
+    provider: 'google' | 'seedance' | 'kling' | 'hailuo';
+    supportsTextToVideo: boolean;
+    supportsImageToVideo: boolean;
+    supportsMultiImage: boolean;
+    supportsAudio?: boolean;
+    recommended?: boolean;
+    durations: number[];
+    resolutions: string[];
+    aspectRatios: string[];
+}
+
+const VIDEO_MODELS: VideoModelOption[] = [
     { id: 'veo-3.1', name: 'Veo 3.1', provider: 'google', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, durations: [4, 6, 8], resolutions: ['Auto', '720p', '1080p'], aspectRatios: ['16:9', '9:16'] },
+    // Seedance 官方模型
+    { id: 'seedance-2-0', name: 'Seedance 2.0', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
+    { id: 'seedance-2-0-fast', name: 'Seedance 2.0 Fast', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
+    { id: 'seedance-1-5-pro', name: 'Seedance 1.5 Pro', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [5, 10], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
     // Kling AI models - Consolidated: removed legacy v1, v1-5, v1-6, v2-master
+    { id: 'kling-v3', name: 'Kling 3.0', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [3, 4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1'] },
+    { id: 'kling-v3-turbo', name: 'Kling 3.0 Turbo', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [3, 4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1'] },
     { id: 'kling-v2-1', name: 'Kling V2.1', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, recommended: true, durations: [5, 10], resolutions: ['Auto', '720p', '1080p'], aspectRatios: ['16:9', '9:16'] },
     { id: 'kling-v2-1-master', name: 'Kling V2.1 Master', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, durations: [5, 10], resolutions: ['Auto', '720p', '1080p'], aspectRatios: ['16:9', '9:16'] },
     { id: 'kling-v2-5-turbo', name: 'Kling V2.5 Turbo', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, durations: [5, 10], resolutions: ['Auto', '720p', '1080p'], aspectRatios: ['16:9', '9:16'] },
-    { id: 'kling-v2-6', name: 'Kling 2.6 (Motion)', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, durations: [5, 10], resolutions: ['Auto', '720p', '1080p'], aspectRatios: ['16:9', '9:16'] },
+    { id: 'kling-v2-6', name: 'Kling 2.6 (Motion)', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [5, 10], resolutions: ['Auto', '720p', '1080p'], aspectRatios: ['16:9', '9:16'] },
     // Hailuo AI (MiniMax) models - Note: API appears to only output 5s videos regardless of duration param
     { id: 'hailuo-2.3', name: 'Hailuo 2.3', provider: 'hailuo', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, durations: [5], resolutions: ['768p', '1080p'], aspectRatios: ['16:9', '9:16'] },
     { id: 'hailuo-2.3-fast', name: 'Hailuo 2.3 Fast', provider: 'hailuo', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, durations: [5], resolutions: ['768p', '1080p'], aspectRatios: ['16:9', '9:16'] },
@@ -383,6 +403,9 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
 
     // Video model selection logic
     const currentVideoModel = VIDEO_MODELS.find(m => m.id === data.videoModel) || VIDEO_MODELS[0];
+    const currentVideoAspectRatio = currentVideoModel.aspectRatios.includes(data.aspectRatio || '')
+        ? data.aspectRatio!
+        : currentVideoModel.aspectRatios[0];
     const isFrameToFrame = data.videoMode === 'frame-to-frame';
 
     // Determine video generation mode based on inputs and settings
@@ -416,6 +439,11 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
         }
     }, [videoGenerationMode, data.videoModel, data.type, data.id, availableVideoModels, onUpdate]);
 
+    useEffect(() => {
+        if (data.type !== NodeType.VIDEO || currentVideoModel.aspectRatios.includes(data.aspectRatio || '')) return;
+        onUpdate(data.id, { aspectRatio: currentVideoModel.aspectRatios[0] });
+    }, [currentVideoModel.id, currentVideoModel.aspectRatios, data.aspectRatio, data.id, data.type, onUpdate]);
+
     const handleVideoModelChange = (modelId: string) => {
         const newModel = VIDEO_MODELS.find(m => m.id === modelId);
         const updates: Partial<typeof data> = { videoModel: modelId };
@@ -433,6 +461,10 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
             if (!supportedRes.includes(currentRes)) {
                 updates.resolution = newModel.resolutions[0];
             }
+        }
+
+        if (newModel?.aspectRatios && !newModel.aspectRatios.includes(data.aspectRatio || '')) {
+            updates.aspectRatio = newModel.aspectRatios[0];
         }
 
         onUpdate(data.id, updates);
@@ -770,14 +802,14 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
 
             {/* Controls - Hidden for storyboard-generated scenes */}
             {!(data.prompt && data.prompt.startsWith('Extract panel #')) && (
-                <div className="flex items-center justify-between relative">
-                    <div className="flex items-center gap-2">
+                <div className="flex items-center justify-between gap-3 relative">
+                    <div className="flex min-w-0 items-center gap-2">
                         {/* Model Selector - Local, Video, and Image nodes get different dropdowns */}
                         {isLocalModelNode ? (
                             <div className="relative" ref={modelDropdownRef}>
                                 <button
                                     onClick={() => setShowModelDropdown(!showModelDropdown)}
-                                    className="flex items-center gap-1.5 text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
+                                    className="flex min-w-[142px] items-center gap-1.5 whitespace-nowrap text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
                                 >
                                     <HardDrive size={12} className="text-purple-400" />
                                     <span className="font-medium">{selectedLocalModel?.name || '选择模型'}</span>
@@ -828,7 +860,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                             <div className="relative" ref={modelDropdownRef}>
                                 <button
                                     onClick={() => setShowModelDropdown(!showModelDropdown)}
-                                    className="flex items-center gap-1.5 text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
+                                    className="flex min-w-[142px] items-center gap-1.5 whitespace-nowrap text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
                                 >
                                     {currentVideoModel.id === 'veo-3.1' ? (
                                         <GoogleIcon size={12} className="text-white" />
@@ -837,13 +869,13 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                     ) : (
                                         <Film size={12} className="text-cyan-400" />
                                     )}
-                                    <span className="font-medium">{currentVideoModel.name}</span>
+                                    <span className="font-medium whitespace-nowrap">{currentVideoModel.name}</span>
                                     <ChevronDown size={12} className="ml-0.5 opacity-50" />
                                 </button>
 
                                 {/* Model Dropdown Menu */}
                                 {showModelDropdown && (
-                                    <div className="absolute top-full mt-1 left-0 w-52 bg-[#252525] border border-neutral-700 rounded-lg shadow-xl overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-100">
+                                    <div className="absolute top-full mt-1 left-0 w-56 max-h-[65vh] overflow-y-auto bg-[#252525] border border-neutral-700 rounded-lg shadow-xl z-50 animate-in fade-in zoom-in-95 duration-100">
                                         {/* Mode indicator */}
                                         <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-400 uppercase tracking-wider bg-[#1a1a1a] border-b border-neutral-700 flex items-center gap-1.5">
                                             <span className={`w-1.5 h-1.5 rounded-full ${videoGenerationMode === 'text-to-video' ? 'bg-blue-400' :
@@ -875,6 +907,31 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                                                 <Film size={12} className="text-cyan-400" />
                                                             )}
                                                             {model.name}
+                                                        </span>
+                                                        {currentVideoModel.id === model.id && <Check size={12} />}
+                                                    </button>
+                                                ))}
+                                            </>
+                                        )}
+
+                                        {/* Seedance Models */}
+                                        {availableVideoModels.filter(m => m.provider === 'seedance').length > 0 && (
+                                            <>
+                                                <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f] border-t border-neutral-700">
+                                                    Seedance
+                                                </div>
+                                                {availableVideoModels.filter(m => m.provider === 'seedance').map(model => (
+                                                    <button
+                                                        key={model.id}
+                                                        onClick={() => handleVideoModelChange(model.id)}
+                                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${currentVideoModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'}`}
+                                                    >
+                                                        <span className="flex items-center gap-2">
+                                                            <Film size={12} className="text-cyan-400" />
+                                                            {model.name}
+                                                            {model.recommended && (
+                                                                <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">推荐</span>
+                                                            )}
                                                         </span>
                                                         {currentVideoModel.id === model.id && <Check size={12} />}
                                                     </button>
@@ -1087,7 +1144,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                         videoUploadInputRef.current?.click();
                                     }}
                                     disabled={isUploadingVideo}
-                                    className="flex items-center gap-1.5 text-xs font-medium bg-[#252525] hover:bg-[#333] disabled:cursor-wait disabled:opacity-60 border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
+                                    className="flex items-center gap-1.5 whitespace-nowrap text-xs font-medium bg-[#252525] hover:bg-[#333] disabled:cursor-wait disabled:opacity-60 border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
                                     title="上传本地生成的视频，并保存到个人素材库"
                                 >
                                     {isUploadingVideo
@@ -1099,13 +1156,13 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                         )}
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
                         {/* Unified Size/Ratio Dropdown (hidden for video nodes in motion-control mode) */}
                         {!(isVideoNode && videoGenerationMode === 'motion-control') && (
                             <div className="relative" ref={dropdownRef}>
                                 <button
                                     onClick={() => setShowSizeDropdown(!showSizeDropdown)}
-                                    className="flex items-center gap-1.5 text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
+                                    className="flex items-center gap-1.5 whitespace-nowrap text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
                                 >
                                     {isVideoNode && <Monitor size={12} className="text-green-400" />}
                                     {!isVideoNode && <Crop size={12} className="text-blue-400" />}
@@ -1142,7 +1199,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                             <div className="relative" ref={resolutionDropdownRef}>
                                 <button
                                     onClick={() => setShowResolutionDropdown(!showResolutionDropdown)}
-                                    className="flex items-center gap-1.5 text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
+                                    className="flex items-center gap-1.5 whitespace-nowrap text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
                                 >
                                     <Monitor size={12} className="text-green-400" />
                                     {(data.resolution || 'Auto') === 'Auto' ? '自动' : data.resolution}
@@ -1177,10 +1234,10 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                             <div className="relative" ref={aspectRatioDropdownRef}>
                                 <button
                                     onClick={() => setShowAspectRatioDropdown(!showAspectRatioDropdown)}
-                                    className="flex items-center gap-1.5 text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
+                                    className="flex items-center gap-1.5 whitespace-nowrap text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
                                 >
                                     <Film size={12} className="text-purple-400" />
-                                    {data.aspectRatio || '16:9'}
+                                    {currentVideoAspectRatio}
                                 </button>
 
                                 {/* Aspect Ratio Dropdown Menu */}
@@ -1209,7 +1266,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                             <div className="relative" ref={durationDropdownRef}>
                                 <button
                                     onClick={() => setShowDurationDropdown(!showDurationDropdown)}
-                                    className="flex items-center gap-1.5 text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
+                                    className="flex items-center gap-1.5 whitespace-nowrap text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
                                 >
                                     <Clock size={12} className="text-cyan-400" />
                                     {currentDuration}秒
@@ -1234,6 +1291,25 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                     </div>
                                 )}
                             </div>
+                        )}
+
+                        {isVideoNode && currentVideoModel.supportsAudio && videoGenerationMode !== 'motion-control' && (
+                            <button
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    onUpdate(data.id, { generateAudio: data.generateAudio === false });
+                                }}
+                                aria-pressed={data.generateAudio !== false}
+                                title={data.generateAudio !== false ? '生成音频：已开启' : '生成音频：已关闭'}
+                                className={`flex items-center gap-1.5 whitespace-nowrap text-xs font-medium border px-2.5 py-1.5 rounded-lg transition-colors ${data.generateAudio !== false
+                                    ? 'bg-cyan-500/15 border-cyan-500/50 text-cyan-200'
+                                    : 'bg-[#252525] border-neutral-700 text-neutral-400 hover:bg-[#333]'
+                                    }`}
+                            >
+                                <Volume2 size={12} />
+                                <span>音频</span>
+                                <span className={`w-1.5 h-1.5 rounded-full ${data.generateAudio !== false ? 'bg-cyan-400' : 'bg-neutral-600'}`} />
+                            </button>
                         )}
 
                         {/* Generate Button - Active even after success to allow re-generation */}
@@ -1456,24 +1532,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                         {/* Advanced Settings Content - Only for Video nodes */}
                         {showAdvanced && isVideoNode && (
                             <div className="mt-3 space-y-3">
-                                {/* Audio Toggle - Only for Kling 2.6 (Veo 3.1 SDK doesn't support generateAudio yet) */}
-                                {data.videoModel === 'kling-v2-6' && (
-                                    <div className="inline-flex items-center gap-2 px-2.5 py-1.5 bg-neutral-800/50 rounded-lg w-fit">
-                                        <svg className="w-3.5 h-3.5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                                        </svg>
-                                        <span className="text-[11px] text-neutral-300">生成音频</span>
-                                        <button
-                                            onClick={() => onUpdate(data.id, { generateAudio: !(data.generateAudio !== false) })}
-                                            className={`relative w-8 h-4 rounded-full transition-colors ${data.generateAudio !== false ? 'bg-cyan-600' : 'bg-neutral-700'}`}
-                                        >
-                                            <span
-                                                className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-transform shadow-md ${data.generateAudio !== false ? 'left-4' : 'left-0.5'}`}
-                                            />
-                                        </button>
-                                    </div>
-                                )}
-
                                 {/* Frame Inputs - Show when 2+ nodes are connected */}
                                 {connectedImageNodes.length >= 2 && (
                                     <div className="space-y-2">

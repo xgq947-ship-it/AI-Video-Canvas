@@ -199,7 +199,15 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
 
   const revealInFinder = async () => {
     if (!data.renderJobId) return;
-    await fetch(`/api/render/remotion/${data.renderJobId}/reveal`, { method: 'POST' }).catch(() => {});
+    setMsg('正在打开 Finder…');
+    try {
+      const res = await fetch(`/api/render/remotion/${data.renderJobId}/reveal`, { method: 'POST' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || '无法打开 Finder');
+      setMsg('已在 Finder 中显示成片');
+    } catch (e: any) {
+      setMsg('错误: ' + (e?.message || '无法打开 Finder'));
+    }
   };
 
   // 轮询渲染进度

@@ -11,6 +11,7 @@ import path from 'path';
 import { generateKlingVideo, generateKlingImage, generateKlingMultiImage } from '../services/kling.js';
 import { generateGeminiImage, generateVeoVideo } from '../services/gemini.js';
 import { generateHailuoVideo } from '../services/hailuo.js';
+import { generateSeedanceVideo } from '../services/seedance.js';
 import { generateOpenAIImage } from '../services/openai.js';
 import { resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
 
@@ -187,7 +188,7 @@ router.post('/generate-image', async (req, res) => {
 router.post('/generate-video', async (req, res) => {
     try {
         const { nodeId, prompt, imageBase64: rawImageBase64, lastFrameBase64: rawLastFrameBase64, motionReferenceUrl: rawMotionReferenceUrl, aspectRatio, resolution, duration, videoModel } = req.body;
-        const { GEMINI_API_KEY, KLING_ACCESS_KEY, KLING_SECRET_KEY, HAILUO_API_KEY, VIDEOS_DIR } = req.app.locals;
+        const { GEMINI_API_KEY, KLING_ACCESS_KEY, KLING_SECRET_KEY, KLING_API_KEY, ARK_API_KEY, HAILUO_API_KEY, VIDEOS_DIR } = req.app.locals;
 
         // Resolve file URLs to base64
         const imageBase64 = resolveImageToBase64(rawImageBase64);
@@ -196,11 +197,34 @@ router.post('/generate-video', async (req, res) => {
 
         // Determine provider
         const isKlingModel = videoModel && videoModel.startsWith('kling-');
+        const isSeedanceModel = videoModel && videoModel.startsWith('seedance-');
         const isHailuoModel = videoModel && videoModel.startsWith('hailuo-');
 
         let videoBuffer;
 
-        if (isKlingModel) {
+        if (isSeedanceModel) {
+            if (!ARK_API_KEY) {
+                return res.status(500).json({
+                    error: 'Seedance API Key 未配置，请在 .env 中添加 ARK_API_KEY'
+                });
+            }
+
+            const resultVideoUrl = await generateSeedanceVideo({
+                prompt,
+                imageBase64,
+                lastFrameBase64,
+                modelId: videoModel,
+                aspectRatio,
+                resolution,
+                duration: duration || 5,
+                generateAudio: req.body.generateAudio !== false,
+                apiKey: ARK_API_KEY
+            });
+            const videoResponse = await fetch(resultVideoUrl);
+            if (!videoResponse.ok) throw new Error('Seedance 视频下载失败');
+            videoBuffer = Buffer.from(await videoResponse.arrayBuffer());
+
+        } else if (isKlingModel) {
             // --- KLING AI VIDEO GENERATION ---
 
             // Check if this is a Kling 2.6 model (route to Fal.ai - official API doesn't support v2.6)
@@ -256,7 +280,13 @@ router.post('/generate-video', async (req, res) => {
                 }
             } else {
                 // --- STANDARD KLING VIDEO GENERATION ---
-                if (!KLING_ACCESS_KEY || !KLING_SECRET_KEY) {
+                const isKling3 = videoModel === 'kling-v3' || videoModel === 'kling-v3-turbo';
+                if (isKling3 && !KLING_API_KEY) {
+                    return res.status(500).json({
+                        error: 'Kling 3 API Key 未配置，请在 .env 中添加 KLING_API_KEY'
+                    });
+                }
+                if (!isKling3 && (!KLING_ACCESS_KEY || !KLING_SECRET_KEY)) {
                     return res.status(500).json({
                         error: "Kling API credentials not configured. Add KLING_ACCESS_KEY and KLING_SECRET_KEY to .env"
                     });
@@ -270,8 +300,11 @@ router.post('/generate-video', async (req, res) => {
                     lastFrameBase64,
                     modelId: videoModel,
                     aspectRatio,
+                    resolution,
                     duration: duration || 5,
+                    generateAudio: req.body.generateAudio !== false,
                     motionReferenceUrl,
+                    apiKey: isKling3 ? KLING_API_KEY : undefined,
                     accessKey: KLING_ACCESS_KEY,
                     secretKey: KLING_SECRET_KEY
                 });
@@ -346,6 +379,8 @@ router.post('/generate-video', async (req, res) => {
             model: videoModel || 'veo-3.1',
             aspectRatio: aspectRatio || 'Auto',
             resolution: resolution || 'Auto',
+            duration: duration || undefined,
+            generateAudio: req.body.generateAudio !== false,
             createdAt: new Date().toISOString(),
             type: 'videos'
         };

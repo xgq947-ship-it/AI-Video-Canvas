@@ -78,15 +78,41 @@ function extractRawBase64(dataUrl) {
 /**
  * Map frontend model ID to Kling API model_name for video
  */
-function mapKlingVideoModelName(modelId) {
+export function mapKlingVideoModelName(modelId) {
     // Consolidated models: removed legacy v1, v1-5, v1-6, v2-master
     const mapping = {
         'kling-v2-1': 'kling-v2-1',
         'kling-v2-1-master': 'kling-v2-1-master',
         'kling-v2-5-turbo': 'kling-v2-5-turbo',
-        'kling-v2-6': 'kling-v2-6'
+        'kling-v2-6': 'kling-v2-6',
+        'kling-v3': 'kling-v3',
+        'kling-v3-turbo': 'kling-v3-0-turbo'
     };
     return mapping[modelId] || 'kling-v2-1';
+}
+
+export function buildKlingVideoRequest({ prompt, imageBase64, lastFrameBase64, motionReferenceUrl, modelId, aspectRatio, resolution, duration, generateAudio = true }) {
+    const modelName = mapKlingVideoModelName(modelId);
+    const isKling3 = modelId === 'kling-v3' || modelId === 'kling-v3-turbo';
+    const proOnlyModels = ['kling-v2-6', 'kling-v2-master'];
+    const useProMode = isKling3
+        ? String(resolution || '').toLowerCase() === '1080p'
+        : !!lastFrameBase64 || !!motionReferenceUrl || proOnlyModels.includes(modelName);
+    const mappedAspectRatio = ['16:9', '9:16', '1:1'].includes(aspectRatio) ? aspectRatio : '16:9';
+    const body = {
+        model_name: modelName,
+        mode: useProMode ? 'pro' : 'std',
+        duration: String(duration || 5),
+        aspect_ratio: mappedAspectRatio,
+        prompt: prompt || ''
+    };
+
+    if (isKling3) body.sound = generateAudio !== false ? 'on' : 'off';
+    if (imageBase64) body.image = extractRawBase64(imageBase64);
+    if (lastFrameBase64) body.image_tail = extractRawBase64(lastFrameBase64);
+    if (motionReferenceUrl) body.motion_video = extractRawBase64(motionReferenceUrl);
+
+    return { body, endpoint: imageBase64 ? 'image2video' : 'text2video' };
 }
 
 /**
@@ -152,47 +178,13 @@ async function pollKlingVideoTask(taskId, endpoint, token, maxWaitMs = 300000) {
 /**
  * Generate video using Kling AI Image-to-Video API
  */
-export async function generateKlingVideo({ prompt, imageBase64, lastFrameBase64, motionReferenceUrl, modelId, aspectRatio, duration, accessKey, secretKey }) {
-    const token = generateKlingJWT(accessKey, secretKey);
-    const modelName = mapKlingVideoModelName(modelId);
-
-    // Use 'pro' mode when:
-    // 1. Doing frame-to-frame (with end frame) or motion control
-    // 2. Using kling-v2-6 or kling-v2-master models (they only support 'pro' mode)
-    const proOnlyModels = ['kling-v2-6', 'kling-v2-master'];
-    const useProMode = !!lastFrameBase64 || !!motionReferenceUrl || proOnlyModels.includes(modelName);
-
-    // Map aspect ratio - default to 16:9
-    const mappedAspectRatio = aspectRatio === '9:16' ? '9:16' : '16:9';
-
-    // Prepare request body - duration can be 5 or 10 seconds
-    const body = {
-        model_name: modelName,
-        mode: useProMode ? 'pro' : 'std',
-        duration: String(duration || 5),
-        aspect_ratio: mappedAspectRatio,
-        prompt: prompt || ''
-    };
-
-    // Add start frame image
-    if (imageBase64) {
-        body.image = extractRawBase64(imageBase64);
-    }
-
-    // Add end frame image (requires pro mode for most models)
-    if (lastFrameBase64) {
-        body.image_tail = extractRawBase64(lastFrameBase64);
-    }
-
-    // Add motion reference video (for Kling 2.6 Character and Motion)
-    if (motionReferenceUrl) {
-        body.motion_video = extractRawBase64(motionReferenceUrl);
-    }
-
-    console.log(`Kling Video Gen: Using model ${modelName}, mode: ${body.mode}, has image: ${!!imageBase64}, has tail: ${!!lastFrameBase64}, has motion: ${!!motionReferenceUrl}`);
+export async function generateKlingVideo({ prompt, imageBase64, lastFrameBase64, motionReferenceUrl, modelId, aspectRatio, resolution, duration, generateAudio = true, apiKey, accessKey, secretKey }) {
+    const token = apiKey || generateKlingJWT(accessKey, secretKey);
+    const { body, endpoint } = buildKlingVideoRequest({ prompt, imageBase64, lastFrameBase64, motionReferenceUrl, modelId, aspectRatio, resolution, duration, generateAudio });
+    console.log(`Kling Video Gen: Using model ${body.model_name}, endpoint: ${endpoint}, mode: ${body.mode}, audio: ${body.sound || 'unsupported'}, has image: ${!!imageBase64}, has tail: ${!!lastFrameBase64}, has motion: ${!!motionReferenceUrl}`);
 
     // Create task
-    const response = await fetch(`${KLING_BASE_URL}/v1/videos/image2video`, {
+    const response = await fetch(`${KLING_BASE_URL}/v1/videos/${endpoint}`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -215,7 +207,7 @@ export async function generateKlingVideo({ prompt, imageBase64, lastFrameBase64,
     console.log(`Kling task created: ${taskId}`);
 
     // Poll for completion
-    return await pollKlingVideoTask(taskId, 'image2video', token);
+    return await pollKlingVideoTask(taskId, endpoint, token);
 }
 
 // ============================================================================

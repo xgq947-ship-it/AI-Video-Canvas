@@ -367,7 +367,7 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                     duration: node.videoDuration,
                     videoModel: node.videoModel,
                     motionReferenceUrl,
-                    generateAudio: node.generateAudio, // For Kling 2.6 and Veo 3.1 native audio
+                    generateAudio: node.generateAudio, // 支持原生音频的视频模型，默认开启
                     nodeId: id
                 });
 

@@ -4,8 +4,9 @@
  * Top navigation bar component with canvas title, save button, and other controls.
  */
 
-import React, { useState } from 'react';
-import { Plus, Save, Loader2 } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ChevronDown, KeyRound, Loader2, Plus, Save, Settings } from 'lucide-react';
+import { ApiKeySettingsModal } from './modals/ApiKeySettingsModal';
 
 interface TopBarProps {
     // Title
@@ -47,6 +48,19 @@ export const TopBar: React.FC<TopBarProps> = ({
 }) => {
     const [showNewConfirm, setShowNewConfirm] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+    const [showApiSettings, setShowApiSettings] = useState(false);
+    const settingsMenuRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const handlePointerDown = (event: PointerEvent) => {
+            if (settingsMenuRef.current && !settingsMenuRef.current.contains(event.target as Node)) {
+                setShowSettingsMenu(false);
+            }
+        };
+        document.addEventListener('pointerdown', handlePointerDown);
+        return () => document.removeEventListener('pointerdown', handlePointerDown);
+    }, []);
 
     const handleTitleBlur = () => {
         if (editingTitleValue.trim()) {
@@ -164,6 +178,38 @@ export const TopBar: React.FC<TopBarProps> = ({
                         <Plus size={16} />
                         新建
                     </button>
+                    <div className="relative" ref={settingsMenuRef}>
+                        <button
+                            onClick={() => setShowSettingsMenu(current => !current)}
+                            className={`h-10 rounded-full px-3 flex items-center gap-1.5 transition-colors border ${canvasTheme === 'dark'
+                                ? 'bg-neutral-900 border-neutral-700 text-neutral-300 hover:bg-neutral-800 hover:text-white'
+                                : 'bg-white border-neutral-200 text-neutral-600 hover:bg-neutral-50 shadow-sm'
+                                }`}
+                            title="设置"
+                            aria-label="设置"
+                            aria-expanded={showSettingsMenu}
+                        >
+                            <Settings size={17} />
+                            <ChevronDown size={13} className={`transition-transform ${showSettingsMenu ? 'rotate-180' : ''}`} />
+                        </button>
+                        {showSettingsMenu && (
+                            <div className={`absolute right-0 top-full mt-2 w-52 overflow-hidden rounded-xl border p-1.5 shadow-2xl ${canvasTheme === 'dark' ? 'border-neutral-700 bg-[#202020]' : 'border-neutral-200 bg-white'}`}>
+                                <button
+                                    onClick={() => {
+                                        setShowSettingsMenu(false);
+                                        setShowApiSettings(true);
+                                    }}
+                                    className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${canvasTheme === 'dark' ? 'text-neutral-200 hover:bg-neutral-700' : 'text-neutral-700 hover:bg-neutral-100'}`}
+                                >
+                                    <KeyRound size={16} className="text-blue-400" />
+                                    <span>
+                                        <span className="block font-medium">配置 API 密钥</span>
+                                        <span className="mt-0.5 block text-[10px] text-neutral-500">管理当前工作台服务</span>
+                                    </span>
+                                </button>
+                            </div>
+                        )}
+                    </div>
                     <button
                         onClick={onToggleTheme}
                         className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors border ${canvasTheme === 'dark'
@@ -223,6 +269,12 @@ export const TopBar: React.FC<TopBarProps> = ({
                     </div>
                 </div>
             )}
+
+            <ApiKeySettingsModal
+                isOpen={showApiSettings}
+                onClose={() => setShowApiSettings(false)}
+                canvasTheme={canvasTheme}
+            />
         </>
     );
 };

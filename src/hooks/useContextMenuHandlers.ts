@@ -67,14 +67,20 @@ export const useContextMenuHandlers = ({
     // NODE OPERATIONS
     // ============================================================================
 
-    const handleAddNext = useCallback((nodeId: string, _direction: 'left' | 'right') => {
+    const handleAddNext = useCallback((
+        nodeId: string,
+        _direction: 'left' | 'right',
+        anchor?: { x: number; y: number }
+    ) => {
         const sourceNode = nodes.find(n => n.id === nodeId);
         if (!sourceNode) return;
 
         setContextMenu({
             isOpen: true,
-            x: window.innerWidth / 2,
-            y: window.innerHeight / 2,
+            // 节点连接点短按时，以指针释放位置作为菜单左上角。
+            // 拖线后由其他调用方打开时才回退到视口中心。
+            x: anchor?.x ?? window.innerWidth / 2,
+            y: anchor?.y ?? window.innerHeight / 2,
             type: 'node-connector',
             sourceNodeId: nodeId,
             connectorSide: _direction

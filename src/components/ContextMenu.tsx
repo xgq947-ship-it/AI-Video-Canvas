@@ -140,7 +140,14 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
   const menuLeft = Math.max(12, Math.min(state.x, window.innerWidth - 312));
   const menuHeight = state.type === 'global' && view === 'main' ? 470 : 620;
-  const menuTop = Math.max(68, Math.min(state.y, window.innerHeight - menuHeight));
+  // 节点“＋”菜单以点击位置作为左上角。底部空间不足时让菜单内部滚动，
+  // 不再按预估高度把整张菜单向上回推。
+  const menuTop = state.type === 'node-connector'
+    ? Math.max(12, state.y)
+    : Math.max(68, Math.min(state.y, window.innerHeight - menuHeight));
+  const connectorMenuMaxHeight = state.type === 'node-connector'
+    ? Math.max(160, window.innerHeight - menuTop - 12)
+    : undefined;
 
   // 1. Right Click on Node
   if (state.type === 'node-options') {
@@ -414,6 +421,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         position: 'fixed',
         left: menuLeft,
         top: menuTop,
+        maxHeight: connectorMenuMaxHeight,
         zIndex: 1000
       }}
       className={`w-[292px] max-h-[calc(100vh-92px)] border rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-100 ${canvasTheme === 'dark' ? 'bg-[#171717] border-neutral-800' : 'bg-white border-neutral-200'

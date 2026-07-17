@@ -22,7 +22,7 @@ interface CanvasNodeProps {
   connectedImageNodes?: { id: string; url: string; type?: NodeType }[]; // For frame-to-frame video mode and motion control
   onUpdate: (id: string, updates: Partial<NodeData>) => void;
   onGenerate: (id: string) => void;
-  onAddNext: (id: string, type: 'left' | 'right') => void;
+  onAddNext: (id: string, type: 'left' | 'right', anchor?: { x: number; y: number }) => void;
   selected: boolean;
   showControls?: boolean; // Only show controls when single node is selected (not in group selection)
   onSelect: (id: string) => void;

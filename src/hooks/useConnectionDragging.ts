@@ -122,10 +122,15 @@ export const useConnectionDragging = () => {
      * @param onConnectionMade - Optional callback called with (parentId, childId) when connection is created
      */
     const completeConnectionDrag = (
-        onAddNext: (nodeId: string, direction: 'left' | 'right') => void,
+        onAddNext: (
+            nodeId: string,
+            direction: 'left' | 'right',
+            anchor?: { x: number; y: number }
+        ) => void,
         onUpdateNodes: (updater: (prev: NodeData[]) => NodeData[]) => void,
         nodes: NodeData[],
-        onConnectionMade?: (parentId: string, childId: string) => void
+        onConnectionMade?: (parentId: string, childId: string) => void,
+        pointerPosition?: { x: number; y: number }
     ): boolean => {
         if (!isDraggingConnection || !connectionStart) return false;
 
@@ -144,7 +149,7 @@ export const useConnectionDragging = () => {
 
         // Short click - open menu
         if (dragDuration < 200 && !hoveredNodeId) {
-            onAddNext(connectionStart.nodeId, connectionStart.handle);
+            onAddNext(connectionStart.nodeId, connectionStart.handle, pointerPosition);
         }
         // Drag to node - create connection based on target side
         else if (hoveredNodeId && hoveredSide) {

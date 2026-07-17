@@ -20,6 +20,7 @@ interface CanvasNodeProps {
   allNodes?: NodeData[]; // 全部节点（漫剧成片节点用于组装 manifest）
   inputUrl?: string;
   connectedImageNodes?: { id: string; url: string; type?: NodeType }[]; // For frame-to-frame video mode and motion control
+  connectedAudioNodes?: { id: string; title: string; url: string }[]; // Seedance voice references
   onUpdate: (id: string, updates: Partial<NodeData>) => void;
   onGenerate: (id: string) => void;
   onAddNext: (id: string, type: 'left' | 'right', anchor?: { x: number; y: number }) => void;
@@ -76,6 +77,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   allNodes,
   inputUrl,
   connectedImageNodes,
+  connectedAudioNodes,
   onUpdate,
   onGenerate,
   onAddNext,
@@ -605,6 +607,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
               isLoading={isLoading}
               isSuccess={isSuccess}
               connectedImageNodes={connectedImageNodes}
+              connectedAudioNodes={connectedAudioNodes}
               onUpdate={onUpdate}
               onGenerate={onGenerate}
               onChangeAngleGenerate={onChangeAngleGenerate}

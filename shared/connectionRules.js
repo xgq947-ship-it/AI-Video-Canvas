@@ -42,7 +42,9 @@ export const isValidNodeConnection = (parentType, childType) => {
     );
   }
 
-  // 音轨 / 字幕只能连向 RENDER（上面已处理）
+  // 配音节点还可连向 VIDEO，作为 Seedance 2.0 的人物音色参考。
+  // SFX / BGM / 字幕仍只能连向 RENDER。
+  if (parentType === NODE.AUDIO && childType === NODE.VIDEO) return true;
   if (AUDIO_KINDS.includes(parentType) || parentType === NODE.SUBTITLE) return false;
 
   // TEXT → IMAGE / VIDEO（提示词）或 AUDIO / SUBTITLE（台词文本）

@@ -7,7 +7,7 @@
  */
 
 import React, { useState, useRef, useEffect, memo } from 'react';
-import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Film, Clock, Expand, Shrink, Monitor, Crop, HardDrive, Upload, Loader2, Volume2 } from 'lucide-react';
+import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Film, Clock, Expand, Shrink, Monitor, Crop, HardDrive, Upload, Loader2, Mic2 } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { OpenAIIcon, GoogleIcon, KlingIcon, HailuoIcon } from '../icons/BrandIcons';
 import { useFaceDetection } from '../../hooks/useFaceDetection';
@@ -20,6 +20,7 @@ interface NodeControlsProps {
     isLoading: boolean;
     isSuccess: boolean;
     connectedImageNodes?: { id: string; url: string; type?: NodeType }[]; // Connected parent nodes
+    connectedAudioNodes?: { id: string; title: string; url: string }[]; // Seedance voice references
     onUpdate: (id: string, updates: Partial<NodeData>) => void;
     onGenerate: (id: string) => void;
     onChangeAngleGenerate?: (nodeId: string) => void;
@@ -198,6 +199,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     isLoading,
     isSuccess,
     connectedImageNodes = [],
+    connectedAudioNodes = [],
     onUpdate,
     onGenerate,
     onChangeAngleGenerate,
@@ -802,7 +804,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
 
             {/* Controls - Hidden for storyboard-generated scenes */}
             {!(data.prompt && data.prompt.startsWith('Extract panel #')) && (
-                <div className="flex items-center justify-between gap-3 relative">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2 relative">
                     <div className="flex min-w-0 items-center gap-2">
                         {/* Model Selector - Local, Video, and Image nodes get different dropdowns */}
                         {isLocalModelNode ? (
@@ -876,6 +878,22 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                 {/* Model Dropdown Menu */}
                                 {showModelDropdown && (
                                     <div className="absolute top-full mt-1 left-0 w-56 max-h-[65vh] overflow-y-auto bg-[#252525] border border-neutral-700 rounded-lg shadow-xl z-50 animate-in fade-in zoom-in-95 duration-100">
+                                        {/* Local Upload */}
+                                        <button
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                setShowModelDropdown(false);
+                                                videoUploadInputRef.current?.click();
+                                            }}
+                                            disabled={isUploadingVideo}
+                                            title="上传本地生成的视频，并保存到个人素材库"
+                                            className="w-full flex items-center gap-2 px-3 py-2.5 text-xs text-left text-white hover:bg-[#333] transition-colors border-b border-neutral-700 disabled:cursor-wait disabled:opacity-60"
+                                        >
+                                            {isUploadingVideo
+                                                ? <Loader2 size={12} className="animate-spin text-cyan-400" />
+                                                : <Upload size={12} className="text-cyan-400" />}
+                                            <span>{isUploadingVideo ? '上传中...' : '本地上传'}</span>
+                                        </button>
                                         {/* Mode indicator */}
                                         <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-400 uppercase tracking-wider bg-[#1a1a1a] border-b border-neutral-700 flex items-center gap-1.5">
                                             <span className={`w-1.5 h-1.5 rounded-full ${videoGenerationMode === 'text-to-video' ? 'bg-blue-400' :
@@ -1130,33 +1148,17 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                         )}
 
                         {isVideoNode && (
-                            <>
-                                <input
-                                    ref={videoUploadInputRef}
-                                    type="file"
-                                    accept="video/mp4,video/webm,video/quicktime,video/x-m4v,.mp4,.webm,.mov,.m4v"
-                                    className="hidden"
-                                    onChange={handleLocalVideoUpload}
-                                />
-                                <button
-                                    onClick={(event) => {
-                                        event.stopPropagation();
-                                        videoUploadInputRef.current?.click();
-                                    }}
-                                    disabled={isUploadingVideo}
-                                    className="flex items-center gap-1.5 whitespace-nowrap text-xs font-medium bg-[#252525] hover:bg-[#333] disabled:cursor-wait disabled:opacity-60 border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
-                                    title="上传本地生成的视频，并保存到个人素材库"
-                                >
-                                    {isUploadingVideo
-                                        ? <Loader2 size={12} className="animate-spin text-cyan-400" />
-                                        : <Upload size={12} className="text-cyan-400" />}
-                                    <span>{isUploadingVideo ? '上传中' : '本地上传'}</span>
-                                </button>
-                            </>
+                            <input
+                                ref={videoUploadInputRef}
+                                type="file"
+                                accept="video/mp4,video/webm,video/quicktime,video/x-m4v,.mp4,.webm,.mov,.m4v"
+                                className="hidden"
+                                onChange={handleLocalVideoUpload}
+                            />
                         )}
                     </div>
 
-                    <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+                    <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap">
                         {/* Unified Size/Ratio Dropdown (hidden for video nodes in motion-control mode) */}
                         {!(isVideoNode && videoGenerationMode === 'motion-control') && (
                             <div className="relative" ref={dropdownRef}>
@@ -1293,23 +1295,14 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                             </div>
                         )}
 
-                        {isVideoNode && currentVideoModel.supportsAudio && videoGenerationMode !== 'motion-control' && (
-                            <button
-                                onClick={(event) => {
-                                    event.stopPropagation();
-                                    onUpdate(data.id, { generateAudio: data.generateAudio === false });
-                                }}
-                                aria-pressed={data.generateAudio !== false}
-                                title={data.generateAudio !== false ? '生成音频：已开启' : '生成音频：已关闭'}
-                                className={`flex items-center gap-1.5 whitespace-nowrap text-xs font-medium border px-2.5 py-1.5 rounded-lg transition-colors ${data.generateAudio !== false
-                                    ? 'bg-cyan-500/15 border-cyan-500/50 text-cyan-200'
-                                    : 'bg-[#252525] border-neutral-700 text-neutral-400 hover:bg-[#333]'
-                                    }`}
+                        {isVideoNode && currentVideoModel.provider === 'seedance' && connectedAudioNodes.length > 0 && (
+                            <div
+                                title={`固定音色参考：${connectedAudioNodes.map(node => node.title).join('、')}`}
+                                className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-emerald-500/50 bg-emerald-500/15 px-2.5 py-1.5 text-xs font-medium text-emerald-200"
                             >
-                                <Volume2 size={12} />
-                                <span>音频</span>
-                                <span className={`w-1.5 h-1.5 rounded-full ${data.generateAudio !== false ? 'bg-cyan-400' : 'bg-neutral-600'}`} />
-                            </button>
+                                <Mic2 size={12} />
+                                <span>音色参考 {connectedAudioNodes.length}</span>
+                            </div>
                         )}
 
                         {/* Generate Button - Active even after success to allow re-generation */}

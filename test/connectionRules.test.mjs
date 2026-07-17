@@ -22,8 +22,9 @@ test('成片(RENDER)是终点，不能作为父', () => {
   assert.equal(isValidNodeConnection(NODE.RENDER, NODE.RENDER), false);
 });
 
-test('音轨/字幕只能连向成片', () => {
-  assert.equal(isValidNodeConnection(NODE.AUDIO, NODE.VIDEO), false);
+test('配音可连向视频作为 Seedance 音色参考，其他音轨仍只能连向成片', () => {
+  assert.equal(isValidNodeConnection(NODE.AUDIO, NODE.VIDEO), true);
+  assert.equal(isValidNodeConnection(NODE.SFX, NODE.VIDEO), false);
   assert.equal(isValidNodeConnection(NODE.BGM, NODE.IMAGE), false);
   assert.equal(isValidNodeConnection(NODE.SUBTITLE, NODE.VIDEO), false);
 });

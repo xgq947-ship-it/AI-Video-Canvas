@@ -13,7 +13,7 @@ import { generateGeminiImage, generateVeoVideo } from '../services/gemini.js';
 import { generateHailuoVideo } from '../services/hailuo.js';
 import { generateSeedanceVideo } from '../services/seedance.js';
 import { generateOpenAIImage } from '../services/openai.js';
-import { resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
+import { resolveAudioToBase64, resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
 
 const router = express.Router();
 
@@ -187,13 +187,17 @@ router.post('/generate-image', async (req, res) => {
 
 router.post('/generate-video', async (req, res) => {
     try {
-        const { nodeId, prompt, imageBase64: rawImageBase64, lastFrameBase64: rawLastFrameBase64, motionReferenceUrl: rawMotionReferenceUrl, aspectRatio, resolution, duration, videoModel } = req.body;
+        const { nodeId, prompt, imageBase64: rawImageBase64, lastFrameBase64: rawLastFrameBase64, motionReferenceUrl: rawMotionReferenceUrl, referenceAudioUrls: rawReferenceAudioUrls, aspectRatio, resolution, duration, videoModel } = req.body;
         const { GEMINI_API_KEY, KLING_ACCESS_KEY, KLING_SECRET_KEY, KLING_API_KEY, ARK_API_KEY, HAILUO_API_KEY, VIDEOS_DIR } = req.app.locals;
 
         // Resolve file URLs to base64
         const imageBase64 = resolveImageToBase64(rawImageBase64);
         const lastFrameBase64 = resolveImageToBase64(rawLastFrameBase64);
         const motionReferenceUrl = resolveImageToBase64(rawMotionReferenceUrl);
+        const referenceAudioUrls = (Array.isArray(rawReferenceAudioUrls) ? rawReferenceAudioUrls : [])
+            .slice(0, 3)
+            .map(resolveAudioToBase64)
+            .filter(Boolean);
 
         // Determine provider
         const isKlingModel = videoModel && videoModel.startsWith('kling-');
@@ -213,6 +217,7 @@ router.post('/generate-video', async (req, res) => {
                 prompt,
                 imageBase64,
                 lastFrameBase64,
+                referenceAudioUrls,
                 modelId: videoModel,
                 aspectRatio,
                 resolution,

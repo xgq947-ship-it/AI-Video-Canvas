@@ -1727,6 +1727,17 @@ export default function App() {
                       type: parent!.type
                     }));
                 })()}
+                connectedAudioNodes={(() => {
+                  if (!node.parentIds || node.parentIds.length === 0) return [];
+                  return node.parentIds
+                    .map(parentId => nodes.find(n => n.id === parentId))
+                    .filter(parent => parent?.type === NodeType.AUDIO && parent.mediaUrl)
+                    .map(parent => ({
+                      id: parent!.id,
+                      title: parent!.title || '固定音色参考',
+                      url: parent!.mediaUrl!
+                    }));
+                })()}
                 onUpdate={updateNodeWithSync}
                 onGenerate={handleGenerate}
                 onAddNext={handleAddNext}

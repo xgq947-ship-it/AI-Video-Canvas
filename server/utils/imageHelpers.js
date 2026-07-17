@@ -77,6 +77,53 @@ export function resolveImageToBase64(input) {
 }
 
 /**
+ * Resolve a Seedance reference audio input.
+ * Local library audio is converted to a data URL; public HTTP(S) URLs are
+ * preserved because ModelArk can fetch them directly.
+ * @param {string} input
+ * @returns {string|null}
+ */
+export function resolveAudioToBase64(input) {
+    if (!input || typeof input !== 'string') return null;
+    if (input.startsWith('data:audio/')) return input;
+
+    let filePath = input;
+    if (input.startsWith('http://') || input.startsWith('https://')) {
+        try {
+            const url = new URL(input);
+            const isLocal = ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+            if (!isLocal) return input;
+            filePath = url.pathname;
+        } catch {
+            return null;
+        }
+    }
+
+    if (!filePath.startsWith('/library/')) return null;
+
+    try {
+        const cleanPath = filePath.split('?')[0].split('#')[0];
+        const libraryDir = path.resolve(process.env.LIBRARY_DIR || path.join(process.cwd(), 'library'));
+        const relativePath = cleanPath.replace(/^\/library\//, '');
+        const absolutePath = path.resolve(libraryDir, relativePath);
+        if (absolutePath !== libraryDir && !absolutePath.startsWith(`${libraryDir}${path.sep}`)) return null;
+        if (!fs.existsSync(absolutePath)) return null;
+
+        const ext = path.extname(absolutePath).toLowerCase();
+        const mimeType = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav' }[ext];
+        if (!mimeType) return null;
+        const fileBuffer = fs.readFileSync(absolutePath);
+        if (fileBuffer.length > 15 * 1024 * 1024) {
+            throw new Error('Seedance 参考音频单文件不能超过 15MB');
+        }
+        return `data:${mimeType};base64,${fileBuffer.toString('base64')}`;
+    } catch (error) {
+        console.error('Error resolving audio to base64:', error);
+        throw error;
+    }
+}
+
+/**
  * Extract raw base64 from data URL (removes data:image/xxx;base64, prefix)
  * @param {string} dataUrl - Base64 data URL
  * @returns {string|null} Raw base64 string

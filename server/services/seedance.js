@@ -36,12 +36,22 @@ export function buildSeedanceRequest({
     prompt,
     imageBase64,
     lastFrameBase64,
+    referenceAudioUrls = [],
     modelId,
     aspectRatio,
     resolution,
     duration,
     generateAudio = true
 }) {
+    const audioReferences = Array.isArray(referenceAudioUrls)
+        ? referenceAudioUrls.filter(Boolean).slice(0, 3)
+        : [];
+    if (lastFrameBase64 && audioReferences.length > 0) {
+        throw new Error('Seedance 参考音频不能与尾帧模式同时使用，请保留首帧并移除尾帧');
+    }
+    if (audioReferences.length > 0 && !imageBase64) {
+        throw new Error('Seedance 参考音频必须同时连接至少一张首帧图片');
+    }
     const content = [{ type: 'text', text: prompt || '' }];
 
     if (imageBase64) {
@@ -57,6 +67,14 @@ export function buildSeedanceRequest({
             type: 'image_url',
             image_url: { url: lastFrameBase64 },
             role: 'last_frame'
+        });
+    }
+
+    for (const audioUrl of audioReferences) {
+        content.push({
+            type: 'audio_url',
+            audio_url: { url: audioUrl },
+            role: 'reference_audio'
         });
     }
 

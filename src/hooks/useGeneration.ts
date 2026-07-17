@@ -275,10 +275,20 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                 let imageBase64: string | undefined;
                 let lastFrameBase64: string | undefined;
 
-                // Get non-TEXT parent nodes (image sources only)
+                const isSeedanceModel = !!node.videoModel?.startsWith('seedance-');
+                const referenceAudioUrls = isSeedanceModel
+                    ? (node.parentIds || [])
+                        .map(parentId => nodes.find(n => n.id === parentId))
+                        .filter(parent => parent?.type === NodeType.AUDIO && parent.mediaUrl)
+                        .map(parent => parent!.mediaUrl!)
+                        .slice(0, 3)
+                    : [];
+
+                // Only visual parents participate in first/last-frame selection.
+                // Connected AUDIO nodes are handled separately as Seedance references.
                 const imageParentIds = node.parentIds?.filter(pid => {
                     const parent = nodes.find(n => n.id === pid);
-                    return parent?.type !== NodeType.TEXT;
+                    return parent && [NodeType.IMAGE, NodeType.IMAGE_EDITOR, NodeType.VIDEO, NodeType.VIDEO_EDITOR].includes(parent.type);
                 }) || [];
 
                 // Check for frame-to-frame mode (explicit or auto-detected from 2+ image parents)
@@ -358,8 +368,14 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                 }
 
                 // Generate video
+                if (referenceAudioUrls.length > 0 && lastFrameBase64) {
+                    throw new Error('Seedance 音色参考不能与尾帧模式同时使用：请移除尾帧，只保留首帧');
+                }
+                const videoPrompt = referenceAudioUrls.length > 0
+                    ? `${combinedPrompt}\n\n音色控制：@音频1只作为人物固定音色参考，不复述参考音频中的原始台词。保持相同音色、年龄感、口音和自然说话方式；本镜头只说上文指定的台词，并按本次台词生成准确口型。不要新增旁白或背景音乐。`
+                    : combinedPrompt;
                 const rawResultUrl = await generateVideo({
-                    prompt: combinedPrompt,
+                    prompt: videoPrompt,
                     imageBase64,
                     lastFrameBase64,
                     aspectRatio: node.aspectRatio,
@@ -367,7 +383,8 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                     duration: node.videoDuration,
                     videoModel: node.videoModel,
                     motionReferenceUrl,
-                    generateAudio: node.generateAudio, // 支持原生音频的视频模型，默认开启
+                    referenceAudioUrls,
+                    generateAudio: true, // 支持原生音频的视频模型固定生成音频
                     nodeId: id
                 });
 

@@ -45,6 +45,36 @@ test('Seedance 非法画面参数使用安全默认值', () => {
     assert.equal(request.duration, 15);
 });
 
+test('Seedance 请求携带人物参考音频', () => {
+    const request = buildSeedanceRequest({
+        prompt: '人物说出本次台词',
+        imageBase64: 'data:image/png;base64,AAA',
+        referenceAudioUrls: ['data:audio/mpeg;base64,VOICE'],
+        modelId: 'seedance-2-0'
+    });
+
+    const audio = request.content.find(item => item.type === 'audio_url');
+    assert.deepEqual(audio, {
+        type: 'audio_url',
+        audio_url: { url: 'data:audio/mpeg;base64,VOICE' },
+        role: 'reference_audio'
+    });
+});
+
+test('Seedance 参考音频需要首帧且不能与尾帧共用', () => {
+    assert.throws(() => buildSeedanceRequest({
+        prompt: '人物说话',
+        referenceAudioUrls: ['data:audio/mpeg;base64,VOICE']
+    }), /至少一张首帧图片/);
+
+    assert.throws(() => buildSeedanceRequest({
+        prompt: '人物说话',
+        imageBase64: 'data:image/png;base64,AAA',
+        lastFrameBase64: 'data:image/png;base64,BBB',
+        referenceAudioUrls: ['data:audio/mpeg;base64,VOICE']
+    }), /不能与尾帧模式同时使用/);
+});
+
 test('Kling 3 前端模型 ID 映射到官方模型名', () => {
     assert.equal(mapKlingVideoModelName('kling-v3'), 'kling-v3');
     assert.equal(mapKlingVideoModelName('kling-v3-turbo'), 'kling-v3-0-turbo');

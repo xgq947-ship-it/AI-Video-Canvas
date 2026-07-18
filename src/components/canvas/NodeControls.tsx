@@ -52,7 +52,7 @@ const VIDEO_ASPECT_RATIOS = ["16:9", "9:16"];
 interface VideoModelOption {
     id: string;
     name: string;
-    provider: 'google' | 'seedance' | 'kling' | 'hailuo';
+    provider: 'google' | 'workflow' | 'seedance' | 'kling' | 'hailuo';
     supportsTextToVideo: boolean;
     supportsImageToVideo: boolean;
     supportsMultiImage: boolean;
@@ -65,6 +65,7 @@ interface VideoModelOption {
 
 const VIDEO_MODELS: VideoModelOption[] = [
     { id: 'veo-3.1', name: 'Veo 3.1', provider: 'google', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, durations: [4, 6, 8], resolutions: ['Auto', '720p', '1080p'], aspectRatios: ['16:9', '9:16'] },
+    { id: 'google-flow-omni-flash', name: 'Google Flow · Omni Flash', provider: 'workflow', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, recommended: true, durations: [4, 6, 8, 10], resolutions: ['自动'], aspectRatios: ['16:9', '9:16'] },
     // Seedance 官方模型
     { id: 'seedance-2-0', name: 'Seedance 2.0', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
     { id: 'seedance-2-0-fast', name: 'Seedance 2.0 Fast', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['480p', '720p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
@@ -915,6 +916,31 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                                                 <Film size={12} className="text-cyan-400" />
                                                             )}
                                                             {model.name}
+                                                        </span>
+                                                        {currentVideoModel.id === model.id && <Check size={12} />}
+                                                    </button>
+                                                ))}
+                                            </>
+                                        )}
+
+                                        {/* Local workflow models */}
+                                        {availableVideoModels.filter(m => m.provider === 'workflow').length > 0 && (
+                                            <>
+                                                <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f] border-t border-neutral-700">
+                                                    本地工作流
+                                                </div>
+                                                {availableVideoModels.filter(m => m.provider === 'workflow').map(model => (
+                                                    <button
+                                                        key={model.id}
+                                                        onClick={() => handleVideoModelChange(model.id)}
+                                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${currentVideoModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'}`}
+                                                    >
+                                                        <span className="flex items-center gap-2">
+                                                            <Film size={12} className="text-cyan-400" />
+                                                            {model.name}
+                                                            {model.recommended && (
+                                                                <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">推荐</span>
+                                                            )}
                                                         </span>
                                                         {currentVideoModel.id === model.id && <Check size={12} />}
                                                     </button>

@@ -12,6 +12,7 @@ import { generateKlingVideo, generateKlingImage, generateKlingMultiImage } from 
 import { generateGeminiImage, generateVeoVideo } from '../services/gemini.js';
 import { generateHailuoVideo } from '../services/hailuo.js';
 import { generateSeedanceVideo } from '../services/seedance.js';
+import { generateGoogleFlowWorkflowVideo, GOOGLE_FLOW_WORKFLOW_MODEL_ID } from '../services/googleFlowWorkflow.js';
 import { generateOpenAIImage } from '../services/openai.js';
 import { resolveAudioToBase64, resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
 
@@ -188,25 +189,49 @@ router.post('/generate-image', async (req, res) => {
 router.post('/generate-video', async (req, res) => {
     try {
         const { nodeId, prompt, imageBase64: rawImageBase64, lastFrameBase64: rawLastFrameBase64, motionReferenceUrl: rawMotionReferenceUrl, referenceAudioUrls: rawReferenceAudioUrls, aspectRatio, resolution, duration, videoModel } = req.body;
-        const { GEMINI_API_KEY, KLING_ACCESS_KEY, KLING_SECRET_KEY, KLING_API_KEY, ARK_API_KEY, HAILUO_API_KEY, VIDEOS_DIR } = req.app.locals;
-
-        // Resolve file URLs to base64
-        const imageBase64 = resolveImageToBase64(rawImageBase64);
-        const lastFrameBase64 = resolveImageToBase64(rawLastFrameBase64);
-        const motionReferenceUrl = resolveImageToBase64(rawMotionReferenceUrl);
-        const referenceAudioUrls = (Array.isArray(rawReferenceAudioUrls) ? rawReferenceAudioUrls : [])
-            .slice(0, 3)
-            .map(resolveAudioToBase64)
-            .filter(Boolean);
+        const { GEMINI_API_KEY, KLING_ACCESS_KEY, KLING_SECRET_KEY, KLING_API_KEY, ARK_API_KEY, HAILUO_API_KEY, VIDEOS_DIR, LIBRARY_DIR } = req.app.locals;
 
         // Determine provider
         const isKlingModel = videoModel && videoModel.startsWith('kling-');
         const isSeedanceModel = videoModel && videoModel.startsWith('seedance-');
         const isHailuoModel = videoModel && videoModel.startsWith('hailuo-');
+        const isGoogleFlowWorkflowModel = videoModel === GOOGLE_FLOW_WORKFLOW_MODEL_ID;
+
+        // 页面 workflow 需要真实首帧路径；其他供应商继续使用 base64 输入。
+        const imageBase64 = isGoogleFlowWorkflowModel ? null : resolveImageToBase64(rawImageBase64);
+        const lastFrameBase64 = isGoogleFlowWorkflowModel ? null : resolveImageToBase64(rawLastFrameBase64);
+        const motionReferenceUrl = isGoogleFlowWorkflowModel ? null : resolveImageToBase64(rawMotionReferenceUrl);
+        const referenceAudioUrls = isGoogleFlowWorkflowModel
+            ? []
+            : (Array.isArray(rawReferenceAudioUrls) ? rawReferenceAudioUrls : [])
+                .slice(0, 3)
+                .map(resolveAudioToBase64)
+                .filter(Boolean);
 
         let videoBuffer;
+        let videoExtension = 'mp4';
+        let workflowRunId;
 
-        if (isSeedanceModel) {
+        if (isGoogleFlowWorkflowModel) {
+            if (!rawImageBase64) {
+                return res.status(400).json({ error: 'Google Flow workflow 需要连接一张首帧图片' });
+            }
+            if (rawLastFrameBase64) {
+                return res.status(400).json({ error: 'Google Flow workflow 暂不支持尾帧，请只连接一张首帧图片' });
+            }
+            const workflowResult = await generateGoogleFlowWorkflowVideo({
+                prompt,
+                firstFrameInput: rawImageBase64,
+                aspectRatio: aspectRatio || '16:9',
+                duration: duration || 4,
+                libraryDir: LIBRARY_DIR,
+                timeoutMinutes: 15
+            });
+            videoBuffer = workflowResult.buffer;
+            videoExtension = workflowResult.extension;
+            workflowRunId = workflowResult.runId;
+
+        } else if (isSeedanceModel) {
             if (!ARK_API_KEY) {
                 return res.status(500).json({
                     error: '火山方舟 API Key 未配置，请在设置中填写中国区 ARK_API_KEY'
@@ -371,7 +396,7 @@ router.post('/generate-video', async (req, res) => {
         }
 
         // Save to library - use unique filename to preserve previous generations
-        const saved = saveBufferToFile(videoBuffer, VIDEOS_DIR, 'vid', 'mp4');
+        const saved = saveBufferToFile(videoBuffer, VIDEOS_DIR, 'vid', videoExtension);
 
         // Determine metadata ID: use nodeId for recovery if available, otherwise use file ID
         const metadataId = nodeId || saved.id;
@@ -385,7 +410,8 @@ router.post('/generate-video', async (req, res) => {
             aspectRatio: aspectRatio || 'Auto',
             resolution: resolution || 'Auto',
             duration: duration || undefined,
-            generateAudio: req.body.generateAudio !== false,
+            generateAudio: isGoogleFlowWorkflowModel ? undefined : req.body.generateAudio !== false,
+            workflowRunId,
             createdAt: new Date().toISOString(),
             type: 'videos'
         };

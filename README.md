@@ -43,6 +43,7 @@ cp .env.example .env  # 配置密钥（可留空，见下）
 |---|---|
 | 图片生成 | `GEMINI_API_KEY` / `OPENAI_API_KEY` |
 | 视频生成 | `HAILUO_API_KEY` / `KLING_ACCESS_KEY`+`KLING_SECRET_KEY` / `FAL_API_KEY` |
+| Google Flow 工作流视频 | 无需 API Key；需要本机 9222 Chrome 已登录 Google Flow |
 | 剧本 / 分镜 | `GEMINI_API_KEY` |
 | 配音 (TTS) | MiniMax 画布直连需要 `MINIMAX_API_KEY` + `MINIMAX_GROUP_ID`（可回退 `HAILUO_API_KEY`）；ChatCut/ElevenLabs、豆包、Fish、本地 Qwen 与其他平台可生成后导入 |
 | 画布 / 导入本地素材 / Remotion 渲染 / ffmpeg 母带 | **完全本地，无需密钥** |
@@ -111,7 +112,7 @@ Chrome Headless Shell（约 90MB）。
 
 - **🎨 Visual Canvas Interface** - Drag-and-drop node-based workflow
 - **🤖 Multi-Model AI Generation** - GPT Image 1.5, Gemini Pro, Kling V1-V2.5 for images
-- **🎬 Multi-Model Video Generation** - Veo 3.1, Kling V1-V2.6, Hailuo 2.3/O2 for videos
+- **🎬 Multi-Model Video Generation** - Veo 3.1, Google Flow workflow, Seedance, Kling, Hailuo
 - **🎥 Camera Angle Control** - Transform any image by adjusting camera rotation and tilt angles (Qwen-Image-Edit)
 - **📋 Storyboard** - Create video storyboards with consistent characters and layouts
 - **💃 Motion Control** - Transfer motion from reference videos to character images (Kling V2.6 via Fal.ai)
@@ -448,6 +449,7 @@ Your API key is **never exposed** to the browser:
 | Model | Provider | Text-to-Video | Image-to-Video | Frame-to-Frame |
 |-------|----------|:-------------:|:--------------:|:--------------:|
 | Veo 3.1 | Google | ✅ | ✅ | ✅ |
+| Google Flow · Omni Flash | 本地 workflow / 9222 Chrome | ❌ | ✅ | ❌ |
 | Kling V1 | Kling AI | ✅ | ✅ | ❌ |
 | Kling V1.5 | Kling AI | ✅ | ✅ | ❌ |
 | Kling V1.6 | Kling AI | ✅ | ✅ | ✅ |

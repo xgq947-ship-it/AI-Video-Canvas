@@ -236,7 +236,9 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                                 <CircleAlert size={22} />
                             </div>
                             <div>
-                                <div className="text-sm font-medium text-neutral-200">图片生成失败</div>
+                                <div className="text-sm font-medium text-neutral-200">
+                                    {isVideoType ? '视频生成失败' : '图片生成失败'}
+                                </div>
                                 <div className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">
                                     {data.errorMessage || '生成任务未完成，请重新生成。'}
                                 </div>

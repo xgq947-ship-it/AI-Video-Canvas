@@ -47,13 +47,9 @@ const VIDEO_MODELS = [
             8: ['Auto', '720p', '1080p']
         }
     },
-    { id: 'kling-v2-1', name: 'Kling V2.1', provider: 'kling', recommended: true, durations: [5, 10], resolutions: ['Auto', '720p', '1080p'] },
-    { id: 'kling-v2-1-master', name: 'Kling V2.1 Master', provider: 'kling', durations: [5, 10], resolutions: ['Auto', '720p', '1080p'] },
-    { id: 'kling-v2-5-turbo', name: 'Kling V2.5 Turbo', provider: 'kling', durations: [5, 10], resolutions: ['Auto', '720p', '1080p'] },
-    { id: 'kling-v2-6', name: 'Kling 2.6 (Motion)', provider: 'kling', durations: [5, 10], resolutions: ['Auto', '720p', '1080p'] },
-    { id: 'hailuo-2.3', name: 'Hailuo 2.3', provider: 'hailuo', durations: [5], resolutions: ['768p', '1080p'] },
-    { id: 'hailuo-2.3-fast', name: 'Hailuo 2.3 Fast', provider: 'hailuo', durations: [5], resolutions: ['768p', '1080p'] },
-    { id: 'hailuo-02', name: 'Hailuo 02', provider: 'hailuo', durations: [5], resolutions: ['768p', '1080p'] },
+    { id: 'seedance-2-0', name: 'Seedance 2.0', provider: 'seedance', recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'] },
+    { id: 'kling-v3', name: 'Kling 3.0', provider: 'kling', recommended: true, durations: [3, 4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'] },
+    { id: 'hailuo-2.3', name: 'Hailuo 2.3', provider: 'hailuo', recommended: true, durations: [6, 10], resolutions: ['768p', '1080p'], durationResolutionMap: { 6: ['768p', '1080p'], 10: ['768p'] } },
 ];
 
 export const StoryboardVideoModal: React.FC<StoryboardVideoModalProps> = ({
@@ -423,6 +419,25 @@ export const StoryboardVideoModal: React.FC<StoryboardVideoModalProps> = ({
                                                     <div className="flex items-center gap-2">
                                                         <GoogleIcon size={14} className={settings.model === model.id ? 'text-blue-400' : 'text-neutral-400'} />
                                                         {model.name}
+                                                    </div>
+                                                    {settings.model === model.id && <Check size={14} />}
+                                                </button>
+                                            ))}
+
+                                            {/* Seedance */}
+                                            <div className="px-3 py-2 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1a1a1a] border-t border-neutral-700">Seedance</div>
+                                            {VIDEO_MODELS.filter(m => m.provider === 'seedance').map(model => (
+                                                <button
+                                                    key={model.id}
+                                                    onClick={() => handleModelChange(model.id)}
+                                                    className={`w-full flex items-center justify-between px-3 py-2.5 text-xs hover:bg-[#2a2a2a] transition-colors ${settings.model === model.id ? 'text-blue-400 bg-blue-500/10' : 'text-neutral-300'}`}
+                                                >
+                                                    <div className="flex items-center gap-2">
+                                                        <Film size={14} className="text-cyan-400" />
+                                                        {model.name}
+                                                        {model.recommended && (
+                                                            <span className="text-[9px] px-1 py-0.5 bg-green-500/20 text-green-400 rounded font-medium">推荐</span>
+                                                        )}
                                                     </div>
                                                     {settings.model === model.id && <Check size={14} />}
                                                 </button>

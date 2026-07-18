@@ -13,14 +13,15 @@ import { OpenAIIcon, GoogleIcon, KlingIcon, HailuoIcon } from '../icons/BrandIco
 import { useFaceDetection } from '../../hooks/useFaceDetection';
 import { ChangeAnglePanel } from './ChangeAnglePanel';
 import { LocalModel, getLocalModels } from '../../services/localModelService';
+import type { NodeReference } from '../../utils/nodeReferences.js';
+import { extractReferenceLabels } from '../../utils/nodeReferences.js';
 
 interface NodeControlsProps {
     data: NodeData;
     inputUrl?: string;
     isLoading: boolean;
     isSuccess: boolean;
-    connectedImageNodes?: { id: string; url: string; type?: NodeType }[]; // Connected parent nodes
-    connectedAudioNodes?: { id: string; title: string; url: string }[]; // Seedance voice references
+    connectedReferences?: NodeReference[];
     onUpdate: (id: string, updates: Partial<NodeData>) => void;
     onGenerate: (id: string) => void;
     onChangeAngleGenerate?: (nodeId: string) => void;
@@ -60,27 +61,17 @@ interface VideoModelOption {
     recommended?: boolean;
     durations: number[];
     resolutions: string[];
+    durationResolutionMap?: Record<number, string[]>;
     aspectRatios: string[];
 }
 
 const VIDEO_MODELS: VideoModelOption[] = [
     { id: 'veo-3.1', name: 'Veo 3.1', provider: 'google', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, durations: [4, 6, 8], resolutions: ['Auto', '720p', '1080p'], aspectRatios: ['16:9', '9:16'] },
     { id: 'google-flow-omni-flash', name: 'Google Flow · Omni Flash', provider: 'workflow', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, recommended: true, durations: [4, 6, 8, 10], resolutions: ['自动'], aspectRatios: ['16:9', '9:16'] },
-    // Seedance 官方模型
+    // 供应商仅保留当前主模型，避免同一能力出现多套过时入口。
     { id: 'seedance-2-0', name: 'Seedance 2.0', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
-    { id: 'seedance-2-0-fast', name: 'Seedance 2.0 Fast', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['480p', '720p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
-    { id: 'seedance-1-5-pro', name: 'Seedance 1.5 Pro', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [4, 5, 6, 8, 10, 12], resolutions: ['480p', '720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
-    // Kling AI models - Consolidated: removed legacy v1, v1-5, v1-6, v2-master
     { id: 'kling-v3', name: 'Kling 3.0', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [3, 4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1'] },
-    { id: 'kling-v3-turbo', name: 'Kling 3.0 Turbo', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [3, 4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1'] },
-    { id: 'kling-v2-1', name: 'Kling V2.1', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, recommended: true, durations: [5, 10], resolutions: ['Auto', '720p', '1080p'], aspectRatios: ['16:9', '9:16'] },
-    { id: 'kling-v2-1-master', name: 'Kling V2.1 Master', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, durations: [5, 10], resolutions: ['Auto', '720p', '1080p'], aspectRatios: ['16:9', '9:16'] },
-    { id: 'kling-v2-5-turbo', name: 'Kling V2.5 Turbo', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, durations: [5, 10], resolutions: ['Auto', '720p', '1080p'], aspectRatios: ['16:9', '9:16'] },
-    { id: 'kling-v2-6', name: 'Kling 2.6 (Motion)', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [5, 10], resolutions: ['Auto', '720p', '1080p'], aspectRatios: ['16:9', '9:16'] },
-    // Hailuo AI (MiniMax) models - Note: API appears to only output 5s videos regardless of duration param
-    { id: 'hailuo-2.3', name: 'Hailuo 2.3', provider: 'hailuo', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, durations: [5], resolutions: ['768p', '1080p'], aspectRatios: ['16:9', '9:16'] },
-    { id: 'hailuo-2.3-fast', name: 'Hailuo 2.3 Fast', provider: 'hailuo', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, durations: [5], resolutions: ['768p', '1080p'], aspectRatios: ['16:9', '9:16'] },
-    { id: 'hailuo-02', name: 'Hailuo 02', provider: 'hailuo', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, durations: [5], resolutions: ['768p', '1080p'], aspectRatios: ['16:9', '9:16'] },
+    { id: 'hailuo-2.3', name: 'Hailuo 2.3', provider: 'hailuo', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: false, recommended: true, durations: [6, 10], resolutions: ['768p', '1080p'], durationResolutionMap: { 6: ['768p', '1080p'], 10: ['768p'] }, aspectRatios: ['16:9', '9:16'] },
 ];
 
 // Image model versions with metadata
@@ -199,8 +190,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     inputUrl,
     isLoading,
     isSuccess,
-    connectedImageNodes = [],
-    connectedAudioNodes = [],
+    connectedReferences = [],
     onUpdate,
     onGenerate,
     onChangeAngleGenerate,
@@ -217,6 +207,10 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
     const [isUploadingVideo, setIsUploadingVideo] = useState(false);
     const [localPrompt, setLocalPrompt] = useState(data.prompt || '');
+    const [mentionStart, setMentionStart] = useState<number | null>(null);
+    const [mentionQuery, setMentionQuery] = useState('');
+    const [mentionIndex, setMentionIndex] = useState(0);
+    const promptRef = useRef<HTMLTextAreaElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
     const aspectRatioDropdownRef = useRef<HTMLDivElement>(null);
     const durationDropdownRef = useRef<HTMLDivElement>(null);
@@ -225,6 +219,17 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const videoUploadInputRef = useRef<HTMLInputElement>(null);
     const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const lastSentPromptRef = useRef<string | undefined>(data.prompt); // Track what we sent
+
+    const connectedImageNodes = connectedReferences
+        .filter(reference => (reference.kind === 'image' || reference.kind === 'video') && reference.url)
+        .map(reference => ({
+            id: reference.id,
+            url: reference.kind === 'video' ? (reference.previewUrl || reference.url!) : reference.url!,
+            type: reference.kind === 'video' ? NodeType.VIDEO : NodeType.IMAGE,
+        }));
+    const connectedAudioNodes = connectedReferences
+        .filter(reference => reference.kind === 'audio' && reference.url)
+        .map(reference => ({ id: reference.id, title: reference.title, url: reference.url! }));
 
     // Local model state for LOCAL_IMAGE_MODEL and LOCAL_VIDEO_MODEL nodes
     const [localModels, setLocalModels] = useState<LocalModel[]>([]);
@@ -319,18 +324,12 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
         };
     }, []);
 
-    // Auto-open Advanced Settings when:
-    // 1. 2+ images are connected to a video node (frame-to-frame)
-    // 2. Kling 2.6 with an input image (has audio toggle)
+    // 两个以上画面输入时自动展开首尾帧排序。
     useEffect(() => {
-        if (data.type === NodeType.VIDEO) {
-            const shouldAutoExpand = connectedImageNodes.length >= 2 ||
-                (data.videoModel === 'kling-v2-6' && connectedImageNodes.length > 0);
-            if (shouldAutoExpand) {
-                setShowAdvanced(true);
-            }
+        if (data.type === NodeType.VIDEO && connectedImageNodes.length >= 2) {
+            setShowAdvanced(true);
         }
-    }, [data.type, connectedImageNodes.length, data.videoModel]);
+    }, [data.type, connectedImageNodes.length]);
 
     // Handle prompt change with debounce
     const handlePromptChange = (value: string) => {
@@ -344,6 +343,62 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
         updateTimeoutRef.current = setTimeout(() => {
             onUpdate(data.id, { prompt: value });
         }, 300); // 300ms debounce - increased for smoother typing
+    };
+
+    const updateMentionState = (value: string, cursor: number) => {
+        const beforeCursor = value.slice(0, cursor);
+        const atIndex = beforeCursor.lastIndexOf('@');
+        if (atIndex < 0) {
+            setMentionStart(null);
+            return;
+        }
+        const query = beforeCursor.slice(atIndex + 1);
+        if (/\s/.test(query) || query.length > 16) {
+            setMentionStart(null);
+            return;
+        }
+        setMentionStart(atIndex);
+        setMentionQuery(query);
+        setMentionIndex(0);
+    };
+
+    const mentionOptions = connectedReferences.filter(reference => {
+        const query = mentionQuery.trim().toLowerCase();
+        return !query || reference.label.toLowerCase().includes(query) || reference.title.toLowerCase().includes(query);
+    });
+    const activeReferenceLabels = extractReferenceLabels(localPrompt);
+
+    const insertReferenceMention = (reference: NodeReference) => {
+        const textarea = promptRef.current;
+        const cursor = mentionStart !== null
+            ? textarea?.selectionStart ?? localPrompt.length
+            : textarea && document.activeElement === textarea
+                ? textarea.selectionStart
+                : localPrompt.length;
+        const replaceStart = mentionStart ?? cursor;
+        const nextValue = `${localPrompt.slice(0, replaceStart)}@${reference.label} ${localPrompt.slice(cursor)}`;
+        const nextCursor = replaceStart + reference.label.length + 2;
+        handlePromptChange(nextValue);
+        setMentionStart(null);
+        requestAnimationFrame(() => {
+            textarea?.focus();
+            textarea?.setSelectionRange(nextCursor, nextCursor);
+        });
+    };
+
+    const handlePromptKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (mentionStart === null || mentionOptions.length === 0) return;
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            const direction = event.key === 'ArrowDown' ? 1 : -1;
+            setMentionIndex(current => (current + direction + mentionOptions.length) % mentionOptions.length);
+        } else if (event.key === 'Enter' || event.key === 'Tab') {
+            event.preventDefault();
+            insertReferenceMention(mentionOptions[mentionIndex] || mentionOptions[0]);
+        } else if (event.key === 'Escape') {
+            event.preventDefault();
+            setMentionStart(null);
+        }
     };
 
     const handleSizeSelect = (value: string) => {
@@ -412,21 +467,15 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const isFrameToFrame = data.videoMode === 'frame-to-frame';
 
     // Determine video generation mode based on inputs and settings
-    // 1. Motion Control: If any parent is a video node
-    // 2. Frame-to-Frame: If multiple image parents or explicitly set
-    // 3. Image-to-Video: If single image parent or inputUrl (last frame)
-    // 4. Text-to-Video: Otherwise
-    const hasVideoParent = connectedImageNodes.some(n => n.type === NodeType.VIDEO);
-    const imageInputCount = connectedImageNodes.filter(n => n.type === NodeType.IMAGE).length;
+    // 旧版动作控制模型已移除；连接视频时使用其末帧继续生成。
+    const visualInputCount = connectedImageNodes.filter(n => n.type === NodeType.IMAGE || n.type === NodeType.VIDEO).length;
 
-    const videoGenerationMode = hasVideoParent ? 'motion-control'
-        : (isFrameToFrame || imageInputCount >= 2) ? 'frame-to-frame'
-            : (inputUrl || imageInputCount > 0) ? 'image-to-video'
+    const videoGenerationMode = (isFrameToFrame || visualInputCount >= 2) ? 'frame-to-frame'
+            : (inputUrl || visualInputCount > 0) ? 'image-to-video'
                 : 'text-to-video';
 
     // Filter video models based on mode
     const availableVideoModels = VIDEO_MODELS.filter(model => {
-        if (videoGenerationMode === 'motion-control') return model.id === 'kling-v2-6'; // Only Kling 2.6 for now
         if (videoGenerationMode === 'text-to-video') return model.supportsTextToVideo;
         if (videoGenerationMode === 'image-to-video') return model.supportsImageToVideo;
         return model.supportsMultiImage; // frame-to-frame
@@ -449,7 +498,10 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
 
     const handleVideoModelChange = (modelId: string) => {
         const newModel = VIDEO_MODELS.find(m => m.id === modelId);
-        const updates: Partial<typeof data> = { videoModel: modelId };
+        const updates: Partial<typeof data> = {
+            videoModel: modelId,
+            errorMessage: undefined
+        };
 
         // Reset duration if current duration is not supported by new model
         if (newModel?.durations && data.videoDuration && !newModel.durations.includes(data.videoDuration)) {
@@ -480,7 +532,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
 
     // Get available resolutions for current model (considering duration for models with durationResolutionMap)
     const getAvailableResolutions = () => {
-        const model = currentVideoModel as any;
+        const model = currentVideoModel;
         if (model.durationResolutionMap && currentDuration) {
             return model.durationResolutionMap[currentDuration] || model.resolutions || VIDEO_RESOLUTIONS;
         }
@@ -494,7 +546,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
         : imageAspectRatioOptions;
 
     const handleDurationChange = (duration: number) => {
-        const model = currentVideoModel as any;
+        const model = currentVideoModel;
         const updates: Partial<typeof data> = { videoDuration: duration };
 
         // If model has duration-specific resolutions, reset resolution if needed
@@ -737,19 +789,62 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
         >
             {/* Prompt Textarea with Expand Button - Hidden for storyboard-generated scenes */}
             {!(data.prompt && data.prompt.startsWith('Extract panel #')) && (
-                <div className="mb-3">
+                <div className="relative mb-3">
+                    {connectedReferences.length > 0 && (
+                        <div className="mb-3 flex gap-2 overflow-x-auto pb-1" aria-label="已连接参考素材">
+                            {connectedReferences.map(reference => (
+                                <button
+                                    key={reference.id}
+                                    type="button"
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        insertReferenceMention(reference);
+                                    }}
+                                    className={`group/reference relative h-[62px] w-[54px] flex-none overflow-hidden rounded-lg border text-left transition-colors ${activeReferenceLabels.size > 0 && activeReferenceLabels.has(reference.label)
+                                        ? 'border-cyan-400 bg-cyan-500/10 ring-1 ring-cyan-400/40'
+                                        : isDark ? 'border-neutral-700 bg-[#252525] hover:border-cyan-500' : 'border-neutral-300 bg-neutral-100 hover:border-cyan-500'}`}
+                                    title={`点击插入 @${reference.label}：${reference.title}`}
+                                >
+                                    {reference.kind === 'audio' ? (
+                                        <div className="flex h-[40px] items-center justify-center bg-cyan-950/40 text-cyan-300">
+                                            <Mic2 size={20} />
+                                        </div>
+                                    ) : reference.previewUrl ? (
+                                        reference.kind === 'video' && !reference.previewUrl.match(/\.(png|jpe?g|webp|gif)(\?|$)/i) ? (
+                                            <video src={reference.previewUrl} className="h-[40px] w-full object-cover" muted preload="metadata" />
+                                        ) : (
+                                            <img src={reference.previewUrl} alt={reference.label} className="h-[40px] w-full object-cover" />
+                                        )
+                                    ) : (
+                                        <div className="flex h-[40px] items-center justify-center text-neutral-500">
+                                            {reference.kind === 'video' ? <Film size={18} /> : <ImageIcon size={18} />}
+                                        </div>
+                                    )}
+                                    <span className="block truncate px-1 py-0.5 text-[10px] font-medium text-neutral-300">
+                                        {reference.label}
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
                     <textarea
+                        ref={promptRef}
                         className={`w-full resize-none bg-transparent text-[17px] font-normal leading-7 outline-none ${isDark ? 'text-white placeholder-neutral-600' : 'text-neutral-900 placeholder-neutral-400'}`}
                         placeholder={
                             data.type === NodeType.VIDEO && isFrameToFrame && currentVideoModel.provider === 'kling'
                                 ? "Prompt optional for Kling frame-to-frame..."
                                 : data.type === NodeType.VIDEO && inputUrl
-                                    ? "描述这个画面要如何运动..."
-                                    : "描述你想生成的内容..."
+                                    ? "描述这个画面要如何运动，输入 @ 选择参考素材..."
+                                    : "描述你想生成的内容，输入 @ 选择参考素材..."
                         }
                         rows={data.isPromptExpanded ? 12 : 4}
                         value={localPrompt}
-                        onChange={(e) => handlePromptChange(e.target.value)}
+                        onChange={(e) => {
+                            handlePromptChange(e.target.value);
+                            updateMentionState(e.target.value, e.target.selectionStart);
+                        }}
+                        onKeyDown={handlePromptKeyDown}
+                        onClick={(e) => updateMentionState(e.currentTarget.value, e.currentTarget.selectionStart)}
                         onWheel={(e) => e.stopPropagation()}
                         onBlur={() => {
                             // Ensure final value is saved on blur
@@ -761,6 +856,37 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                             }
                         }}
                     />
+                    {mentionStart !== null && (
+                        <div className={`absolute left-0 right-0 top-full z-[160] mt-1 max-h-56 overflow-y-auto rounded-xl border p-1.5 shadow-2xl ${isDark ? 'border-neutral-700 bg-[#252525]' : 'border-neutral-200 bg-white'}`}>
+                            {mentionOptions.length > 0 ? mentionOptions.map((reference, index) => (
+                                <button
+                                    key={reference.id}
+                                    type="button"
+                                    onMouseDown={(event) => event.preventDefault()}
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        insertReferenceMention(reference);
+                                    }}
+                                    className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left ${index === mentionIndex ? 'bg-cyan-500/15 text-cyan-300' : isDark ? 'text-neutral-200 hover:bg-neutral-700' : 'text-neutral-800 hover:bg-neutral-100'}`}
+                                >
+                                    <span className="flex h-9 w-9 flex-none items-center justify-center overflow-hidden rounded-md bg-neutral-800">
+                                        {reference.kind === 'audio' ? <Mic2 size={17} />
+                                            : reference.previewUrl
+                                                ? reference.kind === 'video' && !reference.previewUrl.match(/\.(png|jpe?g|webp|gif)(\?|$)/i)
+                                                    ? <video src={reference.previewUrl} className="h-full w-full object-cover" muted preload="metadata" />
+                                                    : <img src={reference.previewUrl} alt="" className="h-full w-full object-cover" />
+                                                : reference.kind === 'video' ? <Film size={17} /> : <ImageIcon size={17} />}
+                                    </span>
+                                    <span className="min-w-0">
+                                        <span className="block text-sm font-semibold">@{reference.label}</span>
+                                        <span className="block truncate text-xs text-neutral-500">{reference.title}</span>
+                                    </span>
+                                </button>
+                            )) : (
+                                <div className="px-3 py-3 text-sm text-neutral-500">没有匹配的参考素材</div>
+                            )}
+                        </div>
+                    )}
                     {/* Expand/Shrink Button - Below textarea */}
                     <div className="flex justify-end mt-1">
                         <button
@@ -778,18 +904,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
             {data.errorMessage && (
                 <div className="text-red-400 text-xs mb-2 p-1 bg-red-900/20 rounded border border-red-900/50">
                     {data.errorMessage}
-                </div>
-            )}
-
-            {/* Motion Control Warning - when motion mode detected but no character image */}
-            {isVideoNode && videoGenerationMode === 'motion-control' && imageInputCount === 0 && (
-                <div className="text-amber-400 text-xs mb-2 p-2 bg-amber-900/20 rounded border border-amber-700/50 flex items-start gap-2">
-                    <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
-                    <span>
-                        <strong>动作控制</strong>需要角色图片，请连接一个图片节点来定义角色外观。
-                    </span>
                 </div>
             )}
 
@@ -888,13 +1002,10 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                         {/* Mode indicator */}
                                         <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-400 uppercase tracking-wider bg-[#1a1a1a] border-b border-neutral-700 flex items-center gap-1.5">
                                             <span className={`w-1.5 h-1.5 rounded-full ${videoGenerationMode === 'text-to-video' ? 'bg-blue-400' :
-                                                videoGenerationMode === 'image-to-video' ? 'bg-green-400' :
-                                                    videoGenerationMode === 'motion-control' ? 'bg-orange-400' : 'bg-purple-400'
+                                                videoGenerationMode === 'image-to-video' ? 'bg-green-400' : 'bg-purple-400'
                                                 }`} />
                                             {videoGenerationMode === 'text-to-video' ? '文本 → 视频' :
-                                                videoGenerationMode === 'image-to-video' ? '图片 → 视频' :
-                                                    videoGenerationMode === 'motion-control' ? '动作控制' :
-                                                        '首尾帧'}
+                                                videoGenerationMode === 'image-to-video' ? '图片 → 视频' : '首尾帧'}
                                         </div>
                                         {/* Google Models */}
                                         {availableVideoModels.filter(m => m.provider === 'google').length > 0 && (
@@ -1175,9 +1286,8 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                     </div>
 
                     <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap">
-                        {/* Unified Size/Ratio Dropdown (hidden for video nodes in motion-control mode) */}
-                        {!(isVideoNode && videoGenerationMode === 'motion-control') && (
-                            <div className="relative" ref={dropdownRef}>
+                        {/* Unified Size/Ratio Dropdown */}
+                        <div className="relative" ref={dropdownRef}>
                                 <button
                                     onClick={() => setShowSizeDropdown(!showSizeDropdown)}
                                     className="flex items-center gap-1.5 whitespace-nowrap text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
@@ -1209,8 +1319,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                         ))}
                                     </div>
                                 )}
-                            </div>
-                        )}
+                        </div>
 
                         {/* Image Resolution Dropdown - Only for Image nodes */}
                         {!isVideoNode && (currentImageModel as any).resolutions && (
@@ -1247,8 +1356,8 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                             </div>
                         )}
 
-                        {/* Video Aspect Ratio Dropdown - Only for video nodes (hidden in motion-control mode) */}
-                        {isVideoNode && videoGenerationMode !== 'motion-control' && (
+                        {/* Video Aspect Ratio Dropdown - Only for video nodes */}
+                        {isVideoNode && (
                             <div className="relative" ref={aspectRatioDropdownRef}>
                                 <button
                                     onClick={() => setShowAspectRatioDropdown(!showAspectRatioDropdown)}
@@ -1279,8 +1388,8 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                             </div>
                         )}
 
-                        {/* Duration Dropdown - Only for video nodes (hidden in motion-control mode) */}
-                        {isVideoNode && videoGenerationMode !== 'motion-control' && availableDurations.length > 0 && (
+                        {/* Duration Dropdown - Only for video nodes */}
+                        {isVideoNode && availableDurations.length > 0 && (
                             <div className="relative" ref={durationDropdownRef}>
                                 <button
                                     onClick={() => setShowDurationDropdown(!showDurationDropdown)}
@@ -1311,7 +1420,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                             </div>
                         )}
 
-                        {isVideoNode && ['seedance-2-0', 'seedance-2-0-fast'].includes(currentVideoModel.id) && connectedAudioNodes.length > 0 && (
+                        {isVideoNode && currentVideoModel.id === 'seedance-2-0' && connectedAudioNodes.length > 0 && (
                             <div
                                 title={`固定音色参考：${connectedAudioNodes.map(node => node.title).join('、')}`}
                                 className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-emerald-500/50 bg-emerald-500/15 px-2.5 py-1.5 text-xs font-medium text-emerald-200"
@@ -1545,44 +1654,12 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                 {connectedImageNodes.length >= 2 && (
                                     <div className="space-y-2">
                                         <label className="text-[10px] text-neutral-500 uppercase tracking-wider">
-                                            {videoGenerationMode === 'motion-control' ? '输入参考' : '已连接画面'}
-                                            {videoGenerationMode !== 'motion-control' && <span className="text-neutral-600">（拖动可排序）</span>}
+                                            已连接画面<span className="text-neutral-600">（拖动可排序）</span>
                                         </label>
 
                                         {frameInputsWithUrls.length === 0 ? (
                                             <div className="text-xs text-neutral-600 italic py-2">
-                                                {videoGenerationMode === 'motion-control' ? '请连接视频和图片节点作为参考' : '请连接图片节点作为首帧和尾帧'}
-                                            </div>
-                                        ) : videoGenerationMode === 'motion-control' ? (
-                                            /* Horizontal layout for Motion Control */
-                                            <div className="flex gap-2">
-                                                {frameInputsWithUrls.map((input, index) => (
-                                                    <div
-                                                        key={input.nodeId}
-                                                        className="flex-1 flex flex-col items-center gap-2 p-2 bg-neutral-800 rounded-lg border border-neutral-700/50"
-                                                    >
-                                                        <div className="relative w-full aspect-video overflow-hidden rounded bg-black flex items-center justify-center">
-                                                            {input.url ? (
-                                                                <img
-                                                                    src={input.url}
-                                                                    alt={input.type === NodeType.VIDEO ? 'Motion Ref' : 'Character Ref'}
-                                                                    className="w-full h-full object-contain"
-                                                                />
-                                                            ) : (
-                                                                <div className="text-[10px] text-neutral-600">暂无预览</div>
-                                                            )}
-                                                            <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
-                                                            <div className="absolute bottom-1 left-1 right-1">
-                                                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded block text-center truncate ${input.type === NodeType.VIDEO
-                                                                    ? 'bg-purple-600/80 text-white'
-                                                                    : 'bg-blue-600/80 text-white'
-                                                                    }`}>
-                                                                    {input.type === NodeType.VIDEO ? '动作参考' : '角色参考'}
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                ))}
+                                                请连接图片节点作为首帧和尾帧
                                             </div>
                                         ) : (
                                             /* Vertical draggable layout for Frame-to-Frame */

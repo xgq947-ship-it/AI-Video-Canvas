@@ -79,7 +79,7 @@ const KLING_API_KEY = API_KEY_OVERRIDES.KLING_API_KEY || process.env.KLING_API_K
 const KLING_BASE_URL = 'https://api-singapore.klingai.com';
 
 if (!KLING_ACCESS_KEY || !KLING_SECRET_KEY) {
-    console.warn("SERVER WARNING: KLING_ACCESS_KEY or KLING_SECRET_KEY not set. Kling AI models will not work.");
+    console.warn("SERVER WARNING: KLING_ACCESS_KEY or KLING_SECRET_KEY not set. Kling 图片兼容模型将不可用。");
 }
 
 if (!KLING_API_KEY) {
@@ -121,10 +121,6 @@ if (!OPENAI_API_KEY) {
 // ============================================================================
 
 const FAL_API_KEY = API_KEY_OVERRIDES.FAL_API_KEY || process.env.FAL_API_KEY;
-
-if (!FAL_API_KEY) {
-    console.warn("SERVER WARNING: FAL_API_KEY not set. Kling 2.6 Motion Control will not work.");
-}
 
 // Set up app.locals for sharing config with route modules
 app.locals.IMAGES_DIR = IMAGES_DIR;

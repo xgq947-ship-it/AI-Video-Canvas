@@ -9,6 +9,11 @@ import { NodeData, NodeType, NodeStatus } from '../types';
 import { generateImage, generateVideo, queueCodexImage } from '../services/generationService';
 import { generateLocalImage } from '../services/localModelService';
 import { extractVideoLastFrame } from '../utils/videoHelpers';
+import {
+    collectNodeReferences,
+    extractReferenceLabels,
+    selectPromptReferences,
+} from '../utils/nodeReferences.js';
 
 interface UseGenerationProps {
     nodes: NodeData[];
@@ -98,13 +103,20 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
         // Combine prompts: TEXT node prompts + node's own prompt
         const textNodePrompts = getTextNodePrompts();
         const combinedPrompt = [...textNodePrompts, node.prompt].filter(Boolean).join('\n\n');
+        const directReferences = collectNodeReferences(node.parentIds, nodes);
+        const explicitReferenceLabels = extractReferenceLabels(combinedPrompt);
+        const selectedReferences = selectPromptReferences(directReferences, combinedPrompt);
+        const selectedReferenceIds = new Set(selectedReferences.map(reference => reference.id));
+        const shouldUseReferenceParent = (parentId: string) =>
+            explicitReferenceLabels.size === 0 || selectedReferenceIds.has(parentId);
+        const selectedVisualReferences = selectedReferences.filter(reference => reference.kind !== 'audio');
 
         // Check if prompt is required
         // For Kling frame-to-frame with both start and end frames, prompt is optional
         const isKlingFrameToFrame =
             node.type === NodeType.VIDEO &&
             node.videoModel?.startsWith('kling-') &&
-            (node.parentIds && node.parentIds.length >= 2);
+            selectedVisualReferences.length >= 2;
 
         if (!combinedPrompt && !isKlingFrameToFrame) return;
 
@@ -112,7 +124,8 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
             status: NodeStatus.LOADING,
             generationStartTime: Date.now(),
             codexJobId: undefined,
-            codexJobStatus: undefined
+            codexJobStatus: undefined,
+            errorMessage: undefined
         });
 
         try {
@@ -125,7 +138,7 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                 // in every downstream request instead of replacing it with only the
                 // immediately preceding composite/full-body output.
                 if (node.parentIds && node.parentIds.length > 0) {
-                    const pendingParentIds = [...node.parentIds];
+                    const pendingParentIds = node.parentIds.filter(parentId => shouldUseReferenceParent(parentId));
                     const visitedParentIds = new Set<string>();
                     const addedUrls = new Set<string>();
 
@@ -137,9 +150,12 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                         const parent = nodes.find(n => n.id === parentId);
                         if (!parent || parent.type === NodeType.TEXT) continue;
 
-                        if (parent.resultUrl && !addedUrls.has(parent.resultUrl)) {
-                            imageBase64s.push(parent.resultUrl);
-                            addedUrls.add(parent.resultUrl);
+                        const parentReferenceUrl = parent.type === NodeType.VIDEO
+                            ? (parent.lastFrame || parent.resultUrl)
+                            : parent.resultUrl;
+                        if (parentReferenceUrl && !addedUrls.has(parentReferenceUrl)) {
+                            imageBase64s.push(parentReferenceUrl);
+                            addedUrls.add(parentReferenceUrl);
                         }
 
                         // Character-library assets carry their identity face and look-pack
@@ -236,10 +252,13 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                 // Get parent images if any
                 const imageBase64s: string[] = [];
                 if (node.parentIds && node.parentIds.length > 0) {
-                    for (const parentId of node.parentIds) {
+                    for (const parentId of node.parentIds.filter(parentId => shouldUseReferenceParent(parentId))) {
                         const parent = nodes.find(n => n.id === parentId);
-                        if (parent?.type !== NodeType.TEXT && parent?.resultUrl) {
-                            imageBase64s.push(parent.resultUrl);
+                        const parentReferenceUrl = parent?.type === NodeType.VIDEO
+                            ? (parent.lastFrame || parent.resultUrl)
+                            : parent?.resultUrl;
+                        if (parent?.type !== NodeType.TEXT && parentReferenceUrl) {
+                            imageBase64s.push(parentReferenceUrl);
                         }
                     }
                 }
@@ -279,6 +298,7 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                 const supportsSeedanceReferenceAudio = node.videoModel === 'seedance-2-0' || node.videoModel === 'seedance-2-0-fast';
                 const connectedSeedanceAudioUrls = isSeedanceModel
                     ? (node.parentIds || [])
+                        .filter(parentId => shouldUseReferenceParent(parentId))
                         .map(parentId => nodes.find(n => n.id === parentId))
                         .filter(parent => parent?.type === NodeType.AUDIO && parent.mediaUrl)
                         .map(parent => parent!.mediaUrl!)
@@ -292,6 +312,7 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                 // Only visual parents participate in first/last-frame selection.
                 // Connected AUDIO nodes are handled separately as Seedance references.
                 const imageParentIds = node.parentIds?.filter(pid => {
+                    if (!shouldUseReferenceParent(pid)) return false;
                     const parent = nodes.find(n => n.id === pid);
                     return parent && [NodeType.IMAGE, NodeType.IMAGE_EDITOR, NodeType.VIDEO, NodeType.VIDEO_EDITOR].includes(parent.type);
                 }) || [];
@@ -306,6 +327,7 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                 if (node.videoModel === 'kling-v2-6') {
                     // Find a parent video node that has a result
                     const videoParent = node.parentIds
+                        ?.filter(parentId => shouldUseReferenceParent(parentId))
                         ?.map(pid => nodes.find(n => n.id === pid))
                         .find(n => n?.type === NodeType.VIDEO && n.resultUrl);
 
@@ -351,6 +373,7 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                     if (isMotionControl) {
                         // For Motion Control, look specifically for an IMAGE parent as character reference
                         const characterParent = node.parentIds
+                            ?.filter(parentId => shouldUseReferenceParent(parentId))
                             ?.map(pid => nodes.find(n => n.id === pid))
                             .find(n => n?.type === NodeType.IMAGE && n.resultUrl);
 

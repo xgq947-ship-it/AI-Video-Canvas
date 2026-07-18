@@ -56,6 +56,7 @@ import { getCanvasRect } from './utils/canvasRect';
 import { MapPinned } from 'lucide-react';
 import { CanvasMinimap } from './components/canvas/CanvasMinimap';
 import { CanvasZoomControl } from './components/canvas/CanvasZoomControl';
+import { collectNodeReferences } from './utils/nodeReferences.js';
 
 // ============================================================================
 // MAIN COMPONENT
@@ -1603,29 +1604,7 @@ export default function App() {
                   }
                   return parent?.resultUrl;
                 })()}
-                connectedImageNodes={(() => {
-                  // Gather all connected parent nodes (image or video) with their URLs
-                  if (!node.parentIds || node.parentIds.length === 0) return [];
-                  return node.parentIds
-                    .map(parentId => nodes.find(n => n.id === parentId))
-                    .filter(parent => parent && (parent.type === NodeType.IMAGE || parent.type === NodeType.VIDEO) && parent.resultUrl)
-                    .map(parent => ({
-                      id: parent!.id,
-                      url: (parent!.type === NodeType.VIDEO ? parent!.lastFrame : parent!.resultUrl) || parent!.resultUrl!,
-                      type: parent!.type
-                    }));
-                })()}
-                connectedAudioNodes={(() => {
-                  if (!node.parentIds || node.parentIds.length === 0) return [];
-                  return node.parentIds
-                    .map(parentId => nodes.find(n => n.id === parentId))
-                    .filter(parent => parent?.type === NodeType.AUDIO && parent.mediaUrl)
-                    .map(parent => ({
-                      id: parent!.id,
-                      title: parent!.title || '固定音色参考',
-                      url: parent!.mediaUrl!
-                    }));
-                })()}
+                connectedReferences={collectNodeReferences(node.parentIds, nodes)}
                 onUpdate={updateNodeWithSync}
                 onGenerate={handleGenerate}
                 onAddNext={handleAddNext}

@@ -199,22 +199,40 @@ async function executeGoogleFlowWorkflow({
             root,
             runPath,
             timeoutMs: (timeoutMinutes + 2) * 60 * 1000,
-            args: [
-                '--prompt', String(prompt).trim(),
-                '--first-frame', firstFrame,
-                '--duration', String(duration),
-                '--aspect-ratio', aspectRatio,
-                '--model', 'Omni Flash',
-                '--output-dir', outputDir,
-                '--timeout-minutes', String(timeoutMinutes),
-                '--execute'
-            ]
+            args: buildGoogleFlowWorkflowArgs({
+                prompt,
+                firstFrame,
+                duration,
+                aspectRatio,
+                outputDir,
+                timeoutMinutes
+            })
         });
         const result = await loadVideoResult(payload.outputs);
         return { ...result, runId: payload.run_id };
     } finally {
         fs.rmSync(taskDir, { recursive: true, force: true });
     }
+}
+
+export function buildGoogleFlowWorkflowArgs({
+    prompt,
+    firstFrame,
+    duration,
+    aspectRatio,
+    outputDir,
+    timeoutMinutes
+}) {
+    return [
+        '--prompt', String(prompt).trim(),
+        '--first-frame', firstFrame,
+        '--duration', String(duration),
+        '--aspect-ratio', aspectRatio,
+        '--model', 'Omni Flash',
+        '--output-dir', outputDir,
+        '--timeout-minutes', String(timeoutMinutes),
+        '--execute'
+    ];
 }
 
 export function generateGoogleFlowWorkflowVideo(options) {

@@ -41,8 +41,8 @@ cp .env.example .env  # 配置密钥（可留空，见下）
 
 | 功能 | 需要的密钥 |
 |---|---|
-| 图片生成 | `GEMINI_API_KEY` / `OPENAI_API_KEY` |
-| 视频生成 | `HAILUO_API_KEY` / `KLING_ACCESS_KEY`+`KLING_SECRET_KEY` / `FAL_API_KEY` |
+| 图片生成 | `GEMINI_API_KEY` / `OPENAI_API_KEY` / Kling 兼容图片模型：`KLING_ACCESS_KEY`+`KLING_SECRET_KEY` |
+| 视频生成 | Seedance 2.0：`ARK_API_KEY` / Kling 3.0：`KLING_API_KEY` / Hailuo 2.3：`HAILUO_API_KEY` |
 | Google Flow 工作流视频 | 无需 API Key；需要本机 9222 Chrome 已登录 Google Flow |
 | 剧本 / 分镜 | `GEMINI_API_KEY` |
 | 配音 (TTS) | MiniMax 画布直连需要 `MINIMAX_API_KEY` + `MINIMAX_GROUP_ID`（可回退 `HAILUO_API_KEY`）；ChatCut/ElevenLabs、豆包、Fish、本地 Qwen 与其他平台可生成后导入 |
@@ -194,18 +194,22 @@ https://github.com/user-attachments/assets/3c36de54-d37e-4875-8403-5b6e4a6216e0
    # Get from https://aistudio.google.com/app/apikey
    GEMINI_API_KEY=your_gemini_api_key_here
    
-   # Get from https://app.klingai.com/global/dev/api-key
-   KLING_ACCESS_KEY=your_kling_access_key_here
-   KLING_SECRET_KEY=your_kling_secret_key_here
+   # Seedance 2.0（火山方舟）
+   ARK_API_KEY=your_ark_api_key_here
+
+   # Kling 3.0
+   KLING_API_KEY=your_kling_api_key_here
    
    # Get from https://platform.minimax.io/user-center/basic-information/interface-key
    HAILUO_API_KEY=your_hailuo_api_key_here
    
    # Get from https://platform.openai.com/api-keys
    OPENAI_API_KEY=your_openai_api_key_here
+
+   # Kling 兼容图片模型（V1.5 / V2.1）
+   KLING_ACCESS_KEY=your_kling_access_key_here
+   KLING_SECRET_KEY=your_kling_secret_key_here
    
-   # Get from https://fal.ai/dashboard/keys (for Kling V2.6 Motion Control)
-   FAL_API_KEY=your_fal_api_key_here
    ```
    
    > ⚠️ **Security**: API keys are stored server-side only and never exposed to the client.
@@ -450,18 +454,9 @@ Your API key is **never exposed** to the browser:
 |-------|----------|:-------------:|:--------------:|:--------------:|
 | Veo 3.1 | Google | ✅ | ✅ | ✅ |
 | Google Flow · Omni Flash | 本地 workflow / 9222 Chrome | ❌ | ✅ | ❌ |
-| Kling V1 | Kling AI | ✅ | ✅ | ❌ |
-| Kling V1.5 | Kling AI | ✅ | ✅ | ❌ |
-| Kling V1.6 | Kling AI | ✅ | ✅ | ✅ |
-| Kling V2 Master | Kling AI | ✅ | ✅ | ❌ |
-| Kling V2.1 | Kling AI | ✅ | ✅ | ❌ |
-| Kling V2.1 Master | Kling AI | ✅ | ✅ | ❌ |
-| Kling V2.5 Turbo | Kling AI | ✅ | ✅ | ❌ |
-| Hailuo 2.3 | MiniMax | ✅ | ✅ | ✅ |
-| Hailuo 2.3 Fast | MiniMax | ❌ | ✅ | ❌ |
-| Hailuo 02 | MiniMax | ✅ | ✅ | ✅ |
-| Hailuo O2 | MiniMax | ✅ | ✅ | ❌ |
-| Kling V2.6 Motion | Fal.ai | ❌ | ✅ | Motion Control |
+| Seedance 2.0 | 火山方舟 | ✅ | ✅ | ✅ |
+| Kling 3.0 | Kling AI | ✅ | ✅ | ✅ |
+| Hailuo 2.3 | MiniMax | ✅ | ✅ | ❌ |
 
 **Chat:**
 - **Gemini 2.0 Flash** - Chat conversations

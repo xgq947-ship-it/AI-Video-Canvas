@@ -2,11 +2,34 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+    buildGoogleFlowWorkflowArgs,
     extractWorkflowJson,
     GOOGLE_FLOW_SUPPORTED_ASPECT_RATIOS,
     GOOGLE_FLOW_SUPPORTED_DURATIONS,
     GOOGLE_FLOW_WORKFLOW_MODEL_ID
 } from '../server/services/googleFlowWorkflow.js';
+
+test('Google Flow workflow 原样传递输入框提示词与真实生成参数', () => {
+    const args = buildGoogleFlowWorkflowArgs({
+        prompt: '  镜头缓慢推进，人物保持红色礼服  ',
+        firstFrame: '/tmp/first-frame.png',
+        duration: 10,
+        aspectRatio: '9:16',
+        outputDir: '/tmp/output',
+        timeoutMinutes: 15
+    });
+
+    assert.deepEqual(args, [
+        '--prompt', '镜头缓慢推进，人物保持红色礼服',
+        '--first-frame', '/tmp/first-frame.png',
+        '--duration', '10',
+        '--aspect-ratio', '9:16',
+        '--model', 'Omni Flash',
+        '--output-dir', '/tmp/output',
+        '--timeout-minutes', '15',
+        '--execute'
+    ]);
+});
 
 test('Google Flow workflow 使用稳定的前端模型 ID 与能力范围', () => {
     assert.equal(GOOGLE_FLOW_WORKFLOW_MODEL_ID, 'google-flow-omni-flash');

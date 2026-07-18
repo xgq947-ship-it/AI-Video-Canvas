@@ -37,10 +37,14 @@ test('清除手动密钥后回退环境变量，接口不返回明文', () => {
     fs.rmSync(libraryDir, { recursive: true, force: true });
 });
 
-test('Seedance 设置明确标注火山方舟中国区密钥', () => {
+test('最新视频模型均预留对应 API 密钥', () => {
     const fields = describeApiKeySettings({}, {});
     const ark = fields.find(field => field.name === 'ARK_API_KEY');
+    const kling = fields.find(field => field.name === 'KLING_API_KEY');
+    const hailuo = fields.find(field => field.name === 'HAILUO_API_KEY');
 
-    assert.equal(ark.provider, 'Seedance');
+    assert.equal(ark.provider, 'Seedance 2.0');
     assert.match(ark.label, /火山方舟.*中国区/);
+    assert.equal(kling.provider, 'Kling 3.0');
+    assert.equal(hailuo.provider, 'Hailuo 2.3');
 });

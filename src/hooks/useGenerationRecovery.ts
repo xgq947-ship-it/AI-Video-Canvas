@@ -9,6 +9,7 @@ import { useEffect, useCallback, useRef } from 'react';
 import { NodeData, NodeStatus } from '../types';
 import { extractVideoLastFrame } from '../utils/videoHelpers';
 import { getCodexImageJob } from '../services/generationService';
+import { isGenerationRecoveryExpired } from '../utils/generationRecovery.js';
 
 interface UseGenerationRecoveryOptions {
     nodes: NodeData[];
@@ -25,6 +26,16 @@ export const useGenerationRecovery = ({
 
     const checkStatus = useCallback(async (nodeId: string) => {
         try {
+            const currentNode = nodesRef.current.find(n => n.id === nodeId);
+            if (currentNode && isGenerationRecoveryExpired(currentNode)) {
+                updateNode(nodeId, {
+                    status: currentNode.resultUrl ? NodeStatus.SUCCESS : NodeStatus.ERROR,
+                    errorMessage: '生成任务已中断或超时，请重新生成。',
+                    generationStartTime: undefined
+                });
+                return;
+            }
+
             const response = await fetch(`/api/generation-status/${nodeId}`);
             if (response.ok) {
                 const data = await response.json();

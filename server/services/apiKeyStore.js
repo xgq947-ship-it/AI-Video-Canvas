@@ -9,12 +9,12 @@ import path from 'path';
 export const API_KEY_FIELDS = [
     { name: 'GEMINI_API_KEY', provider: 'Google', label: 'Gemini / Veo API Key', secret: true },
     { name: 'OPENAI_API_KEY', provider: 'OpenAI', label: 'OpenAI API Key', secret: true },
-    { name: 'ARK_API_KEY', provider: 'Seedance', label: '火山方舟 API Key（中国区）', secret: true },
-    { name: 'KLING_API_KEY', provider: 'Kling 3', label: 'Kling 新版 API Key', secret: true },
-    { name: 'KLING_ACCESS_KEY', provider: 'Kling 旧模型', label: 'Access Key', secret: true },
-    { name: 'KLING_SECRET_KEY', provider: 'Kling 旧模型', label: 'Secret Key', secret: true },
-    { name: 'HAILUO_API_KEY', provider: '海螺 / MiniMax', label: 'Hailuo API Key', secret: true },
-    { name: 'FAL_API_KEY', provider: 'Fal.ai', label: 'Fal.ai API Key', secret: true },
+    { name: 'ARK_API_KEY', provider: 'Seedance 2.0', label: '火山方舟 ARK API Key（中国区）', secret: true },
+    { name: 'KLING_API_KEY', provider: 'Kling 3.0', label: 'Kling API Key', secret: true },
+    { name: 'HAILUO_API_KEY', provider: 'Hailuo 2.3', label: 'MiniMax API Key', secret: true },
+    // 图片面板仍保留 Kling V1.5 / V2.1，因此兼容密钥继续可配置，但不再用于视频模型。
+    { name: 'KLING_ACCESS_KEY', provider: 'Kling 图片模型（兼容）', label: 'Access Key', secret: true },
+    { name: 'KLING_SECRET_KEY', provider: 'Kling 图片模型（兼容）', label: 'Secret Key', secret: true },
     { name: 'MINIMAX_API_KEY', provider: 'MiniMax 配音', label: 'MiniMax API Key', secret: true },
     { name: 'MINIMAX_GROUP_ID', provider: 'MiniMax 配音', label: 'MiniMax Group ID', secret: false }
 ];

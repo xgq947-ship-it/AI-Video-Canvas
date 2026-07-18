@@ -1,16 +1,8 @@
 import React from 'react';
 import { NodeData } from '../../types';
 
-const GRID_SPLIT_OPTIONS = [
-  { label: '4宫格 (2×2)', cols: 2, rows: 2 },
-  { label: '9宫格 (3×3)', cols: 3, rows: 3 },
-  { label: '16宫格 (4×4)', cols: 4, rows: 4 },
-  { label: '25宫格 (5×5)', cols: 5, rows: 5 },
-];
-
 export type NodeHoverToolbarAction =
   | 'changeAngle'
-  | 'gridSplit'
   | 'lastFrame'
   | 'upload'
   | 'separator'
@@ -26,64 +18,9 @@ interface NodeHoverToolbarProps {
   onUpdate: (id: string, updates: Partial<NodeData>) => void;
   onUpload?: (nodeId: string, imageDataUrl: string) => void;
   onExpand?: (imageUrl: string) => void;
-  onGridSplit?: (nodeId: string, cols: number, rows: number) => void;
   /** 用视频最后一帧生成一个图片节点 */
   onExtractLastFrame?: (nodeId: string) => void;
 }
-
-const GridSplitMenu: React.FC<{ onSplit: (cols: number, rows: number) => void }> = ({ onSplit }) => {
-  const [open, setOpen] = React.useState(false);
-  const ref = React.useRef<HTMLDivElement>(null);
-
-  React.useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [open]);
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={(event) => { event.stopPropagation(); setOpen(value => !value); }}
-        onPointerDown={(event) => event.stopPropagation()}
-        className={`flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${open ? 'bg-blue-500 text-white' : 'text-neutral-200 hover:bg-neutral-700 hover:text-white'}`}
-        title="把整图等分切成多张独立图片"
-      >
-        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
-          <rect x="3" y="3" width="18" height="18" rx="2" />
-          <line x1="9" y1="3" x2="9" y2="21" />
-          <line x1="15" y1="3" x2="15" y2="21" />
-          <line x1="3" y1="9" x2="21" y2="9" />
-          <line x1="3" y1="15" x2="21" y2="15" />
-        </svg>
-        宫格切分
-      </button>
-      {open && (
-        <div
-          className="absolute top-full mt-1.5 left-1/2 -translate-x-1/2 w-36 rounded-lg border border-neutral-700 bg-neutral-900 shadow-2xl py-1 z-30"
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          {GRID_SPLIT_OPTIONS.map(option => (
-            <button
-              key={option.label}
-              onClick={(event) => {
-                event.stopPropagation();
-                onSplit(option.cols, option.rows);
-                setOpen(false);
-              }}
-              className="w-full px-3 py-1.5 text-left text-xs text-neutral-200 transition-colors hover:bg-neutral-800 hover:text-white"
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
 
 const downloadMedia = (resultUrl: string, nodeId: string, mediaType: 'image' | 'video') => {
   const filename = `${mediaType}_${nodeId}.${mediaType === 'image' ? 'png' : 'mp4'}`;
@@ -131,7 +68,6 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
   onUpdate,
   onUpload,
   onExpand,
-  onGridSplit,
   onExtractLastFrame,
 }) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -170,13 +106,6 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
                   调整角度
                 </button>
               );
-            case 'gridSplit':
-              return onGridSplit ? (
-                <GridSplitMenu
-                  key={`${action}-${index}`}
-                  onSplit={(cols, rows) => onGridSplit(data.id, cols, rows)}
-                />
-              ) : null;
             case 'upload':
               return (
                 <React.Fragment key={`${action}-${index}`}>

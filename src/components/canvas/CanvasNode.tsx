@@ -42,7 +42,6 @@ interface CanvasNodeProps {
   onImageToImage?: (nodeId: string) => void;
   onImageToVideo?: (nodeId: string) => void;
   onChangeAngleGenerate?: (nodeId: string) => void;
-  onGridSplit?: (nodeId: string, cols: number, rows: number) => void;
   onExtractLastFrame?: (nodeId: string) => void;
   zoom: number;
   // Mouse event callbacks for chat panel drag functionality
@@ -94,7 +93,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   onImageToImage,
   onImageToVideo,
   onChangeAngleGenerate,
-  onGridSplit,
   onExtractLastFrame,
   zoom,
   onMouseEnter,
@@ -122,7 +120,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   // 三种可达渲染分支共用一套工具栏，仅通过动作配置保留原有差异与顺序。
   const cameraToolbarActions: NodeHoverToolbarAction[] = [
     'changeAngle',
-    ...(onGridSplit ? ['gridSplit' as const] : []),
     'separator',
     'expand',
     'download',
@@ -131,7 +128,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
     ...(!(data.prompt && data.prompt.startsWith('Extract panel #'))
       ? ['changeAngle' as const, 'separator' as const, 'upload' as const]
       : []),
-    ...(onGridSplit ? ['gridSplit' as const, 'separator' as const] : []),
     'expand',
     'download',
   ];
@@ -320,7 +316,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
               actions={cameraToolbarActions}
               onUpdate={onUpdate}
               onExpand={onExpand}
-              onGridSplit={onGridSplit}
             />
           )}
 
@@ -507,7 +502,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
             onUpdate={onUpdate}
             onUpload={onUpload}
             onExpand={onExpand}
-            onGridSplit={onGridSplit}
           />
         )}
 

@@ -1193,82 +1193,6 @@ export default function App() {
     }
   };
 
-  /**
-   * 宫格切分：把一张图片等分成 cols×rows 块，每块存成真实素材并在画布生成图片节点。
-   * 纯前端切图（canvas），不调用任何 AI 接口。切片持久化到 library/images/，刷新后仍在。
-   */
-  const handleGridSplit = async (nodeId: string, cols: number, rows: number) => {
-    const node = nodes.find(n => n.id === nodeId);
-    if (!node?.resultUrl) return;
-    const src = node.resultUrl;
-
-    // 加载图片；/library 资源带 CORS 头，设 crossOrigin 避免画布被污染导致 toDataURL 抛错
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    const loaded = await new Promise<HTMLImageElement | null>((resolve) => {
-      img.onload = () => resolve(img);
-      img.onerror = () => resolve(null);
-      img.src = src.startsWith('data:') ? src : src.split('?')[0];
-    });
-    if (!loaded) { alert('无法加载图片，切分失败'); return; }
-
-    const sliceW = Math.floor(loaded.naturalWidth / cols);
-    const sliceH = Math.floor(loaded.naturalHeight / rows);
-    if (sliceW < 1 || sliceH < 1) { alert('图片太小，无法切分'); return; }
-
-    const cellGapX = 380;
-    const cellGapY = 440;
-    const baseX = node.x + 460; // 放在源节点右侧，按行列排布
-    const baseY = node.y;
-    const namePrefix = (node.title || node.prompt || '切分').slice(0, 20);
-
-    try {
-      const tasks: Promise<NodeData | null>[] = [];
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-          const idx = r * cols + c + 1;
-          tasks.push((async () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = sliceW;
-            canvas.height = sliceH;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) return null;
-            ctx.drawImage(loaded, c * sliceW, r * sliceH, sliceW, sliceH, 0, 0, sliceW, sliceH);
-            const dataUrl = canvas.toDataURL('image/png');
-            const resp = await fetch('/api/assets/images', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ data: dataUrl, prompt: `${namePrefix}_${cols}x${rows}_${idx}` }),
-            });
-            if (!resp.ok) return null;
-            const saved = await resp.json();
-            if (!saved?.url) return null;
-            return {
-              id: crypto.randomUUID(),
-              type: NodeType.IMAGE,
-              x: baseX + c * cellGapX,
-              y: baseY + r * cellGapY,
-              prompt: `${namePrefix} 宫格${idx}`,
-              status: NodeStatus.SUCCESS,
-              resultUrl: saved.url,
-              resultAspectRatio: `${sliceW}/${sliceH}`,
-              model: 'Grid Split',
-              aspectRatio: getClosestAspectRatio(sliceW, sliceH),
-              resolution: 'Auto',
-            } as NodeData;
-          })());
-        }
-      }
-      const results = (await Promise.all(tasks)).filter((n): n is NodeData => n !== null);
-      if (results.length === 0) { alert('切分失败：切片未能保存'); return; }
-      setNodes(prev => [...prev, ...results]);
-      setSelectedNodeIds(results.map(n => n.id));
-    } catch (e) {
-      console.error('Grid split failed', e);
-      alert('切分失败');
-    }
-  };
-
   // Custom MIME type used when dragging an asset out of the sidebar onto the canvas
   const ASSET_DRAG_TYPE = 'application/x-twitcanva-asset';
 
@@ -1745,7 +1669,6 @@ export default function App() {
                 onImageToImage={handleImageToImage}
                 onImageToVideo={handleImageToVideo}
                 onChangeAngleGenerate={handleChangeAngleGenerate}
-                onGridSplit={handleGridSplit}
                 onExtractLastFrame={handleExtractLastFrame}
                 zoom={viewport.zoom}
                 onMouseEnter={() => setCanvasHoveredNodeId(node.id)}

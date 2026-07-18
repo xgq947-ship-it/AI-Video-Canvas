@@ -80,3 +80,42 @@ export const centerNodeAt = (point, nodeWidth = DEFAULT_NODE_WIDTH, nodeHeight =
     x: point.x - nodeWidth / 2,
     y: point.y - nodeHeight / 2,
 });
+
+/** box 占可视区的比例（默认留出边距，不贴边） */
+export const FIT_VIEWPORT_PADDING = 0.82;
+
+/**
+ * 计算把一个世界坐标包围盒（box）居中并铺满画布可视区的视口——
+ * 用于侧边栏"跳转到该节点"：既要把节点移到画面正中，也要缩放到刚好填满可视区，
+ * 而不只是平移（旧实现 locateNodeFromSidebar 只平移，缩放不变）。
+ *
+ * @param {RectLike} rect 画布容器 rect（宽高必须有值，否则视为 0）
+ * @param {{x:number,y:number,width:number,height:number}} box 世界坐标包围盒
+ * @param {{padding?:number, minZoom?:number, maxZoom?:number}} [options]
+ *   padding: box 占可视区的比例，0~1（默认 FIT_VIEWPORT_PADDING）
+ *   minZoom/maxZoom: 缩放范围；不传则不做限制，由调用方按需 clamp（避免这里强绑定 shared/zoom.js 的常量）
+ * @returns {Viewport}
+ */
+export const computeFitViewport = (rect, box, options = {}) => {
+    const padding = options.padding ?? FIT_VIEWPORT_PADDING;
+    const paneWidth = rect.width || 0;
+    const paneHeight = rect.height || 0;
+    const safeBoxWidth = Math.max(box.width, 1);
+    const safeBoxHeight = Math.max(box.height, 1);
+
+    let zoom = Math.min(
+        (paneWidth * padding) / safeBoxWidth,
+        (paneHeight * padding) / safeBoxHeight
+    );
+    if (options.minZoom != null) zoom = Math.max(options.minZoom, zoom);
+    if (options.maxZoom != null) zoom = Math.min(options.maxZoom, zoom);
+
+    const boxCenter = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    const paneCenter = { x: paneWidth / 2, y: paneHeight / 2 };
+
+    return {
+        zoom,
+        x: paneCenter.x - boxCenter.x * zoom,
+        y: paneCenter.y - boxCenter.y * zoom,
+    };
+};

@@ -50,9 +50,6 @@ interface CanvasNodeProps {
   onMouseLeave?: () => void;
   // Theme
   canvasTheme?: 'dark' | 'light';
-  // Social sharing
-  onPostToX?: (nodeId: string, mediaUrl: string, mediaType: 'image' | 'video') => void;
-  onPostToTikTok?: (nodeId: string, mediaUrl: string) => void;
 }
 
 const NODE_TYPE_LABELS: Record<NodeType, string> = {
@@ -103,8 +100,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   onMouseEnter,
   onMouseLeave,
   canvasTheme = 'dark',
-  onPostToX,
-  onPostToTikTok
 }) => {
   // ============================================================================
   // STATE
@@ -121,11 +116,8 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   // Theme helper
   const isDark = canvasTheme === 'dark';
 
-  // Inverse scaling for toolbar to keep it readable when zooming out
-  // Same logic as NodeControls prompt bar
-  const minEffectiveScale = 0.8;
-  const effectiveScale = Math.max(zoom, minEffectiveScale);
-  const localScale = effectiveScale / zoom;
+  // 工具栏始终保持固定屏幕尺寸，不跟随画布缩放。
+  const localScale = 1 / Math.max(zoom, 0.01);
 
   // 三种可达渲染分支共用一套工具栏，仅通过动作配置保留原有差异与顺序。
   const cameraToolbarActions: NodeHoverToolbarAction[] = [
@@ -133,7 +125,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
     ...(onGridSplit ? ['gridSplit' as const] : []),
     'separator',
     'expand',
-    'postToX',
     'download',
   ];
   const imageToolbarActions: NodeHoverToolbarAction[] = [
@@ -142,14 +133,11 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
       : []),
     ...(onGridSplit ? ['gridSplit' as const, 'separator' as const] : []),
     'expand',
-    'postToX',
     'download',
   ];
   const videoToolbarActions: NodeHoverToolbarAction[] = [
     ...(onExtractLastFrame ? ['lastFrame' as const, 'separator' as const] : []),
     'expand',
-    'postToX',
-    'postToTikTok',
     'download',
   ];
 
@@ -248,6 +236,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   if (data.type === NodeType.IMAGE_EDITOR) {
     return (
       <div
+        data-node-id={data.id}
         className={`absolute flex items-center group/node touch-none pointer-events-auto`}
         style={{
           transform: `translate(${data.x}px, ${data.y}px)`,
@@ -308,6 +297,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   if (data.type === NodeType.CAMERA_ANGLE) {
     return (
       <div
+        data-node-id={data.id}
         className={`absolute flex items-center group/node touch-none pointer-events-auto`}
         style={{
           transform: `translate(${data.x}px, ${data.y}px)`,
@@ -331,7 +321,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
               onUpdate={onUpdate}
               onExpand={onExpand}
               onGridSplit={onGridSplit}
-              onPostToX={onPostToX}
             />
           )}
 
@@ -420,6 +409,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
 
     return (
       <div
+        data-node-id={data.id}
         className={`absolute flex items-center group/node touch-none pointer-events-auto`}
         style={{
           transform: `translate(${data.x}px, ${data.y}px)`,
@@ -490,6 +480,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
 
   return (
     <div
+      data-node-id={data.id}
       className={`absolute group/node touch-none pointer-events-auto`}
       style={{
         transform: `translate(${data.x}px, ${data.y}px)`,
@@ -517,7 +508,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
             onUpload={onUpload}
             onExpand={onExpand}
             onGridSplit={onGridSplit}
-            onPostToX={onPostToX}
           />
         )}
 
@@ -531,8 +521,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
             onUpdate={onUpdate}
             onExpand={onExpand}
             onExtractLastFrame={onExtractLastFrame}
-            onPostToX={onPostToX}
-            onPostToTikTok={onPostToTikTok}
           />
         )}
 
@@ -593,7 +581,6 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
             onImageToVideo={onImageToVideo}
             onGenerate={onGenerate}
             onUpdate={onUpdate}
-            onPostToX={onPostToX}
           />
         </div>
 

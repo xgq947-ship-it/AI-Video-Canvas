@@ -11,8 +11,6 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
 import generationRoutes from './routes/generation.js';
-import twitterRoutes from './routes/twitter.js';
-import tiktokPostRoutes from './routes/tiktok-post.js';
 import { processTikTokVideo, isValidTikTokUrl } from './tools/tiktok.js';
 import localModelsRoutes from './routes/local-models.js';
 import storyboardRoutes from './routes/storyboard.js';
@@ -23,6 +21,7 @@ import settingsRoutes from './routes/settings.js';
 import { applyApiKeysToApp, loadApiKeyOverrides } from './services/apiKeyStore.js';
 import { normalizeCharacterAssetMeta } from './services/characterAssets.js';
 import { createUniqueAssetFilename } from './services/assetFilenames.js';
+import { createCodexImageAutomation } from './services/codexImageAutomation.js';
 import { scanAssetLibrary } from './utils/scanAssetLibrary.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -88,13 +87,13 @@ if (!KLING_API_KEY) {
 }
 
 // ============================================================================
-// SEEDANCE / MODELARK CONFIGURATION
+// SEEDANCE / 火山方舟中国区 CONFIGURATION
 // ============================================================================
 
 const ARK_API_KEY = API_KEY_OVERRIDES.ARK_API_KEY || process.env.ARK_API_KEY;
 
 if (!ARK_API_KEY) {
-    console.warn("SERVER WARNING: ARK_API_KEY not set. Seedance models will not work.");
+    console.warn("SERVER WARNING: ARK_API_KEY not set. 火山方舟 Seedance models will not work.");
 }
 
 // ============================================================================
@@ -132,6 +131,10 @@ app.locals.IMAGES_DIR = IMAGES_DIR;
 app.locals.VIDEOS_DIR = VIDEOS_DIR;
 app.locals.LIBRARY_DIR = LIBRARY_DIR;
 app.locals.CODEX_IMAGE_JOBS_DIR = CODEX_IMAGE_JOBS_DIR;
+app.locals.CODEX_IMAGE_AUTOMATION = createCodexImageAutomation({
+    projectRoot: path.join(__dirname, '..'),
+    jobsDir: CODEX_IMAGE_JOBS_DIR
+});
 applyApiKeysToApp(app, process.env, API_KEY_OVERRIDES);
 
 // ============================================================================
@@ -245,12 +248,6 @@ function sanitizeWorkflowNodes(nodes) {
 app.use('/api', generationRoutes);
 app.use('/api', codexImageJobRoutes);
 app.use('/api/settings', settingsRoutes);
-
-// Mount Twitter routes (Post to X feature)
-app.use('/api/twitter', twitterRoutes);
-
-// Mount TikTok routes (Post to TikTok feature)
-app.use('/api/tiktok-post', tiktokPostRoutes);
 
 // Mount Local Models routes (local open-source model discovery)
 app.use('/api/local-models', localModelsRoutes);
@@ -576,7 +573,19 @@ app.get('/api/workflows', async (req, res) => {
                 createdAt: workflow.createdAt,
                 updatedAt: workflow.updatedAt,
                 nodeCount: workflow.nodes?.length || 0,
-                coverUrl: workflow.coverUrl
+                coverUrl: workflow.coverUrl,
+                // 工作流选择卡片使用真实节点生成画布缩略图，只返回预览所需字段。
+                previewNodes: (workflow.nodes || []).map(node => ({
+                    id: node.id,
+                    type: node.type,
+                    x: node.x,
+                    y: node.y,
+                    status: node.status,
+                    resultUrl: node.resultUrl,
+                    resultAspectRatio: node.resultAspectRatio,
+                    aspectRatio: node.aspectRatio,
+                    parentIds: node.parentIds
+                }))
             };
         });
         workflows.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
@@ -1207,4 +1216,7 @@ try {
 
 app.listen(PORT, () => {
     console.log(`Backend server running on http://localhost:${PORT}`);
+    if (app.locals.CODEX_IMAGE_AUTOMATION.resumePending()) {
+        console.log('[Codex 自动生图] 已恢复未完成的图片任务');
+    }
 });

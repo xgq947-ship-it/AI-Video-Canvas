@@ -7,6 +7,10 @@
 
 import React, { useState, useCallback, Dispatch, SetStateAction } from 'react';
 import { NodeData, NodeGroup, Viewport } from '../types';
+import { computeFitViewport } from '@/shared/canvasCoords.js';
+import { ZOOM_MIN } from '@/shared/zoom.js';
+import { getNodeHeight, getNodeWidth } from '../components/canvas/ConnectionsLayer';
+import { getCanvasRect } from '../utils/canvasRect';
 
 interface WorkflowData {
     id: string | null;
@@ -23,6 +27,7 @@ interface UseWorkflowOptions {
     canvasTitle: string;
     setNodes: Dispatch<SetStateAction<NodeData[]>>;
     setGroups: Dispatch<SetStateAction<NodeGroup[]>>; // For restoring groups when loading
+    setViewport: Dispatch<SetStateAction<Viewport>>;
     setSelectedNodeIds: Dispatch<SetStateAction<string[]>>;
     setCanvasTitle: (title: string) => void;
     setEditingTitleValue: (value: string) => void;
@@ -36,6 +41,7 @@ export const useWorkflow = ({
     canvasTitle,
     setNodes,
     setGroups,
+    setViewport,
     setSelectedNodeIds,
     setCanvasTitle,
     setEditingTitleValue,
@@ -102,8 +108,34 @@ export const useWorkflow = ({
 
                 setCanvasTitle(workflow.title || 'Untitled');
                 setEditingTitleValue(workflow.title || 'Untitled');
-                setNodes(workflow.nodes || []);
+                const loadedNodes: NodeData[] = workflow.nodes || [];
+                setNodes(loadedNodes);
                 setGroups(workflow.groups || []); // Restore groups
+                if (loadedNodes.length > 0) {
+                    const bounds = loadedNodes.map(node => {
+                        const parent = node.parentIds?.length
+                            ? loadedNodes.find(item => item.id === node.parentIds?.[0])
+                            : undefined;
+                        return {
+                            x: node.x,
+                            y: node.y,
+                            width: getNodeWidth(node, parent),
+                            height: getNodeHeight(node, parent),
+                        };
+                    });
+                    const minX = Math.min(...bounds.map(item => item.x));
+                    const minY = Math.min(...bounds.map(item => item.y));
+                    const maxX = Math.max(...bounds.map(item => item.x + item.width));
+                    const maxY = Math.max(...bounds.map(item => item.y + item.height));
+                    setViewport(computeFitViewport(getCanvasRect(), {
+                        x: minX,
+                        y: minY,
+                        width: maxX - minX,
+                        height: maxY - minY,
+                    }, { minZoom: ZOOM_MIN, maxZoom: 1, padding: 0.82 }));
+                } else {
+                    setViewport({ x: 0, y: 0, zoom: 1 });
+                }
                 // Reset selection
                 setSelectedNodeIds([]);
                 setIsWorkflowPanelOpen(false);
@@ -118,7 +150,7 @@ export const useWorkflow = ({
             console.error('Failed to load workflow:', error);
         }
         return null;
-    }, [setNodes, setGroups, setSelectedNodeIds, setCanvasTitle, setEditingTitleValue]);
+    }, [setNodes, setGroups, setViewport, setSelectedNodeIds, setCanvasTitle, setEditingTitleValue]);
 
     /**
      * Handle workflow panel toggle from toolbar click

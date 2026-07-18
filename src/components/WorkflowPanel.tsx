@@ -6,8 +6,16 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Trash2, FileText, Loader2, Maximize2, Pencil, Check } from 'lucide-react';
+import { X, Trash2, Loader2, Maximize2, Pencil, Check } from 'lucide-react';
 import { LazyImage } from './LazyImage';
+import { NodeData, NodeStatus, NodeType } from '../types';
+import { getNodeHeight, getNodeWidth } from './canvas/ConnectionsLayer';
+import { calculateConnectionPath } from '../utils/connectionHelpers';
+
+type WorkflowPreviewNode = Pick<
+    NodeData,
+    'id' | 'type' | 'x' | 'y' | 'status' | 'resultUrl' | 'resultAspectRatio' | 'aspectRatio' | 'parentIds'
+>;
 
 interface WorkflowSummary {
     id: string;
@@ -17,6 +25,7 @@ interface WorkflowSummary {
     nodeCount: number;
     coverUrl?: string;
     description?: string;
+    previewNodes?: WorkflowPreviewNode[];
 }
 
 interface AssetMetadata {
@@ -35,6 +44,117 @@ interface WorkflowPanelProps {
     panelLeft?: number;
     canvasTheme?: 'dark' | 'light';
 }
+
+const WorkflowCanvasThumbnail: React.FC<{
+    nodes: WorkflowPreviewNode[];
+    title: string;
+    isDark: boolean;
+}> = ({ nodes, title, isDark }) => {
+    const preview = React.useMemo(() => {
+        if (nodes.length === 0) return null;
+
+        const normalizedNodes = nodes.map(node => ({
+            ...node,
+            prompt: '',
+            model: '',
+            resolution: '',
+        })) as NodeData[];
+        const rectangles = normalizedNodes.map(node => {
+            const parent = node.parentIds?.length
+                ? normalizedNodes.find(item => item.id === node.parentIds?.[0])
+                : undefined;
+            return {
+                node,
+                width: getNodeWidth(node, parent),
+                height: getNodeHeight(node, parent),
+            };
+        });
+        const minX = Math.min(...rectangles.map(item => item.node.x));
+        const minY = Math.min(...rectangles.map(item => item.node.y));
+        const maxX = Math.max(...rectangles.map(item => item.node.x + item.width));
+        const maxY = Math.max(...rectangles.map(item => item.node.y + item.height));
+        const contentWidth = Math.max(1, maxX - minX);
+        const contentHeight = Math.max(1, maxY - minY);
+        const padding = Math.max(60, Math.max(contentWidth, contentHeight) * 0.06);
+
+        return {
+            rectangles,
+            viewBox: `${minX - padding} ${minY - padding} ${contentWidth + padding * 2} ${contentHeight + padding * 2}`,
+        };
+    }, [nodes]);
+
+    if (!preview) {
+        return (
+            <div className={`flex h-full items-center justify-center text-sm ${isDark ? 'text-neutral-600' : 'text-neutral-400'}`}>
+                空画布
+            </div>
+        );
+    }
+
+    return (
+        <svg
+            className="h-full w-full"
+            viewBox={preview.viewBox}
+            preserveAspectRatio="xMidYMid meet"
+            role="img"
+            aria-label={`${title} 画布缩略图`}
+        >
+            {preview.rectangles.flatMap(({ node }) => (node.parentIds || []).map(parentId => {
+                const parent = preview.rectangles.find(item => item.node.id === parentId);
+                const child = preview.rectangles.find(item => item.node.id === node.id);
+                if (!parent || !child) return null;
+                const path = calculateConnectionPath(
+                    parent.node.x + parent.width,
+                    parent.node.y + parent.height / 2,
+                    child.node.x,
+                    child.node.y + child.height / 2,
+                    'right'
+                );
+                return (
+                    <path
+                        key={`${parentId}-${node.id}`}
+                        d={path}
+                        fill="none"
+                        stroke={isDark ? '#525252' : '#a3a3a3'}
+                        strokeWidth="1.5"
+                        vectorEffect="non-scaling-stroke"
+                        opacity="0.7"
+                    />
+                );
+            }))}
+            {preview.rectangles.map(({ node, width, height }) => {
+                const hasImage = node.type === NodeType.IMAGE
+                    && node.status === NodeStatus.SUCCESS
+                    && Boolean(node.resultUrl);
+                return (
+                    <g key={node.id}>
+                        <rect
+                            x={node.x}
+                            y={node.y}
+                            width={width}
+                            height={height}
+                            rx="18"
+                            fill={isDark ? '#303030' : '#e5e5e5'}
+                            stroke={isDark ? '#666' : '#a3a3a3'}
+                            strokeWidth="1"
+                            vectorEffect="non-scaling-stroke"
+                        />
+                        {hasImage && (
+                            <image
+                                href={node.resultUrl}
+                                x={node.x}
+                                y={node.y}
+                                width={width}
+                                height={height}
+                                preserveAspectRatio="xMidYMid slice"
+                            />
+                        )}
+                    </g>
+                );
+            })}
+        </svg>
+    );
+};
 
 export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
     isOpen,
@@ -228,7 +348,7 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
                                             }`}
                                     >
                                         {/* Thumbnail */}
-                                        <div className="aspect-[4/3] bg-gradient-to-br from-neutral-800 to-neutral-900 flex items-center justify-center relative overflow-hidden">
+                                        <div className={`relative flex aspect-[4/3] items-center justify-center overflow-hidden ${isDark ? 'bg-[#202020]' : 'bg-neutral-200'}`}>
                                             {workflow.coverUrl ? (
                                                 <img
                                                     src={workflow.coverUrl}
@@ -237,9 +357,11 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
                                                     loading="lazy"
                                                 />
                                             ) : (
-                                                <div className="w-16 h-16 rounded-lg bg-gradient-to-br from-blue-500/20 to-purple-600/20 flex items-center justify-center">
-                                                    <FileText size={28} className="text-neutral-500" />
-                                                </div>
+                                                <WorkflowCanvasThumbnail
+                                                    nodes={workflow.previewNodes || []}
+                                                    title={workflow.title || '未命名项目'}
+                                                    isDark={isDark}
+                                                />
                                             )}
 
                                             {/* Action buttons */}

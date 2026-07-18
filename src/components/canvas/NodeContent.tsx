@@ -28,8 +28,6 @@ interface NodeContentProps {
     onImageToVideo?: (nodeId: string) => void;
     onGenerate?: (nodeId: string) => void;
     onUpdate?: (nodeId: string, updates: Partial<NodeData>) => void;
-    // Social sharing
-    onPostToX?: (nodeId: string, mediaUrl: string, mediaType: 'image' | 'video') => void;
 }
 
 export const NodeContent: React.FC<NodeContentProps> = ({
@@ -49,7 +47,6 @@ export const NodeContent: React.FC<NodeContentProps> = ({
     onImageToVideo,
     onGenerate,
     onUpdate,
-    onPostToX
 }) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -136,11 +133,7 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                         <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center z-20">
                             <Loader2 size={40} className="animate-spin text-blue-400" />
                             <span className="mt-3 text-sm text-white font-medium">
-                                {data.imageModel === 'codex-imagegen'
-                                    ? data.codexJobStatus === 'processing'
-                                        ? `Codex 正在生成（${data.aspectRatio || '自动比例'}）...`
-                                        : `等待 Codex 处理（${data.aspectRatio || '自动比例'}）...`
-                                    : '正在重新生成...'}
+                                正在重新生成...
                             </span>
                         </div>
                     )}
@@ -234,11 +227,7 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                         <div className="relative z-10 flex flex-col items-center gap-2">
                             <Loader2 size={32} className="animate-spin text-blue-400" />
                             <span className="text-xs text-neutral-500 font-medium">
-                                {data.imageModel === 'codex-imagegen'
-                                    ? data.codexJobStatus === 'processing'
-                                        ? `Codex 正在生成（${data.aspectRatio || '自动比例'}）...`
-                                        : `等待 Codex 处理（${data.aspectRatio || '自动比例'}）...`
-                                    : '正在生成...'}
+                                正在生成...
                             </span>
                         </div>
                     ) : data.status === NodeStatus.ERROR ? (

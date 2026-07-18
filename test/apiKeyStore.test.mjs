@@ -36,3 +36,11 @@ test('清除手动密钥后回退环境变量，接口不返回明文', () => {
     assert.equal(JSON.stringify(fields).includes('env-87654321'), false);
     fs.rmSync(libraryDir, { recursive: true, force: true });
 });
+
+test('Seedance 设置明确标注火山方舟中国区密钥', () => {
+    const fields = describeApiKeySettings({}, {});
+    const ark = fields.find(field => field.name === 'ARK_API_KEY');
+
+    assert.equal(ark.provider, 'Seedance');
+    assert.match(ark.label, /火山方舟.*中国区/);
+});

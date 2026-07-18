@@ -71,6 +71,113 @@ final result: passed
 
 ---
 
+# 新建空画布与工作流真实缩略图设计 QA
+
+- source visual truth paths:
+  - `/var/folders/rp/tm3c_gz979b___tds5nnyz740000gn/T/codex-clipboard-efdd6487-84f5-447b-a8c3-009012fd4ffd.png`
+  - `/var/folders/rp/tm3c_gz979b___tds5nnyz740000gn/T/codex-clipboard-dddb035a-743a-4228-9205-c683be9cafa9.png`
+  - `/var/folders/rp/tm3c_gz979b___tds5nnyz740000gn/T/codex-clipboard-ff78c83a-a289-44e7-be74-4a848c17989e.png`
+- implementation screenshot paths:
+  - `/tmp/twitcanva-new-project-empty-final.png`
+  - `/tmp/twitcanva-workflow-thumbnails-final.png`
+  - `/tmp/twitcanva-workflow-loaded-fit-center.png`
+- side-by-side comparison paths:
+  - `/tmp/twitcanva-new-project-comparison.png`
+  - `/tmp/twitcanva-workflow-thumbnails-comparison.png`
+- viewport: `1458 × 768`
+- state: 深色主题；分别验证新建空项目、项目选择面板、加载 25 节点项目
+
+## Full-view comparison evidence
+
+新建项目不再显示中央“开始一部 AI 漫剧”引导卡，直接保留完整空画布。项目选择卡片使用实际节点坐标、连接关系和图片内容生成微型画布，不再显示通用文件图标。加载已有项目后，整个节点包围盒自动适配并居中显示。
+
+## Focused region comparison evidence
+
+工作流卡片的预览完整保留真实横向节点链路和右侧纵向图片节点；无图片节点使用中性卡片表示。手动设置的封面仍优先显示，未设置封面时才自动使用画布缩略图。
+
+## Findings
+
+- 无 P0/P1/P2 问题。
+- P3：项目选择面板沿用当前产品的紧凑宽度，没有扩大为参考截图的全宽面板；本轮仅替换预览内容和空画布行为。
+
+## Required fidelity surfaces
+
+- 字体与排版：通过。继续沿用现有工作流卡片标题、节点数量和截断规则。
+- 间距与布局：通过。缩略图保持 `4:3`，真实画布按节点包围盒居中适配。
+- 颜色与视觉令牌：通过。节点、连线和空状态使用现有深色中性色。
+- 图片质量：通过。缩略图直接使用真实工作流图片地址，无占位图和伪造素材。
+- 文案与内容：通过。新建项目仅保留侧边栏“画布暂无节点”，中央无额外引导文案。
+
+## Interactions tested
+
+- 点击“新建”后节点数为 `0`、缩放恢复 `100%`、中央引导卡数量为 `0`。
+- 打开“我的工作流”后存在 `3` 个真实画布缩略图，其中共渲染 `20` 张节点图片。
+- 点击“莫妮卡在上海 · 分句配音口型校准版”后加载 `25` 个节点，面板自动关闭。
+- 加载后缩放为 `13%`；画布中心为 `(859, 384)`，节点内容中心为 `(859, 383.9)`。
+- 浏览器控制台无错误。
+- `npx tsc --noEmit` 通过；`npm test` 81 项全过；`npm run build` 成功。
+
+## Comparison history
+
+1. 初始项目卡片只显示文件图标，无法识别工作流画面；项目加载后沿用旧视口，可能看不到节点。
+2. 第一轮接入真实画布缩略图后，节点连线在小卡片中偏粗。
+3. 收紧缩略图连线与边框，并在加载时按真实节点包围盒自动适配；同视口复测通过。
+
+final result: passed
+
+---
+
+# 画布选中工具栏固定尺寸设计 QA
+
+- source visual truth paths:
+  - `/var/folders/rp/tm3c_gz979b___tds5nnyz740000gn/T/codex-clipboard-dd6bac2d-9f82-49a9-a366-842664050c59.png`
+  - `/var/folders/rp/tm3c_gz979b___tds5nnyz740000gn/T/codex-clipboard-234aebef-8364-4acc-a486-1df6eff24907.png`
+- implementation screenshot paths:
+  - `/tmp/twitcanva-node-controls-20pct.png`
+  - `/tmp/twitcanva-multi-select-toolbar-20pct.png`
+  - `/tmp/twitcanva-multiselect-comparison.png`
+- viewport: `1536 × 912`
+- state: 深色主题；分别验证 20% 缩放下单节点选中和多节点框选
+
+## Full-view comparison evidence
+
+单节点操作面板和多选“打组”工具栏均改为固定屏幕尺寸，不再随画布缩放。20% 缩放下，画布节点保持缩小，操作文字、图标和点击区域仍保持正常可读大小。
+
+## Focused region comparison evidence
+
+多选工具栏位于选择框正上方，“打组”文字保持单行显示。单节点悬浮工具栏使用横向紧凑布局，中文标签不再逐字换行，也不会因低缩放被放大成超高面板。
+
+## Findings
+
+- 无 P0/P1/P2 问题。
+- P3：本项目保留现有工具栏按钮集合，没有复制参考产品中与当前工作流无关的操作。
+
+## Required fidelity surfaces
+
+- 字体与排版：通过。提示词正文为 `17 px / 28 px`，工具栏文字为固定屏幕尺寸且保持单行。
+- 间距与布局：通过。工具栏紧贴选择框正上方，按钮内边距和分隔线恢复为紧凑尺寸。
+- 颜色与视觉令牌：通过。沿用现有深色表面、边框、悬浮态和蓝色强调色。
+- 图片质量：通过。节点原图和缩略图渲染未改动。
+- 文案：通过。多选操作显示中文“打组”。
+
+## Interactions tested
+
+- 新建两个图片节点并框选，100% 与 20% 缩放下“打组”按钮均清晰可见。
+- 20% 缩放下选中单节点，提示词面板和底部控件保持固定可读尺寸。
+- 框选、缩放、单选和删除临时测试节点均正常。
+- 浏览器控制台无错误。
+- `npx tsc --noEmit` 通过；`npm test` 77 项全过；`npm run build` 成功。
+
+## Comparison history
+
+1. 初始实现的工具栏尺寸受画布缩放影响，低缩放下文字不可读。
+2. 首轮固定尺寸后，中文按钮因容器收缩发生逐字换行，导致工具栏过高。
+3. 增加单行与禁止收缩约束，并恢复紧凑字号、图标和内边距；20% 缩放复测通过。
+
+final result: passed
+
+---
+
 # 紧凑添加节点菜单与缩放菜单设计 QA
 
 - source visual truth paths:

@@ -15,8 +15,6 @@ export type NodeHoverToolbarAction =
   | 'upload'
   | 'separator'
   | 'expand'
-  | 'postToX'
-  | 'postToTikTok'
   | 'download';
 
 interface NodeHoverToolbarProps {
@@ -31,8 +29,6 @@ interface NodeHoverToolbarProps {
   onGridSplit?: (nodeId: string, cols: number, rows: number) => void;
   /** 用视频最后一帧生成一个图片节点 */
   onExtractLastFrame?: (nodeId: string) => void;
-  onPostToX?: (nodeId: string, mediaUrl: string, mediaType: 'image' | 'video') => void;
-  onPostToTikTok?: (nodeId: string, mediaUrl: string) => void;
 }
 
 const GridSplitMenu: React.FC<{ onSplit: (cols: number, rows: number) => void }> = ({ onSplit }) => {
@@ -53,10 +49,10 @@ const GridSplitMenu: React.FC<{ onSplit: (cols: number, rows: number) => void }>
       <button
         onClick={(event) => { event.stopPropagation(); setOpen(value => !value); }}
         onPointerDown={(event) => event.stopPropagation()}
-        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${open ? 'bg-blue-500 text-white' : 'text-neutral-300 hover:bg-neutral-700 hover:text-white'}`}
+        className={`flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${open ? 'bg-blue-500 text-white' : 'text-neutral-200 hover:bg-neutral-700 hover:text-white'}`}
         title="把整图等分切成多张独立图片"
       >
-        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
           <rect x="3" y="3" width="18" height="18" rx="2" />
           <line x1="9" y1="3" x2="9" y2="21" />
           <line x1="15" y1="3" x2="15" y2="21" />
@@ -67,7 +63,7 @@ const GridSplitMenu: React.FC<{ onSplit: (cols: number, rows: number) => void }>
       </button>
       {open && (
         <div
-          className="absolute top-full mt-2 left-1/2 -translate-x-1/2 w-40 rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl py-1 z-30"
+          className="absolute top-full mt-1.5 left-1/2 -translate-x-1/2 w-36 rounded-lg border border-neutral-700 bg-neutral-900 shadow-2xl py-1 z-30"
           onPointerDown={(event) => event.stopPropagation()}
         >
           {GRID_SPLIT_OPTIONS.map(option => (
@@ -78,7 +74,7 @@ const GridSplitMenu: React.FC<{ onSplit: (cols: number, rows: number) => void }>
                 onSplit(option.cols, option.rows);
                 setOpen(false);
               }}
-              className="w-full text-left px-3 py-2 text-xs text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors"
+              className="w-full px-3 py-1.5 text-left text-xs text-neutral-200 transition-colors hover:bg-neutral-800 hover:text-white"
             >
               {option.label}
             </button>
@@ -137,8 +133,6 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
   onExpand,
   onGridSplit,
   onExtractLastFrame,
-  onPostToX,
-  onPostToTikTok,
 }) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const resultUrl = data.resultUrl!;
@@ -151,7 +145,7 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
         transformOrigin: 'bottom center',
       }}
     >
-      <div className="flex items-center gap-1 px-2 py-1.5 bg-neutral-900/95 rounded-full border border-neutral-700 shadow-xl backdrop-blur-md">
+      <div className="flex items-center gap-0.5 whitespace-nowrap rounded-full border border-neutral-700 bg-neutral-900/95 px-2 py-1 shadow-lg backdrop-blur-md">
         {actions.map((action, index) => {
           switch (action) {
             case 'changeAngle':
@@ -163,12 +157,12 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
                     angleSettings: data.angleSettings || { rotation: 0, tilt: 0, scale: 0, wideAngle: false },
                   })}
                   onPointerDown={(event) => event.stopPropagation()}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${data.angleMode
+                  className={`flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${data.angleMode
                     ? 'bg-blue-500 text-white'
                     : 'text-neutral-300 hover:bg-neutral-700 hover:text-white'
                     }`}
                 >
-                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
                     <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
                     <line x1="12" y1="22.08" x2="12" y2="12" />
@@ -189,10 +183,10 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     onPointerDown={(event) => event.stopPropagation()}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium text-neutral-200 transition-colors hover:bg-neutral-700 hover:text-white"
                     title="上传图片"
                   >
-                    <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                       <polyline points="17 8 12 3 7 8" />
                       <line x1="12" y1="3" x2="12" y2="15" />
@@ -219,17 +213,17 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
                 </React.Fragment>
               );
             case 'separator':
-              return <div key={`${action}-${index}`} className="w-px h-4 bg-neutral-600 mx-1" />;
+              return <div key={`${action}-${index}`} className="mx-0.5 h-4 w-px shrink-0 bg-neutral-600" />;
             case 'lastFrame':
               return (
                 <button
                   key={`${action}-${index}`}
                   onClick={(event) => { event.stopPropagation(); onExtractLastFrame?.(data.id); }}
                   onPointerDown={(event) => event.stopPropagation()}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
+                  className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium text-neutral-200 transition-colors hover:bg-neutral-700 hover:text-white"
                   title="用视频最后一帧生成一个图片节点"
                 >
-                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                     <rect x="3" y="3" width="18" height="18" rx="2" />
                     <circle cx="8.5" cy="8.5" r="1.5" />
                     <polyline points="21 15 16 10 5 21" />
@@ -243,48 +237,14 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
                   key={`${action}-${index}`}
                   onClick={() => onExpand?.(resultUrl)}
                   onPointerDown={(event) => event.stopPropagation()}
-                  className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
+                  className="shrink-0 rounded-full p-1.5 text-neutral-200 transition-colors hover:bg-neutral-700 hover:text-white"
                   title="查看原图"
                 >
-                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                     <polyline points="15 3 21 3 21 9" />
                     <polyline points="9 21 3 21 3 15" />
                     <line x1="21" y1="3" x2="14" y2="10" />
                     <line x1="3" y1="21" x2="10" y2="14" />
-                  </svg>
-                </button>
-              );
-            case 'postToX':
-              return (
-                <button
-                  key={`${action}-${index}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onPostToX?.(data.id, resultUrl, mediaType);
-                  }}
-                  onPointerDown={(event) => event.stopPropagation()}
-                  className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                  title="发布到 X"
-                >
-                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="currentColor">
-                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-                  </svg>
-                </button>
-              );
-            case 'postToTikTok':
-              return (
-                <button
-                  key={`${action}-${index}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onPostToTikTok?.(data.id, resultUrl);
-                  }}
-                  onPointerDown={(event) => event.stopPropagation()}
-                  className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
-                  title="发布到 TikTok"
-                >
-                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="currentColor">
-                    <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z" />
                   </svg>
                 </button>
               );
@@ -297,10 +257,10 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
                     downloadMedia(resultUrl, data.id, mediaType);
                   }}
                   onPointerDown={(event) => event.stopPropagation()}
-                  className="p-1.5 text-neutral-300 hover:bg-neutral-700 hover:text-white rounded-full transition-colors"
+                  className="shrink-0 rounded-full p-1.5 text-neutral-200 transition-colors hover:bg-neutral-700 hover:text-white"
                   title="下载"
                 >
-                  <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                     <polyline points="7 10 12 15 17 10" />
                     <line x1="12" y1="15" x2="12" y2="3" />

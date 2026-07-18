@@ -44,16 +44,14 @@ import { VideoEditorModal } from './components/modals/VideoEditorModal';
 import { ExpandedMediaModal } from './components/modals/ExpandedMediaModal';
 import { CreateAssetModal } from './components/modals/CreateAssetModal';
 import { TikTokImportModal } from './components/modals/TikTokImportModal';
-import { TwitterPostModal } from './components/modals/TwitterPostModal';
-import { TikTokPostModal } from './components/modals/TikTokPostModal';
 import { AssetLibraryPanel, type LibraryAsset } from './components/AssetLibraryPanel';
 import { useTikTokImport } from './hooks/useTikTokImport';
 import { useStoryboardGenerator } from './hooks/useStoryboardGenerator';
 import { StoryboardGeneratorModal } from './components/modals/StoryboardGeneratorModal';
 import { StoryboardVideoModal } from './components/modals/StoryboardVideoModal';
-import { MangaStartPanel } from './components/MangaStartPanel';
 import { isValidNodeConnection } from '@/shared/connectionRules.js';
-import { canvasViewCenter, centerNodeAt, screenToCanvas } from '@/shared/canvasCoords.js';
+import { canvasViewCenter, centerNodeAt, computeFitViewport, screenToCanvas, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT } from '@/shared/canvasCoords.js';
+import { ZOOM_MIN, ZOOM_MAX } from '@/shared/zoom.js';
 import { getCanvasRect } from './utils/canvasRect';
 import { MapPinned } from 'lucide-react';
 import { CanvasMinimap } from './components/canvas/CanvasMinimap';
@@ -230,6 +228,7 @@ export default function App() {
     canvasTitle,
     setNodes,
     setGroups,
+    setViewport,
     setSelectedNodeIds,
     setCanvasTitle,
     setEditingTitleValue,
@@ -443,6 +442,7 @@ export default function App() {
     setCanvasTitle('未命名项目');
     setEditingTitleValue('未命名项目');
     resetWorkflowId(); // Important: ensures new workflow gets a new ID
+    setViewport({ x: 0, y: 0, zoom: 1 });
     setIsDirty(false);
   };
 
@@ -656,18 +656,36 @@ export default function App() {
     setNodes(prev => prev.map(node => positions.has(node.id) ? { ...node, ...positions.get(node.id)! } : node));
   }, [nodes, selectedNodeIds, setNodes]);
 
+  /**
+   * 侧边栏点击「画布元素」→ 跳转到该节点：居中并缩放到刚好铺满画布可视区。
+   * 节点实际渲染宽高并不统一（文本/待生成 365、视频 385、出图后的图片节点 auto 随比例变），
+   * 所以不用猜测常量，而是直接量测该节点当前的真实 DOM 尺寸（CanvasNode 各分支已标注
+   * data-node-id），再按当前 zoom 换算回世界坐标尺寸，交给 computeFitViewport 算出目标视口。
+   */
   const locateNodeFromSidebar = React.useCallback((id: string) => {
     const node = nodes.find(item => item.id === id);
     if (!node) return;
-    const sidebarWidth = sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH;
-    const usableWidth = window.innerWidth - sidebarWidth;
     setSelectedNodeIds([id]);
+
+    const rect = getCanvasRect();
+    const nodeEl = document.querySelector<HTMLElement>(`[data-node-id="${id}"]`);
+    const box = nodeEl
+      ? (() => {
+        const domRect = nodeEl.getBoundingClientRect();
+        return {
+          x: node.x,
+          y: node.y,
+          width: domRect.width / viewport.zoom,
+          height: domRect.height / viewport.zoom,
+        };
+      })()
+      : { x: node.x, y: node.y, width: DEFAULT_NODE_WIDTH, height: DEFAULT_NODE_HEIGHT }; // 节点尚未渲染时的兜底
+
     setViewport(prev => ({
       ...prev,
-      x: usableWidth / 2 - (node.x + 182) * prev.zoom,
-      y: window.innerHeight / 2 - (node.y + 220) * prev.zoom,
+      ...computeFitViewport(rect, box, { minZoom: ZOOM_MIN, maxZoom: ZOOM_MAX }),
     }));
-  }, [nodes, sidebarCollapsed, setSelectedNodeIds, setViewport]);
+  }, [nodes, viewport.zoom, setSelectedNodeIds, setViewport]);
 
   const {
     handleCopy,
@@ -909,36 +927,6 @@ export default function App() {
     }, 500);
 
   }, [storyboardVideoModal.nodes, setNodes]);
-
-  // Twitter Post Modal State
-  const [twitterModal, setTwitterModal] = useState<{
-    isOpen: boolean;
-    mediaUrl: string | null;
-    mediaType: 'image' | 'video';
-  }>({ isOpen: false, mediaUrl: null, mediaType: 'image' });
-
-  const handlePostToX = React.useCallback((nodeId: string, mediaUrl: string, mediaType: 'image' | 'video') => {
-    console.log('[Twitter] Opening post modal for:', nodeId, mediaUrl, mediaType);
-    setTwitterModal({
-      isOpen: true,
-      mediaUrl,
-      mediaType
-    });
-  }, []);
-
-  // TikTok Post Modal State
-  const [tiktokModal, setTiktokModal] = useState<{
-    isOpen: boolean;
-    mediaUrl: string | null;
-  }>({ isOpen: false, mediaUrl: null });
-
-  const handlePostToTikTok = React.useCallback((nodeId: string, mediaUrl: string) => {
-    console.log('[TikTok] Opening post modal for:', nodeId, mediaUrl);
-    setTiktokModal({
-      isOpen: true,
-      mediaUrl
-    });
-  }, []);
 
   // Context menu handlers
   const {
@@ -1498,7 +1486,7 @@ export default function App() {
           groups={groups}
           selectedNodeIds={selectedNodeIds}
           workflowId={workflowId}
-          onSelectNode={(id) => setSelectedNodeIds([id])}
+          onSelectNode={locateNodeFromSidebar}
           onSelectNodes={setSelectedNodeIds}
           onCreateGroup={() => { if (selectedNodeIds.length >= 2) groupNodes(selectedNodeIds, setNodes, '新分组'); }}
           onRenameGroup={renameGroup}
@@ -1514,16 +1502,6 @@ export default function App() {
           onDeleteProject={handleDeleteCurrentProject}
           onCollapsedChange={setSidebarCollapsed}
           canvasTheme={canvasTheme}
-        />
-      )}
-
-      {nodes.length === 0 && !storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
-        <MangaStartPanel
-          canvasTheme={canvasTheme}
-          onCreateWorkflow={handleCreateMangaWorkflow}
-          onOpenStoryboard={storyboardGenerator.openModal}
-          onOpenAssets={handleAssetsClick}
-          sidebarOffset={sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH}
         />
       )}
 
@@ -1581,21 +1559,6 @@ export default function App() {
         isOpen={isTikTokModalOpen}
         onClose={closeTikTokModal}
         onVideoImported={handleTikTokVideoImported}
-      />
-
-      {/* Twitter Post Modal */}
-      <TwitterPostModal
-        isOpen={twitterModal.isOpen}
-        onClose={() => setTwitterModal(prev => ({ ...prev, isOpen: false }))}
-        mediaUrl={twitterModal.mediaUrl}
-        mediaType={twitterModal.mediaType}
-      />
-
-      {/* TikTok Post Modal */}
-      <TikTokPostModal
-        isOpen={tiktokModal.isOpen}
-        onClose={() => setTiktokModal(prev => ({ ...prev, isOpen: false }))}
-        mediaUrl={tiktokModal.mediaUrl}
       />
 
       {/* Storyboard Generator Modal */}
@@ -1788,8 +1751,6 @@ export default function App() {
                 onMouseEnter={() => setCanvasHoveredNodeId(node.id)}
                 onMouseLeave={() => setCanvasHoveredNodeId(null)}
                 canvasTheme={canvasTheme}
-                onPostToX={handlePostToX}
-                onPostToTikTok={handlePostToTikTok}
               />
             ))}
           </div>

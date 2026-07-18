@@ -276,13 +276,18 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                 let lastFrameBase64: string | undefined;
 
                 const isSeedanceModel = !!node.videoModel?.startsWith('seedance-');
-                const referenceAudioUrls = isSeedanceModel
+                const supportsSeedanceReferenceAudio = node.videoModel === 'seedance-2-0' || node.videoModel === 'seedance-2-0-fast';
+                const connectedSeedanceAudioUrls = isSeedanceModel
                     ? (node.parentIds || [])
                         .map(parentId => nodes.find(n => n.id === parentId))
                         .filter(parent => parent?.type === NodeType.AUDIO && parent.mediaUrl)
                         .map(parent => parent!.mediaUrl!)
                         .slice(0, 3)
                     : [];
+                if (connectedSeedanceAudioUrls.length > 0 && !supportsSeedanceReferenceAudio) {
+                    throw new Error('输入音色参考仅支持 Seedance 2.0 与 Seedance 2.0 Fast，请切换模型或移除音频连接');
+                }
+                const referenceAudioUrls = supportsSeedanceReferenceAudio ? connectedSeedanceAudioUrls : [];
 
                 // Only visual parents participate in first/last-frame selection.
                 // Connected AUDIO nodes are handled separately as Seedance references.

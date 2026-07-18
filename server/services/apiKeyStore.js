@@ -9,7 +9,7 @@ import path from 'path';
 export const API_KEY_FIELDS = [
     { name: 'GEMINI_API_KEY', provider: 'Google', label: 'Gemini / Veo API Key', secret: true },
     { name: 'OPENAI_API_KEY', provider: 'OpenAI', label: 'OpenAI API Key', secret: true },
-    { name: 'ARK_API_KEY', provider: 'Seedance', label: 'BytePlus ModelArk API Key', secret: true },
+    { name: 'ARK_API_KEY', provider: 'Seedance', label: '火山方舟 API Key（中国区）', secret: true },
     { name: 'KLING_API_KEY', provider: 'Kling 3', label: 'Kling 新版 API Key', secret: true },
     { name: 'KLING_ACCESS_KEY', provider: 'Kling 旧模型', label: 'Access Key', secret: true },
     { name: 'KLING_SECRET_KEY', provider: 'Kling 旧模型', label: 'Secret Key', secret: true },

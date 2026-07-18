@@ -40,7 +40,7 @@ After deployment, Modal provides URLs like:
 ### 4. Add to Environment
 ```env
 # .env
-MODAL_CAMERA_ENDPOINT=https://your-username--camera-angle-control-cameraangle-generate.modal.run
+VITE_MODAL_CAMERA_ENDPOINT=https://your-username--camera-angle-control-cameraangle-generate.modal.run
 ```
 
 ---

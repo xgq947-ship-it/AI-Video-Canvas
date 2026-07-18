@@ -79,7 +79,7 @@ export function resolveImageToBase64(input) {
 /**
  * Resolve a Seedance reference audio input.
  * Local library audio is converted to a data URL; public HTTP(S) URLs are
- * preserved because ModelArk can fetch them directly.
+ * preserved because 火山方舟 can fetch them directly.
  * @param {string} input
  * @returns {string|null}
  */

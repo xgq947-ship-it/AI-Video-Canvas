@@ -19,10 +19,28 @@ router.post('/codex-image-jobs', (req, res) => {
             resolution: req.body.resolution,
             referenceImages: req.body.referenceImages
         });
+        req.app.locals.CODEX_IMAGE_AUTOMATION?.notify();
         res.status(202).json(job);
     } catch (error) {
         res.status(400).json({ error: error.message });
     }
+});
+
+router.get('/codex-image-automation/status', (req, res) => {
+    const automation = req.app.locals.CODEX_IMAGE_AUTOMATION;
+    if (!automation) {
+        return res.json({ enabled: false, status: 'unavailable', queuedJobs: 0 });
+    }
+    res.json(automation.getStatus());
+});
+
+router.post('/codex-image-automation/retry', (req, res) => {
+    const automation = req.app.locals.CODEX_IMAGE_AUTOMATION;
+    if (!automation) {
+        return res.status(503).json({ error: 'Codex 自动生图服务不可用' });
+    }
+    const started = automation.notify();
+    res.status(started ? 202 : 503).json(automation.getStatus());
 });
 
 router.get('/codex-image-jobs', (req, res) => {

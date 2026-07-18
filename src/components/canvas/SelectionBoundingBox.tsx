@@ -180,11 +180,11 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
     const isGrouped = !!group;
     const showGroupButton = selectedNodes.length > 1 && !isGrouped;
 
-    // Calculate scale factor for UI elements - clamp to prevent elements from getting too large
-    // At zoom 1.0: scale = 1.0 (normal size)
-    // At zoom 0.5: scale = 1.5 (max clamped, instead of 2.0)
-    // At zoom 2.0: scale = 0.5 (smaller)
-    const uiScale = Math.min(1 / viewport.zoom, 1.5);
+    // 多选与分组操作始终保持固定屏幕尺寸，不跟随画布缩放。
+    const uiScale = 1 / Math.max(viewport.zoom, 0.01);
+    // 工具条与方框之间的间距：纯布局定位（bottom: 100% + gap），不与 scale 混合在同一个 transform 里，
+    // 避免 translateY(-100%) 与 scale() 叠加导致的随缩放偏移（该位移会被内层的 scale 再次放大/缩小）。
+    const stackGap = 8 / Math.max(viewport.zoom, 0.01);
 
     // ============================================================================
     // RENDER
@@ -201,7 +201,7 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
                 border: isGrouped ? '2px solid #6366f1' : '2px dashed #6366f1',
                 borderRadius: '12px',
                 backgroundColor: isGrouped ? 'rgba(55, 55, 55, 0.5)' : 'transparent',
-                zIndex: 5
+                zIndex: 60
             }}
             onPointerDown={(e) => {
                 // Only trigger group drag if clicking on the bounding box itself, not its children
@@ -289,25 +289,25 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
             {/* Group Button (when multiple nodes selected but not grouped) */}
             {showGroupButton && (
                 <div
-                    className="absolute flex gap-2 pointer-events-auto"
+                    className="absolute flex gap-1.5 pointer-events-auto"
                     style={{
-                        top: -10,
+                        bottom: `calc(100% + ${stackGap}px)`,
                         right: 0,
-                        transform: `scale(${uiScale}) translateY(-100%)`,
+                        transform: `scale(${uiScale})`,
                         transformOrigin: 'bottom right'
                     }}
                 >
                     <button
                         onClick={onGroup}
-                        className="bg-neutral-900 border border-neutral-700 hover:bg-neutral-800 text-white text-sm px-4 py-2.5 rounded flex items-center gap-2 transition-colors"
+                        className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-neutral-700 bg-neutral-900 px-3.5 py-2 text-sm font-medium text-white shadow-xl transition-colors hover:bg-neutral-800"
                     >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <rect x="3" y="3" width="7" height="7" />
                             <rect x="14" y="3" width="7" height="7" />
                             <rect x="14" y="14" width="7" height="7" />
                             <rect x="3" y="14" width="7" height="7" />
                         </svg>
-                        Group
+                        打组
                     </button>
                 </div>
             )}
@@ -315,11 +315,11 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
             {/* Group Toolbar (when grouped) */}
             {isGrouped && (
                 <div
-                    className="absolute flex gap-2 pointer-events-auto"
+                    className="absolute flex gap-1.5 pointer-events-auto"
                     style={{
-                        top: -10,
+                        bottom: `calc(100% + ${stackGap}px)`,
                         left: '50%',
-                        transform: `translateX(-50%) scale(${uiScale}) translateY(-100%)`,
+                        transform: `translateX(-50%) scale(${uiScale})`,
                         transformOrigin: 'bottom center'
                     }}
                 >
@@ -327,29 +327,29 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
                     <div className="relative">
                         <button
                             onClick={() => setShowSortDropdown(!showSortDropdown)}
-                            className="bg-neutral-900 border border-neutral-700 hover:bg-neutral-800 text-white text-sm px-4 py-2.5 rounded flex items-center gap-2 transition-colors"
+                            className="shrink-0 whitespace-nowrap bg-neutral-900 border border-neutral-700 hover:bg-neutral-800 text-white text-xs px-3 py-1.5 rounded flex items-center gap-1.5 transition-colors"
                         >
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                 <line x1="4" y1="6" x2="20" y2="6" />
                                 <line x1="4" y1="12" x2="16" y2="12" />
                                 <line x1="4" y1="18" x2="12" y2="18" />
                             </svg>
                             排列
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                 <polyline points="6 9 12 15 18 9" />
                             </svg>
                         </button>
                         {/* Dropdown Menu - Appears above */}
                         {showSortDropdown && (
-                            <div className="absolute bottom-full mb-1 left-0 w-36 bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl overflow-hidden z-50">
+                            <div className="absolute bottom-full mb-1 left-0 w-32 bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl overflow-hidden z-50">
                                 <button
                                     onClick={() => {
                                         onSortNodes?.('horizontal');
                                         setShowSortDropdown(false);
                                     }}
-                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-white hover:bg-neutral-700 transition-colors"
+                                    className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-white hover:bg-neutral-700 transition-colors"
                                 >
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                         <line x1="4" y1="12" x2="20" y2="12" />
                                         <polyline points="14 6 20 12 14 18" />
                                     </svg>
@@ -360,9 +360,9 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
                                         onSortNodes?.('vertical');
                                         setShowSortDropdown(false);
                                     }}
-                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-white hover:bg-neutral-700 transition-colors"
+                                    className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-white hover:bg-neutral-700 transition-colors"
                                 >
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                         <line x1="12" y1="4" x2="12" y2="20" />
                                         <polyline points="6 14 12 20 18 14" />
                                     </svg>
@@ -373,9 +373,9 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
                                         onSortNodes?.('grid');
                                         setShowSortDropdown(false);
                                     }}
-                                    className="w-full flex items-center gap-2 px-3 py-2 text-sm text-white hover:bg-neutral-700 transition-colors"
+                                    className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-white hover:bg-neutral-700 transition-colors"
                                 >
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                         <rect x="3" y="3" width="7" height="7" />
                                         <rect x="14" y="3" width="7" height="7" />
                                         <rect x="3" y="14" width="7" height="7" />
@@ -390,9 +390,9 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
                     {/* Ungroup Button */}
                     <button
                         onClick={onUngroup}
-                        className="bg-neutral-900 border border-neutral-700 hover:bg-neutral-800 text-white text-sm px-4 py-2.5 rounded flex items-center gap-2 transition-colors"
+                        className="shrink-0 whitespace-nowrap bg-neutral-900 border border-neutral-700 hover:bg-neutral-800 text-white text-xs px-3 py-1.5 rounded flex items-center gap-1.5 transition-colors"
                     >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <rect x="3" y="3" width="7" height="7" />
                             <rect x="14" y="3" width="7" height="7" />
                             <rect x="14" y="14" width="7" height="7" />
@@ -409,9 +409,9 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
                                 e.stopPropagation();
                                 if (onEditStoryboard) onEditStoryboard(group.id);
                             }}
-                            className="bg-neutral-800 hover:bg-neutral-700 border border-neutral-600 text-white text-sm px-4 py-2.5 rounded flex items-center gap-2 transition-colors mr-2"
+                            className="shrink-0 whitespace-nowrap bg-neutral-800 hover:bg-neutral-700 border border-neutral-600 text-white text-xs px-3 py-1.5 rounded flex items-center gap-1.5 transition-colors mr-1.5"
                         >
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                                 <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                             </svg>
@@ -425,9 +425,9 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
                             e.stopPropagation();
                             if (onCreateVideo) onCreateVideo();
                         }}
-                        className="bg-purple-600 hover:bg-purple-500 text-white text-sm px-4 py-2.5 rounded flex items-center gap-2 transition-colors shadow-lg shadow-purple-600/20"
+                        className="shrink-0 whitespace-nowrap bg-purple-600 hover:bg-purple-500 text-white text-xs px-3 py-1.5 rounded flex items-center gap-1.5 transition-colors shadow-lg shadow-purple-600/20"
                     >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M15 10l5 5-5 5" />
                             <path d="M4 4v16" />
                         </svg>

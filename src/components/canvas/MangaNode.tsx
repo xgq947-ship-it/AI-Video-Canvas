@@ -249,6 +249,7 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
 
   return (
     <div
+      data-node-id={data.id}
       className="absolute group/node touch-none pointer-events-auto"
       style={{ transform: `translate(${data.x}px, ${data.y}px)`, zIndex: selected ? 50 : 10 }}
       onPointerDown={(e) => onNodePointerDown(e, data.id)}

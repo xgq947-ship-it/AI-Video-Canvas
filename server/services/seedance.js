@@ -1,14 +1,14 @@
 /**
  * Seedance 官方 API 适配器。
- * 使用 BytePlus ModelArk 的异步视频生成任务接口。
+ * 使用火山方舟中国区的异步视频生成任务接口。
  */
 
-const SEEDANCE_BASE_URL = 'https://ark.ap-southeast.bytepluses.com/api/v3';
+export const SEEDANCE_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
 
 const MODEL_MAPPING = {
-    'seedance-2-0': 'dreamina-seedance-2-0-260128',
-    'seedance-2-0-fast': 'dreamina-seedance-2-0-fast-260128',
-    'seedance-1-5-pro': 'seedance-1-5-pro-251215'
+    'seedance-2-0': 'doubao-seedance-2-0-260128',
+    'seedance-2-0-fast': 'doubao-seedance-2-0-fast-260128',
+    'seedance-1-5-pro': 'doubao-seedance-1-5-pro-251215'
 };
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -22,14 +22,20 @@ function normalizeRatio(value) {
     return supported.has(value) ? value : 'adaptive';
 }
 
-function normalizeResolution(value) {
+function normalizeResolution(value, modelId) {
     const normalized = String(value || '').toLowerCase();
-    return ['480p', '720p', '1080p', '2k', '4k'].includes(normalized) ? normalized : '720p';
+    const supported = modelId === 'seedance-2-0-fast'
+        ? new Set(['480p', '720p'])
+        : modelId === 'seedance-1-5-pro'
+            ? new Set(['480p', '720p', '1080p'])
+            : new Set(['480p', '720p', '1080p', '4k']);
+    return supported.has(normalized) ? normalized : '720p';
 }
 
-function normalizeDuration(value) {
+function normalizeDuration(value, modelId) {
     const parsed = Math.round(Number(value));
-    return Number.isFinite(parsed) ? Math.min(15, Math.max(2, parsed)) : 5;
+    const maxDuration = modelId === 'seedance-1-5-pro' ? 12 : 15;
+    return Number.isFinite(parsed) ? Math.min(maxDuration, Math.max(4, parsed)) : 5;
 }
 
 export function buildSeedanceRequest({
@@ -43,9 +49,14 @@ export function buildSeedanceRequest({
     duration,
     generateAudio = true
 }) {
+    const effectiveModelId = MODEL_MAPPING[modelId] ? modelId : 'seedance-2-0';
     const audioReferences = Array.isArray(referenceAudioUrls)
         ? referenceAudioUrls.filter(Boolean).slice(0, 3)
         : [];
+    const supportsReferenceAudio = effectiveModelId === 'seedance-2-0' || effectiveModelId === 'seedance-2-0-fast';
+    if (audioReferences.length > 0 && !supportsReferenceAudio) {
+        throw new Error('输入参考音频仅支持 Seedance 2.0 与 Seedance 2.0 Fast');
+    }
     if (lastFrameBase64 && audioReferences.length > 0) {
         throw new Error('Seedance 参考音频不能与尾帧模式同时使用，请保留首帧并移除尾帧');
     }
@@ -79,12 +90,12 @@ export function buildSeedanceRequest({
     }
 
     return {
-        model: mapSeedanceModelName(modelId),
+        model: mapSeedanceModelName(effectiveModelId),
         content,
         generate_audio: generateAudio !== false,
         ratio: normalizeRatio(aspectRatio),
-        resolution: normalizeResolution(resolution),
-        duration: normalizeDuration(duration),
+        resolution: normalizeResolution(resolution, effectiveModelId),
+        duration: normalizeDuration(duration, effectiveModelId),
         watermark: false,
         return_last_frame: true
     };
@@ -94,7 +105,7 @@ async function readApiResponse(response) {
     const result = await response.json().catch(() => ({}));
     if (!response.ok || result.error) {
         const detail = result.error?.message || result.message || `HTTP ${response.status}`;
-        throw new Error(`Seedance API 请求失败：${detail}`);
+        throw new Error(`火山方舟 Seedance API 请求失败：${detail}`);
     }
     return result;
 }
@@ -127,7 +138,7 @@ async function pollSeedanceTask(taskId, apiKey, maxWaitMs = 900000) {
 
 export async function generateSeedanceVideo(options) {
     const { apiKey } = options;
-    if (!apiKey) throw new Error('Seedance API Key 未配置');
+    if (!apiKey) throw new Error('火山方舟 API Key 未配置');
 
     const requestBody = buildSeedanceRequest(options);
     console.log(`[Seedance] 创建任务：${requestBody.model}，音频：${requestBody.generate_audio ? '开启' : '关闭'}`);

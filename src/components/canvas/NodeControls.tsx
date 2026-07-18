@@ -67,8 +67,8 @@ const VIDEO_MODELS: VideoModelOption[] = [
     { id: 'veo-3.1', name: 'Veo 3.1', provider: 'google', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, durations: [4, 6, 8], resolutions: ['Auto', '720p', '1080p'], aspectRatios: ['16:9', '9:16'] },
     // Seedance 官方模型
     { id: 'seedance-2-0', name: 'Seedance 2.0', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
-    { id: 'seedance-2-0-fast', name: 'Seedance 2.0 Fast', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
-    { id: 'seedance-1-5-pro', name: 'Seedance 1.5 Pro', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [5, 10], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
+    { id: 'seedance-2-0-fast', name: 'Seedance 2.0 Fast', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['480p', '720p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
+    { id: 'seedance-1-5-pro', name: 'Seedance 1.5 Pro', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [4, 5, 6, 8, 10, 12], resolutions: ['480p', '720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
     // Kling AI models - Consolidated: removed legacy v1, v1-5, v1-6, v2-master
     { id: 'kling-v3', name: 'Kling 3.0', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [3, 4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1'] },
     { id: 'kling-v3-turbo', name: 'Kling 3.0 Turbo', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [3, 4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1'] },
@@ -92,7 +92,7 @@ const VIDEO_MODELS: VideoModelOption[] = [
 const IMAGE_MODELS = [
     {
         id: 'codex-imagegen',
-        name: 'Codex 生图（Plus）',
+        name: 'Codex 生图',
         provider: 'codex',
         supportsImageToImage: true,
         supportsMultiImage: true,
@@ -685,12 +685,8 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
         return 0;
     });
 
-    // Inverse scaling for the prompt bar to keep it readable when zooming out
-    // When zooming in (zoom > 0.8), we let it zoom 1:1 with the canvas (localScale = 1)
-    // When zooming out (zoom < 0.8), we keep it at least at 0.8 effective scale
-    const minEffectiveScale = 0.8;
-    const effectiveScale = Math.max(zoom, minEffectiveScale);
-    const localScale = effectiveScale / zoom;
+    // 操作面板始终保持固定屏幕尺寸，不跟随画布缩放。
+    const localScale = 1 / Math.max(zoom, 0.01);
 
     // Theme helper
     const isDark = canvasTheme === 'dark';
@@ -729,7 +725,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
 
     return (
         <div
-            className={`p-4 rounded-2xl shadow-2xl cursor-default w-full transition-colors duration-300 ${isDark ? 'bg-[#1a1a1a] border border-neutral-800' : 'bg-white border border-neutral-200'}`}
+            className={`w-full cursor-default rounded-2xl p-5 shadow-2xl transition-colors duration-300 ${isDark ? 'bg-[#1a1a1a] border border-neutral-800' : 'bg-white border border-neutral-200'}`}
             style={{
                 transform: `scale(${localScale})`,
                 transformOrigin: 'top center',
@@ -742,7 +738,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
             {!(data.prompt && data.prompt.startsWith('Extract panel #')) && (
                 <div className="mb-3">
                     <textarea
-                        className={`w-full bg-transparent text-sm outline-none resize-none font-light ${isDark ? 'text-white placeholder-neutral-600' : 'text-neutral-900 placeholder-neutral-400'}`}
+                        className={`w-full resize-none bg-transparent text-[17px] font-normal leading-7 outline-none ${isDark ? 'text-white placeholder-neutral-600' : 'text-neutral-900 placeholder-neutral-400'}`}
                         placeholder={
                             data.type === NodeType.VIDEO && isFrameToFrame && currentVideoModel.provider === 'kling'
                                 ? "Prompt optional for Kling frame-to-frame..."
@@ -768,10 +764,10 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                     <div className="flex justify-end mt-1">
                         <button
                             onClick={() => onUpdate(data.id, { isPromptExpanded: !data.isPromptExpanded })}
-                            className={`flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded transition-colors ${isDark ? 'text-neutral-500 hover:text-white hover:bg-neutral-700' : 'text-neutral-500 hover:text-neutral-900 hover:bg-neutral-200'}`}
+                            className={`flex items-center gap-1.5 rounded px-2 py-1 text-xs transition-colors ${isDark ? 'text-neutral-400 hover:text-white hover:bg-neutral-700' : 'text-neutral-500 hover:text-neutral-900 hover:bg-neutral-200'}`}
                             title={data.isPromptExpanded ? '收起提示词' : '展开提示词'}
                         >
-                            {data.isPromptExpanded ? <Shrink size={12} /> : <Expand size={12} />}
+                            {data.isPromptExpanded ? <Shrink size={14} /> : <Expand size={14} />}
                             <span>{data.isPromptExpanded ? '收起' : '展开'}</span>
                         </button>
                     </div>
@@ -781,12 +777,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
             {data.errorMessage && (
                 <div className="text-red-400 text-xs mb-2 p-1 bg-red-900/20 rounded border border-red-900/50">
                     {data.errorMessage}
-                </div>
-            )}
-
-            {data.imageModel === 'codex-imagegen' && !isVideoNode && (
-                <div className="text-blue-300 text-xs mb-2 p-2 bg-blue-900/20 rounded border border-blue-800/50">
-                    Codex 会按“{data.aspectRatio || '自动'}”比例生成并校验最终像素；不匹配时自动修正。点击生成后，在 Codex 发送：AI漫剧图片生成
                 </div>
             )}
 
@@ -1043,11 +1033,11 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                                 imageGenerationMode === 'image-to-image' ? '图片 → 图片' :
                                                     `${inputCount} 张图片 → 图片`}
                                         </div>
-                                        {/* Codex Plus bridge */}
+                                        {/* Codex 本地生图 */}
                                         {availableImageModels.filter(m => m.provider === 'codex').length > 0 && (
                                             <>
                                                 <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f]">
-                                                    Codex（无需 API Key）
+                                                    本地生图
                                                 </div>
                                                 {availableImageModels.filter(m => m.provider === 'codex').map(model => (
                                                     <button
@@ -1295,7 +1285,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                             </div>
                         )}
 
-                        {isVideoNode && currentVideoModel.provider === 'seedance' && connectedAudioNodes.length > 0 && (
+                        {isVideoNode && ['seedance-2-0', 'seedance-2-0-fast'].includes(currentVideoModel.id) && connectedAudioNodes.length > 0 && (
                             <div
                                 title={`固定音色参考：${connectedAudioNodes.map(node => node.title).join('、')}`}
                                 className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-emerald-500/50 bg-emerald-500/15 px-2.5 py-1.5 text-xs font-medium text-emerald-200"

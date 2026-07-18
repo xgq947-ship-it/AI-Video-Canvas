@@ -90,8 +90,9 @@ npm run render:e2e-test  # 用 ffmpeg 生成测试素材并端到端渲染出 MP
 见 [docs/AI漫剧0-1工作流.md](docs/AI漫剧0-1工作流.md#八常见错误)。首次渲染会自动下载一次
 Chrome Headless Shell（约 90MB）。
 
-> **Seedance**：仅当存在正式官方 API 与用户凭证时才接入；当前仅保留标准 Provider 适配接口
-> 与 UI 占位，不伪造可用状态，也不使用任何逆向破解的即梦接口。
+> **Seedance**：通过火山方舟中国区官方 API
+> `https://ark.cn-beijing.volces.com/api/v3` 接入，设置中须填写同一火山方舟账号生成的中国区 API Key，
+> 并在方舟控制台开通对应 Seedance 模型。项目不使用任何逆向破解的即梦接口。
 
 ---
 
@@ -115,8 +116,6 @@ Chrome Headless Shell（约 90MB）。
 - **📋 Storyboard** - Create video storyboards with consistent characters and layouts
 - **💃 Motion Control** - Transfer motion from reference videos to character images (Kling V2.6 via Fal.ai)
 - **📥 TikTok Import** - Download TikTok videos without watermark for use as motion references
-- **📤 Post to X** - Share generated images/videos directly to Twitter/X with one click
-- **📤 Post to TikTok** - Share generated videos directly to TikTok with one click
 - **🖼️ Image-to-Image** - Use reference images for generation
 - **📽️ Frame-to-Frame Video** - Animate between start and end frames
 - **🔗 Smart Node Connections** - Type-aware validation (IMAGE→VIDEO, TEXT→IMAGE, etc.)
@@ -206,22 +205,6 @@ https://github.com/user-attachments/assets/3c36de54-d37e-4875-8403-5b6e4a6216e0
    
    # Get from https://fal.ai/dashboard/keys (for Kling V2.6 Motion Control)
    FAL_API_KEY=your_fal_api_key_here
-   
-   # Optional: X (Twitter) Post Feature - Get from https://developer.twitter.com/en/portal
-   # See docs/post-to-x.md for detailed setup instructions
-   TWITTER_CLIENT_ID=your_twitter_client_id
-   TWITTER_CLIENT_SECRET=your_twitter_client_secret
-   TWITTER_API_KEY=your_twitter_api_key
-   TWITTER_API_SECRET=your_twitter_api_secret
-   TWITTER_ACCESS_TOKEN=your_twitter_access_token
-   TWITTER_ACCESS_TOKEN_SECRET=your_twitter_access_token_secret
-   TWITTER_CALLBACK_URL=http://127.0.0.1:3001/api/twitter/callback
-   
-   # Optional: TikTok Post Feature - Get from https://developers.tiktok.com/
-   # See docs/tiktok-integration.md for detailed setup instructions
-   TIKTOK_CLIENT_KEY=your_tiktok_client_key
-   TIKTOK_CLIENT_SECRET=your_tiktok_client_secret
-   TIKTOK_CALLBACK_URL=https://your-ngrok-url.ngrok-free.app/api/tiktok-post/callback
    ```
    
    > ⚠️ **Security**: API keys are stored server-side only and never exposed to the client.
@@ -329,50 +312,7 @@ For users without high-end GPUs, we provide a Modal-based cloud deployment.
    
    > **Tip**: Stop the app when not actively using the feature to avoid any accidental charges.
 
-#### Option 2: Local Deployment (Advanced)
-This feature requires a **24GB VRAM GPU** (RTX 3090/4090).
-
-**Download Models (~35GB):**
-```bash
-# Activate venv
-.\venv\Scripts\activate    # Windows
-source venv/bin/activate   # Linux/macOS
-
-# Download fast transformer (~20GB)
-huggingface-cli download linoyts/Qwen-Image-Edit-Rapid-AIO \
-    --local-dir models/camera-control/qwen-rapid-aio \
-    --include "transformer/*"
-
-# Download camera angle LoRA (~236MB)
-huggingface-cli download dx8152/Qwen-Edit-2509-Multiple-angles \
-    镜头转换.safetensors \
-    --local-dir models/camera-control/loras
-```
-
-**Configure HuggingFace Cache (Recommended):**
-
-By default, HuggingFace caches models to your C: drive. Move the cache to prevent filling up your system drive:
-
-```powershell
-# Windows - Set cache to D: drive
-[System.Environment]::SetEnvironmentVariable("HF_HOME", "D:\HuggingFace_Cache", "User")
-# Restart terminal after running
-```
-
-```bash
-# Linux/macOS - Add to ~/.bashrc or ~/.zshrc
-export HF_HOME="/path/to/your/cache"
-source ~/.bashrc
-```
-
-**Start Camera Angle Server:**
-```bash
-.\start-camera-server.bat    # Windows
-./start-camera-server.sh     # Linux/macOS
-# Server runs on http://localhost:8100
-```
-
-> 📖 For detailed documentation, see [docs/camera-angle-control.md](docs/camera-angle-control.md)
+> 📖 For detailed documentation, see [docs/modal-camera-integration.md](docs/modal-camera-integration.md)
 
 
 ## 💾 Asset Storage
@@ -451,31 +391,6 @@ Download TikTok videos without watermark to use as **motion references** for the
 > **Tip**: The imported video will appear in your Video History and can be used as a motion reference when generating videos with Kling V2.6 Motion Control. This allows you to transfer dance moves, gestures, or any motion from TikTok videos to your AI-generated characters!
 
 > **Note**: First and last frames are automatically trimmed to remove TikTok watermarks (requires ffmpeg installed on your system).
-
-#### Post to X (Twitter)
-
-Share your generated images and videos directly to Twitter/X:
-
-1. Generate an image or video using a node
-2. Hover over the media and click the **X icon** button
-3. Sign in with your X account (first time only)
-4. Add an optional caption
-5. Click **Post** to share!
-
-> **Rate Limits (Free Tier)**: 17 posts/day, 85 media uploads/day. See [Post to X Documentation](docs/post-to-x.md) for setup instructions.
-
-#### Post to TikTok
-
-Share your generated videos directly to TikTok:
-
-1. Generate a video using a node
-2. Hover over the video and click the **TikTok icon** button (🎵)
-3. Sign in with your TikTok account (first time only)
-4. Add a caption with hashtags
-5. Select privacy level ("Only Me" for testing)
-6. Click **Post to TikTok**
-
-> **Note**: Unaudited apps can only post to private accounts. See [TikTok Integration Documentation](docs/tiktok-integration.md) for full setup.
 
 ## 🔧 Available Scripts
 

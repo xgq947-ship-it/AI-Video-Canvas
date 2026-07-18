@@ -209,7 +209,7 @@ router.post('/generate-video', async (req, res) => {
         if (isSeedanceModel) {
             if (!ARK_API_KEY) {
                 return res.status(500).json({
-                    error: 'Seedance API Key 未配置，请在 .env 中添加 ARK_API_KEY'
+                    error: '火山方舟 API Key 未配置，请在设置中填写中国区 ARK_API_KEY'
                 });
             }
 

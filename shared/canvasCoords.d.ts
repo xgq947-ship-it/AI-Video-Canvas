@@ -27,3 +27,17 @@ export const DEFAULT_NODE_WIDTH: number;
 export const VIDEO_NODE_WIDTH: number;
 export const DEFAULT_NODE_HEIGHT: number;
 export function centerNodeAt(point: Point, nodeWidth?: number, nodeHeight?: number): Point;
+
+export interface Box {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+export const FIT_VIEWPORT_PADDING: number;
+export function computeFitViewport(
+    rect: RectLike,
+    box: Box,
+    options?: { padding?: number; minZoom?: number; maxZoom?: number }
+): Viewport;

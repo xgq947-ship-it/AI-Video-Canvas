@@ -1324,6 +1324,7 @@ export default function App() {
         closeHistoryPanel();
         closeAssetLibrary();
         setSidebarAssetPreview(null);
+        setIsMinimapOpen(false);
       }
       // Middle-click (button 1) or other: Start panning
       else {

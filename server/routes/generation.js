@@ -13,6 +13,7 @@ import { generateGeminiImage, generateVeoVideo } from '../services/gemini.js';
 import { generateHailuoVideo } from '../services/hailuo.js';
 import { generateSeedanceVideo } from '../services/seedance.js';
 import { generateGoogleFlowWorkflowVideo, GOOGLE_FLOW_WORKFLOW_MODEL_ID } from '../services/googleFlowWorkflow.js';
+import { generateGoogleFlowWorkflowImage, GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID } from '../services/googleFlowImageWorkflow.js';
 import { generateOpenAIImage } from '../services/openai.js';
 import { resolveAudioToBase64, resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
 
@@ -25,16 +26,33 @@ const router = express.Router();
 router.post('/generate-image', async (req, res) => {
     try {
         const { nodeId, prompt, aspectRatio, resolution, imageBase64: rawImageBase64, imageModel, klingReferenceMode, klingFaceIntensity, klingSubjectIntensity } = req.body;
-        const { GEMINI_API_KEY, KLING_ACCESS_KEY, KLING_SECRET_KEY, OPENAI_API_KEY, IMAGES_DIR } = req.app.locals;
+        const { GEMINI_API_KEY, KLING_ACCESS_KEY, KLING_SECRET_KEY, OPENAI_API_KEY, IMAGES_DIR, LIBRARY_DIR } = req.app.locals;
 
         // Determine provider
         const isKlingModel = imageModel && imageModel.startsWith('kling-');
         const isOpenAIModel = imageModel && imageModel.startsWith('gpt-image-');
+        const isGoogleFlowWorkflowModel = imageModel === GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID;
 
         let imageBuffer;
         let imageFormat = 'png';
 
-        if (isKlingModel) {
+        if (isGoogleFlowWorkflowModel) {
+            // --- GOOGLE FLOW LOCAL TEXT-TO-IMAGE WORKFLOW ---
+            const referenceImages = rawImageBase64
+                ? (Array.isArray(rawImageBase64) ? rawImageBase64 : [rawImageBase64]).filter(Boolean)
+                : [];
+
+            console.log(`Using Google Flow workflow for image: ${imageModel}`);
+            const result = await generateGoogleFlowWorkflowImage({
+                prompt,
+                aspectRatio: aspectRatio || '1:1',
+                referenceImageInputs: referenceImages,
+                libraryDir: LIBRARY_DIR,
+                timeoutMinutes: 10
+            });
+            imageBuffer = result.buffer;
+            imageFormat = result.extension;
+        } else if (isKlingModel) {
             // --- KLING AI IMAGE GENERATION ---
             if (!KLING_ACCESS_KEY || !KLING_SECRET_KEY) {
                 return res.status(500).json({

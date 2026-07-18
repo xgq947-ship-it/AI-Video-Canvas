@@ -93,6 +93,16 @@ const IMAGE_MODELS = [
         aspectRatios: ["Auto", "1:1", "9:16", "16:9", "3:4", "4:3", "3:2", "2:3", "5:4", "4:5", "21:9"]
     },
     {
+        id: 'google-flow-nano-banana-2',
+        name: 'Google Flow · Nano Banana 2',
+        provider: 'workflow',
+        supportsImageToImage: true,
+        supportsMultiImage: true,
+        recommended: true,
+        resolutions: ["自动"],
+        aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"]
+    },
+    {
         id: 'gpt-image-1.5',
         name: 'GPT Image 1.5',
         provider: 'openai',
@@ -595,7 +605,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
 
         // Reset aspect ratio if current ratio is not supported by new model
         if (newModel?.aspectRatios && data.aspectRatio && !newModel.aspectRatios.includes(data.aspectRatio)) {
-            updates.aspectRatio = 'Auto';
+            updates.aspectRatio = newModel.aspectRatios[0] || 'Auto';
         }
 
         // Reset resolution if current resolution is not supported by new model
@@ -1141,7 +1151,9 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                     onClick={() => setShowModelDropdown(!showModelDropdown)}
                                     className="flex items-center gap-1.5 text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
                                 >
-                                    {currentImageModel.id === 'google-veo' ? ( // Keeping consistency if there was one, but mainly checking provider
+                                    {currentImageModel.provider === 'workflow' ? (
+                                        <Banana size={12} className="text-cyan-400" />
+                                    ) : currentImageModel.id === 'google-veo' ? ( // Keeping consistency if there was one, but mainly checking provider
                                         <GoogleIcon size={12} className="text-white" />
                                     ) : currentImageModel.id === 'gemini-pro' ? (
                                         <Banana size={12} className="text-yellow-400" />
@@ -1184,6 +1196,28 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                                     >
                                                         <span className="flex items-center gap-2">
                                                             <Sparkles size={12} className="text-blue-400" />
+                                                            {model.name}
+                                                            <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">推荐</span>
+                                                        </span>
+                                                        {currentImageModel.id === model.id && <Check size={12} />}
+                                                    </button>
+                                                ))}
+                                            </>
+                                        )}
+                                        {/* Google Flow 本地 workflow */}
+                                        {availableImageModels.filter(m => m.provider === 'workflow').length > 0 && (
+                                            <>
+                                                <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f] border-t border-neutral-700">
+                                                    Google Flow
+                                                </div>
+                                                {availableImageModels.filter(m => m.provider === 'workflow').map(model => (
+                                                    <button
+                                                        key={model.id}
+                                                        onClick={() => handleImageModelChange(model.id)}
+                                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${currentImageModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'}`}
+                                                    >
+                                                        <span className="flex items-center gap-2">
+                                                            <Banana size={12} className="text-cyan-400" />
                                                             {model.name}
                                                             <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">推荐</span>
                                                         </span>

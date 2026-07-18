@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { enqueueGoogleFlowWorkflow } from './googleFlowWorkflowQueue.js';
 
 export const GOOGLE_FLOW_WORKFLOW_MODEL_ID = 'google-flow-omni-flash';
 export const GOOGLE_FLOW_SUPPORTED_DURATIONS = [4, 6, 8, 10];
@@ -21,8 +22,6 @@ const DEFAULT_WORKFLOW_ROOT = path.join(
     '02-运营店铺',
     '运营自动化工具'
 );
-
-let workflowQueue = Promise.resolve();
 
 export function extractWorkflowJson(stdout) {
     const source = String(stdout || '');
@@ -236,7 +235,5 @@ export function buildGoogleFlowWorkflowArgs({
 }
 
 export function generateGoogleFlowWorkflowVideo(options) {
-    const result = workflowQueue.then(() => executeGoogleFlowWorkflow(options));
-    workflowQueue = result.catch(() => undefined);
-    return result;
+    return enqueueGoogleFlowWorkflow(() => executeGoogleFlowWorkflow(options));
 }

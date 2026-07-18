@@ -5,7 +5,7 @@
  * Shows "Group" button for multi-selection and group toolbar when grouped.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { NodeData, NodeGroup, NodeType } from '../../types';
 
 interface SelectionBoundingBoxProps {
@@ -156,6 +156,43 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
     const [isEditingLabel, setIsEditingLabel] = useState(false);
     const [editedLabel, setEditedLabel] = useState('');
     const [showSortDropdown, setShowSortDropdown] = useState(false);
+    const [isGroupHovered, setIsGroupHovered] = useState(false);
+    const boundingBoxRef = useRef<HTMLDivElement>(null);
+    const groupToolbarRef = useRef<HTMLDivElement>(null);
+    const isGrouped = !!group;
+
+    // 分组框本身必须让点击穿透到内部节点，因此不能依赖 CSS :hover。
+    // 使用真实屏幕坐标判断鼠标是否位于分组、工具栏或两者之间的移动走廊。
+    useEffect(() => {
+        if (!isGrouped) {
+            setIsGroupHovered(false);
+            return;
+        }
+
+        const handlePointerMove = (event: PointerEvent) => {
+            const box = boundingBoxRef.current?.getBoundingClientRect();
+            if (!box) return;
+            const toolbar = groupToolbarRef.current?.getBoundingClientRect();
+            const insideBox = event.clientX >= box.left && event.clientX <= box.right
+                && event.clientY >= box.top && event.clientY <= box.bottom;
+            const insideToolbar = !!toolbar
+                && event.clientX >= toolbar.left && event.clientX <= toolbar.right
+                && event.clientY >= toolbar.top && event.clientY <= toolbar.bottom;
+            const insideToolbarBridge = !!toolbar
+                && event.clientX >= Math.min(box.left, toolbar.left)
+                && event.clientX <= Math.max(box.right, toolbar.right)
+                && event.clientY >= toolbar.top
+                && event.clientY <= box.top;
+            const hovered = insideBox || insideToolbar || insideToolbarBridge;
+
+            setIsGroupHovered(previous => previous === hovered ? previous : hovered);
+            if (!hovered) setShowSortDropdown(false);
+        };
+
+        window.addEventListener('pointermove', handlePointerMove, { passive: true });
+        return () => window.removeEventListener('pointermove', handlePointerMove);
+    }, [isGrouped]);
+
     // ============================================================================
     // CALCULATIONS
     // ============================================================================
@@ -177,7 +214,6 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
     const width = maxX - minX;
     const height = maxY - minY;
 
-    const isGrouped = !!group;
     const showGroupButton = selectedNodes.length > 1 && !isGrouped;
 
     // 多选与分组操作始终保持固定屏幕尺寸，不跟随画布缩放。
@@ -192,7 +228,8 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
 
     return (
         <div
-            className="absolute pointer-events-auto cursor-move"
+            ref={boundingBoxRef}
+            className="absolute pointer-events-none"
             style={{
                 left: minX,
                 top: minY,
@@ -200,16 +237,25 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
                 height,
                 border: isGrouped ? '2px solid #6366f1' : '2px dashed #6366f1',
                 borderRadius: '12px',
-                backgroundColor: isGrouped ? 'rgba(55, 55, 55, 0.5)' : 'transparent',
+                backgroundColor: isGrouped ? 'rgba(99, 102, 241, 0.06)' : 'transparent',
                 zIndex: 60
             }}
-            onPointerDown={(e) => {
-                // Only trigger group drag if clicking on the bounding box itself, not its children
-                if (e.target === e.currentTarget) {
-                    onBoundingBoxPointerDown(e);
-                }
-            }}
         >
+            {/* 只让四条边框接收拖动事件，内部区域完整透传给节点。 */}
+            {[
+                { key: 'top', top: -5, left: 0, width: '100%', height: 10 },
+                { key: 'right', top: 0, right: -5, width: 10, height: '100%' },
+                { key: 'bottom', bottom: -5, left: 0, width: '100%', height: 10 },
+                { key: 'left', top: 0, left: -5, width: 10, height: '100%' }
+            ].map(({ key, ...edgeStyle }) => (
+                <div
+                    key={key}
+                    className="absolute pointer-events-auto cursor-move"
+                    style={edgeStyle}
+                    onPointerDown={onBoundingBoxPointerDown}
+                />
+            ))}
+
             {/* Resize Handles */}
             {[
                 { pos: 'top-left', cursor: 'nw-resize', top: -4, left: -4 },
@@ -232,6 +278,7 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
                         transform: handle.transform,
                         cursor: handle.cursor
                     }}
+                    onPointerDown={onBoundingBoxPointerDown}
                 />
             ))}
 
@@ -313,8 +360,9 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
             )}
 
             {/* Group Toolbar (when grouped) */}
-            {isGrouped && (
+            {isGrouped && isGroupHovered && (
                 <div
+                    ref={groupToolbarRef}
                     className="absolute flex gap-1.5 pointer-events-auto"
                     style={{
                         bottom: `calc(100% + ${stackGap}px)`,

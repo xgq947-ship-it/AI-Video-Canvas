@@ -1,0 +1,82 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+import {
+    buildGoogleFlowImageWorkflowArgs,
+    GOOGLE_FLOW_IMAGE_SUPPORTED_ASPECT_RATIOS,
+    GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID,
+    loadGoogleFlowImageResult,
+    resolveGoogleFlowReferenceImages
+} from '../server/services/googleFlowImageWorkflow.js';
+
+test('Google Flow 文生图原样传递提示词和真实生成参数', () => {
+    const args = buildGoogleFlowImageWorkflowArgs({
+        prompt: '  电影感上海夜景，暖色灯光  ',
+        aspectRatio: '9:16',
+        referenceImages: ['/tmp/ref-1.png', '/tmp/ref-2.webp'],
+        outputDir: '/tmp/output',
+        timeoutMinutes: 10
+    });
+
+    assert.deepEqual(args, [
+        '--prompt', '电影感上海夜景，暖色灯光',
+        '--aspect-ratio', '9:16',
+        '--count', '1',
+        '--model', 'Nano Banana 2',
+        '--output-dir', '/tmp/output',
+        '--timeout-minutes', '10',
+        '--reference-image', '/tmp/ref-1.png',
+        '--reference-image', '/tmp/ref-2.webp',
+        '--execute'
+    ]);
+});
+
+test('Google Flow 文生图使用稳定模型 ID 与上游支持的画幅', () => {
+    assert.equal(GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID, 'google-flow-nano-banana-2');
+    assert.deepEqual(GOOGLE_FLOW_IMAGE_SUPPORTED_ASPECT_RATIOS, ['16:9', '4:3', '1:1', '3:4', '9:16']);
+});
+
+test('Google Flow 文生图读取 workflow 返回的本地图片', async () => {
+    const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-google-flow-image-test-'));
+    try {
+        const imagePath = path.join(taskDir, 'result.webp');
+        const expected = Buffer.from('workflow-image');
+        fs.writeFileSync(imagePath, expected);
+
+        const result = await loadGoogleFlowImageResult({
+            images: [{ path: imagePath, url: null }],
+            image_paths: [imagePath]
+        });
+
+        assert.deepEqual(result.buffer, expected);
+        assert.equal(result.extension, 'webp');
+        assert.equal(result.source, 'workflow-file');
+    } finally {
+        fs.rmSync(taskDir, { recursive: true, force: true });
+    }
+});
+
+test('Google Flow 文生图把素材库 URL 与 Base64 参考图转换为本地文件', async () => {
+    const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-google-flow-reference-test-'));
+    const libraryDir = path.join(taskDir, 'library');
+    const libraryImage = path.join(libraryDir, 'images', '人物.png');
+    fs.mkdirSync(path.dirname(libraryImage), { recursive: true });
+    fs.writeFileSync(libraryImage, Buffer.from('library-image'));
+
+    try {
+        const dataUrl = `data:image/png;base64,${Buffer.from('data-image').toString('base64')}`;
+        const references = await resolveGoogleFlowReferenceImages([
+            '/library/images/%E4%BA%BA%E7%89%A9.png?t=123',
+            dataUrl
+        ], libraryDir, taskDir);
+
+        assert.equal(references[0], libraryImage);
+        assert.equal(path.basename(references[1]), 'reference-2.png');
+        assert.deepEqual(fs.readFileSync(references[1]), Buffer.from('data-image'));
+    } finally {
+        fs.rmSync(taskDir, { recursive: true, force: true });
+    }
+});

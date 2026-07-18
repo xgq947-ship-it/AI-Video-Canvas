@@ -41,7 +41,7 @@ cp .env.example .env  # 配置密钥（可留空，见下）
 
 | 功能 | 需要的密钥 |
 |---|---|
-| 图片生成 | `GEMINI_API_KEY` / `OPENAI_API_KEY` / Kling 兼容图片模型：`KLING_ACCESS_KEY`+`KLING_SECRET_KEY` |
+| 图片生成 | Google Flow 本地 workflow（无需 API Key）/ `GEMINI_API_KEY` / `OPENAI_API_KEY` / Kling 兼容图片模型：`KLING_ACCESS_KEY`+`KLING_SECRET_KEY` |
 | 视频生成 | Seedance 2.0：`ARK_API_KEY` / Kling 3.0：`KLING_API_KEY` / Hailuo 2.3：`HAILUO_API_KEY` |
 | Google Flow 工作流视频 | 无需 API Key；需要本机 9222 Chrome 已登录 Google Flow |
 | 剧本 / 分镜 | `GEMINI_API_KEY` |

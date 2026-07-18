@@ -622,7 +622,7 @@ const NodeRow = ({
             : node.type === NodeType.IMAGE ? <ImageIcon size={20} className={muted} />
               : <Sparkles size={20} className={muted} />}
       </div>
-      <span className="min-w-0 flex-1 truncate text-[15px]">{node.title || node.prompt || typeLabel[node.type] || node.type}</span>
+      <span className="min-w-0 flex-1 truncate text-[13px]">{node.title || node.prompt || typeLabel[node.type] || node.type}</span>
       <MoreHorizontal size={18} className={`${muted} opacity-0 transition-opacity group-hover:opacity-100`} />
       <span
         role="button"

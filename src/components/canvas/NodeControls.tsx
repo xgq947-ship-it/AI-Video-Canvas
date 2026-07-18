@@ -103,6 +103,15 @@ const IMAGE_MODELS = [
         aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"]
     },
     {
+        id: 'google-flow-nano-banana-pro',
+        name: 'Google Flow · Nano Banana Pro',
+        provider: 'workflow',
+        supportsImageToImage: true,
+        supportsMultiImage: true,
+        resolutions: ["自动"],
+        aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"]
+    },
+    {
         id: 'gpt-image-1.5',
         name: 'GPT Image 1.5',
         provider: 'openai',

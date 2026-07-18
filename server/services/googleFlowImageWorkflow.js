@@ -13,7 +13,20 @@ import { extractWorkflowJson } from './googleFlowWorkflow.js';
 import { enqueueGoogleFlowWorkflow } from './googleFlowWorkflowQueue.js';
 
 export const GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID = 'google-flow-nano-banana-2';
+// 画布模型 id → Ops-Cli text_to_image --model 值（Flow Image 模式下拉里的模型名）。
+export const GOOGLE_FLOW_IMAGE_WORKFLOW_MODELS = {
+    'google-flow-nano-banana-2': 'Nano Banana 2',
+    'google-flow-nano-banana-pro': 'Nano Banana Pro'
+};
 export const GOOGLE_FLOW_IMAGE_SUPPORTED_ASPECT_RATIOS = ['16:9', '4:3', '1:1', '3:4', '9:16'];
+
+export function isGoogleFlowImageWorkflowModel(modelId) {
+    return Object.prototype.hasOwnProperty.call(GOOGLE_FLOW_IMAGE_WORKFLOW_MODELS, modelId);
+}
+
+export function resolveGoogleFlowImageModelName(modelId) {
+    return GOOGLE_FLOW_IMAGE_WORKFLOW_MODELS[modelId] || 'Nano Banana 2';
+}
 
 const DEFAULT_WORKFLOW_ROOT = path.join(
     os.homedir(),
@@ -191,13 +204,14 @@ export function buildGoogleFlowImageWorkflowArgs({
     aspectRatio,
     referenceImages = [],
     outputDir,
-    timeoutMinutes
+    timeoutMinutes,
+    flowModel = 'Nano Banana 2'
 }) {
     const args = [
         '--prompt', String(prompt).trim(),
         '--aspect-ratio', aspectRatio,
         '--count', '1',
-        '--model', 'Nano Banana 2',
+        '--model', flowModel,
         '--output-dir', outputDir,
         '--timeout-minutes', String(timeoutMinutes)
     ];
@@ -213,7 +227,8 @@ async function executeGoogleFlowImageWorkflow({
     aspectRatio,
     referenceImageInputs = [],
     libraryDir,
-    timeoutMinutes = 10
+    timeoutMinutes = 10,
+    modelId
 }) {
     if (!String(prompt || '').trim()) throw new Error('Google Flow 图片提示词不能为空');
     if (!GOOGLE_FLOW_IMAGE_SUPPORTED_ASPECT_RATIOS.includes(aspectRatio)) {
@@ -234,7 +249,8 @@ async function executeGoogleFlowImageWorkflow({
                 aspectRatio,
                 referenceImages,
                 outputDir,
-                timeoutMinutes
+                timeoutMinutes,
+                flowModel: resolveGoogleFlowImageModelName(modelId)
             })
         });
         const result = await loadGoogleFlowImageResult(payload.outputs);

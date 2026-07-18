@@ -13,7 +13,7 @@ import { generateGeminiImage, generateVeoVideo } from '../services/gemini.js';
 import { generateHailuoVideo } from '../services/hailuo.js';
 import { generateSeedanceVideo } from '../services/seedance.js';
 import { generateGoogleFlowWorkflowVideo, GOOGLE_FLOW_WORKFLOW_MODEL_ID } from '../services/googleFlowWorkflow.js';
-import { generateGoogleFlowWorkflowImage, GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID } from '../services/googleFlowImageWorkflow.js';
+import { generateGoogleFlowWorkflowImage, GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID, isGoogleFlowImageWorkflowModel } from '../services/googleFlowImageWorkflow.js';
 import { generateOpenAIImage } from '../services/openai.js';
 import { resolveAudioToBase64, resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
 
@@ -31,7 +31,7 @@ router.post('/generate-image', async (req, res) => {
         // Determine provider
         const isKlingModel = imageModel && imageModel.startsWith('kling-');
         const isOpenAIModel = imageModel && imageModel.startsWith('gpt-image-');
-        const isGoogleFlowWorkflowModel = imageModel === GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID;
+        const isGoogleFlowWorkflowModel = isGoogleFlowImageWorkflowModel(imageModel);
 
         let imageBuffer;
         let imageFormat = 'png';
@@ -48,7 +48,8 @@ router.post('/generate-image', async (req, res) => {
                 aspectRatio: aspectRatio || '1:1',
                 referenceImageInputs: referenceImages,
                 libraryDir: LIBRARY_DIR,
-                timeoutMinutes: 10
+                timeoutMinutes: 10,
+                modelId: imageModel
             });
             imageBuffer = result.buffer;
             imageFormat = result.extension;

@@ -17,7 +17,7 @@
 
 **Full-view comparison evidence**
 
-The combined comparison confirms the same persistent left-rail composition, dark surface hierarchy, project header, Canvas/Assets tabs, scrollable content region, and fixed footer navigation. The implementation keeps the application's real TwitCanva logo and existing canvas controls instead of copying the source product's branding.
+The combined comparison confirms the same persistent left-rail composition, dark surface hierarchy, project header, Canvas/Assets tabs, scrollable content region, and fixed footer navigation. The implementation keeps the application's real Evan logo and existing canvas controls instead of copying the source product's branding.
 
 **Focused region comparison evidence**
 
@@ -26,7 +26,7 @@ The left sidebar was reduced from 390 px to 300 px after user review. Typography
 **Findings**
 
 - No actionable P0, P1, or P2 mismatch remains.
-- P3: The TwitCanva purple logo differs from the white reference logo. This is intentional product-brand preservation.
+- P3: The Evan purple logo differs from the white reference logo. This is intentional product-brand preservation.
 - P3: The source populated Canvas state contains many thumbnail rows, while the implementation evidence shows the matching empty state because the current unsaved canvas has zero nodes. The populated Assets state was separately verified with real local image records.
 
 **Required fidelity surfaces**
@@ -34,7 +34,7 @@ The left sidebar was reduced from 390 px to 300 px after user review. Typography
 - Fonts and typography: passed. Existing system sans stack, weights, truncation, line height, and muted hierarchy match the product and reference density.
 - Spacing and layout rhythm: passed. Sidebar width, header/tabs/content/footer segmentation, row radii, padding, and fixed footer remain consistent.
 - Colors and visual tokens: passed. Near-black canvas, #151515 sidebar, neutral borders, selected surfaces, and muted foregrounds match the reference direction.
-- Image quality and asset fidelity: passed. The implementation uses the existing TwitCanva logo and actual library thumbnails; no placeholder imagery or handcrafted icons replace visible assets.
+- Image quality and asset fidelity: passed. The implementation uses the existing Evan logo and actual library thumbnails; no placeholder imagery or handcrafted icons replace visible assets.
 - Copy and content: passed. Labels are localized and correspond to real project concepts and actions.
 
 **Interactions tested**
@@ -365,7 +365,7 @@ final result: passed
 
 ## Interactions tested
 
-- 展开侧边栏中 `img[alt="TwitCanva"]` 数量实测为 `0`。
+- 展开侧边栏中 `img[alt="Evan"]` 数量实测为 `0`。
 - 书本图标点击后 `aria-expanded=true`，四个项目操作全部出现。
 - 再次点击书本图标可关闭菜单。
 - `npx tsc --noEmit` 通过；`npm test` 59 项全过；`npm run build` 成功。

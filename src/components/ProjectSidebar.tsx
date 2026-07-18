@@ -280,7 +280,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
     return (
       <aside className={`fixed inset-y-0 left-0 z-30 flex w-16 flex-col items-center border-r ${surface}`}>
         <button className={`mt-3 rounded-xl p-2.5 ${hover}`} onClick={() => setCollapsed(false)} title="展开侧边栏">
-          <img src="/TwitCanva-logo.png" alt="TwitCanva" className="h-7 w-7 rounded-md object-contain" />
+          <img src="/TwitCanva-logo.png" alt="Evan" className="h-7 w-7 rounded-md object-contain" />
         </button>
         <div className="mt-auto mb-5 flex flex-col gap-2">
           <SidebarIcon title="工作流" onClick={onOpenWorkflows}><Grid2X2 size={20} /></SidebarIcon>

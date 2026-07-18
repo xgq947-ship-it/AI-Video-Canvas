@@ -1,7 +1,7 @@
 /**
  * App.tsx
  * 
- * Main application component for TwitCanva.
+ * Main application component for Evan.
  * Orchestrates canvas, nodes, connections, and user interactions.
  * Uses custom hooks for state management and logic separation.
  */

@@ -17,7 +17,7 @@ private final class LauncherModel: ObservableObject {
     nonisolated private static let projectPath = "/Users/dasheng/Desktop/AI漫剧电影/05_TwitCanva视频工作流"
     nonisolated private static let sourcePlist = projectPath + "/launcher/com.dasheng.twitcanva.plist"
     nonisolated private static let installedPlist = "/Users/dasheng/Library/LaunchAgents/com.dasheng.twitcanva.plist"
-    nonisolated private static let logPath = "/Users/dasheng/Library/Logs/TwitCanva"
+    nonisolated private static let logPath = "/Users/dasheng/Library/Logs/Evan"
     nonisolated private static let serviceLabel = "com.dasheng.twitcanva"
     nonisolated private static let canvasURL = URL(string: "http://localhost:5173")!
 
@@ -210,7 +210,7 @@ private struct LauncherView: View {
                     .shadow(color: Color.purple.opacity(0.2), radius: 12, y: 6)
 
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("TwitCanva 工作台")
+                        Text("Evan 工作台")
                             .font(.system(size: 20, weight: .semibold))
                         Text("AI 漫剧创作画布")
                             .font(.system(size: 13))
@@ -325,7 +325,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
                 backing: .buffered,
                 defer: false
             )
-            newWindow.title = "TwitCanva工作台"
+            newWindow.title = "Evan工作台"
             newWindow.contentView = contentView
             newWindow.titlebarAppearsTransparent = true
             newWindow.titleVisibility = .hidden

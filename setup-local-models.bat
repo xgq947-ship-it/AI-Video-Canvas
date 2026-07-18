@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================================
-REM TwitCanva - Local Models Setup Script (Windows)
+REM Evan - Local Models Setup Script (Windows)
 REM 
 REM This script sets up the Python virtual environment for local AI model support.
 REM Run this once after cloning the repo if you want to use local models.
@@ -8,7 +8,7 @@ REM ============================================================================
 
 echo.
 echo ========================================
-echo  TwitCanva Local Models Setup
+echo  Evan Local Models Setup
 echo ========================================
 echo.
 

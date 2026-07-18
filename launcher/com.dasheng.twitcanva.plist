@@ -33,9 +33,9 @@
     <string>Interactive</string>
 
     <key>StandardOutPath</key>
-    <string>/Users/dasheng/Library/Logs/TwitCanva/service.log</string>
+    <string>/Users/dasheng/Library/Logs/Evan/service.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/dasheng/Library/Logs/TwitCanva/service-error.log</string>
+    <string>/Users/dasheng/Library/Logs/Evan/service-error.log</string>
 </dict>
 </plist>

@@ -15,7 +15,7 @@ const run = (handler) => async (args) => {
   catch (error) { return { isError: true, content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }] }; }
 };
 
-server.registerTool('list_workflows', { description: '列出本地 TwitCanva 画布工作流。', inputSchema: {} }, run(() => service.listWorkflows()));
+server.registerTool('list_workflows', { description: '列出本地 Evan 画布工作流。', inputSchema: {} }, run(() => service.listWorkflows()));
 server.registerTool('read_canvas', {
   description: '读取一个画布及视频/音频节点摘要，不修改任何内容。',
   inputSchema: { workflowId: z.string() },
@@ -36,7 +36,7 @@ server.registerTool('apply_edit_plan', {
   inputSchema: { planId: z.string(), confirm: z.boolean() },
 }, run((args) => service.applyEditPlan(args)));
 server.registerTool('render_preview', {
-  description: '提交画布副本到本地 Remotion 服务渲染。需要 TwitCanva 服务运行在 localhost:3001。',
+  description: '提交画布副本到本地 Remotion 服务渲染。需要 Evan 服务运行在 localhost:3001。',
   inputSchema: { workflowId: z.string(), renderNodeId: z.string() },
 }, run(async (args) => {
   const built = service.getRenderManifest(args);

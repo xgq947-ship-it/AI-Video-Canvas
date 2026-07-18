@@ -11,7 +11,7 @@ export function buildCodexAutomationCommand(projectRoot, codexPath) {
         || process.env.CODEX_CLI_PATH
         || (fs.existsSync(DEFAULT_CODEX_PATH) ? DEFAULT_CODEX_PATH : 'codex');
     const prompt = [
-        '使用 twitcanva-codex-images skill，自动处理当前 TwitCanva 项目中的全部图片生成任务。',
+        '使用 twitcanva-codex-images skill，自动处理当前 Evan 项目中的全部图片生成任务。',
         '先恢复 processing 任务，再按创建时间处理 pending 任务，直到连续两次检查队列都为空。',
         '必须使用当前 ChatGPT 登录包含的内置 image_gen 能力，不调用 OpenAI API，也不要索要 API Key。',
         '严格只操作 library/codex-image-jobs 和 library/images，不修改项目源代码，不等待用户输入。'

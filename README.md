@@ -1,6 +1,6 @@
 <div align="center">
-  <img src="public/TwitCanva-logo.png" alt="TwitCanva Logo" width="120" />
-  <h1>TwitCanva</h1>
+  <img src="public/TwitCanva-logo.png" alt="Evan Logo" width="120" />
+  <h1>Evan</h1>
 </div>
 
 A modern, AI-powered canvas application for generating and manipulating images and videos using OpenAI GPT Image, Google Gemini, Kling AI, Hailuo AI (MiniMax), and Fal.ai. Built with React, TypeScript, and Vite.
@@ -9,7 +9,7 @@ A modern, AI-powered canvas application for generating and manipulating images a
 
 ## 🎬 AI 漫剧 0—1 生产工作台（中文）
 
-在 TwitCanva 无限画布的基础上，本项目增量扩展为**「AI 漫剧 0—1 生产工作台」**：
+在 Evan 无限画布的基础上，本项目增量扩展为**「AI 漫剧 0—1 生产工作台」**：
 在同一个本地画布里，从一句故事一路做到一条可播放的 MP4 成片。
 
 ### 这是什么
@@ -21,7 +21,7 @@ A modern, AI-powered canvas application for generating and manipulating images a
 ```
 
 - 生图 / 生视频 / 配音调用线上官方 API；本地只运行画布、素材库、项目管理与 **Remotion 渲染**。
-- 保留 TwitCanva 原有画布、故事板、素材库和图片/视频生成功能。
+- 保留 Evan 原有画布、故事板、素材库和图片/视频生成功能。
 - 角色素材支持“4 张身份库 + 多套服装造型包”，按角色名称和造型名称筛选；造型素材连接下游生图节点时自动携带身份与同造型参考图。
 - 最终渲染引擎为 [Remotion](https://www.remotion.dev/) 4.0.489，**完全由 project-manifest 驱动**，无单片硬编码。
 
@@ -97,7 +97,7 @@ Chrome Headless Shell（约 90MB）。
 ---
 
 
-![TwitCanva](https://img.shields.io/badge/React-18.3.1-blue)
+![Evan](https://img.shields.io/badge/React-18.3.1-blue)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.6.2-blue)
 ![Vite](https://img.shields.io/badge/Vite-6.4.1-purple)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue)
@@ -235,7 +235,7 @@ If you prefer using Docker to run the application in a containerized environment
 
 ### Optional: Local Open-Source Models Setup
 
-TwitCanva supports running open-source AI models (like Stable Diffusion, Qwen Camera Control, ControlNet) locally on your GPU. This is **optional** - the cloud-based AI models work without this setup.
+Evan supports running open-source AI models (like Stable Diffusion, Qwen Camera Control, ControlNet) locally on your GPU. This is **optional** - the cloud-based AI models work without this setup.
 
 **Requirements:**
 - NVIDIA GPU with 8GB+ VRAM (12GB+ recommended for larger models)

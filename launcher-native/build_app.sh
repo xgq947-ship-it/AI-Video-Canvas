@@ -3,9 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SOURCE_FILE="$ROOT_DIR/launcher-native/TwitCanvaLauncher.swift"
-APP_PATH="$ROOT_DIR/TwitCanva工作台.app"
+APP_PATH="$ROOT_DIR/Evan工作台.app"
+LEGACY_APP_PATH="$ROOT_DIR/TwitCanva工作台.app"
 BUILD_DIR="$ROOT_DIR/launcher-native/.build"
-APP_BUILD="$BUILD_DIR/TwitCanva工作台.app"
+APP_BUILD="$BUILD_DIR/Evan工作台.app"
 ICONSET="$BUILD_DIR/TwitCanva.iconset"
 
 rm -rf "$BUILD_DIR"
@@ -36,12 +37,12 @@ cat > "$APP_BUILD/Contents/Info.plist" <<'PLIST'
 <plist version="1.0">
 <dict>
   <key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
-  <key>CFBundleDisplayName</key><string>TwitCanva工作台</string>
+  <key>CFBundleDisplayName</key><string>Evan工作台</string>
   <key>CFBundleExecutable</key><string>TwitCanvaLauncher</string>
   <key>CFBundleIconFile</key><string>TwitCanva</string>
   <key>CFBundleIdentifier</key><string>com.dasheng.twitcanva.launcher</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundleName</key><string>TwitCanva工作台</string>
+  <key>CFBundleName</key><string>Evan工作台</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>2.0</string>
   <key>CFBundleVersion</key><string>2</string>
@@ -55,5 +56,6 @@ PLIST
 
 codesign --force --deep --sign - "$APP_BUILD" >/dev/null
 rm -rf "$APP_PATH"
+rm -rf "$LEGACY_APP_PATH"
 mv "$APP_BUILD" "$APP_PATH"
 echo "$APP_PATH"

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# TwitCanva - Local Models Setup Script (Linux/macOS)
+# Evan - Local Models Setup Script (Linux/macOS)
 # 
 # This script sets up the Python virtual environment for local AI model support.
 # Run this once after cloning the repo if you want to use local models.
@@ -8,7 +8,7 @@
 
 echo ""
 echo "========================================"
-echo " TwitCanva Local Models Setup"
+echo " Evan Local Models Setup"
 echo "========================================"
 echo ""
 

@@ -1,8 +1,8 @@
 /**
  * Google Flow workflow 适配器。
  *
- * 通过运营自动化工具的 google_flow_video_generate workflow 调用可见的
- * 9222 Chrome 页面，不在 Evan 内复制任何 Google Flow 页面自动化逻辑。
+ * 通过运营自动化工具的 image_to_video_generate workflow（--provider google-flow）
+ * 调用可见的 9222 Chrome 页面，不在 Evan 内复制任何 Google Flow 页面自动化逻辑。
  */
 
 import { spawn } from 'node:child_process';
@@ -108,7 +108,7 @@ function runWorkflowProcess({ root, runPath, args, timeoutMs }) {
     const python = fs.existsSync(venvPython) ? venvPython : 'python3';
 
     return new Promise((resolve, reject) => {
-        const child = spawn(python, [runPath, 'workflow', 'google_flow_video_generate', ...args], {
+        const child = spawn(python, [runPath, 'workflow', 'image_to_video_generate', '--provider', 'google-flow', ...args], {
             cwd: root,
             env: {
                 ...process.env,

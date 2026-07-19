@@ -467,8 +467,12 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                 status: node.resultUrl ? NodeStatus.SUCCESS : NodeStatus.ERROR,
                 errorMessage,
                 codexJobId: undefined,
-                codexJobStatus: undefined,
-                generationStartTime: undefined
+                codexJobStatus: undefined
+                // generationStartTime 不清空：App.tsx 的 waitForNodeResult 靠它跟 before 快照对比
+                // 判断"是否发生了新一轮生成"。首次生成（before.generationStartTime 本来就是
+                // undefined）失败时如果这里也置 undefined，前后一致会被误判成"没有新尝试"，
+                // 导致 waitForNodeResult 一直等不到 ERROR 状态、卡住整整一小时超时——
+                // 期间 generationPromisesRef 里的 promise 不会清掉，点重新生成/运行没有任何反应。
             });
             console.error('Generation failed:', error);
         }

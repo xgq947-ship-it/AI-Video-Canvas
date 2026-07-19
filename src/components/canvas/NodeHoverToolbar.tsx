@@ -90,7 +90,7 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
                   key={`${action}-${index}`}
                   onClick={() => onUpdate(data.id, {
                     angleMode: !data.angleMode,
-                    angleSettings: data.angleSettings || { rotation: 0, tilt: 0, scale: 0, wideAngle: false },
+                    angleSettings: data.angleSettings || { rotation: 0, tilt: 0, scale: 0 },
                   })}
                   onPointerDown={(event) => event.stopPropagation()}
                   className={`flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${data.angleMode

@@ -153,57 +153,6 @@ const IMAGE_MODELS = [
     },
 ];
 
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-/**
- * Build a prompt that includes angle transformation instructions
- * for generating the image from a different viewing angle
- */
-function buildAnglePrompt(
-    basePrompt: string,
-    settings: { rotation: number; tilt: number; scale: number; wideAngle: boolean }
-): string {
-    const parts: string[] = [];
-
-    // Base instruction
-    parts.push('Generate this same image from a different camera angle.');
-
-    // Rotation (horizontal)
-    if (settings.rotation !== 0) {
-        const direction = settings.rotation > 0 ? 'right' : 'left';
-        parts.push(`The camera has rotated ${Math.abs(settings.rotation)}° to the ${direction}.`);
-    }
-
-    // Tilt (vertical)
-    if (settings.tilt !== 0) {
-        const direction = settings.tilt > 0 ? 'upward' : 'downward';
-        parts.push(`The camera has tilted ${Math.abs(settings.tilt)}° ${direction}.`);
-    }
-
-    // Scale
-    if (settings.scale !== 0) {
-        if (settings.scale > 50) {
-            parts.push('The camera is positioned closer to the subject.');
-        } else if (settings.scale < 50 && settings.scale > 0) {
-            parts.push('The camera is positioned slightly closer.');
-        }
-    }
-
-    // Wide-angle lens
-    if (settings.wideAngle) {
-        parts.push('Use a wide-angle lens perspective with visible distortion at the edges.');
-    }
-
-    // Add original prompt context if provided
-    if (basePrompt.trim()) {
-        parts.push(`Original scene description: ${basePrompt}`);
-    }
-
-    return parts.join(' ');
-}
-
 const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     data,
     inputUrl,
@@ -784,7 +733,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
             >
                 <ChangeAnglePanel
                     imageUrl={data.resultUrl}
-                    settings={data.angleSettings || { rotation: 0, tilt: 0, scale: 0, wideAngle: false }}
+                    settings={data.angleSettings || { rotation: 0, tilt: 0, scale: 0 }}
                     onSettingsChange={(settings) => onUpdate(data.id, { angleSettings: settings })}
                     onClose={() => onUpdate(data.id, { angleMode: false })}
                     onGenerate={handleAngleGenerate}

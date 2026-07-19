@@ -17,7 +17,6 @@ interface AngleSettings {
     rotation: number;  // -180 to 180 degrees
     tilt: number;      // -90 to 90 degrees
     scale: number;     // 0 to 100
-    wideAngle: boolean;
 }
 
 interface ChangeAnglePanelProps {
@@ -37,8 +36,7 @@ interface ChangeAnglePanelProps {
 const DEFAULT_SETTINGS: AngleSettings = {
     rotation: 0,
     tilt: 0,
-    scale: 0,
-    wideAngle: false
+    scale: 0
 };
 
 // ============================================================================

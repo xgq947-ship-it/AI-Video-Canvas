@@ -118,7 +118,6 @@ export interface NodeData {
     rotation: number;  // Horizontal rotation in degrees (-180 to 180)
     tilt: number;      // Vertical tilt in degrees (-90 to 90)
     scale: number;     // Scale factor (0 to 100)
-    wideAngle: boolean; // Whether to use wide-angle lens perspective
   };
 
   // Local Model node specific

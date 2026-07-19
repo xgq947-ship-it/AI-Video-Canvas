@@ -364,7 +364,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
               >
                 <ChangeAnglePanel
                   imageUrl={data.resultUrl}
-                  settings={data.angleSettings || { rotation: 0, tilt: 0, scale: 0, wideAngle: false }}
+                  settings={data.angleSettings || { rotation: 0, tilt: 0, scale: 0 }}
                   onSettingsChange={(settings) => onUpdate(data.id, { angleSettings: settings })}
                   onClose={() => onUpdate(data.id, { angleMode: false })}
                   onGenerate={onChangeAngleGenerate ? () => onChangeAngleGenerate(data.id) : () => { }}

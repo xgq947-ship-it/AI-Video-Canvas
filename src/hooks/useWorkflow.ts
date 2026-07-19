@@ -32,6 +32,9 @@ interface UseWorkflowOptions {
     setCanvasTitle: (title: string) => void;
     setEditingTitleValue: (value: string) => void;
     onPanelOpen?: () => void; // Called when workflow panel opens
+    // Set right before applying the server's sanitized nodes back into state,
+    // so that write-back doesn't get treated as a user edit (dirty flag / re-save loop)
+    ignoreNextChangeRef?: React.MutableRefObject<boolean>;
 }
 
 export const useWorkflow = ({
@@ -45,7 +48,8 @@ export const useWorkflow = ({
     setSelectedNodeIds,
     setCanvasTitle,
     setEditingTitleValue,
-    onPanelOpen
+    onPanelOpen,
+    ignoreNextChangeRef
 }: UseWorkflowOptions) => {
     // Workflow state
     const [workflowId, setWorkflowId] = useState<string | null>(null);
@@ -75,11 +79,21 @@ export const useWorkflow = ({
                 const result = await response.json();
                 setWorkflowId(result.id);
                 console.log('Workflow saved:', result.id);
+
+                // Server converts any base64 image/video data into saved files and,
+                // when it did so, sends the updated nodes back. Write those back into
+                // local state so the base64 is dropped from memory — otherwise the same
+                // base64 would still be sent (and re-saved as a brand new file) on the
+                // very next save.
+                if (Array.isArray(result.nodes)) {
+                    if (ignoreNextChangeRef) ignoreNextChangeRef.current = true;
+                    setNodes(result.nodes);
+                }
             }
         } catch (error) {
             console.error('Failed to save workflow:', error);
         }
-    }, [workflowId, canvasTitle, nodes, groups, viewport]);
+    }, [workflowId, canvasTitle, nodes, groups, viewport, setNodes, ignoreNextChangeRef]);
 
     /**
      * Load workflow from server

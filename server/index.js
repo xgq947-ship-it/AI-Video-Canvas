@@ -23,6 +23,8 @@ import { normalizeCharacterAssetMeta } from './services/characterAssets.js';
 import { createUniqueAssetFilename } from './services/assetFilenames.js';
 import { createCodexImageAutomation } from './services/codexImageAutomation.js';
 import { scanAssetLibrary } from './utils/scanAssetLibrary.js';
+import { organizeWorkflowAssets, deleteWorkflowAssetDirs } from './utils/projectAssets.js';
+import { execFile } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -184,10 +186,10 @@ function saveBase64ToFile(dataUrl) {
  * Sanitizes workflow nodes by converting base64 data to file URLs.
  * Prevents large base64 strings from bloating workflow JSON files.
  * @param {Array} nodes - Array of workflow nodes
- * @returns {Array} - Sanitized nodes with file URLs instead of base64
+ * @returns {{ nodes: Array, sanitizedCount: number }} - Sanitized nodes with file URLs instead of base64, and how many fields were converted
  */
 function sanitizeWorkflowNodes(nodes) {
-    if (!nodes || !Array.isArray(nodes)) return nodes;
+    if (!nodes || !Array.isArray(nodes)) return { nodes, sanitizedCount: 0 };
 
     let sanitizedCount = 0;
 
@@ -237,7 +239,7 @@ function sanitizeWorkflowNodes(nodes) {
         console.log(`[Workflow Sanitize] Converted ${sanitizedCount} base64 field(s) to file URLs`);
     }
 
-    return sanitized;
+    return { nodes: sanitized, sanitizedCount };
 }
 
 // Mount generation routes (image and video generation)
@@ -454,12 +456,17 @@ app.post('/api/workflows', async (req, res) => {
 
         const filePath = path.join(WORKFLOWS_DIR, `${workflow.id}.json`);
 
-        // Preserve existing coverUrl if it exists
+        // Preserve existing coverUrl and assetsDirName if they exist — neither is
+        // sent by the client, so without this they'd be lost/regenerated on every save
+        // (assetsDirName in particular must stay frozen once assigned; see projectAssets.js).
         if (fs.existsSync(filePath)) {
             try {
                 const existingData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
                 if (existingData.coverUrl) {
                     workflow.coverUrl = existingData.coverUrl;
+                }
+                if (existingData.assetsDirName) {
+                    workflow.assetsDirName = existingData.assetsDirName;
                 }
             } catch (readError) {
                 console.warn("Could not read existing workflow to preserve cover:", readError);
@@ -467,14 +474,31 @@ app.post('/api/workflows', async (req, res) => {
         }
 
         // Sanitize nodes: convert any base64 data to file URLs before saving
+        let sanitizedCount = 0;
         if (workflow.nodes) {
-            workflow.nodes = sanitizeWorkflowNodes(workflow.nodes);
+            const result = sanitizeWorkflowNodes(workflow.nodes);
+            workflow.nodes = result.nodes;
+            sanitizedCount = result.sanitizedCount;
         }
+
+        // Organize this workflow's media into its own per-project folder
+        // (library/images|videos/{assetsDirName}/) so it can be browsed both
+        // in-app (filtered by project) and directly in Finder.
+        const { changed: assetsOrganized } = organizeWorkflowAssets(workflow, {
+            imagesDir: IMAGES_DIR,
+            videosDir: VIDEOS_DIR
+        });
 
         fs.writeFileSync(filePath, JSON.stringify(workflow, null, 2));
 
-
-        res.json({ success: true, id: workflow.id });
+        // Only send nodes back when something actually changed (base64 sanitized
+        // and/or media relocated into the project folder), so the client can sync
+        // its local state and stop re-sending stale base64/URLs on the next save.
+        res.json({
+            success: true,
+            id: workflow.id,
+            ...(sanitizedCount > 0 || assetsOrganized ? { nodes: workflow.nodes } : {})
+        });
     } catch (error) {
         console.error("Save workflow error:", error);
         res.status(500).json({ error: error.message });
@@ -614,10 +638,73 @@ app.delete('/api/workflows/:id', async (req, res) => {
         if (!fs.existsSync(filePath)) {
             return res.status(404).json({ error: "Workflow not found" });
         }
+        let workflow = null;
+        try {
+            workflow = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        } catch (readError) {
+            console.warn("Could not read workflow before delete:", readError);
+        }
         fs.unlinkSync(filePath);
+        // Also remove this project's own asset folders (the flat pool / other
+        // projects' copies are untouched — see projectAssets.js).
+        deleteWorkflowAssetDirs(workflow, { imagesDir: IMAGES_DIR, videosDir: VIDEOS_DIR });
         res.json({ success: true });
     } catch (error) {
         console.error("Delete workflow error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Reveal this workflow's asset folder in Finder (macOS only)
+app.post('/api/workflows/:id/reveal-assets', async (req, res) => {
+    try {
+        const filePath = path.join(WORKFLOWS_DIR, `${req.params.id}.json`);
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: "Workflow not found" });
+        }
+        if (process.platform !== 'darwin') {
+            return res.status(400).json({ error: "仅支持 macOS 上在 Finder 中打开" });
+        }
+        const workflow = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        if (!workflow.assetsDirName) {
+            return res.status(404).json({ error: "该项目还没有生成任何素材" });
+        }
+        const dir = path.join(IMAGES_DIR, workflow.assetsDirName);
+        fs.mkdirSync(dir, { recursive: true });
+        execFile('open', [dir], (err) => {
+            if (err) {
+                console.error('Failed to open Finder:', err);
+                return res.status(500).json({ error: err.message });
+            }
+            res.json({ success: true });
+        });
+    } catch (error) {
+        console.error("Reveal assets error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Update workflow title (rename from the gallery, without touching nodes/groups)
+app.put('/api/workflows/:id/title', async (req, res) => {
+    try {
+        const { title } = req.body;
+        if (!title || !title.trim()) {
+            return res.status(400).json({ error: "标题不能为空" });
+        }
+        const filePath = path.join(WORKFLOWS_DIR, `${req.params.id}.json`);
+
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: "Workflow not found" });
+        }
+
+        const workflowData = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        workflowData.title = title.trim();
+        workflowData.updatedAt = new Date().toISOString();
+        fs.writeFileSync(filePath, JSON.stringify(workflowData, null, 2));
+
+        res.json({ success: true, title: workflowData.title });
+    } catch (error) {
+        console.error("Update title error:", error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -883,9 +970,12 @@ app.post('/api/assets/:type', async (req, res) => {
 });
 
 // List all assets of a type (with pagination support)
+// Pass ?workflowId=<id> to scope the listing to that project's own folder instead
+// of the global flat pool (used by the History panel's "本项目" tab).
 app.get('/api/assets/:type', async (req, res) => {
     try {
         const { type } = req.params;
+        const { workflowId } = req.query;
         const limit = parseInt(req.query.limit) || 0; // 0 = no limit (backward compatible)
         const offset = parseInt(req.query.offset) || 0;
 
@@ -893,25 +983,73 @@ app.get('/api/assets/:type', async (req, res) => {
             return res.status(400).json({ error: 'Invalid asset type' });
         }
 
-        const targetDir = type === 'images' ? IMAGES_DIR : VIDEOS_DIR;
+        const emptyResult = () => res.json(limit > 0 ? { assets: [], total: 0, hasMore: false } : []);
+
+        let targetDir = type === 'images' ? IMAGES_DIR : VIDEOS_DIR;
+        let urlPrefix = `/library/${type}`;
+
+        if (workflowId) {
+            const wfPath = path.join(WORKFLOWS_DIR, `${workflowId}.json`);
+            if (!fs.existsSync(wfPath)) return emptyResult();
+            let assetsDirName;
+            try {
+                assetsDirName = JSON.parse(fs.readFileSync(wfPath, 'utf8')).assetsDirName;
+            } catch (e) {
+                return emptyResult();
+            }
+            if (!assetsDirName) return emptyResult(); // project has no organized media yet
+            targetDir = path.join(targetDir, assetsDirName);
+            urlPrefix = `${urlPrefix}/${assetsDirName}`;
+        }
 
         if (!fs.existsSync(targetDir)) {
-            // Return paginated format if limit is specified, otherwise array for backward compatibility
-            return res.json(limit > 0 ? { assets: [], total: 0, hasMore: false } : []);
+            return emptyResult();
         }
 
         const files = fs.readdirSync(targetDir);
         const assets = [];
 
-        for (const file of files) {
-            if (file.endsWith('.json')) {
-                try {
-                    const content = fs.readFileSync(path.join(targetDir, file), 'utf8');
-                    const metadata = JSON.parse(content);
-                    metadata.url = `/library/${type}/${metadata.filename}`;
-                    assets.push(metadata);
-                } catch (e) {
-                    // Skip invalid JSON files
+        if (workflowId) {
+            // Project folders often contain media with no sidecar metadata (workflow-editor
+            // saves, generation results) — unlike the global pool, everything physically in
+            // this folder belongs to the project, so list every media file directly and
+            // enrich it with sidecar JSON where one happens to exist (same basename).
+            const mediaExts = type === 'images'
+                ? new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif'])
+                : new Set(['.mp4', '.webm', '.mov', '.m4v']);
+
+            for (const file of files) {
+                const ext = path.extname(file).toLowerCase();
+                if (!mediaExts.has(ext)) continue;
+
+                const base = file.slice(0, file.lastIndexOf('.'));
+                const sidecarPath = path.join(targetDir, `${base}.json`);
+                let metadata = { id: base, filename: file, prompt: '', type };
+                if (fs.existsSync(sidecarPath)) {
+                    try {
+                        metadata = { ...metadata, ...JSON.parse(fs.readFileSync(sidecarPath, 'utf8')) };
+                    } catch (e) {
+                        // Fall back to the synthesized metadata below
+                    }
+                }
+                if (!metadata.createdAt) {
+                    metadata.createdAt = fs.statSync(path.join(targetDir, file)).mtime.toISOString();
+                }
+                metadata.filename = file;
+                metadata.url = `${urlPrefix}/${file}`;
+                assets.push(metadata);
+            }
+        } else {
+            for (const file of files) {
+                if (file.endsWith('.json')) {
+                    try {
+                        const content = fs.readFileSync(path.join(targetDir, file), 'utf8');
+                        const metadata = JSON.parse(content);
+                        metadata.url = `${urlPrefix}/${metadata.filename}`;
+                        assets.push(metadata);
+                    } catch (e) {
+                        // Skip invalid JSON files
+                    }
                 }
             }
         }

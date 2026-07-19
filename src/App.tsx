@@ -212,6 +212,11 @@ export default function App() {
     canRedo
   } = useHistory({ nodes, groups }, 50);
 
+  // Mark as dirty when nodes or title change
+  const isInitialMount = React.useRef(true);
+  const lastLoadingCountRef = React.useRef(0);
+  const ignoreNextChange = React.useRef(false);
+
   // Workflow management
   const {
     workflowId,
@@ -233,6 +238,7 @@ export default function App() {
     setSelectedNodeIds,
     setCanvasTitle,
     setEditingTitleValue,
+    ignoreNextChangeRef: ignoreNextChange,
     onPanelOpen: () => {
       closeHistoryPanel();
       closeAssetLibrary();
@@ -242,11 +248,6 @@ export default function App() {
   // Simple dirty flag for unsaved changes tracking
   const [isDirty, setIsDirty] = React.useState(false);
   const hasUnsavedChanges = isDirty && nodes.length > 0;
-
-  // Mark as dirty when nodes or title change
-  const isInitialMount = React.useRef(true);
-  const lastLoadingCountRef = React.useRef(0);
-  const ignoreNextChange = React.useRef(false);
 
   React.useEffect(() => {
     if (isInitialMount.current) {
@@ -1450,6 +1451,7 @@ export default function App() {
         panelY={historyPanelY}
         panelLeft={(sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH) + 20}
         canvasTheme={canvasTheme}
+        workflowId={workflowId || undefined}
       />
 
       <AssetLibraryPanel

@@ -38,6 +38,9 @@ interface HistoryPanelProps {
     panelY?: number;
     panelLeft?: number;
     canvasTheme?: 'dark' | 'light';
+    // Current project's id — when set, shows a "本项目/全部" scope toggle so the
+    // user can filter history down to just this project's own organized folder.
+    workflowId?: string;
 }
 
 // ============================================================================
@@ -50,10 +53,12 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
     onSelectAsset,
     panelY = 200,
     panelLeft = 80,
-    canvasTheme = 'dark'
+    canvasTheme = 'dark',
+    workflowId
 }) => {
     // --- State ---
     const [activeTab, setActiveTab] = useState<'images' | 'videos'>('images');
+    const [scope, setScope] = useState<'project' | 'all'>(workflowId ? 'project' : 'all');
     const [assets, setAssets] = useState<AssetMetadata[]>([]);
     const [loading, setLoading] = useState(false);
     const [loadingMore, setLoadingMore] = useState(false);
@@ -70,6 +75,9 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
     // Theme helper
     const isDark = canvasTheme === 'dark';
 
+    // Query-string suffix applied to /api/assets/:type calls when scoped to the current project
+    const scopeQuery = scope === 'project' && workflowId ? `&workflowId=${encodeURIComponent(workflowId)}` : '';
+
     // --- Fetch initial page and counts when panel opens ---
     useEffect(() => {
         if (isOpen) {
@@ -82,7 +90,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
             // Fetch total counts for both tabs
             fetchCounts();
         }
-    }, [isOpen, activeTab]);
+    }, [isOpen, activeTab, scope]);
 
     /**
      * Fetch total counts for both images and videos
@@ -91,8 +99,8 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
         try {
             // Fetch counts in parallel
             const [imgRes, vidRes] = await Promise.all([
-                fetch('http://localhost:3001/api/assets/images?limit=1'),
-                fetch('http://localhost:3001/api/assets/videos?limit=1')
+                fetch(`http://localhost:3001/api/assets/images?limit=1${scopeQuery}`),
+                fetch(`http://localhost:3001/api/assets/videos?limit=1${scopeQuery}`)
             ]);
 
             if (imgRes.ok) {
@@ -141,7 +149,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
 
         try {
             const response = await fetch(
-                `http://localhost:3001/api/assets/${activeTab}?limit=${PAGE_SIZE}&offset=${pageOffset}`
+                `http://localhost:3001/api/assets/${activeTab}?limit=${PAGE_SIZE}&offset=${pageOffset}${scopeQuery}`
             );
             if (response.ok) {
                 const data = await response.json();
@@ -177,7 +185,7 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
         if (!loadingMore && hasMore) {
             fetchAssets(offset, false);
         }
-    }, [offset, loadingMore, hasMore, activeTab]);
+    }, [offset, loadingMore, hasMore, activeTab, scope]);
 
     const handleDelete = async (id: string) => {
         try {
@@ -256,12 +264,36 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
                             Video History ({videoTotalCount})
                         </button>
                     </div>
-                    <button
-                        onClick={onClose}
-                        className={`transition-colors ${isDark ? 'text-neutral-500 hover:text-white' : 'text-neutral-400 hover:text-neutral-900'}`}
-                    >
-                        <Maximize2 size={18} />
-                    </button>
+                    <div className="flex items-center gap-3">
+                        {workflowId && (
+                            <div className={`flex items-center rounded-lg p-0.5 text-xs ${isDark ? 'bg-neutral-800' : 'bg-neutral-100'}`}>
+                                <button
+                                    onClick={() => setScope('project')}
+                                    className={`px-2.5 py-1 rounded-md transition-colors ${scope === 'project'
+                                        ? isDark ? 'bg-neutral-700 text-white' : 'bg-white text-neutral-900 shadow-sm'
+                                        : isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-500 hover:text-neutral-900'
+                                        }`}
+                                >
+                                    本项目
+                                </button>
+                                <button
+                                    onClick={() => setScope('all')}
+                                    className={`px-2.5 py-1 rounded-md transition-colors ${scope === 'all'
+                                        ? isDark ? 'bg-neutral-700 text-white' : 'bg-white text-neutral-900 shadow-sm'
+                                        : isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-500 hover:text-neutral-900'
+                                        }`}
+                                >
+                                    全部
+                                </button>
+                            </div>
+                        )}
+                        <button
+                            onClick={onClose}
+                            className={`transition-colors ${isDark ? 'text-neutral-500 hover:text-white' : 'text-neutral-400 hover:text-neutral-900'}`}
+                        >
+                            <Maximize2 size={18} />
+                        </button>
+                    </div>
                 </div>
 
                 {/* Content */}
@@ -317,16 +349,20 @@ export const HistoryPanel: React.FC<HistoryPanelProps> = ({
                                                         }}
                                                     />
                                                 )}
-                                                {/* Delete button */}
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        setDeleteConfirm(asset.id);
-                                                    }}
-                                                    className="absolute top-2 right-2 p-1.5 bg-black/50 hover:bg-red-500 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
-                                                >
-                                                    <Trash2 size={14} className="text-white" />
-                                                </button>
+                                                {/* Delete button — only in the global "全部" scope: the delete
+                                                    endpoint targets the flat pool's copy by id, which doesn't
+                                                    correctly resolve project-local files in "本项目" scope */}
+                                                {scope === 'all' && (
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setDeleteConfirm(asset.id);
+                                                        }}
+                                                        className="absolute top-2 right-2 p-1.5 bg-black/50 hover:bg-red-500 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                                                    >
+                                                        <Trash2 size={14} className="text-white" />
+                                                    </button>
+                                                )}
                                             </div>
                                         ))}
                                     </div>

@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Trash2, Loader2, Maximize2, Pencil, Check } from 'lucide-react';
+import { X, Trash2, Loader2, Maximize2, Pencil, Check, FolderOpen } from 'lucide-react';
 import { LazyImage } from './LazyImage';
 import { NodeData, NodeStatus, NodeType } from '../types';
 import { getNodeHeight, getNodeWidth } from './canvas/ConnectionsLayer';
@@ -169,6 +169,11 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
     const [loading, setLoading] = useState(false);
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
+    // Inline rename state (double-click a card's title)
+    const [editingTitleFor, setEditingTitleFor] = useState<string | null>(null);
+    const [editingTitleValue, setEditingTitleValue] = useState('');
+    const titleInputRef = useRef<HTMLInputElement>(null);
+
     // Cover editing state
     const [editingCoverFor, setEditingCoverFor] = useState<string | null>(null);
     const [coverAssets, setCoverAssets] = useState<AssetMetadata[]>([]);
@@ -216,6 +221,63 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
             console.error('Failed to delete workflow:', error);
         }
         setDeleteConfirm(null);
+    };
+
+    const startRenaming = (workflow: WorkflowSummary, e: React.MouseEvent) => {
+        e.stopPropagation();
+        setEditingTitleFor(workflow.id);
+        setEditingTitleValue(workflow.title || '');
+    };
+
+    const cancelRenaming = () => {
+        setEditingTitleFor(null);
+        setEditingTitleValue('');
+    };
+
+    const commitRenaming = async () => {
+        const id = editingTitleFor;
+        const title = editingTitleValue.trim();
+        if (!id) return;
+        const original = workflows.find(w => w.id === id)?.title || '';
+        if (!title || title === original) {
+            cancelRenaming();
+            return;
+        }
+        try {
+            const response = await fetch(`http://localhost:3001/api/workflows/${id}/title`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title })
+            });
+            if (response.ok) {
+                setWorkflows(prev => prev.map(w => (w.id === id ? { ...w, title } : w)));
+            }
+        } catch (error) {
+            console.error('Failed to rename workflow:', error);
+        }
+        cancelRenaming();
+    };
+
+    useEffect(() => {
+        if (editingTitleFor && titleInputRef.current) {
+            titleInputRef.current.focus();
+            titleInputRef.current.select();
+        }
+    }, [editingTitleFor]);
+
+    const handleRevealAssets = async (id: string, e: React.MouseEvent) => {
+        e.stopPropagation();
+        try {
+            const response = await fetch(`http://localhost:3001/api/workflows/${id}/reveal-assets`, {
+                method: 'POST'
+            });
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                console.error('Failed to reveal assets folder:', data.error);
+            }
+        } catch (error) {
+            console.error('Failed to reveal assets folder:', error);
+        }
     };
 
     // Load more covers callback for infinite scroll
@@ -366,6 +428,14 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
 
                                             {/* Action buttons */}
                                             <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                                                {/* Reveal assets folder in Finder */}
+                                                <button
+                                                    onClick={(e) => handleRevealAssets(workflow.id, e)}
+                                                    className="p-1.5 bg-black/50 hover:bg-blue-500 rounded-lg transition-all"
+                                                    title="在 Finder 中打开项目素材"
+                                                >
+                                                    <FolderOpen size={14} className="text-white" />
+                                                </button>
                                                 {/* Edit cover button */}
                                                 <button
                                                     onClick={(e) => openCoverEditor(workflow.id, e)}
@@ -389,7 +459,29 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
                                         </div>
                                         {/* Info */}
                                         <div className={`p-3 ${isDark ? 'bg-neutral-900/50' : 'bg-neutral-100/90'}`}>
-                                            <h3 className={`font-medium text-sm truncate ${isDark ? 'text-white' : 'text-neutral-900'}`}>{workflow.title || '未命名'}</h3>
+                                            {editingTitleFor === workflow.id ? (
+                                                <input
+                                                    ref={titleInputRef}
+                                                    value={editingTitleValue}
+                                                    onChange={(e) => setEditingTitleValue(e.target.value)}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    onBlur={commitRenaming}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter') { e.currentTarget.blur(); }
+                                                        else if (e.key === 'Escape') { cancelRenaming(); }
+                                                    }}
+                                                    className={`w-full font-medium text-sm bg-transparent border-b outline-none ${isDark ? 'text-white border-neutral-600' : 'text-neutral-900 border-neutral-400'}`}
+                                                />
+                                            ) : (
+                                                <h3
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    onDoubleClick={(e) => startRenaming(workflow, e)}
+                                                    title="双击重命名"
+                                                    className={`font-medium text-sm truncate ${isDark ? 'text-white' : 'text-neutral-900'}`}
+                                                >
+                                                    {workflow.title || '未命名'}
+                                                </h3>
+                                            )}
                                             <p className={`text-xs mt-0.5 ${isDark ? 'text-neutral-500' : 'text-neutral-600'}`}>
                                                 {workflow.nodeCount} 个节点
                                             </p>

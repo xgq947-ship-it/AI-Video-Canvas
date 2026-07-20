@@ -927,7 +927,8 @@ const optimizePromptHandler = async (req, res) => {
             }
         }
         const model = req.app.locals.PROMPT_OPTIMIZER_MODEL || provider.defaultModel;
-        console.log(`[Prompt Optimize:${providerId}] Model: ${model}. Profile: ${profileId}. Prompt: ${prompt.length > 50 ? prompt.substring(0, 50) + '...' : prompt}`);
+        const effort = provider.defaultEffort || '';
+        console.log(`[Prompt Optimize:${providerId}] Model: ${model}${effort ? ` (effort=${effort})` : ''}. Profile: ${profileId}. Prompt: ${prompt.length > 50 ? prompt.substring(0, 50) + '...' : prompt}`);
 
         const systemInstruction = buildPromptOptimizationInstruction(profile, context);
 
@@ -938,6 +939,7 @@ const optimizePromptHandler = async (req, res) => {
                 userPrompt: prompt,
                 apiKey,
                 model,
+                effort,
                 temperature: 0.25,
                 maxTokens: 2500
             });

@@ -16,6 +16,7 @@ interface OptimizerProvider {
     label: string;
     apiKeyField: string | null;
     defaultModel: string;
+    defaultEffort: string;
     keyConfigured: boolean;
 }
 
@@ -36,8 +37,9 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
     const [saved, setSaved] = useState(false);
     const [optimizerProviders, setOptimizerProviders] = useState<OptimizerProvider[]>([]);
     const [optimizerProvider, setOptimizerProvider] = useState('deepseek');
-    const [optimizerModel, setOptimizerModel] = useState('');
-    const [initialOptimizer, setInitialOptimizer] = useState<{ provider: string; model: string }>({ provider: 'deepseek', model: '' });
+    // 模型覆盖按后端各自记忆：{ 后端id: 模型字符串 }
+    const [optimizerModels, setOptimizerModels] = useState<Record<string, string>>({});
+    const [initialOptimizer, setInitialOptimizer] = useState<{ provider: string; models: Record<string, string> }>({ provider: 'deepseek', models: {} });
 
     useEffect(() => {
         if (!isOpen) return;
@@ -59,10 +61,11 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                 if (!response.ok) throw new Error(result.error || '读取优化后端配置失败');
                 if (!cancelled) {
                     setOptimizerProviders(result.providers || []);
-                    const current = result.current || { provider: 'deepseek', model: '' };
+                    const current = result.current || { provider: 'deepseek', models: {} };
+                    const models = current.models || {};
                     setOptimizerProvider(current.provider);
-                    setOptimizerModel(current.model || '');
-                    setInitialOptimizer({ provider: current.provider, model: current.model || '' });
+                    setOptimizerModels(models);
+                    setInitialOptimizer({ provider: current.provider, models });
                 }
             })
         ])
@@ -95,8 +98,11 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
         return Array.from(grouped.entries());
     }, [fields]);
 
+    // 当前后端的模型覆盖值（各后端独立记忆，切换后端时自动显示各自的值）
+    const optimizerModel = optimizerModels[optimizerProvider] || '';
     const apiKeyDirty = Object.values(values).some(value => value.trim()) || clearFields.size > 0;
-    const optimizerDirty = optimizerProvider !== initialOptimizer.provider || optimizerModel.trim() !== initialOptimizer.model;
+    const optimizerDirty = optimizerProvider !== initialOptimizer.provider
+        || optimizerModel.trim() !== (initialOptimizer.models[optimizerProvider] || '');
     const hasChanges = apiKeyDirty || optimizerDirty;
     const selectedOptimizer = optimizerProviders.find(provider => provider.id === optimizerProvider);
     const isDark = canvasTheme === 'dark';
@@ -153,10 +159,11 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                 });
                 const result = await response.json();
                 if (!response.ok) throw new Error(result.error || '优化后端保存失败');
-                const current = result.current || { provider: optimizerProvider, model: optimizerModel.trim() };
+                const current = result.current || { provider: optimizerProvider, models: optimizerModels };
+                const models = current.models || {};
                 setOptimizerProvider(current.provider);
-                setOptimizerModel(current.model || '');
-                setInitialOptimizer({ provider: current.provider, model: current.model || '' });
+                setOptimizerModels(models);
+                setInitialOptimizer({ provider: current.provider, models });
             }
 
             setSaved(true);
@@ -226,7 +233,11 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                             id="optimizer-model"
                                             type="text"
                                             value={optimizerModel}
-                                            onChange={event => { setOptimizerModel(event.target.value); setSaved(false); }}
+                                            onChange={event => {
+                                                const next = event.target.value;
+                                                setOptimizerModels(current => ({ ...current, [optimizerProvider]: next }));
+                                                setSaved(false);
+                                            }}
                                             autoComplete="off"
                                             spellCheck={false}
                                             placeholder={selectedOptimizer?.defaultModel ? `默认：${selectedOptimizer.defaultModel}` : '留空用后端默认'}
@@ -234,6 +245,9 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                         />
                                     </div>
                                 </div>
+                                {selectedOptimizer?.defaultEffort && (
+                                    <p className={`mt-2 text-[11px] ${isDark ? 'text-neutral-500' : 'text-neutral-500'}`}>推理强度：{selectedOptimizer.defaultEffort}（该后端固定）</p>
+                                )}
                                 {selectedOptimizer && !selectedOptimizer.keyConfigured && (
                                     <p className="mt-2 text-[11px] text-amber-400">该后端需要在下方填写 {selectedOptimizer.apiKeyField} 才能使用。</p>
                                 )}

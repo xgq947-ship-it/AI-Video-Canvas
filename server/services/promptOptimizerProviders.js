@@ -110,7 +110,7 @@ function runCli(bin, args, label) {
 // Claude Code CLI（`claude -p`）：无头文本生成，用本机已登录的 Claude 账号，无需 API key。
 // 不传 --dangerously-skip-permissions 时，print 模式下任何工具调用都无法被批准，因而不会读写项目文件，
 // 本调用是纯文本改写。默认从 PATH 找 claude，可用 CLAUDE_CLI_PATH 指定绝对路径。
-async function runClaudeCli({ systemInstruction, userPrompt, model }) {
+async function runClaudeCli({ systemInstruction, userPrompt, model, effort }) {
     const bin = process.env.CLAUDE_CLI_PATH || 'claude';
     const args = [
         '-p', userPrompt,
@@ -118,6 +118,7 @@ async function runClaudeCli({ systemInstruction, userPrompt, model }) {
         '--output-format', 'text'
     ];
     if (model) args.push('--model', model);
+    if (effort) args.push('--effort', effort); // low / medium / high / xhigh / max
     return runCli(bin, args, 'Claude CLI');
 }
 
@@ -125,7 +126,7 @@ async function runClaudeCli({ systemInstruction, userPrompt, model }) {
 // Codex 没有独立的系统提示词参数，故把系统指令与待优化内容合并为单条 prompt。
 // read-only 沙箱 + 临时目录，纯文本改写不会触碰项目；--output-last-message 把最终答复单独写到文件，
 // 避免解析夹杂 agent 日志的 stdout。默认走 ChatGPT.app 内置 codex，可用 CODEX_CLI_PATH 指定绝对路径。
-async function runCodexCli({ systemInstruction, userPrompt, model }) {
+async function runCodexCli({ systemInstruction, userPrompt, model, effort }) {
     const bin = resolveCodexBin();
     const combined = `${systemInstruction}\n\n【待优化内容】\n${userPrompt}`;
     const outFile = path.join(os.tmpdir(), `codex-optimize-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.txt`);
@@ -137,6 +138,7 @@ async function runCodexCli({ systemInstruction, userPrompt, model }) {
         '--output-last-message', outFile
     ];
     if (model) args.push('--model', model);
+    if (effort) args.push('-c', `model_reasoning_effort=${effort}`); // low / medium / high
     args.push(combined);
 
     try {
@@ -157,19 +159,22 @@ export const PROMPT_OPTIMIZER_PROVIDERS = {
     deepseek: {
         label: 'DeepSeek（云端 API）',
         apiKeyField: 'DEEPSEEK_API_KEY',
-        defaultModel: 'deepseek-v4-flash',
+        defaultModel: 'deepseek-v4-pro',
+        defaultEffort: '',          // v4 走 thinking:disabled，不用推理档位
         run: runDeepSeek
     },
     'claude-cli': {
         label: 'Claude CLI（本机）',
-        apiKeyField: null,          // 走本机已登录的 CLI，无需密钥
-        defaultModel: 'sonnet',     // CLI 接受别名（sonnet / opus / haiku）
+        apiKeyField: null,             // 走本机已登录的 CLI，无需密钥
+        defaultModel: 'claude-sonnet-5',
+        defaultEffort: 'high',         // --effort 档位：low/medium/high/xhigh/max
         run: runClaudeCli
     },
     'codex-cli': {
         label: 'Codex CLI（本机）',
         apiKeyField: null,
-        defaultModel: '',           // 留空则用 codex 自身默认模型；用 PROMPT_OPTIMIZER_MODEL 覆盖
+        defaultModel: 'gpt-5.6-sol',
+        defaultEffort: 'medium',       // model_reasoning_effort：low/medium/high
         run: runCodexCli
     }
 };
@@ -184,6 +189,7 @@ export function listPromptOptimizerProviders() {
         id,
         label: provider.label,
         apiKeyField: provider.apiKeyField,
-        defaultModel: provider.defaultModel
+        defaultModel: provider.defaultModel,
+        defaultEffort: provider.defaultEffort || ''
     }));
 }

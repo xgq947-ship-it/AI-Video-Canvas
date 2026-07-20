@@ -14,7 +14,7 @@ private final class LauncherModel: ObservableObject {
     @Published var isBusy = false
     @Published var activityText = "正在检查服务"
 
-    nonisolated private static let projectPath = "/Users/dasheng/Desktop/AI漫剧电影/05_TwitCanva视频工作流"
+    nonisolated private static let projectPath = "/Users/dasheng/Desktop/AI-Video-Canvas"
     nonisolated private static let sourcePlist = projectPath + "/launcher/com.dasheng.twitcanva.plist"
     nonisolated private static let installedPlist = "/Users/dasheng/Library/LaunchAgents/com.dasheng.twitcanva.plist"
     nonisolated private static let logPath = "/Users/dasheng/Library/Logs/Evan"

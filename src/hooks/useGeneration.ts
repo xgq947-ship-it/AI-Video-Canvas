@@ -104,7 +104,7 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
         const textNodePrompts = getTextNodePrompts();
         const combinedPrompt = [...textNodePrompts, node.prompt].filter(Boolean).join('\n\n');
         const directReferences = collectNodeReferences(node.parentIds, nodes);
-        const explicitReferenceLabels = extractReferenceLabels(combinedPrompt);
+        const explicitReferenceLabels = extractReferenceLabels(combinedPrompt, directReferences);
         const selectedReferences = selectPromptReferences(directReferences, combinedPrompt);
         const selectedReferenceIds = new Set(selectedReferences.map(reference => reference.id));
         const shouldUseReferenceParent = (parentId: string) =>

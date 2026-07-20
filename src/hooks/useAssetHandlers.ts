@@ -84,12 +84,12 @@ export const useAssetHandlers = ({
     }, [nodes]);
 
     /**
-     * Save asset to library
+     * Save asset to library. Also tags the source node with the saved asset's
+     * name so downstream connections display "@素材名" instead of "参考图N".
      */
     const handleSaveAssetToLibrary = useCallback(async (
         name: string,
-        category: string,
-        meta?: Record<string, string | undefined>
+        description?: string
     ) => {
         if (!nodeToSnapshot?.resultUrl) return;
 
@@ -99,18 +99,23 @@ export const useAssetHandlers = ({
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     sourceUrl: nodeToSnapshot.resultUrl,
-                    name: name,
-                    category: category,
-                    meta
+                    name,
+                    description
                 })
             });
 
             if (!response.ok) throw new Error('Failed to save');
+            const { asset } = await response.json();
+
+            const snapshotId = nodeToSnapshot.id;
+            setNodes(prev => prev.map(n => n.id === snapshotId
+                ? { ...n, assetId: asset.id, assetName: name, assetDescription: description }
+                : n));
         } catch (error) {
             console.error("Failed to save asset:", error);
             throw error;
         }
-    }, [nodeToSnapshot]);
+    }, [nodeToSnapshot, setNodes]);
 
     /**
      * Handle file upload from context menu

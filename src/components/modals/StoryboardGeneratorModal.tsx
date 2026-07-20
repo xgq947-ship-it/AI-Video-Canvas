@@ -11,17 +11,6 @@ import { CharacterAsset, SceneScript, StoryboardState } from '../../hooks/useSto
 import { StoryInput } from '../StoryInput';
 
 // ============================================================================
-// IMAGE MODELS (Copied from NodeControls.tsx for model selection)
-// ============================================================================
-
-const IMAGE_MODELS = [
-    { id: 'gpt-image-1.5', name: 'GPT Image 1.5', provider: 'openai' },
-    { id: 'gemini-pro', name: 'Nano Banana Pro', provider: 'google' },
-    { id: 'kling-v1-5', name: 'Kling V1.5', provider: 'kling' },
-    { id: 'kling-v2-1', name: 'Kling V2.1', provider: 'kling' },
-];
-
-// ============================================================================
 // TYPES
 // ============================================================================
 
@@ -718,7 +707,7 @@ export const StoryboardGeneratorModal: React.FC<StoryboardGeneratorModalProps> =
                                     <div className="text-center">
                                         <Loader2 size={48} className="animate-spin text-purple-500 mx-auto mb-4" />
                                         <p className="text-white font-medium">正在生成预览...</p>
-                                        <p className="text-neutral-400 text-sm mt-2">正在用 Nano Banana Pro 生成连贯的故事板</p>
+                                        <p className="text-neutral-400 text-sm mt-2">正在生成连贯的故事板</p>
                                     </div>
                                 ) : state.compositeImageUrl ? (
                                     <div className="relative w-full h-full flex items-center justify-center">
@@ -772,7 +761,7 @@ export const StoryboardGeneratorModal: React.FC<StoryboardGeneratorModalProps> =
                                     <div className="text-neutral-400">分镜数：</div>
                                     <div className="text-white">{state.scripts.length}</div>
                                     <div className="text-neutral-400">模型：</div>
-                                    <div className="text-white">Nano Banana Pro</div>
+                                    <div className="text-white">自动</div>
                                     <div className="text-neutral-400">预览：</div>
                                     <div className="text-white">{state.compositeImageUrl ? '已生成' : '暂无'}</div>
                                 </div>

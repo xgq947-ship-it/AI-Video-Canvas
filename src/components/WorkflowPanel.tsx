@@ -39,6 +39,7 @@ interface WorkflowPanelProps {
     isOpen: boolean;
     onClose: () => void;
     onLoadWorkflow: (workflowId: string) => void;
+    onRenameWorkflow?: (workflowId: string, title: string, nodes: NodeData[]) => void;
     currentWorkflowId?: string;
     panelY?: number;
     panelLeft?: number;
@@ -160,6 +161,7 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
     isOpen,
     onClose,
     onLoadWorkflow,
+    onRenameWorkflow,
     currentWorkflowId,
     panelY = 200,
     panelLeft = 80,
@@ -249,11 +251,18 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ title })
             });
-            if (response.ok) {
-                setWorkflows(prev => prev.map(w => (w.id === id ? { ...w, title } : w)));
-            }
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || '项目重命名失败');
+            setWorkflows(prev => prev.map(w => (w.id === id ? {
+                ...w,
+                title: result.title || title,
+                coverUrl: result.coverUrl ?? w.coverUrl,
+                previewNodes: Array.isArray(result.nodes) ? result.nodes : w.previewNodes
+            } : w)));
+            onRenameWorkflow?.(id, result.title || title, Array.isArray(result.nodes) ? result.nodes : []);
         } catch (error) {
             console.error('Failed to rename workflow:', error);
+            window.alert(error instanceof Error ? error.message : '项目重命名失败');
         }
         cancelRenaming();
     };

@@ -31,15 +31,18 @@ function sanitizeDirName(title) {
     return cleaned || fallback;
 }
 
+function buildAssetsDirName(workflow, title) {
+    const shortId = (workflow.id || '').replace(/-/g, '').slice(0, 8) || Math.random().toString(36).slice(2, 10);
+    return `${sanitizeDirName(title)}_${shortId}`;
+}
+
 /**
- * Assigns (once) and returns the folder name this workflow's assets live under.
- * Frozen at first assignment so later title edits don't require renaming/re-linking
- * every already-organized file.
+ * Assigns and returns the folder name this workflow's assets live under.
+ * The title endpoint keeps this name synchronized after later title edits.
  */
 export function ensureAssetsDirName(workflow) {
     if (!workflow.assetsDirName) {
-        const shortId = (workflow.id || '').replace(/-/g, '').slice(0, 8) || Math.random().toString(36).slice(2, 10);
-        workflow.assetsDirName = `${sanitizeDirName(workflow.title)}_${shortId}`;
+        workflow.assetsDirName = buildAssetsDirName(workflow, workflow.title);
     }
     return workflow.assetsDirName;
 }
@@ -62,6 +65,11 @@ function parseLibraryUrl(url) {
             return null;
         }
     }
+    try {
+        pathname = decodeURIComponent(pathname);
+    } catch {
+        // Keep malformed legacy URLs untouched rather than failing a save.
+    }
     pathname = pathname.split('?')[0];
     const m = pathname.match(/^\/library\/(images|videos)\/(.+)$/);
     if (!m) return null;
@@ -77,8 +85,12 @@ function sidecarPathFor(filePath) {
 
 /** Copies file + its sidecar metadata (if any) into destPath's directory, if not already there. */
 function copyIfNeeded(srcPath, destPath) {
-    if (!fs.existsSync(srcPath)) return false;
     fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    // A title rename may have already moved the project directory while an
+    // in-flight client save still contains the old URL. In that case the
+    // destination is authoritative and the URL can safely be rewritten.
+    if (fs.existsSync(destPath)) return true;
+    if (!fs.existsSync(srcPath)) return false;
     if (!fs.existsSync(destPath)) {
         fs.copyFileSync(srcPath, destPath);
     }
@@ -90,6 +102,81 @@ function copyIfNeeded(srcPath, destPath) {
         }
     }
     return true;
+}
+
+/**
+ * Renames this workflow's image/video folders to match a new project title and
+ * rewrites every project-local media URL. The stable workflow-id suffix keeps
+ * folders unique even when multiple projects share the same title.
+ *
+ * Mutates `workflow` only after all filesystem renames succeed.
+ * @returns {{ changed: boolean, oldDirName: string | null, newDirName: string, rollback: () => void }}
+ */
+export function renameWorkflowAssetDirs(workflow, newTitle, { imagesDir, videosDir }) {
+    const oldDirName = workflow?.assetsDirName || null;
+    const newDirName = buildAssetsDirName(workflow, newTitle);
+    if (!oldDirName || oldDirName === newDirName) {
+        if (oldDirName) workflow.assetsDirName = newDirName;
+        return { changed: false, oldDirName, newDirName, rollback: () => {} };
+    }
+
+    const baseDirs = [imagesDir, videosDir];
+    const moves = baseDirs
+        .map(baseDir => ({
+            from: path.join(baseDir, oldDirName),
+            to: path.join(baseDir, newDirName)
+        }))
+        .filter(move => fs.existsSync(move.from));
+
+    for (const move of moves) {
+        if (fs.existsSync(move.to)) {
+            const error = new Error(`目标项目素材目录已存在：${path.basename(move.to)}`);
+            error.code = 'EEXIST';
+            throw error;
+        }
+    }
+
+    const completedMoves = [];
+    try {
+        for (const move of moves) {
+            fs.renameSync(move.from, move.to);
+            completedMoves.push(move);
+        }
+    } catch (error) {
+        for (const move of completedMoves.reverse()) {
+            if (fs.existsSync(move.to) && !fs.existsSync(move.from)) {
+                fs.renameSync(move.to, move.from);
+            }
+        }
+        throw error;
+    }
+
+    const rewrite = (url) => {
+        const parsed = parseLibraryUrl(url);
+        if (!parsed || parsed.projectDir !== oldDirName) return url;
+        return `${parsed.origin}/library/${parsed.type}/${newDirName}/${parsed.filename}`;
+    };
+
+    workflow.assetsDirName = newDirName;
+    for (const node of workflow.nodes || []) {
+        for (const field of MEDIA_URL_FIELDS) {
+            if (typeof node[field] === 'string') node[field] = rewrite(node[field]);
+        }
+    }
+    if (typeof workflow.coverUrl === 'string') workflow.coverUrl = rewrite(workflow.coverUrl);
+
+    return {
+        changed: true,
+        oldDirName,
+        newDirName,
+        rollback: () => {
+            for (const move of [...completedMoves].reverse()) {
+                if (fs.existsSync(move.to) && !fs.existsSync(move.from)) {
+                    fs.renameSync(move.to, move.from);
+                }
+            }
+        }
+    };
 }
 
 /**

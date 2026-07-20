@@ -48,3 +48,11 @@ test('最新视频模型均预留对应 API 密钥', () => {
     assert.equal(kling.provider, 'Kling 3.0');
     assert.equal(hailuo.provider, 'Hailuo 2.3');
 });
+
+test('提示词优化可单独配置 DeepSeek API 密钥', () => {
+    const fields = describeApiKeySettings({}, {});
+    const deepseek = fields.find(field => field.name === 'DEEPSEEK_API_KEY');
+
+    assert.equal(deepseek.provider, 'DeepSeek');
+    assert.match(deepseek.label, /提示词优化/);
+});

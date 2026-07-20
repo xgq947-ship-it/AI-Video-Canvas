@@ -9,12 +9,17 @@
 import React, { useState, useRef, useEffect, memo } from 'react';
 import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Film, Clock, Expand, Shrink, Monitor, Crop, HardDrive, Upload, Loader2, Mic2 } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
-import { OpenAIIcon, GoogleIcon, KlingIcon, HailuoIcon } from '../icons/BrandIcons';
+import { KlingIcon, HailuoIcon } from '../icons/BrandIcons';
 import { useFaceDetection } from '../../hooks/useFaceDetection';
 import { ChangeAnglePanel } from './ChangeAnglePanel';
 import { LocalModel, getLocalModels } from '../../services/localModelService';
 import type { NodeReference } from '../../utils/nodeReferences.js';
 import { extractReferenceLabels } from '../../utils/nodeReferences.js';
+import {
+    IMAGE_PROMPT_OPTIMIZATION_PROFILES,
+    PROMPT_OPTIMIZATION_PROFILES,
+    type PromptOptimizationProfile
+} from '../../../shared/promptOptimizationProfiles.js';
 
 interface NodeControlsProps {
     data: NodeData;
@@ -67,7 +72,6 @@ interface VideoModelOption {
 }
 
 const VIDEO_MODELS: VideoModelOption[] = [
-    { id: 'veo-3.1', name: 'Veo 3.1', provider: 'google', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, durations: [4, 6, 8], resolutions: ['Auto', '720p', '1080p'], aspectRatios: ['16:9', '9:16'] },
     { id: 'google-flow-omni-flash', name: 'Google Flow · Omni Flash', provider: 'workflow', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, supportsIngredients: true, recommended: true, durations: [4, 6, 8, 10], resolutions: ['自动'], aspectRatios: ['16:9', '9:16'] },
     // 供应商仅保留当前主模型，避免同一能力出现多套过时入口。
     { id: 'seedance-2-0', name: 'Seedance 2.0', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
@@ -112,26 +116,6 @@ const IMAGE_MODELS = [
         resolutions: ["自动"],
         aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"]
     },
-    {
-        id: 'gpt-image-1.5',
-        name: 'GPT Image 1.5',
-        provider: 'openai',
-        supportsImageToImage: true,
-        supportsMultiImage: true,
-        recommended: true,
-        resolutions: ["Auto", "1K", "2K", "4K"],
-        // OpenAI uses exact pixel sizes, not aspect ratios
-        aspectRatios: ["Auto", "1024x1024", "1536x1024", "1024x1536"]
-    },
-    {
-        id: 'gemini-pro',
-        name: 'Nano Banana Pro',
-        provider: 'google',
-        supportsImageToImage: true,
-        supportsMultiImage: true,
-        resolutions: ["1K", "2K", "4K"],
-        aspectRatios: ["Auto", "1:1", "9:16", "16:9", "3:4", "4:3", "3:2", "2:3", "5:4", "4:5", "21:9"]
-    },
     // Kling AI models - Consolidated: removed legacy v1, v2, v2-new
     {
         id: 'kling-v1-5',
@@ -139,16 +123,6 @@ const IMAGE_MODELS = [
         provider: 'kling',
         supportsImageToImage: true, // V1.5 supports image_reference for subject/face
         supportsMultiImage: false,
-        resolutions: ["1K", "2K"],
-        aspectRatios: ["Auto", "1:1", "9:16", "16:9", "3:4", "4:3", "3:2", "2:3", "21:9"]
-    },
-    {
-        id: 'kling-v2-1',
-        name: 'Kling V2.1',
-        provider: 'kling',
-        supportsImageToImage: false, // V2.1 requires Multi-Image API
-        supportsMultiImage: true,    // Use Multi-Image API with subject_image_list
-        recommended: true,
         resolutions: ["1K", "2K"],
         aspectRatios: ["Auto", "1:1", "9:16", "16:9", "3:4", "4:3", "3:2", "2:3", "21:9"]
     },
@@ -176,6 +150,9 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
     const [isUploadingVideo, setIsUploadingVideo] = useState(false);
     const [localPrompt, setLocalPrompt] = useState(data.prompt || '');
+    const [showPromptOptimizer, setShowPromptOptimizer] = useState(false);
+    const [isOptimizingPrompt, setIsOptimizingPrompt] = useState(false);
+    const [promptOptimizationError, setPromptOptimizationError] = useState('');
     const [mentionStart, setMentionStart] = useState<number | null>(null);
     const [mentionQuery, setMentionQuery] = useState('');
     const [mentionIndex, setMentionIndex] = useState(0);
@@ -185,6 +162,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const durationDropdownRef = useRef<HTMLDivElement>(null);
     const resolutionDropdownRef = useRef<HTMLDivElement>(null);
     const modelDropdownRef = useRef<HTMLDivElement>(null);
+    const promptOptimizerRef = useRef<HTMLDivElement>(null);
     const videoUploadInputRef = useRef<HTMLInputElement>(null);
     const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const lastSentPromptRef = useRef<string | undefined>(data.prompt); // Track what we sent
@@ -271,6 +249,9 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
             if (resolutionDropdownRef.current && !resolutionDropdownRef.current.contains(event.target as Node)) {
                 setShowResolutionDropdown(false);
             }
+            if (promptOptimizerRef.current && !promptOptimizerRef.current.contains(event.target as Node)) {
+                setShowPromptOptimizer(false);
+            }
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -335,7 +316,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
         const query = mentionQuery.trim().toLowerCase();
         return !query || reference.label.toLowerCase().includes(query) || reference.title.toLowerCase().includes(query);
     });
-    const activeReferenceLabels = extractReferenceLabels(localPrompt);
+    const activeReferenceLabels = extractReferenceLabels(localPrompt, connectedReferences);
 
     const insertReferenceMention = (reference: NodeReference) => {
         const textarea = promptRef.current;
@@ -512,6 +493,55 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     // Get available durations for current model
     const availableDurations = currentVideoModel.durations || [5];
     const currentDuration = data.videoDuration || availableDurations[0];
+
+    const canOptimizePrompt = Boolean(localPrompt.trim()) || (isImageNode && connectedReferences.length > 0);
+
+    const handleOptimizePrompt = async (profile: PromptOptimizationProfile) => {
+        const sourcePrompt = localPrompt.trim() || (isImageNode
+            ? `严格基于${connectedReferences.map(reference => `@${reference.label}`).join('、')}，保持同一人物身份与已经确认的造型。`
+            : '');
+        if (!sourcePrompt || isOptimizingPrompt) return;
+
+        setIsOptimizingPrompt(true);
+        setPromptOptimizationError('');
+        setShowPromptOptimizer(false);
+
+        try {
+            const response = await fetch('/api/prompt/optimize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    prompt: sourcePrompt,
+                    profileId: profile.id,
+                    context: {
+                        targetModel: isVideoNode ? currentVideoModel.id : data.imageModel,
+                        aspectRatio: data.aspectRatio,
+                        duration: isVideoNode ? currentDuration : undefined
+                    }
+                })
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || !result.optimizedPrompt) {
+                throw new Error(result.error || '提示词优化失败');
+            }
+
+            if (updateTimeoutRef.current) clearTimeout(updateTimeoutRef.current);
+            const optimizedPrompt = String(result.optimizedPrompt);
+            setLocalPrompt(optimizedPrompt);
+            lastSentPromptRef.current = optimizedPrompt;
+
+            const updates: Partial<NodeData> = { prompt: optimizedPrompt };
+            if (isImageNode && profile.aspectRatio && imageAspectRatioOptions.includes(profile.aspectRatio)) {
+                updates.aspectRatio = profile.aspectRatio;
+            }
+            onUpdate(data.id, updates);
+        } catch (error) {
+            console.error('Prompt optimization failed:', error);
+            setPromptOptimizationError(error instanceof Error ? error.message : '提示词优化失败');
+        } finally {
+            setIsOptimizingPrompt(false);
+        }
+    };
 
     // Get available resolutions for current model (considering duration for models with durationResolutionMap)
     const getAvailableResolutions = () => {
@@ -773,8 +803,8 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
             {/* Prompt Textarea with Expand Button - Hidden for storyboard-generated scenes */}
             {!(data.prompt && data.prompt.startsWith('Extract panel #')) && (
                 <div className="relative mb-3">
-                    {connectedReferences.length > 0 && (
-                        <div className="mb-3 flex gap-2 overflow-x-auto pb-1" aria-label="已连接参考素材">
+                    <div className="mb-3 flex min-h-[38px] items-start gap-3">
+                        <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1" aria-label="已连接参考素材">
                             {connectedReferences.map(reference => (
                                 <button
                                     key={reference.id}
@@ -809,7 +839,55 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                 </button>
                             ))}
                         </div>
-                    )}
+
+                        {(isImageNode || isVideoNode) && (
+                            <div className="relative flex-none" ref={promptOptimizerRef}>
+                                <button
+                                    type="button"
+                                    disabled={!canOptimizePrompt || isOptimizingPrompt}
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        if (isImageNode) {
+                                            setShowPromptOptimizer(current => !current);
+                                        } else {
+                                            void handleOptimizePrompt(PROMPT_OPTIMIZATION_PROFILES.video);
+                                        }
+                                    }}
+                                    className={`flex h-9 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isDark
+                                        ? 'border-neutral-700 bg-[#252525] text-neutral-200 hover:border-violet-500 hover:bg-violet-500/10 hover:text-violet-300'
+                                        : 'border-neutral-300 bg-white text-neutral-700 hover:border-violet-500 hover:bg-violet-50 hover:text-violet-700'}`}
+                                    title={isImageNode ? '选择图片提示词优化类型' : '直接优化视频提示词'}
+                                >
+                                    {isOptimizingPrompt ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                                    <span>{isOptimizingPrompt ? '优化中' : '提示词优化'}</span>
+                                    {isImageNode && <ChevronDown size={13} className="opacity-60" />}
+                                </button>
+
+                                {isImageNode && showPromptOptimizer && (
+                                    <div className={`absolute right-0 top-full z-[180] mt-2 w-72 overflow-hidden rounded-xl border p-1.5 shadow-2xl ${isDark ? 'border-neutral-700 bg-[#252525]' : 'border-neutral-200 bg-white'}`}>
+                                        {IMAGE_PROMPT_OPTIMIZATION_PROFILES.map(profile => (
+                                            <button
+                                                key={profile.id}
+                                                type="button"
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    void handleOptimizePrompt(profile);
+                                                }}
+                                                className={`w-full rounded-lg px-3 py-2.5 text-left transition-colors ${isDark ? 'hover:bg-neutral-700' : 'hover:bg-neutral-100'}`}
+                                            >
+                                                <span className={`block text-sm font-semibold ${isDark ? 'text-white' : 'text-neutral-900'}`}>{profile.label}</span>
+                                                <span className="mt-0.5 block text-xs text-neutral-500">{profile.description}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {promptOptimizationError && (
+                                    <div className="mt-1 max-w-72 text-right text-[11px] text-red-400">{promptOptimizationError}</div>
+                                )}
+                            </div>
+                        )}
+                    </div>
                     <textarea
                         ref={promptRef}
                         className={`w-full resize-none bg-transparent text-[17px] font-normal leading-7 outline-none ${isDark ? 'text-white placeholder-neutral-600' : 'text-neutral-900 placeholder-neutral-400'}`}
@@ -952,9 +1030,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                     onClick={() => setShowModelDropdown(!showModelDropdown)}
                                     className="flex min-w-[142px] items-center gap-1.5 whitespace-nowrap text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
                                 >
-                                    {currentVideoModel.id === 'veo-3.1' ? (
-                                        <GoogleIcon size={12} className="text-white" />
-                                    ) : currentVideoModel.provider === 'kling' ? (
+                                    {currentVideoModel.provider === 'kling' ? (
                                         <KlingIcon size={14} />
                                     ) : (
                                         <Film size={12} className="text-cyan-400" />
@@ -990,33 +1066,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                             {videoGenerationMode === 'text-to-video' ? '文本 → 视频' :
                                                 videoGenerationMode === 'image-to-video' ? '图片 → 视频' : '首尾帧'}
                                         </div>
-                                        {/* Google Models */}
-                                        {availableVideoModels.filter(m => m.provider === 'google').length > 0 && (
-                                            <>
-                                                <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f]">
-                                                    Google
-                                                </div>
-                                                {availableVideoModels.filter(m => m.provider === 'google').map(model => (
-                                                    <button
-                                                        key={model.id}
-                                                        onClick={() => handleVideoModelChange(model.id)}
-                                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${currentVideoModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'
-                                                            }`}
-                                                    >
-                                                        <span className="flex items-center gap-2">
-                                                            {model.id === 'veo-3.1' ? (
-                                                                <GoogleIcon size={12} className="text-white" />
-                                                            ) : (
-                                                                <Film size={12} className="text-cyan-400" />
-                                                            )}
-                                                            {model.name}
-                                                        </span>
-                                                        {currentVideoModel.id === model.id && <Check size={12} />}
-                                                    </button>
-                                                ))}
-                                            </>
-                                        )}
-
                                         {/* Local workflow models */}
                                         {workflowVideoModels.length > 0 && (
                                             <>
@@ -1142,14 +1191,8 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                 >
                                     {currentImageModel.provider === 'workflow' ? (
                                         <Banana size={12} className="text-cyan-400" />
-                                    ) : currentImageModel.id === 'google-veo' ? ( // Keeping consistency if there was one, but mainly checking provider
-                                        <GoogleIcon size={12} className="text-white" />
-                                    ) : currentImageModel.id === 'gemini-pro' ? (
-                                        <Banana size={12} className="text-yellow-400" />
                                     ) : currentImageModel.provider === 'codex' ? (
                                         <Sparkles size={12} className="text-blue-400" />
-                                    ) : currentImageModel.provider === 'openai' ? (
-                                        <OpenAIIcon size={12} className="text-green-400" />
                                     ) : currentImageModel.provider === 'kling' ? (
                                         <KlingIcon size={14} />
                                     ) : (
@@ -1215,58 +1258,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                                 ))}
                                             </>
                                         )}
-                                        {/* OpenAI Models */}
-                                        {availableImageModels.filter(m => m.provider === 'openai').length > 0 && (
-                                            <>
-                                                <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f]">
-                                                    OpenAI
-                                                </div>
-                                                {availableImageModels.filter(m => m.provider === 'openai').map(model => (
-                                                    <button
-                                                        key={model.id}
-                                                        onClick={() => handleImageModelChange(model.id)}
-                                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${currentImageModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'
-                                                            }`}
-                                                    >
-                                                        <span className="flex items-center gap-2">
-                                                            <OpenAIIcon size={12} className="text-green-400" />
-                                                            {model.name}
-                                                            {model.recommended && (
-                                                                <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">推荐</span>
-                                                            )}
-                                                        </span>
-                                                        {currentImageModel.id === model.id && <Check size={12} />}
-                                                    </button>
-                                                ))}
-                                            </>
-                                        )}
-                                        {/* Google Models */}
-                                        {availableImageModels.filter(m => m.provider === 'google').length > 0 && (
-                                            <>
-                                                <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f] border-t border-neutral-700">
-                                                    Google
-                                                </div>
-                                                {availableImageModels.filter(m => m.provider === 'google').map(model => (
-                                                    <button
-                                                        key={model.id}
-                                                        onClick={() => handleImageModelChange(model.id)}
-                                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${currentImageModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'
-                                                            }`}
-                                                    >
-                                                        <span className="flex items-center gap-2">
-                                                            {model.id === 'gemini-pro' ? (
-                                                                <Banana size={12} className="text-yellow-400" />
-                                                            ) : (
-                                                                <GoogleIcon size={12} className="text-white" />
-                                                            )}
-                                                            {model.name}
-                                                        </span>
-                                                        {currentImageModel.id === model.id && <Check size={12} />}
-                                                    </button>
-                                                ))}
-                                            </>
-                                        )}
-
                                         {/* Kling Models */}
                                         {availableImageModels.filter(m => m.provider === 'kling').length > 0 && (
                                             <>

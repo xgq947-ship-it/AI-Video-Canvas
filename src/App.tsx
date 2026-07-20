@@ -762,7 +762,7 @@ export default function App() {
       y: data.y || 0,
       prompt: data.prompt || '',
       status: data.status || NodeStatus.IDLE,
-      model: data.model || 'gpt-image-1.5',
+      model: data.model || 'codex-imagegen',
       imageModel: data.imageModel,
       aspectRatio: data.aspectRatio || '16:9',
       resolution: data.resolution || '1K',
@@ -1038,7 +1038,7 @@ export default function App() {
     const createNode = (resultAspectRatio?: string, aspectRatio?: string) => {
       const isVideo = type === 'videos';
       // Use the original model from asset metadata, or fall back to defaults
-      const defaultModel = isVideo ? 'veo-3.1' : 'imagen-3.0-generate-002';
+      const defaultModel = isVideo ? 'seedance-2-0' : 'codex-imagegen';
       const nodeModel = model || defaultModel;
 
       const newNode: NodeData = {
@@ -1132,7 +1132,11 @@ export default function App() {
       characterAssetRole: asset.characterAssetRole,
       lookId: asset.lookId,
       lookName: asset.lookName,
-      characterReferenceUrls
+      characterReferenceUrls,
+      // 从素材库拖入画布的节点即代表该素材的一次应用，连线引用也应显示素材名
+      assetId: asset.id,
+      assetName: asset.name,
+      assetDescription: asset.description
     };
   };
 
@@ -1443,6 +1447,13 @@ export default function App() {
         isOpen={isWorkflowPanelOpen}
         onClose={closeWorkflowPanel}
         onLoadWorkflow={handleLoadWithTracking}
+        onRenameWorkflow={(id, title, renamedNodes) => {
+          if (id !== workflowId) return;
+          ignoreNextChange.current = true;
+          setCanvasTitle(title);
+          setEditingTitleValue(title);
+          if (renamedNodes.length > 0) setNodes(renamedNodes);
+        }}
         currentWorkflowId={workflowId || undefined}
         panelY={workflowPanelY}
         panelLeft={(sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH) + 20}
@@ -1826,7 +1837,7 @@ export default function App() {
         nodeId={editorModal.nodeId || ''}
         imageUrl={editorModal.imageUrl}
         initialPrompt={nodes.find(n => n.id === editorModal.nodeId)?.prompt}
-        initialModel={nodes.find(n => n.id === editorModal.nodeId)?.imageModel || 'gemini-pro'}
+        initialModel={nodes.find(n => n.id === editorModal.nodeId)?.imageModel || 'codex-imagegen'}
         initialAspectRatio={nodes.find(n => n.id === editorModal.nodeId)?.aspectRatio || 'Auto'}
         initialResolution={nodes.find(n => n.id === editorModal.nodeId)?.resolution || '1K'}
         initialElements={nodes.find(n => n.id === editorModal.nodeId)?.editorElements as any}
@@ -1841,7 +1852,7 @@ export default function App() {
           if (!sourceNode) return;
 
           // Get settings from source node (which were updated by the modal)
-          const imageModel = sourceNode.imageModel || 'gemini-pro';
+          const imageModel = sourceNode.imageModel || 'codex-imagegen';
           const aspectRatio = sourceNode.aspectRatio || 'Auto';
           const resolution = sourceNode.resolution || '1K';
 

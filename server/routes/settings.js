@@ -5,6 +5,13 @@ import {
     loadApiKeyOverrides,
     saveApiKeyOverrides
 } from '../services/apiKeyStore.js';
+import { listPromptOptimizerProviders } from '../services/promptOptimizerProviders.js';
+import {
+    applyOptimizerPreferenceToApp,
+    describeOptimizerSettings,
+    loadOptimizerPreference,
+    saveOptimizerPreference
+} from '../services/optimizerPreference.js';
 
 const router = express.Router();
 
@@ -46,6 +53,31 @@ router.post('/api-keys', (req, res) => {
     } catch (error) {
         console.error('[API 设置] 保存失败：', error);
         res.status(500).json({ error: error.message || 'API 密钥保存失败' });
+    }
+});
+
+// —— 提示词优化后端（下拉选择）——
+router.get('/optimizer', (req, res) => {
+    const providers = listPromptOptimizerProviders().map(provider => ({
+        ...provider,
+        // CLI 后端无需密钥；API 后端标注其密钥是否已配置，供 UI 提示。
+        keyConfigured: provider.apiKeyField ? Boolean(req.app.locals[provider.apiKeyField]) : true
+    }));
+    res.json({ providers, current: describeOptimizerSettings(req.app) });
+});
+
+router.post('/optimizer', (req, res) => {
+    try {
+        const libraryDir = req.app.locals.LIBRARY_DIR;
+        const saved = saveOptimizerPreference(libraryDir, {
+            provider: req.body?.provider,
+            model: typeof req.body?.model === 'string' ? req.body.model : undefined
+        });
+        applyOptimizerPreferenceToApp(req.app, process.env, loadOptimizerPreference(libraryDir));
+        res.json({ success: true, current: describeOptimizerSettings(req.app), saved });
+    } catch (error) {
+        console.error('[优化后端] 保存失败：', error);
+        res.status(400).json({ error: error.message || '优化后端保存失败' });
     }
 });
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Eye, EyeOff, KeyRound, Loader2, ShieldCheck, Trash2, X } from 'lucide-react';
+import { CheckCircle2, Eye, EyeOff, KeyRound, Loader2, ShieldCheck, Trash2, Wand2, X } from 'lucide-react';
 
 interface ApiKeyField {
     name: string;
@@ -9,6 +9,14 @@ interface ApiKeyField {
     configured: boolean;
     source: 'manual' | 'environment' | 'none';
     maskedValue: string;
+}
+
+interface OptimizerProvider {
+    id: string;
+    label: string;
+    apiKeyField: string | null;
+    defaultModel: string;
+    keyConfigured: boolean;
 }
 
 interface ApiKeySettingsModalProps {
@@ -26,6 +34,10 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState('');
     const [saved, setSaved] = useState(false);
+    const [optimizerProviders, setOptimizerProviders] = useState<OptimizerProvider[]>([]);
+    const [optimizerProvider, setOptimizerProvider] = useState('deepseek');
+    const [optimizerModel, setOptimizerModel] = useState('');
+    const [initialOptimizer, setInitialOptimizer] = useState<{ provider: string; model: string }>({ provider: 'deepseek', model: '' });
 
     useEffect(() => {
         if (!isOpen) return;
@@ -36,14 +48,26 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
         setValues({});
         setClearFields(new Set());
 
-        fetch('/api/settings/api-keys')
-            .then(async response => {
+        Promise.all([
+            fetch('/api/settings/api-keys').then(async response => {
                 const result = await response.json();
                 if (!response.ok) throw new Error(result.error || '读取 API 配置失败');
                 if (!cancelled) setFields(result.fields || []);
+            }),
+            fetch('/api/settings/optimizer').then(async response => {
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || '读取优化后端配置失败');
+                if (!cancelled) {
+                    setOptimizerProviders(result.providers || []);
+                    const current = result.current || { provider: 'deepseek', model: '' };
+                    setOptimizerProvider(current.provider);
+                    setOptimizerModel(current.model || '');
+                    setInitialOptimizer({ provider: current.provider, model: current.model || '' });
+                }
             })
+        ])
             .catch(fetchError => {
-                if (!cancelled) setError(fetchError.message || '读取 API 配置失败');
+                if (!cancelled) setError(fetchError.message || '读取配置失败');
             })
             .finally(() => {
                 if (!cancelled) setIsLoading(false);
@@ -71,7 +95,10 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
         return Array.from(grouped.entries());
     }, [fields]);
 
-    const hasChanges = Object.values(values).some(value => value.trim()) || clearFields.size > 0;
+    const apiKeyDirty = Object.values(values).some(value => value.trim()) || clearFields.size > 0;
+    const optimizerDirty = optimizerProvider !== initialOptimizer.provider || optimizerModel.trim() !== initialOptimizer.model;
+    const hasChanges = apiKeyDirty || optimizerDirty;
+    const selectedOptimizer = optimizerProviders.find(provider => provider.id === optimizerProvider);
     const isDark = canvasTheme === 'dark';
 
     const handleValueChange = (name: string, value: string) => {
@@ -102,22 +129,39 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
         setSaved(false);
 
         try {
-            const changedValues = Object.fromEntries(
-                Object.entries(values).filter(([, value]) => value.trim())
-            );
-            const response = await fetch('/api/settings/api-keys', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ values: changedValues, clear: Array.from(clearFields) })
-            });
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.error || 'API 密钥保存失败');
-            setFields(result.fields || []);
-            setValues({});
-            setClearFields(new Set());
+            if (apiKeyDirty) {
+                const changedValues = Object.fromEntries(
+                    Object.entries(values).filter(([, value]) => value.trim())
+                );
+                const response = await fetch('/api/settings/api-keys', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ values: changedValues, clear: Array.from(clearFields) })
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || 'API 密钥保存失败');
+                setFields(result.fields || []);
+                setValues({});
+                setClearFields(new Set());
+            }
+
+            if (optimizerDirty) {
+                const response = await fetch('/api/settings/optimizer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ provider: optimizerProvider, model: optimizerModel.trim() })
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || '优化后端保存失败');
+                const current = result.current || { provider: optimizerProvider, model: optimizerModel.trim() };
+                setOptimizerProvider(current.provider);
+                setOptimizerModel(current.model || '');
+                setInitialOptimizer({ provider: current.provider, model: current.model || '' });
+            }
+
             setSaved(true);
         } catch (saveError) {
-            setError(saveError instanceof Error ? saveError.message : 'API 密钥保存失败');
+            setError(saveError instanceof Error ? saveError.message : '保存失败');
         } finally {
             setIsSaving(false);
         }
@@ -153,6 +197,48 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                         <div className="flex h-48 items-center justify-center gap-2 text-sm text-neutral-500"><Loader2 size={18} className="animate-spin" />正在读取配置</div>
                     ) : (
                         <div className="space-y-4">
+                            {/* 提示词优化后端选择 */}
+                            <section className={`rounded-xl border p-4 ${isDark ? 'border-neutral-800 bg-[#202020]' : 'border-neutral-200 bg-neutral-50'}`}>
+                                <div className="mb-1 flex items-center gap-2">
+                                    <Wand2 size={14} className={isDark ? 'text-purple-400' : 'text-purple-600'} />
+                                    <h3 className="text-sm font-medium">提示词优化后端</h3>
+                                </div>
+                                <p className={`mb-3 text-[11px] ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                                    图片 / 视频节点“优化提示词”用哪个模型生成。CLI 后端用本机已登录的工具、无需密钥，但速度慢于云端 API。
+                                </p>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label htmlFor="optimizer-provider" className={`mb-1.5 block text-xs ${isDark ? 'text-neutral-300' : 'text-neutral-600'}`}>后端</label>
+                                        <select
+                                            id="optimizer-provider"
+                                            value={optimizerProvider}
+                                            onChange={event => { setOptimizerProvider(event.target.value); setSaved(false); }}
+                                            className={`h-10 w-full rounded-lg border bg-transparent px-3 text-sm outline-none transition-colors ${isDark ? 'border-neutral-700 text-white focus:border-blue-500' : 'border-neutral-300 text-neutral-900 focus:border-blue-500'}`}
+                                        >
+                                            {optimizerProviders.map(provider => (
+                                                <option key={provider.id} value={provider.id} className={isDark ? 'bg-[#202020]' : ''}>{provider.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label htmlFor="optimizer-model" className={`mb-1.5 block text-xs ${isDark ? 'text-neutral-300' : 'text-neutral-600'}`}>模型（可选）</label>
+                                        <input
+                                            id="optimizer-model"
+                                            type="text"
+                                            value={optimizerModel}
+                                            onChange={event => { setOptimizerModel(event.target.value); setSaved(false); }}
+                                            autoComplete="off"
+                                            spellCheck={false}
+                                            placeholder={selectedOptimizer?.defaultModel ? `默认：${selectedOptimizer.defaultModel}` : '留空用后端默认'}
+                                            className={`h-10 w-full rounded-lg border bg-transparent px-3 text-sm outline-none transition-colors ${isDark ? 'border-neutral-700 text-white placeholder-neutral-600 focus:border-blue-500' : 'border-neutral-300 text-neutral-900 placeholder-neutral-400 focus:border-blue-500'}`}
+                                        />
+                                    </div>
+                                </div>
+                                {selectedOptimizer && !selectedOptimizer.keyConfigured && (
+                                    <p className="mt-2 text-[11px] text-amber-400">该后端需要在下方填写 {selectedOptimizer.apiKeyField} 才能使用。</p>
+                                )}
+                            </section>
+
                             {groups.map(([provider, providerFields]) => (
                                 <section key={provider} className={`rounded-xl border p-4 ${isDark ? 'border-neutral-800 bg-[#202020]' : 'border-neutral-200 bg-neutral-50'}`}>
                                     <div className="mb-3 flex items-center justify-between">

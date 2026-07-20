@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 
 export const API_KEY_FIELDS = [
+    { name: 'DEEPSEEK_API_KEY', provider: 'DeepSeek', label: 'DeepSeek API Key（提示词优化）', secret: true },
     { name: 'GEMINI_API_KEY', provider: 'Google', label: 'Gemini / Veo API Key', secret: true },
     { name: 'OPENAI_API_KEY', provider: 'OpenAI', label: 'OpenAI API Key', secret: true },
     { name: 'ARK_API_KEY', provider: 'Seedance 2.0', label: '火山方舟 ARK API Key（中国区）', secret: true },

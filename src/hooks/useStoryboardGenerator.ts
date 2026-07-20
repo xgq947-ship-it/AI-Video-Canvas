@@ -416,11 +416,11 @@ export const useStoryboardGenerator = ({ onCreateNodes, viewport }: UseStoryboar
                 prompt,
                 // Set to IDLE - handleGenerate will set to LOADING when called
                 status: NodeStatus.IDLE,
-                // Default to Nano Banana Pro (gemini-3-pro-image-preview)
-                model: 'gemini-pro',
-                imageModel: 'gemini-3-pro-image-preview',
+                // 分镜图片默认走 Codex 生图，不再回退到已下线的直连模型。
+                model: 'codex-imagegen',
+                imageModel: 'codex-imagegen',
                 aspectRatio: '16:9',
-                resolution: '1K',
+                resolution: 'Auto',
                 title: `Scene ${sceneNumber}`,
                 parentIds: [],
                 // Assign group ID for auto-grouping

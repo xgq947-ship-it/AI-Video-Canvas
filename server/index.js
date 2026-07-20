@@ -23,8 +23,15 @@ import { normalizeCharacterAssetMeta } from './services/characterAssets.js';
 import { createUniqueAssetFilename } from './services/assetFilenames.js';
 import { createCodexImageAutomation } from './services/codexImageAutomation.js';
 import { scanAssetLibrary } from './utils/scanAssetLibrary.js';
-import { organizeWorkflowAssets, deleteWorkflowAssetDirs } from './utils/projectAssets.js';
+import { organizeWorkflowAssets, deleteWorkflowAssetDirs, renameWorkflowAssetDirs } from './utils/projectAssets.js';
 import { execFile } from 'child_process';
+import {
+    buildPromptOptimizationInstruction,
+    formatOptimizedPrompt,
+    getPromptOptimizationProfile
+} from '../shared/promptOptimizationProfiles.js';
+import { getPromptOptimizerProvider } from './services/promptOptimizerProviders.js';
+import { applyOptimizerPreferenceToApp, loadOptimizerPreference } from './services/optimizerPreference.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -134,6 +141,10 @@ app.locals.CODEX_IMAGE_AUTOMATION = createCodexImageAutomation({
     jobsDir: CODEX_IMAGE_JOBS_DIR
 });
 applyApiKeysToApp(app, process.env, API_KEY_OVERRIDES);
+
+// 提示词优化后端选择：默认 DeepSeek；可在“配置”弹窗下拉里切换到 Claude / Codex 本机 CLI，
+// 选择存到 library/config/optimizer.json（环境变量作为初始默认）。
+applyOptimizerPreferenceToApp(app, process.env, loadOptimizerPreference(LIBRARY_DIR));
 
 // ============================================================================
 // WORKFLOW SANITIZATION HELPERS
@@ -266,9 +277,12 @@ app.use('/api/render', renderRoutes);
 // Save curated asset to library
 app.post('/api/library', async (req, res) => {
     try {
-        const { sourceUrl, name, category, meta } = req.body;
+        const { sourceUrl, name, meta, description } = req.body;
+        // 分类字段已从「新建素材」表单移除（简化为 名称+说明），新素材统一落到 Others 目录；
+        // 仍接受旧调用方传入 category，保持兼容。
+        const category = req.body.category || 'Others';
 
-        if (!sourceUrl || !name || !category) {
+        if (!sourceUrl || !name) {
             return res.status(400).json({ error: "Missing required fields" });
         }
 
@@ -369,6 +383,7 @@ app.post('/api/library', async (req, res) => {
             url: `/library/assets/${category}/${destFilename}`,
             type: sourceUrl.includes('video') || (sourceUrl.startsWith('data:video')) ? 'video' : 'image',
             createdAt: new Date().toISOString(),
+            ...(description?.trim() ? { description: description.trim() } : {}),
             ...normalizedMeta
         };
 
@@ -684,8 +699,10 @@ app.post('/api/workflows/:id/reveal-assets', async (req, res) => {
     }
 });
 
-// Update workflow title (rename from the gallery, without touching nodes/groups)
+// Update workflow title and keep its Finder-visible asset folders in sync.
 app.put('/api/workflows/:id/title', async (req, res) => {
+    let assetRename = null;
+    let tempFilePath = null;
     try {
         const { title } = req.body;
         if (!title || !title.trim()) {
@@ -698,14 +715,34 @@ app.put('/api/workflows/:id/title', async (req, res) => {
         }
 
         const workflowData = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-        workflowData.title = title.trim();
+        const nextTitle = title.trim();
+        assetRename = renameWorkflowAssetDirs(workflowData, nextTitle, {
+            imagesDir: IMAGES_DIR,
+            videosDir: VIDEOS_DIR
+        });
+        workflowData.title = nextTitle;
         workflowData.updatedAt = new Date().toISOString();
-        fs.writeFileSync(filePath, JSON.stringify(workflowData, null, 2));
+        tempFilePath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+        fs.writeFileSync(tempFilePath, JSON.stringify(workflowData, null, 2));
+        fs.renameSync(tempFilePath, filePath);
+        tempFilePath = null;
 
-        res.json({ success: true, title: workflowData.title });
+        res.json({
+            success: true,
+            title: workflowData.title,
+            assetsDirName: workflowData.assetsDirName || null,
+            nodes: workflowData.nodes || [],
+            coverUrl: workflowData.coverUrl || null
+        });
     } catch (error) {
+        if (tempFilePath && fs.existsSync(tempFilePath)) fs.rmSync(tempFilePath, { force: true });
+        try {
+            assetRename?.rollback?.();
+        } catch (rollbackError) {
+            console.error("Asset directory rollback error:", rollbackError);
+        }
         console.error("Update title error:", error);
-        res.status(500).json({ error: error.message });
+        res.status(error.code === 'EEXIST' ? 409 : 500).json({ error: error.message });
     }
 });
 
@@ -859,57 +896,76 @@ app.post('/api/gemini/describe-image', async (req, res) => {
     }
 });
 
-// Optimize a prompt for video generation
-app.post('/api/gemini/optimize-prompt', async (req, res) => {
+// Optimize image/video prompts through extensible shared profiles + pluggable LLM backends.
+// System instruction is model-agnostic (shared/promptOptimizationProfiles.js); the backend is
+// chosen by PROMPT_OPTIMIZER_PROVIDER (default DeepSeek). Adding Claude / Codex = register a
+// provider in services/promptOptimizerProviders.js — this handler stays unchanged.
+// The old Gemini-named route remains as a compatibility alias for StoryboardVideoModal.
+const optimizePromptHandler = async (req, res) => {
     try {
-        const { prompt } = req.body;
-        console.log(`[Gemini Optimize] Request received. Prompt: ${prompt ? (prompt.length > 50 ? prompt.substring(0, 50) + '...' : prompt) : 'missing'}`);
+        const { prompt, profileId = 'video', context = {} } = req.body;
+        const profile = getPromptOptimizationProfile(profileId);
 
         if (!prompt) {
             return res.status(400).json({ error: 'Prompt is required' });
         }
+        if (!profile) {
+            return res.status(400).json({ error: `Unknown prompt optimization profile: ${profileId}` });
+        }
 
-        const client = getClient();
-        const systemInstruction = "You are an expert video prompt engineer. Your goal is to rewrite the user's prompt to be descriptive, visual, and optimized for AI video generation models like Veo, Kling, and Hailuo. detailed, cinematic, and focused on motion and atmosphere. Keep it under 60 words. Output ONLY the rewritten prompt.";
-
-        const result = await client.models.generateContent({
-            model: "gemini-2.0-flash",
-            contents: {
-                parts: [
-                    { text: `${systemInstruction}\n\nUser Prompt: ${prompt}` }
-                ]
-            }
-        });
-
-        let text = "";
-
-        // Handle @google/genai SDK response structure
-        if (result.candidates && result.candidates.length > 0) {
-            const candidate = result.candidates[0];
-            if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0) {
-                text = candidate.content.parts[0].text || "";
+        const providerId = req.app.locals.PROMPT_OPTIMIZER_PROVIDER || 'deepseek';
+        const provider = getPromptOptimizerProvider(providerId);
+        if (!provider) {
+            return res.status(400).json({ error: `未知的提示词优化后端：${providerId}` });
+        }
+        // HTTP API 后端需要密钥；本地 CLI 后端（apiKeyField 为 null）用本机已登录的 CLI，无需密钥。
+        let apiKey;
+        if (provider.apiKeyField) {
+            apiKey = req.app.locals[provider.apiKeyField];
+            if (!apiKey) {
+                return res.status(400).json({ error: `未配置 ${provider.apiKeyField}，请先在 API 密钥设置中添加` });
             }
         }
-        // Fallback for other potential response shapes
-        else if (result.response && typeof result.response.text === 'function') {
-            text = result.response.text();
+        const model = req.app.locals.PROMPT_OPTIMIZER_MODEL || provider.defaultModel;
+        console.log(`[Prompt Optimize:${providerId}] Model: ${model}. Profile: ${profileId}. Prompt: ${prompt.length > 50 ? prompt.substring(0, 50) + '...' : prompt}`);
+
+        const systemInstruction = buildPromptOptimizationInstruction(profile, context);
+
+        let text;
+        try {
+            text = await provider.run({
+                systemInstruction,
+                userPrompt: prompt,
+                apiKey,
+                model,
+                temperature: 0.25,
+                maxTokens: 2500
+            });
+        } catch (upstreamError) {
+            return res.status(upstreamError.status || 502).json({ error: upstreamError.message });
         }
 
         if (!text) {
-            console.warn('[Gemini Optimize] Warning: No text content found in response.');
+            console.warn(`[Prompt Optimize:${providerId}] Warning: No text content found in response.`);
             return res.status(500).json({ error: 'Failed to optimize prompt' });
         }
 
-        // Clean up text (remove quotes if present)
-        text = text.trim().replace(/^["']|["']$/g, '');
+        text = formatOptimizedPrompt(text, profile);
 
-        res.json({ optimizedPrompt: text });
+        res.json({
+            optimizedPrompt: text,
+            profileId: profile.id,
+            aspectRatio: profile.aspectRatio
+        });
 
     } catch (error) {
         console.error("Optimize prompt error:", error);
         res.status(500).json({ error: error.message });
     }
-});
+};
+
+app.post('/api/prompt/optimize', optimizePromptHandler);
+app.post('/api/gemini/optimize-prompt', optimizePromptHandler);
 
 // NOTE: Old generation routes removed - now in server/routes/generation.js
 

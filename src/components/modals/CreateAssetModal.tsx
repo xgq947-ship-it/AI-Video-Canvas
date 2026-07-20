@@ -1,33 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { X, ChevronDown, Check } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { NodeData } from '../../types';
 
 interface CreateAssetModalProps {
     isOpen: boolean;
     onClose: () => void;
     nodeToSnapshot: NodeData | null;
-    onSave: (name: string, category: string, meta?: Record<string, string | undefined>) => Promise<void>;
+    onSave: (name: string, description?: string) => Promise<void>;
 }
-
-type CharacterAssetRole = 'identity-face' | 'identity-angles' | 'identity-board' | 'identity-fullbody' | 'identity-expression' | 'look-fullbody' | 'look-board';
-
-const CHARACTER_ROLES: { value: CharacterAssetRole; label: string }[] = [
-    { value: 'identity-face', label: '身份库 · 正面身份照' },
-    { value: 'identity-angles', label: '身份库 · 面部多角度' },
-    { value: 'identity-board', label: '身份库 · 全身综合设定板' },
-    { value: 'look-fullbody', label: '造型包 · 全身定妆' },
-    { value: 'look-board', label: '造型包 · 人物呈现板' },
-];
-
-// 分类内部值保持英文（与 AssetLibraryPanel、library/assets/<分类>/ 文件夹一致），仅显示中文标签
-const CATEGORIES: { value: string; label: string }[] = [
-    { value: 'Character', label: '角色' },
-    { value: 'Scene', label: '场景' },
-    { value: 'Item', label: '道具' },
-    { value: 'Style', label: '风格' },
-    { value: 'Sound Effect', label: '音效' },
-    { value: 'Others', label: '其他' },
-];
 
 export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
     isOpen,
@@ -36,11 +16,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
     onSave
 }) => {
     const [name, setName] = useState('我的素材');
-    const [category, setCategory] = useState(CATEGORIES[0].value);
-    const [characterName, setCharacterName] = useState('');
-    const [characterAssetRole, setCharacterAssetRole] = useState<CharacterAssetRole>('identity-face');
-    const [lookName, setLookName] = useState('');
-    const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+    const [description, setDescription] = useState('');
     const [status, setStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
 
     // Reset state when opening
@@ -48,10 +24,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
         if (isOpen) {
             setStatus('idle');
             setName('我的素材');
-            setCategory(CATEGORIES[0].value);
-            setCharacterName('');
-            setCharacterAssetRole('identity-face');
-            setLookName('');
+            setDescription('');
         }
     }, [isOpen]);
 
@@ -59,18 +32,10 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
 
     const handleSubmit = async () => {
         if (!name.trim()) return;
-        const isCharacter = category === 'Character';
-        const isLookAsset = characterAssetRole.startsWith('look-');
-        if (isCharacter && !characterName.trim()) return;
-        if (isCharacter && isLookAsset && !lookName.trim()) return;
 
         setStatus('saving');
         try {
-            await onSave(name, category, isCharacter ? {
-                characterName: characterName.trim(),
-                characterAssetRole,
-                lookName: isLookAsset ? lookName.trim() : undefined
-            } : undefined);
+            await onSave(name.trim(), description.trim() || undefined);
             setStatus('success');
             setTimeout(() => {
                 onClose();
@@ -88,8 +53,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
                 {/* Header */}
                 <div className="px-6 pt-6 pb-2">
                     <div className="flex items-center gap-6 border-b border-neutral-700 pb-2">
-                        <button className="text-white font-medium border-b-2 border-white pb-2 -mb-2.5">新建素材</button>
-                        <button className="text-neutral-500 font-medium pb-2 hover:text-neutral-300 transition-colors">加入已有</button>
+                        <span className="text-white font-medium border-b-2 border-white pb-2 -mb-2.5">保存为素材</span>
                     </div>
                 </div>
 
@@ -120,80 +84,22 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
                                 value={name}
                                 onChange={(e) => setName(e.target.value)}
                                 className="w-full bg-[#1a1a1a] border border-neutral-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 transition-colors"
-                                placeholder="素材名称"
+                                placeholder="素材名称，例如：人物肯豆"
+                            />
+                            <p className="text-xs text-neutral-500">连线引用时会显示为 @{name.trim() || '素材名称'}</p>
+                        </div>
+
+                        {/* Description */}
+                        <div className="flex flex-col gap-2">
+                            <label className="text-sm font-medium text-neutral-200">说明</label>
+                            <textarea
+                                value={description}
+                                onChange={(e) => setDescription(e.target.value)}
+                                rows={4}
+                                className="w-full resize-none bg-[#1a1a1a] border border-neutral-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 transition-colors"
+                                placeholder="选填，补充说明这个素材（不影响引用标签）"
                             />
                         </div>
-
-                        {/* Category Dropdown */}
-                        <div className="flex flex-col gap-2 relative">
-                            <label className="text-sm font-medium text-neutral-200">分类 <span className="text-red-400">*</span></label>
-                            <button
-                                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                                className="w-full bg-[#1a1a1a] border border-neutral-700 rounded-lg px-3 py-2 text-white focus:outline-none flex items-center justify-between hover:bg-[#252525] transition-colors"
-                            >
-                                <span>{CATEGORIES.find(c => c.value === category)?.label ?? category}</span>
-                                <ChevronDown size={16} className="text-neutral-400" />
-                            </button>
-
-                            {isDropdownOpen && (
-                                <div className="absolute top-[70px] left-0 right-0 bg-[#1a1a1a] border border-neutral-700 rounded-lg shadow-xl z-10 py-1">
-                                    {CATEGORIES.map(cat => (
-                                        <button
-                                            key={cat.value}
-                                            onClick={() => {
-                                                setCategory(cat.value);
-                                                setIsDropdownOpen(false);
-                                            }}
-                                            className="w-full px-3 py-2 text-left hover:bg-[#252525] flex items-center justify-between group"
-                                        >
-                                            <span className="text-neutral-300 group-hover:text-white">{cat.label}</span>
-                                            {category === cat.value && <Check size={14} className="text-white" />}
-                                        </button>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-
-                        {category === 'Character' && (
-                            <>
-                                <div className="flex flex-col gap-2">
-                                    <label className="text-sm font-medium text-neutral-200">角色名称 <span className="text-red-400">*</span></label>
-                                    <input
-                                        type="text"
-                                        value={characterName}
-                                        onChange={(e) => setCharacterName(e.target.value)}
-                                        className="w-full rounded-lg border border-neutral-700 bg-[#1a1a1a] px-3 py-2 text-white outline-none transition-colors focus:border-blue-500"
-                                        placeholder="例如：林默"
-                                    />
-                                </div>
-
-                                <div className="flex flex-col gap-2">
-                                    <label className="text-sm font-medium text-neutral-200">素材用途</label>
-                                    <select
-                                        value={characterAssetRole}
-                                        onChange={(e) => setCharacterAssetRole(e.target.value as CharacterAssetRole)}
-                                        className="w-full rounded-lg border border-neutral-700 bg-[#1a1a1a] px-3 py-2 text-white outline-none transition-colors focus:border-blue-500"
-                                    >
-                                        {CHARACTER_ROLES.map(role => (
-                                            <option key={role.value} value={role.value}>{role.label}</option>
-                                        ))}
-                                    </select>
-                                </div>
-
-                                {characterAssetRole.startsWith('look-') && (
-                                    <div className="flex flex-col gap-2">
-                                        <label className="text-sm font-medium text-neutral-200">造型名称 <span className="text-red-400">*</span></label>
-                                        <input
-                                            type="text"
-                                            value={lookName}
-                                            onChange={(e) => setLookName(e.target.value)}
-                                            className="w-full rounded-lg border border-neutral-700 bg-[#1a1a1a] px-3 py-2 text-white outline-none transition-colors focus:border-blue-500"
-                                            placeholder="例如：LOOK_B · 晚宴西装裙"
-                                        />
-                                    </div>
-                                )}
-                            </>
-                        )}
 
                     </div>
                 </div>
@@ -208,7 +114,7 @@ export const CreateAssetModal: React.FC<CreateAssetModalProps> = ({
                     </button>
                     <button
                         onClick={handleSubmit}
-                        disabled={status === 'saving' || status === 'success' || !name.trim() || (category === 'Character' && (!characterName.trim() || (characterAssetRole.startsWith('look-') && !lookName.trim())))}
+                        disabled={status === 'saving' || status === 'success' || !name.trim()}
                         className={`flex items-center gap-2 px-6 py-2 rounded-lg font-medium transition-all duration-200 ${status === 'success' ? 'bg-green-600 text-white' :
                                 status === 'error' ? 'bg-red-600 text-white' :
                                     status === 'saving' ? 'bg-neutral-700 text-neutral-300' :

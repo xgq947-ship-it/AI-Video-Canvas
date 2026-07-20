@@ -7,6 +7,7 @@ export interface LibraryAsset {
     category: string;
     url: string;
     type: 'image' | 'video';
+    description?: string;
     characterId?: string;
     characterName?: string;
     characterAssetRole?: 'identity-face' | 'identity-angles' | 'identity-board' | 'identity-fullbody' | 'identity-expression' | 'look-fullbody' | 'look-board';
@@ -309,6 +310,9 @@ const AssetLibraryContent = ({
                                 />
                                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-2 pointer-events-none">
                                     <span className="text-white text-xs font-medium truncate">{asset.name}</span>
+                                    {asset.description && (
+                                        <span className="text-neutral-300 text-[10px] truncate">{asset.description}</span>
+                                    )}
                                 </div>
 
                                 {asset.category === 'Character' && asset.characterName && (

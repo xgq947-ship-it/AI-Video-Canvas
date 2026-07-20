@@ -55,7 +55,7 @@ export const ImageEditorModal: React.FC<ImageEditorModalProps> = ({
     const [showResolutionDropdown, setShowResolutionDropdown] = useState(false);
 
     // --- Model State ---
-    const [selectedModel, setSelectedModel] = useState(initialModel || 'gemini-pro');
+    const [selectedModel, setSelectedModel] = useState(initialModel || 'codex-imagegen');
     const [selectedAspectRatio, setSelectedAspectRatio] = useState(initialAspectRatio || 'Auto');
     const [selectedResolution, setSelectedResolution] = useState(initialResolution || '1K');
 
@@ -289,7 +289,7 @@ export const ImageEditorModal: React.FC<ImageEditorModalProps> = ({
 
         // Initialize state from props
         setPrompt(initialPrompt || '');
-        setSelectedModel(initialModel || 'gemini-pro');
+        setSelectedModel(initialModel || 'codex-imagegen');
         setSelectedAspectRatio(initialAspectRatio || 'Auto');
         setSelectedResolution(initialResolution || '1K');
         // Use initialBackgroundUrl (clean image) if available, otherwise imageUrl (might be composite or input)

@@ -207,7 +207,7 @@ router.post('/generate-image', async (req, res) => {
 
 router.post('/generate-video', async (req, res) => {
     try {
-        const { nodeId, prompt, imageBase64: rawImageBase64, lastFrameBase64: rawLastFrameBase64, motionReferenceUrl: rawMotionReferenceUrl, referenceAudioUrls: rawReferenceAudioUrls, aspectRatio, resolution, duration, videoModel } = req.body;
+        const { nodeId, prompt, imageBase64: rawImageBase64, lastFrameBase64: rawLastFrameBase64, referenceImages: rawReferenceImages, motionReferenceUrl: rawMotionReferenceUrl, referenceAudioUrls: rawReferenceAudioUrls, aspectRatio, resolution, duration, videoModel } = req.body;
         const { GEMINI_API_KEY, KLING_ACCESS_KEY, KLING_SECRET_KEY, KLING_API_KEY, ARK_API_KEY, HAILUO_API_KEY, VIDEOS_DIR, LIBRARY_DIR } = req.app.locals;
 
         // Determine provider
@@ -232,15 +232,23 @@ router.post('/generate-video', async (req, res) => {
         let workflowRunId;
 
         if (isGoogleFlowWorkflowModel) {
-            if (!rawImageBase64) {
-                return res.status(400).json({ error: 'Google Flow workflow 需要连接一张首帧图片' });
-            }
-            if (rawLastFrameBase64) {
-                return res.status(400).json({ error: 'Google Flow workflow 暂不支持尾帧，请只连接一张首帧图片' });
+            // 连 2 张以上图片 → Ingredients 多参考图模式；否则用单张首帧。
+            const referenceImageInputs = Array.isArray(rawReferenceImages)
+                ? rawReferenceImages.filter(Boolean)
+                : [];
+            const useIngredients = referenceImageInputs.length >= 2;
+            if (!useIngredients) {
+                if (!rawImageBase64) {
+                    return res.status(400).json({ error: 'Google Flow workflow 需连接一张首帧图片，或连接 2 张以上图片走多参考图（Ingredients）' });
+                }
+                if (rawLastFrameBase64) {
+                    return res.status(400).json({ error: 'Google Flow workflow 单图模式暂不支持尾帧；请只连一张首帧，或连 2 张以上走多参考图' });
+                }
             }
             const workflowResult = await generateGoogleFlowWorkflowVideo({
                 prompt,
-                firstFrameInput: rawImageBase64,
+                firstFrameInput: useIngredients ? null : rawImageBase64,
+                referenceImageInputs: useIngredients ? referenceImageInputs : [],
                 aspectRatio: aspectRatio || '16:9',
                 duration: duration || 4,
                 libraryDir: LIBRARY_DIR,

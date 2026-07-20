@@ -85,11 +85,11 @@ function resolveLocalLibraryImage(input, libraryDir) {
     return resolved;
 }
 
-function writeDataUrlImage(input, taskDir) {
+function writeDataUrlImage(input, taskDir, basename = 'first-frame') {
     const match = String(input || '').match(/^data:image\/(png|jpeg|jpg|webp);base64,([\s\S]+)$/i);
     if (!match) return null;
     const extension = match[1].toLowerCase() === 'jpeg' ? 'jpg' : match[1].toLowerCase();
-    const target = path.join(taskDir, `first-frame.${extension}`);
+    const target = path.join(taskDir, `${basename}.${extension}`);
     fs.writeFileSync(target, Buffer.from(match[2], 'base64'));
     return target;
 }
@@ -100,6 +100,17 @@ function resolveFirstFrame(input, libraryDir, taskDir) {
     const dataPath = writeDataUrlImage(input, taskDir);
     if (dataPath) return dataPath;
     throw new Error('Google Flow workflow 需要连接一张本地首帧图片');
+}
+
+function resolveReferenceImages(inputs, libraryDir, taskDir) {
+    // Ingredients 多参考图：逐张解析为本地文件（素材库路径或 data URL），保持顺序。
+    return (Array.isArray(inputs) ? inputs : []).map((input, index) => {
+        const localPath = resolveLocalLibraryImage(input, libraryDir);
+        if (localPath) return localPath;
+        const dataPath = writeDataUrlImage(input, taskDir, `ingredient-${index}`);
+        if (dataPath) return dataPath;
+        throw new Error(`Google Flow workflow 参考图无法解析（第 ${index + 1} 张，需素材库图片或本地图片）`);
+    });
 }
 
 function runWorkflowProcess({ root, runPath, args, timeoutMs }) {
@@ -176,6 +187,7 @@ async function loadVideoResult(outputs) {
 async function executeGoogleFlowWorkflow({
     prompt,
     firstFrameInput,
+    referenceImageInputs = [],
     aspectRatio,
     duration,
     libraryDir,
@@ -191,7 +203,12 @@ async function executeGoogleFlowWorkflow({
 
     const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-google-flow-'));
     try {
-        const firstFrame = resolveFirstFrame(firstFrameInput, libraryDir, taskDir);
+        // 连 2 张以上 → Ingredients 多参考图；否则单张首帧。
+        const useIngredients = Array.isArray(referenceImageInputs) && referenceImageInputs.length >= 2;
+        const firstFrame = useIngredients ? null : resolveFirstFrame(firstFrameInput, libraryDir, taskDir);
+        const referenceImages = useIngredients
+            ? resolveReferenceImages(referenceImageInputs, libraryDir, taskDir)
+            : [];
         const outputDir = path.join(taskDir, 'output');
         const { root, runPath } = resolveWorkflowRoot();
         const payload = await runWorkflowProcess({
@@ -201,6 +218,7 @@ async function executeGoogleFlowWorkflow({
             args: buildGoogleFlowWorkflowArgs({
                 prompt,
                 firstFrame,
+                referenceImages,
                 duration,
                 aspectRatio,
                 outputDir,
@@ -217,21 +235,30 @@ async function executeGoogleFlowWorkflow({
 export function buildGoogleFlowWorkflowArgs({
     prompt,
     firstFrame,
+    referenceImages = [],
     duration,
     aspectRatio,
     outputDir,
     timeoutMinutes
 }) {
-    return [
-        '--prompt', String(prompt).trim(),
-        '--first-frame', firstFrame,
+    const args = ['--prompt', String(prompt).trim()];
+    // 传了多参考图 → Ingredients（--reference-image ×N）；否则单张 --first-frame。
+    if (Array.isArray(referenceImages) && referenceImages.length > 0) {
+        for (const ref of referenceImages) {
+            args.push('--reference-image', ref);
+        }
+    } else {
+        args.push('--first-frame', firstFrame);
+    }
+    args.push(
         '--duration', String(duration),
         '--aspect-ratio', aspectRatio,
         '--model', 'Omni Flash',
         '--output-dir', outputDir,
         '--timeout-minutes', String(timeoutMinutes),
         '--execute'
-    ];
+    );
+    return args;
 }
 
 export function generateGoogleFlowWorkflowVideo(options) {

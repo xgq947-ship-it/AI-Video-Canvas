@@ -57,6 +57,7 @@ interface VideoModelOption {
     supportsTextToVideo: boolean;
     supportsImageToVideo: boolean;
     supportsMultiImage: boolean;
+    supportsIngredients?: boolean; // Google Flow Ingredients：多参考图合成（≥2 张自动触发）
     supportsAudio?: boolean;
     recommended?: boolean;
     durations: number[];
@@ -67,7 +68,7 @@ interface VideoModelOption {
 
 const VIDEO_MODELS: VideoModelOption[] = [
     { id: 'veo-3.1', name: 'Veo 3.1', provider: 'google', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, durations: [4, 6, 8], resolutions: ['Auto', '720p', '1080p'], aspectRatios: ['16:9', '9:16'] },
-    { id: 'google-flow-omni-flash', name: 'Google Flow · Omni Flash', provider: 'workflow', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, recommended: true, durations: [4, 6, 8, 10], resolutions: ['自动'], aspectRatios: ['16:9', '9:16'] },
+    { id: 'google-flow-omni-flash', name: 'Google Flow · Omni Flash', provider: 'workflow', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, supportsIngredients: true, recommended: true, durations: [4, 6, 8, 10], resolutions: ['自动'], aspectRatios: ['16:9', '9:16'] },
     // 供应商仅保留当前主模型，避免同一能力出现多套过时入口。
     { id: 'seedance-2-0', name: 'Seedance 2.0', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
     { id: 'kling-v3', name: 'Kling 3.0', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [3, 4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1'] },
@@ -446,8 +447,22 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const availableVideoModels = VIDEO_MODELS.filter(model => {
         if (videoGenerationMode === 'text-to-video') return model.supportsTextToVideo;
         if (videoGenerationMode === 'image-to-video') return model.supportsImageToVideo;
-        return model.supportsMultiImage; // frame-to-frame
+        return model.supportsMultiImage || Boolean(model.supportsIngredients); // frame-to-frame / Ingredients 多参考图
     });
+    const workflowVideoModels = VIDEO_MODELS.filter(model => model.provider === 'workflow');
+
+    const getVideoModelUnavailableReason = (model: VideoModelOption) => {
+        if (videoGenerationMode === 'text-to-video' && !model.supportsTextToVideo) {
+            return '需连接一张首帧图片';
+        }
+        if (videoGenerationMode === 'image-to-video' && !model.supportsImageToVideo) {
+            return '不支持图片生成视频';
+        }
+        if (videoGenerationMode === 'frame-to-frame' && !model.supportsMultiImage && !model.supportsIngredients) {
+            return '仅支持单张首帧';
+        }
+        return '';
+    };
 
     // Auto-select first available video model when current is no longer valid
     useEffect(() => {
@@ -1003,27 +1018,43 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                         )}
 
                                         {/* Local workflow models */}
-                                        {availableVideoModels.filter(m => m.provider === 'workflow').length > 0 && (
+                                        {workflowVideoModels.length > 0 && (
                                             <>
                                                 <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f] border-t border-neutral-700">
                                                     本地工作流
                                                 </div>
-                                                {availableVideoModels.filter(m => m.provider === 'workflow').map(model => (
-                                                    <button
-                                                        key={model.id}
-                                                        onClick={() => handleVideoModelChange(model.id)}
-                                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${currentVideoModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'}`}
-                                                    >
-                                                        <span className="flex items-center gap-2">
-                                                            <Film size={12} className="text-cyan-400" />
-                                                            {model.name}
-                                                            {model.recommended && (
-                                                                <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">推荐</span>
-                                                            )}
-                                                        </span>
-                                                        {currentVideoModel.id === model.id && <Check size={12} />}
-                                                    </button>
-                                                ))}
+                                                {workflowVideoModels.map(model => {
+                                                    const unavailableReason = getVideoModelUnavailableReason(model);
+                                                    const isUnavailable = Boolean(unavailableReason);
+                                                    return (
+                                                        <button
+                                                            key={model.id}
+                                                            onClick={() => !isUnavailable && handleVideoModelChange(model.id)}
+                                                            disabled={isUnavailable}
+                                                            title={unavailableReason || model.name}
+                                                            className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left transition-colors ${isUnavailable
+                                                                ? 'cursor-not-allowed text-neutral-600'
+                                                                : `hover:bg-[#333] ${currentVideoModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'}`
+                                                                }`}
+                                                        >
+                                                            <span className="flex items-center gap-2">
+                                                                <Film size={12} className={isUnavailable ? 'text-neutral-600' : 'text-cyan-400'} />
+                                                                <span className="flex flex-col gap-0.5">
+                                                                    <span className="flex items-center gap-2">
+                                                                        {model.name}
+                                                                        {model.recommended && !isUnavailable && (
+                                                                            <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">推荐</span>
+                                                                        )}
+                                                                    </span>
+                                                                    {unavailableReason && (
+                                                                        <span className="text-[10px] font-normal text-amber-500/80">{unavailableReason}</span>
+                                                                    )}
+                                                                </span>
+                                                            </span>
+                                                            {currentVideoModel.id === model.id && !isUnavailable && <Check size={12} />}
+                                                        </button>
+                                                    );
+                                                })}
                                             </>
                                         )}
 

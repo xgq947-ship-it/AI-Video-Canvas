@@ -31,6 +31,32 @@ test('Google Flow workflow 原样传递输入框提示词与真实生成参数',
     ]);
 });
 
+test('Google Flow workflow 多参考图走 Ingredients（--reference-image ×N，无 --first-frame）', () => {
+    const args = buildGoogleFlowWorkflowArgs({
+        prompt: '  多参考图合成  ',
+        firstFrame: null,
+        referenceImages: ['/tmp/a.png', '/tmp/b.png', '/tmp/c.png'],
+        duration: 8,
+        aspectRatio: '16:9',
+        outputDir: '/tmp/output',
+        timeoutMinutes: 15
+    });
+
+    assert.deepEqual(args, [
+        '--prompt', '多参考图合成',
+        '--reference-image', '/tmp/a.png',
+        '--reference-image', '/tmp/b.png',
+        '--reference-image', '/tmp/c.png',
+        '--duration', '8',
+        '--aspect-ratio', '16:9',
+        '--model', 'Omni Flash',
+        '--output-dir', '/tmp/output',
+        '--timeout-minutes', '15',
+        '--execute'
+    ]);
+    assert.ok(!args.includes('--first-frame'));
+});
+
 test('Google Flow workflow 使用稳定的前端模型 ID 与能力范围', () => {
     assert.equal(GOOGLE_FLOW_WORKFLOW_MODEL_ID, 'google-flow-omni-flash');
     assert.deepEqual(GOOGLE_FLOW_SUPPORTED_DURATIONS, [4, 6, 8, 10]);

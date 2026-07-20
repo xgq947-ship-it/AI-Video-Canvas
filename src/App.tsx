@@ -1106,12 +1106,18 @@ export default function App() {
           item.type === 'image' && item.characterId === asset.characterId
         );
         const identityFace = sameCharacter.find(item => item.characterAssetRole === 'identity-face');
+        const identityAngles = sameCharacter.find(item => item.characterAssetRole === 'identity-angles')
+          || sameCharacter.find(item => item.characterAssetRole === 'identity-expression');
+        const identityBoard = sameCharacter.find(item => item.characterAssetRole === 'identity-board')
+          || sameCharacter.find(item => item.characterAssetRole === 'identity-fullbody');
         const sameLook = asset.lookId
           ? sameCharacter.filter(item => item.lookId === asset.lookId)
           : [];
 
         characterReferenceUrls = [
           identityFace?.url,
+          identityAngles?.url,
+          identityBoard?.url,
           ...sameLook.map(item => item.url),
           asset.url
         ].filter((url, index, urls): url is string => Boolean(url) && urls.indexOf(url) === index);

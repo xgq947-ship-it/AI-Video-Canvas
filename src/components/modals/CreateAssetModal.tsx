@@ -9,13 +9,12 @@ interface CreateAssetModalProps {
     onSave: (name: string, category: string, meta?: Record<string, string | undefined>) => Promise<void>;
 }
 
-type CharacterAssetRole = 'identity-face' | 'identity-fullbody' | 'identity-expression' | 'identity-board' | 'look-fullbody' | 'look-board';
+type CharacterAssetRole = 'identity-face' | 'identity-angles' | 'identity-board' | 'identity-fullbody' | 'identity-expression' | 'look-fullbody' | 'look-board';
 
 const CHARACTER_ROLES: { value: CharacterAssetRole; label: string }[] = [
-    { value: 'identity-face', label: '身份库 · 面部特写' },
-    { value: 'identity-fullbody', label: '身份库 · 基础全身' },
-    { value: 'identity-expression', label: '身份库 · 表情九宫格' },
-    { value: 'identity-board', label: '身份库 · 人物呈现板' },
+    { value: 'identity-face', label: '身份库 · 正面身份照' },
+    { value: 'identity-angles', label: '身份库 · 面部多角度' },
+    { value: 'identity-board', label: '身份库 · 全身综合设定板' },
     { value: 'look-fullbody', label: '造型包 · 全身定妆' },
     { value: 'look-board', label: '造型包 · 人物呈现板' },
 ];

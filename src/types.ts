@@ -132,7 +132,8 @@ export interface NodeData {
   // Character identity + wardrobe pack metadata
   characterId?: string;
   characterName?: string;
-  characterAssetRole?: 'identity-face' | 'identity-fullbody' | 'identity-expression' | 'identity-board' | 'look-fullbody' | 'look-board';
+  // identity-fullbody / identity-expression are retained for legacy project compatibility.
+  characterAssetRole?: 'identity-face' | 'identity-angles' | 'identity-board' | 'identity-fullbody' | 'identity-expression' | 'look-fullbody' | 'look-board';
   lookId?: string;
   lookName?: string;
 

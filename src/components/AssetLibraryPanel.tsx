@@ -9,7 +9,7 @@ export interface LibraryAsset {
     type: 'image' | 'video';
     characterId?: string;
     characterName?: string;
-    characterAssetRole?: 'identity-face' | 'identity-fullbody' | 'identity-expression' | 'identity-board' | 'look-fullbody' | 'look-board';
+    characterAssetRole?: 'identity-face' | 'identity-angles' | 'identity-board' | 'identity-fullbody' | 'identity-expression' | 'look-fullbody' | 'look-board';
     lookId?: string;
     lookName?: string;
 }

@@ -7,7 +7,10 @@ import {
     JIMENG_DEFAULT_MODEL,
     JIMENG_SUPPORTED_ASPECT_RATIOS,
     JIMENG_SUPPORTED_DURATIONS,
-    JIMENG_WORKFLOW_MODEL_ID
+    JIMENG_WORKFLOW_MODEL_ID,
+    JIMENG_FAST_WORKFLOW_MODEL_ID,
+    isJimengWorkflowModelId,
+    resolveJimengModelLabel
 } from '../server/services/jimengVideoWorkflow.js';
 import { GOOGLE_FLOW_WORKFLOW_MODEL_ID } from '../server/services/googleFlowWorkflow.js';
 import { getGenerationRecoveryTimeoutMs, GOOGLE_FLOW_RECOVERY_TIMEOUT_MS } from '../src/utils/generationRecovery.js';
@@ -117,4 +120,58 @@ test('API 直连供应商不受参考素材判定影响', () => {
         assert.equal(shouldUseReferenceImages(model, 3), false, model);
         assert.equal(usesReferenceMaterialsOnly(model), false, model);
     }
+});
+
+
+test('参考素材名与图片一一对应地传给 workflow', () => {
+    // 这是「提示词里的 @参考图2 指到第 2 张图」的全部依据：
+    // 即梦用上传文件名当素材标签，名字必须跟着图一起、按同一顺序传下去。
+    const args = buildJimengWorkflowArgs({
+        prompt: '@肯豆 站在 @房间 里',
+        referenceImages: ['/tmp/a.png', '/tmp/b.png'],
+        referenceLabels: ['肯豆', '房间'],
+        duration: 5,
+        aspectRatio: '16:9',
+        resolution: '720P',
+        outputDir: '/tmp/out',
+        timeoutMinutes: 15
+    });
+    assert.deepEqual(args.slice(0, 8), [
+        '--prompt', '@肯豆 站在 @房间 里',
+        '--reference-image', '/tmp/a.png',
+        '--reference-name', '肯豆',
+        '--reference-image', '/tmp/b.png'
+    ]);
+    assert.deepEqual(args.slice(8, 10), ['--reference-name', '房间']);
+});
+
+test('没有素材名时不传 --reference-name，由 provider 回落到 图片N', () => {
+    const args = buildJimengWorkflowArgs({
+        prompt: 'x',
+        referenceImages: ['/tmp/a.png'],
+        referenceLabels: [],
+        duration: 5,
+        aspectRatio: '16:9',
+        resolution: '720P',
+        outputDir: '/tmp/out',
+        timeoutMinutes: 15
+    });
+    assert.ok(!args.includes('--reference-name'));
+});
+
+test('Fast VIP 映射到即梦页面模型下拉框的精确文案', () => {
+    assert.equal(JIMENG_FAST_WORKFLOW_MODEL_ID, 'jimeng-seedance-2-0-fast');
+    assert.equal(resolveJimengModelLabel(JIMENG_FAST_WORKFLOW_MODEL_ID), '即梦 Seedance 2.0 Fast VIP');
+    assert.equal(resolveJimengModelLabel(JIMENG_WORKFLOW_MODEL_ID), '即梦 Seedance 2.0 VIP');
+    assert.ok(isJimengWorkflowModelId(JIMENG_FAST_WORKFLOW_MODEL_ID));
+    assert.ok(isJimengWorkflowModelId(JIMENG_WORKFLOW_MODEL_ID));
+    assert.ok(!isJimengWorkflowModelId('seedance-2-0'));
+    // Fast VIP 与 Fast 是页面上两个不同选项，provider 按精确文案匹配，不能写成前缀。
+    assert.notEqual(resolveJimengModelLabel(JIMENG_FAST_WORKFLOW_MODEL_ID), '即梦 Seedance 2.0 Fast');
+});
+
+test('Fast VIP 同样走参考素材语义与本地 workflow 恢复窗口', () => {
+    assert.equal(usesReferenceMaterialsOnly('jimeng-seedance-2-0-fast'), true);
+    assert.equal(shouldUseReferenceImages('jimeng-seedance-2-0-fast', 1), true);
+    assert.equal(getGenerationRecoveryTimeoutMs('jimeng-seedance-2-0-fast'), GOOGLE_FLOW_RECOVERY_TIMEOUT_MS);
 });

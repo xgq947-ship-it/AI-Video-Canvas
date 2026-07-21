@@ -7,9 +7,11 @@
 
 export const GOOGLE_FLOW_VIDEO_MODEL = 'google-flow-omni-flash';
 export const JIMENG_VIDEO_MODEL = 'jimeng-seedance-2-0';
+export const JIMENG_FAST_VIDEO_MODEL = 'jimeng-seedance-2-0-fast';
+const JIMENG_VIDEO_MODELS = new Set([JIMENG_VIDEO_MODEL, JIMENG_FAST_VIDEO_MODEL]);
 
 // 走本地 9222 页面 workflow 的视频模型（相对 API 直连供应商）。
-export const BROWSER_WORKFLOW_VIDEO_MODELS = new Set([GOOGLE_FLOW_VIDEO_MODEL, JIMENG_VIDEO_MODEL]);
+export const BROWSER_WORKFLOW_VIDEO_MODELS = new Set([GOOGLE_FLOW_VIDEO_MODEL, ...JIMENG_VIDEO_MODELS]);
 
 export function isBrowserWorkflowVideoModel(videoModel) {
     return BROWSER_WORKFLOW_VIDEO_MODELS.has(videoModel);
@@ -20,7 +22,7 @@ export function isBrowserWorkflowVideoModel(videoModel) {
  * 即梦：连 1 张也是参考素材，不是首帧。
  */
 export function usesReferenceMaterialsOnly(videoModel) {
-    return videoModel === JIMENG_VIDEO_MODEL;
+    return JIMENG_VIDEO_MODELS.has(videoModel);
 }
 
 /**

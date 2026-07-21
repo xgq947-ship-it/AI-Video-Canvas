@@ -13,7 +13,7 @@ import { generateGeminiImage, generateVeoVideo } from '../services/gemini.js';
 import { generateHailuoVideo } from '../services/hailuo.js';
 import { generateSeedanceVideo } from '../services/seedance.js';
 import { generateGoogleFlowWorkflowVideo, GOOGLE_FLOW_WORKFLOW_MODEL_ID } from '../services/googleFlowWorkflow.js';
-import { generateJimengWorkflowVideo, JIMENG_WORKFLOW_MODEL_ID } from '../services/jimengVideoWorkflow.js';
+import { generateJimengWorkflowVideo, isJimengWorkflowModelId, resolveJimengModelLabel } from '../services/jimengVideoWorkflow.js';
 import { generateGoogleFlowWorkflowImage, GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID, isGoogleFlowImageWorkflowModel } from '../services/googleFlowImageWorkflow.js';
 import { generateOpenAIImage } from '../services/openai.js';
 import { resolveAudioToBase64, resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
@@ -208,7 +208,7 @@ router.post('/generate-image', async (req, res) => {
 
 router.post('/generate-video', async (req, res) => {
     try {
-        const { nodeId, prompt, imageBase64: rawImageBase64, lastFrameBase64: rawLastFrameBase64, referenceImages: rawReferenceImages, motionReferenceUrl: rawMotionReferenceUrl, referenceAudioUrls: rawReferenceAudioUrls, aspectRatio, resolution, duration, videoModel } = req.body;
+        const { nodeId, prompt, imageBase64: rawImageBase64, lastFrameBase64: rawLastFrameBase64, referenceImages: rawReferenceImages, referenceImageLabels: rawReferenceImageLabels, motionReferenceUrl: rawMotionReferenceUrl, referenceAudioUrls: rawReferenceAudioUrls, aspectRatio, resolution, duration, videoModel } = req.body;
         const { GEMINI_API_KEY, KLING_ACCESS_KEY, KLING_SECRET_KEY, KLING_API_KEY, ARK_API_KEY, HAILUO_API_KEY, VIDEOS_DIR, LIBRARY_DIR } = req.app.locals;
 
         // Determine provider
@@ -216,7 +216,7 @@ router.post('/generate-video', async (req, res) => {
         const isSeedanceModel = videoModel && videoModel.startsWith('seedance-');
         const isHailuoModel = videoModel && videoModel.startsWith('hailuo-');
         const isGoogleFlowWorkflowModel = videoModel === GOOGLE_FLOW_WORKFLOW_MODEL_ID;
-        const isJimengWorkflowModel = videoModel === JIMENG_WORKFLOW_MODEL_ID;
+        const isJimengWorkflowModel = isJimengWorkflowModelId(videoModel);
         // 两个 provider 都走本地 9222 页面 workflow：输入是真实文件路径而非 base64。
         const isBrowserWorkflowModel = isGoogleFlowWorkflowModel || isJimengWorkflowModel;
 
@@ -265,19 +265,27 @@ router.post('/generate-video', async (req, res) => {
         } else if (isJimengWorkflowModel) {
             // 即梦是「文字为主、参考素材可选」：不接图也能生成。
             // 连进来的图（单张首帧口或多张参考）一律作为参考素材，即梦没有首帧概念。
-            const jimengReferenceInputs = [
-                ...(Array.isArray(rawReferenceImages) ? rawReferenceImages.filter(Boolean) : [])
-            ];
+            // 图与它的名字必须同进同出：先按同一份索引配好对，任何一边单独过滤都会错位。
+            const rawPairs = (Array.isArray(rawReferenceImages) ? rawReferenceImages : [])
+                .map((input, index) => ({
+                    input,
+                    label: Array.isArray(rawReferenceImageLabels) ? rawReferenceImageLabels[index] : undefined
+                }))
+                .filter(item => Boolean(item.input));
             // 兜底：老节点可能仍带着首/尾帧字段（即梦上线前保存的画布）。
             // 即梦没有首尾帧概念，但那两张图仍然是用户想用的素材——按顺序补进参考素材，
-            // 而不是报错让用户手动重连。
-            if (jimengReferenceInputs.length === 0) {
-                if (rawImageBase64) jimengReferenceInputs.push(rawImageBase64);
-                if (rawLastFrameBase64) jimengReferenceInputs.push(rawLastFrameBase64);
+            // 而不是报错让用户手动重连（此时没有画布标签，交给 provider 默认 图片N）。
+            if (rawPairs.length === 0) {
+                if (rawImageBase64) rawPairs.push({ input: rawImageBase64, label: undefined });
+                if (rawLastFrameBase64) rawPairs.push({ input: rawLastFrameBase64, label: undefined });
             }
+            const jimengReferenceInputs = rawPairs.map(item => item.input);
+            const jimengReferenceLabels = rawPairs.map(item => item.label);
             const workflowResult = await generateJimengWorkflowVideo({
                 prompt,
                 referenceImageInputs: jimengReferenceInputs,
+                referenceLabels: jimengReferenceLabels,
+                model: resolveJimengModelLabel(videoModel),
                 aspectRatio: aspectRatio || '16:9',
                 duration: duration || 5,
                 resolution: resolution || '720P',

@@ -343,13 +343,20 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                 //   Google Flow —— 连 1 张仍是首帧，≥2 张才走 Ingredients；
                 //   即梦        —— 没有首帧概念，连 1 张就是参考素材。
                 let videoReferenceImages: string[] | undefined;
+                let videoReferenceLabels: string[] | undefined;
+                // 图和它的名字必须来自**同一条有序列表**：节点面板显示的标签来自
+                // collectNodeReferences，如果这里另起一份 imageParentIds 推导，
+                // 两边顺序/子集一旦不同，提示词里的 @参考图2 就会指到别的图。
+                const visualReferences = directReferences.filter(reference =>
+                    (reference.kind === 'image' || reference.kind === 'video')
+                    && shouldUseReferenceParent(reference.id)
+                    && Boolean(reference.previewUrl || reference.url)
+                );
                 const useReferenceImages = !isMotionControl
-                    && shouldUseReferenceImages(node.videoModel, imageParentIds.length);
+                    && shouldUseReferenceImages(node.videoModel, visualReferences.length);
                 if (useReferenceImages) {
-                    videoReferenceImages = imageParentIds
-                        .map(pid => nodes.find(n => n.id === pid))
-                        .map(parent => parent?.type === NodeType.VIDEO ? parent?.lastFrame : parent?.resultUrl)
-                        .filter((url): url is string => Boolean(url));
+                    videoReferenceImages = visualReferences.map(reference => (reference.previewUrl || reference.url)!);
+                    videoReferenceLabels = visualReferences.map(reference => reference.label);
                     const minimum = minimumReferenceImages(node.videoModel);
                     if (videoReferenceImages.length < minimum) {
                         throw new Error(`多参考图需要至少 ${minimum} 张已生成的图片，请检查连接的图片节点是否都已出图`);
@@ -426,6 +433,7 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                     imageBase64,
                     lastFrameBase64,
                     referenceImages: videoReferenceImages,
+                    referenceImageLabels: videoReferenceLabels,
                     aspectRatio: node.aspectRatio,
                     resolution: node.resolution,
                     duration: node.videoDuration,

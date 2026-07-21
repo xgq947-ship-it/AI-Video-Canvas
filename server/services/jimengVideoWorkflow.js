@@ -23,7 +23,22 @@ import {
 } from './googleFlowWorkflow.js';
 
 export const JIMENG_WORKFLOW_MODEL_ID = 'jimeng-seedance-2-0';
+export const JIMENG_FAST_WORKFLOW_MODEL_ID = 'jimeng-seedance-2-0-fast';
 export const JIMENG_DEFAULT_MODEL = '即梦 Seedance 2.0 VIP';
+
+// 画布模型 id → 即梦页面模型下拉框里的**精确文案**（provider 按文案精确匹配选项）。
+export const JIMENG_MODEL_LABELS = {
+    [JIMENG_WORKFLOW_MODEL_ID]: '即梦 Seedance 2.0 VIP',
+    [JIMENG_FAST_WORKFLOW_MODEL_ID]: '即梦 Seedance 2.0 Fast VIP'
+};
+
+export function isJimengWorkflowModelId(videoModel) {
+    return Object.prototype.hasOwnProperty.call(JIMENG_MODEL_LABELS, videoModel);
+}
+
+export function resolveJimengModelLabel(videoModel) {
+    return JIMENG_MODEL_LABELS[videoModel] || JIMENG_DEFAULT_MODEL;
+}
 export const JIMENG_SUPPORTED_DURATIONS = [4, 5, 6, 8, 10, 15];
 export const JIMENG_SUPPORTED_ASPECT_RATIOS = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'];
 export const JIMENG_SUPPORTED_RESOLUTIONS = ['720P', '1080P', '4K'];
@@ -69,6 +84,7 @@ function resolveReferenceImages(inputs, libraryDir, taskDir) {
 export function buildJimengWorkflowArgs({
     prompt,
     referenceImages = [],
+    referenceLabels = [],
     duration,
     aspectRatio,
     resolution,
@@ -78,9 +94,13 @@ export function buildJimengWorkflowArgs({
 }) {
     const args = ['--prompt', String(prompt).trim()];
     // 即梦没有首帧概念：连进来的图全部作为参考素材；一张都没有就是纯文生视频。
-    for (const ref of referenceImages) {
+    // 每张都带上它在画布里的名字（参考图1 / 素材名），即梦会用这个名字当素材标签，
+    // 提示词里的 @xxx 才能精确指到这张图，而不是靠上传顺序猜。
+    referenceImages.forEach((ref, index) => {
         args.push('--reference-image', ref);
-    }
+        const label = referenceLabels[index];
+        if (label) args.push('--reference-name', String(label));
+    });
     args.push(
         '--duration', String(duration),
         '--aspect-ratio', aspectRatio,
@@ -171,6 +191,7 @@ async function loadVideoResult(outputs) {
 async function executeJimengWorkflow({
     prompt,
     referenceImageInputs = [],
+    referenceLabels = [],
     aspectRatio,
     duration,
     resolution,
@@ -186,7 +207,12 @@ async function executeJimengWorkflow({
         throw new Error(`即梦视频时长只支持 ${JIMENG_SUPPORTED_DURATIONS.join('、')} 秒`);
     }
     const normalizedResolution = normalizeJimengResolution(resolution);
-    const inputs = (Array.isArray(referenceImageInputs) ? referenceImageInputs : []).filter(Boolean);
+    // 先按同一条索引过滤图与名字，避免过滤后两边错位（错位 = 提示词指错素材）。
+    const paired = (Array.isArray(referenceImageInputs) ? referenceImageInputs : [])
+        .map((input, index) => ({ input, label: referenceLabels[index] }))
+        .filter(item => Boolean(item.input));
+    const inputs = paired.map(item => item.input);
+    const labels = paired.map(item => item.label);
     if (inputs.length > JIMENG_MAX_REFERENCE_IMAGES) {
         throw new Error(`即梦最多支持 ${JIMENG_MAX_REFERENCE_IMAGES} 个参考素材，当前 ${inputs.length} 个`);
     }
@@ -203,6 +229,7 @@ async function executeJimengWorkflow({
             args: buildJimengWorkflowArgs({
                 prompt,
                 referenceImages,
+                referenceLabels: labels,
                 duration,
                 aspectRatio,
                 resolution: normalizedResolution,

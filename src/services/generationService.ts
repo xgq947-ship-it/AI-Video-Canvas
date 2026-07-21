@@ -24,7 +24,10 @@ export interface GenerateVideoParams {
   prompt: string;
   imageBase64?: string; // For Image-to-Video (start frame)
   lastFrameBase64?: string; // For frame-to-frame interpolation (end frame)
-  referenceImages?: string[]; // Google Flow Ingredients：多参考图（≥2 张）合成视频
+  referenceImages?: string[]; // 多参考图/参考素材（Google Flow Ingredients、即梦参考素材）
+  // 每张参考素材在生成平台页面上的显示名，与 referenceImages 一一对应。
+  // 即梦用它当上传文件名，从而让提示词里的 @xxx 精确指到这张图。
+  referenceImageLabels?: string[];
   aspectRatio?: string;
   resolution?: string; // Add resolution to params
   duration?: number; // Video duration in seconds (e.g., 5, 6, 8, 10)

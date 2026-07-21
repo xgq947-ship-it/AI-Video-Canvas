@@ -50,6 +50,14 @@ const VIDEO_MODELS = [
         durations: [4, 5, 6, 8, 10, 15],
         resolutions: ['720P', '1080P', '4K']
     },
+    {
+        id: 'jimeng-seedance-2-0-fast',
+        name: '即梦 · Seedance 2.0 Fast VIP',
+        provider: 'workflow',
+        recommended: true,
+        durations: [4, 5, 6, 8, 10, 15],
+        resolutions: ['720P', '1080P', '4K']
+    },
     { id: 'seedance-2-0', name: 'Seedance 2.0', provider: 'seedance', recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'] },
     { id: 'kling-v3', name: 'Kling 3.0', provider: 'kling', recommended: true, durations: [3, 4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'] },
     { id: 'hailuo-2.3', name: 'Hailuo 2.3', provider: 'hailuo', recommended: true, durations: [6, 10], resolutions: ['768p', '1080p'], durationResolutionMap: { 6: ['768p', '1080p'], 10: ['768p'] } },

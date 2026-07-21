@@ -75,6 +75,7 @@ interface VideoModelOption {
 const VIDEO_MODELS: VideoModelOption[] = [
     { id: 'google-flow-omni-flash', name: 'Google Flow · Omni Flash', provider: 'workflow', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, supportsIngredients: true, recommended: true, durations: [4, 6, 8, 10], resolutions: ['自动'], aspectRatios: ['16:9', '9:16'] },
     { id: 'jimeng-seedance-2-0', name: '即梦 · Seedance 2.0 VIP', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
+    { id: 'jimeng-seedance-2-0-fast', name: '即梦 · Seedance 2.0 Fast VIP', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
     // 供应商仅保留当前主模型，避免同一能力出现多套过时入口。
     { id: 'seedance-2-0', name: 'Seedance 2.0', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
     { id: 'kling-v3', name: 'Kling 3.0', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [3, 4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1'] },
@@ -175,6 +176,9 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
             id: reference.id,
             url: reference.kind === 'video' ? (reference.previewUrl || reference.url!) : reference.url!,
             type: reference.kind === 'video' ? NodeType.VIDEO : NodeType.IMAGE,
+            // 素材名（素材库名或参考图N）。生成时会把它作为素材名传给生成平台，
+            // 所以这里显示什么，提示词里就该 @ 什么——两边必须是同一个字符串。
+            label: reference.label,
         }));
     const connectedAudioNodes = connectedReferences
         .filter(reference => reference.kind === 'audio' && reference.url)
@@ -742,7 +746,8 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const referenceInputsWithUrls = connectedImageNodes.map(node => ({
         nodeId: node.id,
         url: node.url,
-        type: node.type
+        type: node.type,
+        label: node.label
     }));
 
     // Get frame inputs with their image URLs
@@ -1682,7 +1687,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                     <div className="space-y-2">
                                         <label className="text-[10px] text-neutral-500 uppercase tracking-wider">
                                             {useReferenceMaterials ? (
-                                                <>已连接参考素材<span className="text-neutral-600">（按顺序对应 @图片1、@图片2…）</span></>
+                                                <>已连接参考素材<span className="text-neutral-600">（提示词里用 @名字 引用）</span></>
                                             ) : (
                                                 <>已连接画面<span className="text-neutral-600">（拖动可排序）</span></>
                                             )}
@@ -1703,7 +1708,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                                         />
                                                         <div className="flex-1">
                                                             <span className="text-xs font-medium px-2 py-0.5 rounded bg-blue-600/30 text-blue-400">
-                                                                参考图{index + 1}
+                                                                {input.label || `参考图${index + 1}`}
                                                             </span>
                                                         </div>
                                                     </div>
@@ -1758,7 +1763,8 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                         )}
                                         {referenceOnlyModel && (
                                             <div className="text-xs text-neutral-500 mt-1">
-                                                该模型没有首帧/尾帧，连接的图片全部作为参考素材（最多 12 个）
+                                                该模型没有首帧/尾帧，连接的图片全部作为参考素材（最多 12 个）；
+                                                提示词里按上面的名字引用，例如 @{referenceInputsWithUrls[0]?.label || '参考图1'}
                                             </div>
                                         )}
                                     </div>

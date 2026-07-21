@@ -670,15 +670,12 @@ app.delete('/api/workflows/:id', async (req, res) => {
     }
 });
 
-// Reveal this workflow's asset folder in Finder (macOS only)
+// 在系统文件管理器中打开该项目的素材目录（Finder / 资源管理器 / 桌面环境默认）
 app.post('/api/workflows/:id/reveal-assets', async (req, res) => {
     try {
         const filePath = path.join(WORKFLOWS_DIR, `${req.params.id}.json`);
         if (!fs.existsSync(filePath)) {
             return res.status(404).json({ error: "Workflow not found" });
-        }
-        if (process.platform !== 'darwin') {
-            return res.status(400).json({ error: "仅支持 macOS 上在 Finder 中打开" });
         }
         const workflow = JSON.parse(fs.readFileSync(filePath, 'utf8'));
         if (!workflow.assetsDirName) {
@@ -686,9 +683,14 @@ app.post('/api/workflows/:id/reveal-assets', async (req, res) => {
         }
         const dir = path.join(IMAGES_DIR, workflow.assetsDirName);
         fs.mkdirSync(dir, { recursive: true });
-        execFile('open', [dir], (err) => {
-            if (err) {
-                console.error('Failed to open Finder:', err);
+        // 三平台各自的「打开目录」命令，写法与 server/routes/render.js 保持一致。
+        const opener = process.platform === 'darwin'
+            ? 'open'
+            : process.platform === 'win32' ? 'explorer.exe' : 'xdg-open';
+        execFile(opener, [dir], (err) => {
+            // explorer.exe 打开成功时也可能返回非 0 退出码，这里不据此判失败。
+            if (err && process.platform !== 'win32') {
+                console.error('Failed to open file manager:', err);
                 return res.status(500).json({ error: err.message });
             }
             res.json({ success: true });

@@ -20,19 +20,67 @@ CDP_URL = f"http://{CDP_HOST}:{CDP_PORT}"
 # 专用浏览器渠道：默认用 Chrome Beta。它的 bundle id 独立（com.google.Chrome.beta），
 # 与日常 Stable Chrome 从系统层面隔离，双击 .html / 点链接不会误投到本自动化实例。
 # 可用 SESSIONHUB_CHROME_BUNDLE / _APP / _PROFILE 环境变量覆盖以切换渠道或路径。
+IS_WINDOWS = sys.platform == "win32"
+IS_MACOS = sys.platform == "darwin"
+
 CHROME_APP_NAME = os.environ.get("SESSIONHUB_CHROME_BUNDLE", "Google Chrome Beta")
-CHROME_BIN = Path(
-    os.environ.get(
-        "SESSIONHUB_CHROME_APP",
-        f"/Applications/{CHROME_APP_NAME}.app/Contents/MacOS/{CHROME_APP_NAME}",
-    )
-)
+
+
+def _default_chrome_bin() -> Path:
+    """按平台推导专用浏览器可执行文件。
+
+    macOS 默认用 Chrome Beta（bundle id 独立，与日常 Stable 隔离）。
+    Windows 上一般只装一个 Chrome，按常见安装位置依次探测；探测不到就返回
+    第一个候选，让 start_chrome 报出「找不到 Chrome」并提示用
+    SESSIONHUB_CHROME_APP 指定。
+    """
+    override = os.environ.get("SESSIONHUB_CHROME_APP", "").strip()
+    if override:
+        return Path(override)
+
+    if IS_MACOS:
+        return Path(f"/Applications/{CHROME_APP_NAME}.app/Contents/MacOS/{CHROME_APP_NAME}")
+
+    if IS_WINDOWS:
+        candidates = [
+            Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Google/Chrome/Application/chrome.exe",
+            Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")) / "Google/Chrome/Application/chrome.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Google/Chrome/Application/chrome.exe",
+        ]
+    else:  # Linux 等
+        candidates = [
+            Path("/usr/bin/google-chrome"),
+            Path("/usr/bin/chromium"),
+            Path("/usr/bin/chromium-browser"),
+        ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+CHROME_BIN = _default_chrome_bin()
+# 配置目录名不再带 -beta：非 macOS 上用的是普通 Chrome 渠道。
+_DEFAULT_PROFILE_NAME = "chrome-9222-beta" if IS_MACOS else "chrome-9222"
 PROFILE_DIR = Path(
     os.environ.get(
         "SESSIONHUB_CHROME_PROFILE",
-        str(Path.home() / ".sessionhub" / "chrome-9222-beta"),
+        str(Path.home() / ".sessionhub" / _DEFAULT_PROFILE_NAME),
     )
 )
+
+
+def _detached_popen_kwargs() -> dict:
+    """让 Chrome 脱离本进程独立存活。
+
+    POSIX 用 start_new_session；Windows 没有这个参数（传了会 ValueError），
+    要用 DETACHED_PROCESS + CREATE_NEW_PROCESS_GROUP。
+    """
+    if IS_WINDOWS:
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        return {"creationflags": flags}
+    return {"start_new_session": True}
 
 
 def is_port_open(host: str = CDP_HOST, port: int = CDP_PORT, timeout: float = 0.5) -> bool:
@@ -55,11 +103,18 @@ def check_cdp() -> tuple[bool, str]:
 
 
 def chrome_start_command() -> str:
+    if IS_MACOS:
+        return (
+            f'open -na "{CHROME_APP_NAME}" --args '
+            f"--remote-debugging-port={CDP_PORT} "
+            f'--user-data-dir="{PROFILE_DIR}" '
+            "--new-window about:blank"
+        )
     return (
-        f'open -na "{CHROME_APP_NAME}" --args '
+        f'"{CHROME_BIN}" '
         f"--remote-debugging-port={CDP_PORT} "
         f'--user-data-dir="{PROFILE_DIR}" '
-        "--new-window about:blank"
+        "--no-first-run --no-default-browser-check --new-window about:blank"
     )
 
 
@@ -114,6 +169,8 @@ def _instance_pid() -> int | None:
     按应用名寻址，Apple 事件落到了用户主 Chrome 上，专用 9222 窗口从未被真正隐藏，
     于是后台自动化每次都把 9222 窗口晾在前台 → 用户看到「弹窗」。
     """
+    if IS_WINDOWS:
+        return _instance_pid_windows()
     try:
         result = subprocess.run(
             ["pgrep", "-f", f"user-data-dir={PROFILE_DIR}"],
@@ -150,7 +207,48 @@ def _instance_pid() -> int | None:
     return candidates[0]
 
 
+def _powershell(script: str) -> str:
+    """执行一段 PowerShell 并返回 stdout；失败返回空串。"""
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except Exception:
+        return ""
+    return proc.stdout if proc.returncode == 0 else ""
+
+
+def _instance_pid_windows() -> int | None:
+    """按 --user-data-dir 精确匹配专用实例，绝不误伤用户日常 Chrome。"""
+    marker = f"user-data-dir={PROFILE_DIR}"
+    out = _powershell(
+        "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+        "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"
+    )
+    fallback: int | None = None
+    for line in out.splitlines():
+        pid_text, _, cmdline = line.partition("\t")
+        try:
+            pid = int(pid_text.strip())
+        except ValueError:
+            continue
+        if marker not in cmdline:
+            continue
+        if "--remote-debugging-port" in cmdline and "--type=" not in cmdline:
+            return pid  # 顶层主进程（--type= 的是渲染/GPU 子进程）
+        if fallback is None:
+            fallback = pid
+    return fallback
+
+
 def _instance_command(pid: int) -> str:
+    if IS_WINDOWS:
+        return _powershell(
+            f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"
+        )
     try:
         return subprocess.run(
             ["ps", "-o", "command=", "-p", str(pid)],
@@ -163,11 +261,22 @@ def _instance_command(pid: int) -> str:
 
 
 def _instance_is_headless(pid: int) -> bool:
+    if IS_WINDOWS:
+        # Windows 上查命令行较慢且易受引号影响，直接问 CDP：
+        # 无头实例的 Browser 字段形如 "HeadlessChrome/1xx.x.x.x"。
+        try:
+            with urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=2) as resp:
+                info = json.loads(resp.read().decode("utf-8"))
+            return "headless" in str(info.get("Browser", "")).lower()
+        except Exception:
+            return False
     return "--headless" in _instance_command(pid)
 
 
 def _system_events(*statements: str) -> bool:
     """对指定 System Events 语句执行 osascript，全部失败返回 False。"""
+    if not IS_MACOS:
+        return False
     args = ["/usr/bin/osascript"]
     for stmt in statements:
         args.extend(["-e", stmt])
@@ -195,6 +304,8 @@ on run argv
   end tell
 end run
 """
+    if not IS_MACOS:
+        return None
     try:
         proc = subprocess.run(
             ["/usr/bin/osascript", "-e", script, str(pid)],
@@ -238,6 +349,12 @@ def _wait_until_hidden(pid: int, *, max_wait_seconds: float = 2.0, poll_interval
 
 def bring_chrome_to_front() -> tuple[bool, str]:
     _debug_log("bring_chrome_to_front.enter")
+    if not IS_MACOS:
+        # 非 macOS 无 osascript 等价物。切前台只影响登录时的体验（把浏览器弹到最前），
+        # 不影响生成本身，故静默降级。**绝不能抛异常**：调用方会把异常归类成
+        # AUTH_REQUIRED，用户会看到莫名其妙的「请重新登录」。
+        _debug_log("bring_chrome_to_front.skip", reason="not_macos")
+        return False, "当前平台不支持自动切前台，请手动切到 9222 浏览器窗口"
     if not _foreground_allowed():
         # 非交互式（后台/定时/Hermes）运行：静默跳过切前台，调用方仍会抛出登录错误。
         _debug_log("bring_chrome_to_front.skip", reason="foreground_not_allowed")
@@ -259,6 +376,9 @@ def bring_chrome_to_front() -> tuple[bool, str]:
 
 def hide_chrome(*, max_wait_seconds: float = 2.0, poll_interval: float = 0.1) -> tuple[bool, str]:
     _debug_log("hide_chrome.enter")
+    if not IS_MACOS:
+        _debug_log("hide_chrome.skip", reason="not_macos")
+        return False, "当前平台不支持自动隐藏窗口"
     pid = _instance_pid()
     if pid is None:
         # 找不到专用实例时什么都不做，避免误伤用户日常 Chrome。
@@ -288,6 +408,21 @@ def surface_for_login(reason: str) -> None:
 
 
 def stop_chrome() -> tuple[bool, str]:
+    if IS_WINDOWS:
+        pid = _instance_pid_windows()
+        if pid is None:
+            return True, "未找到专用 Chrome，无需关闭"
+        # /T 连子进程一起结束；Windows 的 os.kill 没有 SIGKILL 可用。
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            check=False,
+        )
+        for _ in range(20):
+            if not is_port_open():
+                return True, "已关闭专用 Chrome"
+            time.sleep(0.25)
+        return True, "已强制关闭专用 Chrome"
     try:
         result = subprocess.run(
             ["pgrep", "-f", str(PROFILE_DIR)],
@@ -375,7 +510,8 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
             "--window-size=1440,900",
             "about:blank",
         ]
-    else:
+    elif IS_MACOS:
+        # -g 后台打开，不抢前台；-na 强制新实例并透传 --args。
         launch_cmd = [
             "/usr/bin/open",
             "-g",
@@ -390,12 +526,25 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
             "--disable-features=OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints",
             "about:blank",
         ]
+    else:
+        # Windows / Linux 没有 `open`，直接执行 Chrome 可执行文件。
+        launch_cmd = [
+            str(CHROME_BIN),
+            f"--remote-debugging-port={CDP_PORT}",
+            f"--user-data-dir={PROFILE_DIR}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--new-window",
+            "--disable-features=OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints",
+            "about:blank",
+        ]
+    detached = _detached_popen_kwargs()
     if foreground and not headless:
         subprocess.Popen(
             launch_cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,
+            **detached,
         )
     else:
         subprocess.Popen(
@@ -403,7 +552,7 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
-            start_new_session=True,
+            **detached,
         )
     for _ in range(20):
         ok, msg = check_cdp()

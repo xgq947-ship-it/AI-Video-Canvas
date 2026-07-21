@@ -99,3 +99,25 @@ test('Google Flow 文生图把素材库 URL 与 Base64 参考图转换为本地�
         fs.rmSync(taskDir, { recursive: true, force: true });
     }
 });
+
+// —— 回归：塌缩掉中间层后，Node 直接吃 ops_cli 的原始输出 ——
+// 中间层曾额外派生过一个 image_paths 便利字段，删掉它之后这里必须仍能工作，
+// 否则会退化成「没有可用的图片文件或下载地址」——而 dry-run 不产图，测不出来。
+test('图片结果直接从 ops_cli 原生的 images[].path 读取（无 image_paths 兜底）', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ops-image-shape-'));
+    const file = path.join(dir, 'result.png');
+    fs.writeFileSync(file, Buffer.from('89504e470d0a1a0a', 'hex'));
+    try {
+        // 与 ops_cli text-to-image 真实输出同构：只有 images，没有 image_paths。
+        const result = await loadGoogleFlowImageResult({ images: [{ path: file, url: null }] });
+        assert.equal(result.source, 'workflow-file');
+        assert.equal(result.extension, 'png');
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('图片结果在本地文件缺失时回退到 images[].url', async () => {
+    const outputs = { images: [{ path: '/definitely/missing.png', url: 'not-a-url' }] };
+    await assert.rejects(() => loadGoogleFlowImageResult(outputs), /没有可用的图片文件或下载地址/);
+});

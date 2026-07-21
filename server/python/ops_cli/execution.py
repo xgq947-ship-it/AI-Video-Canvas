@@ -97,21 +97,6 @@ def _classify_error(exc: Exception) -> tuple[str, bool, str | None]:
         )
     text = str(exc)
     lowered = text.lower()
-    # 聚水潭短信验证（如查询轨迹授权弹窗）：独立成结构化 AUTH_SMS_REQUIRED，
-    # 让业务层（run.py 通用恢复）能区分「需要短信验证」与普通登录失效，从而创建
-    # challenge + 经 Hermes 发飞书，而不是当成 PLATFORM_REQUEST_FAILED 处理。
-    if any(token in text for token in ("需要完成短信验证", "短信验证", "授权验证")) or "AUTH_SMS_REQUIRED" in text:
-        return (
-            "AUTH_SMS_REQUIRED",
-            False,
-            "聚水潭需要短信验证。请在飞书回复验证码，Hermes 会填入 9222 浏览器完成验证后重试。",
-        )
-    if "FULFILLMENT_OVERVIEW_NOT_FOUND" in text:
-        return (
-            "FULFILLMENT_OVERVIEW_NOT_FOUND",
-            False,
-            "请先在主浏览器学习 天机 → 商家仓履约 → 日常考核 → 数据概览 页面后再读取履约数据。",
-        )
     if "模板" in text or "template" in lowered:
         return "TEMPLATE_MISSING", False, None
     if any(word in lowered for word in ("auth", "session", "cookie", "401", "403", "unauthorized")) or any(

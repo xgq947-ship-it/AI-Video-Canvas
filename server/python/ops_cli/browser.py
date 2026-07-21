@@ -18,10 +18,7 @@ MANAGED_RESIDUE_MIN_AGE_SECONDS = 300
 PAGE_SNAPSHOT_TIMEOUT_MS = 2000
 PAGE_DEFAULT_TIMEOUT_MS = 30000
 
-_DEDUP_HOSTS = {
-    "web.txcs.tmall.com",
-    "www.erp321.com",
-}
+_DEDUP_HOSTS: set[str] = set()
 
 
 def browser_status() -> CommandResponse:

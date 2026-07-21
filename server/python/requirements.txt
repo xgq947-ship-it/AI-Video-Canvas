@@ -1,0 +1,10 @@
+# Google Flow / 即梦 浏览器自动化所需依赖。
+# 由 `npm run setup:browser-models` 安装到 server/python/.venv。
+httpx>=0.28.0
+playwright>=1.52.0
+pydantic>=2.9.0
+PyYAML>=6.0.2
+python-dotenv>=1.0.1
+requests>=2.32.0
+rich>=13.9.0
+typer>=0.12.5

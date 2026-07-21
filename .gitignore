@@ -51,3 +51,14 @@ models/
 # Agent workflows and shared utilities
 .agent/
 .shared/
+
+# 浏览器自动化 Python 运行时（由 npm run setup:browser-models 生成）
+server/python/.venv/
+server/python/logs/
+server/python/runtime/
+server/python/output/
+# 安全：登录态绝不入库
+server/python/sessionhub/data/
+server/python/sessionhub/session/
+**/cookies/
+**/sessions/

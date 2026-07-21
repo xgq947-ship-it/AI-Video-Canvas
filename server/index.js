@@ -32,6 +32,7 @@ import {
 } from '../shared/promptOptimizationProfiles.js';
 import { getPromptOptimizerProvider } from './services/promptOptimizerProviders.js';
 import { applyOptimizerPreferenceToApp, loadOptimizerPreference } from './services/optimizerPreference.js';
+import { BROWSER_MODELS_SETUP_HINT, isBrowserModelsReady } from './services/opsCliRunner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -668,6 +669,27 @@ app.delete('/api/workflows/:id', async (req, res) => {
         console.error("Delete workflow error:", error);
         res.status(500).json({ error: error.message });
     }
+});
+
+// 运行时能力探测：前端据此把「需本地配置」的模型置灰，而不是让用户点了才报错。
+app.get('/api/capabilities', (req, res) => {
+    res.json({
+        // Google Flow / 即梦 依赖 server/python 下的浏览器自动化运行时，
+        // 未安装时这些模型不可用，但其余官方 API 模型照常工作。
+        browserModels: {
+            ready: isBrowserModelsReady(),
+            models: [
+                'google-flow-omni-flash',
+                'google-flow-nano-banana-2',
+                'google-flow-nano-banana-pro',
+                'jimeng-seedance-2-0',
+                'jimeng-seedance-2-0-fast'
+            ],
+            setupCommand: 'npm run setup:browser-models',
+            hint: BROWSER_MODELS_SETUP_HINT
+        },
+        platform: process.platform
+    });
 });
 
 // 在系统文件管理器中打开该项目的素材目录（Finder / 资源管理器 / 桌面环境默认）

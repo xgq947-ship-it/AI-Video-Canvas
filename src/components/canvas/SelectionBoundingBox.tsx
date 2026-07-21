@@ -159,6 +159,7 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
     const [isGroupHovered, setIsGroupHovered] = useState(false);
     const boundingBoxRef = useRef<HTMLDivElement>(null);
     const groupToolbarRef = useRef<HTMLDivElement>(null);
+    const groupLabelRef = useRef<HTMLDivElement>(null);
     const isGrouped = !!group;
 
     // 分组框本身必须让点击穿透到内部节点，因此不能依赖 CSS :hover。
@@ -183,7 +184,16 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
                 && event.clientX <= Math.max(box.right, toolbar.right)
                 && event.clientY >= toolbar.top
                 && event.clientY <= box.top;
-            const hovered = insideBox || insideToolbar || insideToolbarBridge;
+            // 组名挂在分组框左外侧，鼠标从框上移过去的途中会短暂离开框本身；
+            // 把组名自身与它到框之间的横向走廊也算作 hover，否则名字会在指过去的路上闪掉。
+            const label = groupLabelRef.current?.getBoundingClientRect();
+            const insideLabel = !!label
+                && event.clientX >= label.left && event.clientX <= label.right
+                && event.clientY >= label.top && event.clientY <= label.bottom;
+            const insideLabelBridge = !!label
+                && event.clientX >= label.right && event.clientX <= box.left
+                && event.clientY >= label.top && event.clientY <= label.bottom;
+            const hovered = insideBox || insideToolbar || insideToolbarBridge || insideLabel || insideLabelBridge;
 
             setIsGroupHovered(previous => previous === hovered ? previous : hovered);
             if (!hovered) setShowSortDropdown(false);
@@ -315,8 +325,13 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
                         }}
                     />
                 ) : (
+                    // 组名默认隐藏，鼠标移到分组上才淡入：分组框左外侧长期挂一块紫色标签
+                    // 会盖住画布、也抢视觉焦点。隐藏时同时关掉命中，避免空白处出现看不见的可点区域。
                     <div
-                        className="absolute text-sm font-medium text-white bg-indigo-600 px-3 py-1 rounded pointer-events-auto cursor-text whitespace-nowrap"
+                        ref={groupLabelRef}
+                        className={`absolute text-sm font-medium text-white bg-indigo-600 px-3 py-1 rounded cursor-text whitespace-nowrap transition-opacity duration-150 ${
+                            isGroupHovered ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+                        }`}
                         style={{
                             top: 8,
                             right: 'calc(100% + 8px)',

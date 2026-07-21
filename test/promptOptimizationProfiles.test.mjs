@@ -20,7 +20,11 @@ test('三种图片优化均完整携带角色库标准模板的关键结尾与�
   const board = getPromptOptimizationProfile('image-identity-board');
 
   assert.match(front.systemInstruction, /身份一致性高于美化。不要侧脸，不要歪头，不要美颜磨皮，不要网红脸/);
-  assert.match(angles.systemInstruction, /不要标准侧面，不要改变表情、妆容、发型和服装/);
+  assert.match(angles.systemInstruction, /鼻尖必须明确朝向画布左边缘/);
+  assert.match(angles.systemInstruction, /鼻尖必须明确朝向画布右边缘/);
+  assert.match(angles.systemInstruction, /两个侧向人物背向彼此，绝对不能朝向同一侧/);
+  assert.match(angles.systemInstruction, /禁止中间区域和右侧区域朝向相同方向/);
+  assert.match(angles.systemInstruction, /不要标准 90° 侧面/);
   assert.match(board.systemInstruction, /中间人物的身高、头身比、肩宽、腰臀比例、四肢长度和发型/);
   assert.match(board.systemInstruction, /不要在左侧生成任何人体或假人/);
 });

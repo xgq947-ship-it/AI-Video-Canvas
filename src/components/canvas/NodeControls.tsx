@@ -73,6 +73,7 @@ interface VideoModelOption {
 
 const VIDEO_MODELS: VideoModelOption[] = [
     { id: 'google-flow-omni-flash', name: 'Google Flow · Omni Flash', provider: 'workflow', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, supportsIngredients: true, recommended: true, durations: [4, 6, 8, 10], resolutions: ['自动'], aspectRatios: ['16:9', '9:16'] },
+    { id: 'jimeng-seedance-2-0', name: '即梦 · Seedance 2.0 VIP', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
     // 供应商仅保留当前主模型，避免同一能力出现多套过时入口。
     { id: 'seedance-2-0', name: 'Seedance 2.0', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
     { id: 'kling-v3', name: 'Kling 3.0', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [3, 4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1'] },

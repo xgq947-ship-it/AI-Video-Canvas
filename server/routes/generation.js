@@ -13,6 +13,7 @@ import { generateGeminiImage, generateVeoVideo } from '../services/gemini.js';
 import { generateHailuoVideo } from '../services/hailuo.js';
 import { generateSeedanceVideo } from '../services/seedance.js';
 import { generateGoogleFlowWorkflowVideo, GOOGLE_FLOW_WORKFLOW_MODEL_ID } from '../services/googleFlowWorkflow.js';
+import { generateJimengWorkflowVideo, JIMENG_WORKFLOW_MODEL_ID } from '../services/jimengVideoWorkflow.js';
 import { generateGoogleFlowWorkflowImage, GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID, isGoogleFlowImageWorkflowModel } from '../services/googleFlowImageWorkflow.js';
 import { generateOpenAIImage } from '../services/openai.js';
 import { resolveAudioToBase64, resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
@@ -215,12 +216,15 @@ router.post('/generate-video', async (req, res) => {
         const isSeedanceModel = videoModel && videoModel.startsWith('seedance-');
         const isHailuoModel = videoModel && videoModel.startsWith('hailuo-');
         const isGoogleFlowWorkflowModel = videoModel === GOOGLE_FLOW_WORKFLOW_MODEL_ID;
+        const isJimengWorkflowModel = videoModel === JIMENG_WORKFLOW_MODEL_ID;
+        // 两个 provider 都走本地 9222 页面 workflow：输入是真实文件路径而非 base64。
+        const isBrowserWorkflowModel = isGoogleFlowWorkflowModel || isJimengWorkflowModel;
 
         // 页面 workflow 需要真实首帧路径；其他供应商继续使用 base64 输入。
-        const imageBase64 = isGoogleFlowWorkflowModel ? null : resolveImageToBase64(rawImageBase64);
-        const lastFrameBase64 = isGoogleFlowWorkflowModel ? null : resolveImageToBase64(rawLastFrameBase64);
-        const motionReferenceUrl = isGoogleFlowWorkflowModel ? null : resolveImageToBase64(rawMotionReferenceUrl);
-        const referenceAudioUrls = isGoogleFlowWorkflowModel
+        const imageBase64 = isBrowserWorkflowModel ? null : resolveImageToBase64(rawImageBase64);
+        const lastFrameBase64 = isBrowserWorkflowModel ? null : resolveImageToBase64(rawLastFrameBase64);
+        const motionReferenceUrl = isBrowserWorkflowModel ? null : resolveImageToBase64(rawMotionReferenceUrl);
+        const referenceAudioUrls = isBrowserWorkflowModel
             ? []
             : (Array.isArray(rawReferenceAudioUrls) ? rawReferenceAudioUrls : [])
                 .slice(0, 3)
@@ -251,6 +255,31 @@ router.post('/generate-video', async (req, res) => {
                 referenceImageInputs: useIngredients ? referenceImageInputs : [],
                 aspectRatio: aspectRatio || '16:9',
                 duration: duration || 4,
+                libraryDir: LIBRARY_DIR,
+                timeoutMinutes: 15
+            });
+            videoBuffer = workflowResult.buffer;
+            videoExtension = workflowResult.extension;
+            workflowRunId = workflowResult.runId;
+
+        } else if (isJimengWorkflowModel) {
+            // 即梦是「文字为主、参考素材可选」：不接图也能生成。
+            // 连进来的图（单张首帧口或多张参考）一律作为参考素材，即梦没有首帧概念。
+            const jimengReferenceInputs = [
+                ...(Array.isArray(rawReferenceImages) ? rawReferenceImages.filter(Boolean) : [])
+            ];
+            if (jimengReferenceInputs.length === 0 && rawImageBase64) {
+                jimengReferenceInputs.push(rawImageBase64);
+            }
+            if (rawLastFrameBase64) {
+                return res.status(400).json({ error: '即梦视频暂不支持尾帧；请把图片作为参考素材连接' });
+            }
+            const workflowResult = await generateJimengWorkflowVideo({
+                prompt,
+                referenceImageInputs: jimengReferenceInputs,
+                aspectRatio: aspectRatio || '16:9',
+                duration: duration || 5,
+                resolution: resolution || '720P',
                 libraryDir: LIBRARY_DIR,
                 timeoutMinutes: 15
             });
@@ -437,7 +466,7 @@ router.post('/generate-video', async (req, res) => {
             aspectRatio: aspectRatio || 'Auto',
             resolution: resolution || 'Auto',
             duration: duration || undefined,
-            generateAudio: isGoogleFlowWorkflowModel ? undefined : req.body.generateAudio !== false,
+            generateAudio: isBrowserWorkflowModel ? undefined : req.body.generateAudio !== false,
             workflowRunId,
             createdAt: new Date().toISOString(),
             type: 'videos'

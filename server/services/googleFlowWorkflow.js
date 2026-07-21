@@ -63,7 +63,7 @@ function resolveWorkflowRoot() {
     return { root, runPath };
 }
 
-function resolveLocalLibraryImage(input, libraryDir) {
+export function resolveLocalLibraryImage(input, libraryDir) {
     if (!input || typeof input !== 'string') return null;
     let candidate = input;
     if (candidate.startsWith('http://') || candidate.startsWith('https://')) {
@@ -85,7 +85,7 @@ function resolveLocalLibraryImage(input, libraryDir) {
     return resolved;
 }
 
-function writeDataUrlImage(input, taskDir, basename = 'first-frame') {
+export function writeDataUrlImage(input, taskDir, basename = 'first-frame') {
     const match = String(input || '').match(/^data:image\/(png|jpeg|jpg|webp);base64,([\s\S]+)$/i);
     if (!match) return null;
     const extension = match[1].toLowerCase() === 'jpeg' ? 'jpg' : match[1].toLowerCase();

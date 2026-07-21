@@ -325,7 +325,7 @@ def _with_cdp_context(port: int, handler: Any) -> Any:
     try:
         from playwright.sync_api import sync_playwright  # type: ignore
     except ModuleNotFoundError as exc:
-        raise RuntimeError("缺少 Playwright，请先安装 Ops-Cli 依赖。") from exc
+        raise RuntimeError("缺少 Playwright，请先运行：npm run setup:browser-models") from exc
 
     cdp_url = f"http://127.0.0.1:{port}"
     with sync_playwright() as p:

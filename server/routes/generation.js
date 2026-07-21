@@ -268,11 +268,12 @@ router.post('/generate-video', async (req, res) => {
             const jimengReferenceInputs = [
                 ...(Array.isArray(rawReferenceImages) ? rawReferenceImages.filter(Boolean) : [])
             ];
-            if (jimengReferenceInputs.length === 0 && rawImageBase64) {
-                jimengReferenceInputs.push(rawImageBase64);
-            }
-            if (rawLastFrameBase64) {
-                return res.status(400).json({ error: '即梦视频暂不支持尾帧；请把图片作为参考素材连接' });
+            // 兜底：老节点可能仍带着首/尾帧字段（即梦上线前保存的画布）。
+            // 即梦没有首尾帧概念，但那两张图仍然是用户想用的素材——按顺序补进参考素材，
+            // 而不是报错让用户手动重连。
+            if (jimengReferenceInputs.length === 0) {
+                if (rawImageBase64) jimengReferenceInputs.push(rawImageBase64);
+                if (rawLastFrameBase64) jimengReferenceInputs.push(rawLastFrameBase64);
             }
             const workflowResult = await generateJimengWorkflowVideo({
                 prompt,

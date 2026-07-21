@@ -20,6 +20,7 @@ import {
     PROMPT_OPTIMIZATION_PROFILES,
     type PromptOptimizationProfile
 } from '../../../shared/promptOptimizationProfiles.js';
+import { shouldUseReferenceImages, usesReferenceMaterialsOnly } from '../../utils/videoModelCapabilities.js';
 
 interface NodeControlsProps {
     data: NodeData;
@@ -732,6 +733,17 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
             setIsUploadingVideo(false);
         }
     };
+
+    // 当前模型把连进来的图当「参考素材」还是「首尾帧」。
+    // 即梦没有首帧概念，连 3 张图却显示成首帧/尾帧、还丢掉第 3 张，是明确的误导。
+    const useReferenceMaterials = shouldUseReferenceImages(data.videoModel, connectedImageNodes.length);
+    const referenceOnlyModel = usesReferenceMaterialsOnly(data.videoModel);
+    // 参考素材模式下全部展示（不截断到 2 张）；首尾帧模式仍然只取前两张。
+    const referenceInputsWithUrls = connectedImageNodes.map(node => ({
+        nodeId: node.id,
+        url: node.url,
+        type: node.type
+    }));
 
     // Get frame inputs with their image URLs
     // Auto-assign order: first connected = start, second = end
@@ -1666,13 +1678,38 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                         {showAdvanced && isVideoNode && (
                             <div className="mt-3 space-y-3">
                                 {/* Frame Inputs - Show when 2+ nodes are connected */}
-                                {connectedImageNodes.length >= 2 && (
+                                {(connectedImageNodes.length >= 2 || (useReferenceMaterials && connectedImageNodes.length >= 1)) && (
                                     <div className="space-y-2">
                                         <label className="text-[10px] text-neutral-500 uppercase tracking-wider">
-                                            已连接画面<span className="text-neutral-600">（拖动可排序）</span>
+                                            {useReferenceMaterials ? (
+                                                <>已连接参考素材<span className="text-neutral-600">（按顺序对应 @图片1、@图片2…）</span></>
+                                            ) : (
+                                                <>已连接画面<span className="text-neutral-600">（拖动可排序）</span></>
+                                            )}
                                         </label>
 
-                                        {frameInputsWithUrls.length === 0 ? (
+                                        {useReferenceMaterials ? (
+                                            /* 参考素材模式：全部列出，不做首尾帧标注（该模型没有首帧概念） */
+                                            <div className="space-y-2">
+                                                {referenceInputsWithUrls.map((input, index) => (
+                                                    <div
+                                                        key={input.nodeId}
+                                                        className="flex items-center gap-2 p-2 bg-neutral-800 rounded-lg"
+                                                    >
+                                                        <img
+                                                            src={input.url}
+                                                            alt={`Reference ${index + 1}`}
+                                                            className="w-12 h-12 object-cover rounded"
+                                                        />
+                                                        <div className="flex-1">
+                                                            <span className="text-xs font-medium px-2 py-0.5 rounded bg-blue-600/30 text-blue-400">
+                                                                参考图{index + 1}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : frameInputsWithUrls.length === 0 ? (
                                             <div className="text-xs text-neutral-600 italic py-2">
                                                 请连接图片节点作为首帧和尾帧
                                             </div>
@@ -1714,9 +1751,14 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                             </div>
                                         )}
 
-                                        {connectedImageNodes.length > frameInputsWithUrls.length && (
+                                        {!useReferenceMaterials && connectedImageNodes.length > frameInputsWithUrls.length && (
                                             <div className="text-xs text-neutral-500 mt-1">
                                                 还有 {connectedImageNodes.length - frameInputsWithUrls.length} 个输入可用
+                                            </div>
+                                        )}
+                                        {referenceOnlyModel && (
+                                            <div className="text-xs text-neutral-500 mt-1">
+                                                该模型没有首帧/尾帧，连接的图片全部作为参考素材（最多 12 个）
                                             </div>
                                         )}
                                     </div>

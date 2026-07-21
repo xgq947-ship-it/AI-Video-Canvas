@@ -11,6 +11,11 @@ import {
 } from '../server/services/jimengVideoWorkflow.js';
 import { GOOGLE_FLOW_WORKFLOW_MODEL_ID } from '../server/services/googleFlowWorkflow.js';
 import { getGenerationRecoveryTimeoutMs, GOOGLE_FLOW_RECOVERY_TIMEOUT_MS } from '../src/utils/generationRecovery.js';
+import {
+    minimumReferenceImages,
+    shouldUseReferenceImages,
+    usesReferenceMaterialsOnly
+} from '../src/utils/videoModelCapabilities.js';
 
 test('即梦 workflow 纯文生视频：不接图也能生成，不传任何 --reference-image', () => {
     const args = buildJimengWorkflowArgs({
@@ -88,4 +93,28 @@ test('即梦与 Google Flow 共用本地 workflow 的恢复超时档位', () => 
 test('即梦与 Google Flow 共用同一个 9222 串行队列（不能各自排队）', async () => {
     const queue = await import('../server/services/googleFlowWorkflowQueue.js');
     assert.equal(queue.enqueueBrowserWorkflow, queue.enqueueGoogleFlowWorkflow);
+});
+
+
+test('即梦连任意张数图片都走参考素材，不会被当成首尾帧', () => {
+    // 回归：连 3 张图时前端曾把它们当 frame-to-frame（首帧/尾帧 + 丢掉第 3 张），
+    // 后端随即报「即梦视频暂不支持尾帧」。
+    assert.equal(usesReferenceMaterialsOnly('jimeng-seedance-2-0'), true);
+    assert.equal(shouldUseReferenceImages('jimeng-seedance-2-0', 1), true);
+    assert.equal(shouldUseReferenceImages('jimeng-seedance-2-0', 3), true);
+    assert.equal(minimumReferenceImages('jimeng-seedance-2-0'), 1);
+});
+
+test('Google Flow 首帧行为不变：1 张仍是首帧，≥2 张才走 Ingredients', () => {
+    assert.equal(usesReferenceMaterialsOnly('google-flow-omni-flash'), false);
+    assert.equal(shouldUseReferenceImages('google-flow-omni-flash', 1), false);
+    assert.equal(shouldUseReferenceImages('google-flow-omni-flash', 2), true);
+    assert.equal(minimumReferenceImages('google-flow-omni-flash'), 2);
+});
+
+test('API 直连供应商不受参考素材判定影响', () => {
+    for (const model of ['seedance-2-0', 'kling-v3', 'hailuo-2.3']) {
+        assert.equal(shouldUseReferenceImages(model, 3), false, model);
+        assert.equal(usesReferenceMaterialsOnly(model), false, model);
+    }
 });

@@ -9,6 +9,7 @@ import { NodeData, NodeType, NodeStatus } from '../types';
 import { generateImage, generateVideo, queueCodexImage } from '../services/generationService';
 import { generateLocalImage } from '../services/localModelService';
 import { extractVideoLastFrame } from '../utils/videoHelpers';
+import { minimumReferenceImages, shouldUseReferenceImages } from '../utils/videoModelCapabilities.js';
 import {
     collectNodeReferences,
     extractReferenceLabels,
@@ -337,25 +338,26 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                     }
                 }
 
-                // Google Flow Ingredients（多参考图）：连 1 张走首帧模式；连 2 张以上自动走
-                // Ingredients，把所有连接的图片作为参考图交给 workflow（--reference-image ×N），
-                // 而不是当作首/尾帧插值。仅 Google Flow workflow 模型支持。
+                // 多参考图 / 参考素材：把所有连接的图片整体交给 workflow（--reference-image ×N），
+                // 而不是当作首/尾帧插值。判定收敛在 videoModelCapabilities：
+                //   Google Flow —— 连 1 张仍是首帧，≥2 张才走 Ingredients；
+                //   即梦        —— 没有首帧概念，连 1 张就是参考素材。
                 let videoReferenceImages: string[] | undefined;
-                const isGoogleFlowIngredients = !isMotionControl
-                    && !!node.videoModel?.startsWith('google-flow')
-                    && imageParentIds.length >= 2;
-                if (isGoogleFlowIngredients) {
+                const useReferenceImages = !isMotionControl
+                    && shouldUseReferenceImages(node.videoModel, imageParentIds.length);
+                if (useReferenceImages) {
                     videoReferenceImages = imageParentIds
                         .map(pid => nodes.find(n => n.id === pid))
                         .map(parent => parent?.type === NodeType.VIDEO ? parent?.lastFrame : parent?.resultUrl)
                         .filter((url): url is string => Boolean(url));
-                    if (videoReferenceImages.length < 2) {
-                        throw new Error('多参考图需要至少 2 张已生成的图片，请检查连接的图片节点是否都已出图');
+                    const minimum = minimumReferenceImages(node.videoModel);
+                    if (videoReferenceImages.length < minimum) {
+                        throw new Error(`多参考图需要至少 ${minimum} 张已生成的图片，请检查连接的图片节点是否都已出图`);
                     }
                 }
 
-                // Only evaluate as frame-to-frame if NOT in motion control mode and NOT ingredients
-                const isFrameToFrame = !isMotionControl && !isGoogleFlowIngredients && (node.videoMode === 'frame-to-frame' || hasMultipleInputs || hasExplicitFrameInputs);
+                // Only evaluate as frame-to-frame if NOT in motion control mode and NOT reference images
+                const isFrameToFrame = !isMotionControl && !useReferenceImages && (node.videoMode === 'frame-to-frame' || hasMultipleInputs || hasExplicitFrameInputs);
 
                 if (isFrameToFrame && imageParentIds.length >= 2) {
                     // Get start and end frames from frameInputs (if user reordered) or default order

@@ -1,67 +1,19 @@
 /**
  * Google Flow workflow 适配器。
  *
- * 通过运营自动化工具的 image_to_video_generate workflow（--provider google-flow）
- * 调用可见的 9222 Chrome 页面，不在 Evan 内复制任何 Google Flow 页面自动化逻辑。
+ * 调用内置的 server/python/ops_cli（image-to-video google-flow generate）
+ * 驱动可见的 9222 Chrome 页面，不在 Evan 内复制任何 Google Flow 页面自动化逻辑。
  */
 
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { enqueueGoogleFlowWorkflow } from './googleFlowWorkflowQueue.js';
+import { runOpsCli } from './opsCliRunner.js';
 
 export const GOOGLE_FLOW_WORKFLOW_MODEL_ID = 'google-flow-omni-flash';
 export const GOOGLE_FLOW_SUPPORTED_DURATIONS = [4, 6, 8, 10];
 export const GOOGLE_FLOW_SUPPORTED_ASPECT_RATIOS = ['16:9', '9:16'];
-
-const DEFAULT_WORKFLOW_ROOT = path.join(
-    os.homedir(),
-    'Desktop',
-    '电商Brain',
-    '02-运营店铺',
-    '运营自动化工具'
-);
-
-export function extractWorkflowJson(stdout) {
-    const source = String(stdout || '');
-    for (let start = source.indexOf('{'); start >= 0; start = source.indexOf('{', start + 1)) {
-        let depth = 0;
-        let inString = false;
-        let escaped = false;
-        for (let index = start; index < source.length; index += 1) {
-            const char = source[index];
-            if (inString) {
-                if (escaped) escaped = false;
-                else if (char === '\\') escaped = true;
-                else if (char === '"') inString = false;
-                continue;
-            }
-            if (char === '"') inString = true;
-            else if (char === '{') depth += 1;
-            else if (char === '}') {
-                depth -= 1;
-                if (depth === 0) {
-                    try {
-                        return JSON.parse(source.slice(start, index + 1));
-                    } catch {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    throw new Error('Google Flow workflow 未返回可解析的 JSON 结果');
-}
-
-function resolveWorkflowRoot() {
-    const root = path.resolve(process.env.GOOGLE_FLOW_WORKFLOW_ROOT || DEFAULT_WORKFLOW_ROOT);
-    const runPath = path.join(root, 'run.py');
-    if (!fs.existsSync(runPath)) {
-        throw new Error(`未找到 Google Flow workflow：${runPath}`);
-    }
-    return { root, runPath };
-}
 
 export function resolveLocalLibraryImage(input, libraryDir) {
     if (!input || typeof input !== 'string') return null;
@@ -110,52 +62,6 @@ function resolveReferenceImages(inputs, libraryDir, taskDir) {
         const dataPath = writeDataUrlImage(input, taskDir, `ingredient-${index}`);
         if (dataPath) return dataPath;
         throw new Error(`Google Flow workflow 参考图无法解析（第 ${index + 1} 张，需素材库图片或本地图片）`);
-    });
-}
-
-function runWorkflowProcess({ root, runPath, args, timeoutMs }) {
-    const venvPython = path.join(root, '.venv', 'bin', 'python');
-    const python = fs.existsSync(venvPython) ? venvPython : 'python3';
-
-    return new Promise((resolve, reject) => {
-        const child = spawn(python, [runPath, 'workflow', 'image_to_video_generate', '--provider', 'google-flow', ...args], {
-            cwd: root,
-            env: {
-                ...process.env,
-                NF_DISABLE: '1',
-                PYTHONUNBUFFERED: '1'
-            },
-            stdio: ['ignore', 'pipe', 'pipe']
-        });
-        let stdout = '';
-        let stderr = '';
-        const timer = setTimeout(() => {
-            child.kill('SIGTERM');
-            reject(new Error('Google Flow workflow 执行超时'));
-        }, timeoutMs);
-
-        child.stdout.on('data', chunk => { stdout += chunk.toString(); });
-        child.stderr.on('data', chunk => { stderr += chunk.toString(); });
-        child.on('error', error => {
-            clearTimeout(timer);
-            reject(error);
-        });
-        child.on('close', code => {
-            clearTimeout(timer);
-            let payload;
-            try {
-                payload = extractWorkflowJson(stdout);
-            } catch (error) {
-                reject(new Error(`${error.message}${stderr.trim() ? `：${stderr.trim()}` : ''}`));
-                return;
-            }
-            if (code !== 0 || !['success', 'dry_run_success'].includes(payload.status)) {
-                const detail = payload.errors?.[0] || stderr.trim() || `进程退出码 ${code}`;
-                reject(new Error(`Google Flow workflow 失败：${detail}`));
-                return;
-            }
-            resolve(payload);
-        });
     });
 }
 
@@ -210,23 +116,24 @@ async function executeGoogleFlowWorkflow({
             ? resolveReferenceImages(referenceImageInputs, libraryDir, taskDir)
             : [];
         const outputDir = path.join(taskDir, 'output');
-        const { root, runPath } = resolveWorkflowRoot();
-        const payload = await runWorkflowProcess({
-            root,
-            runPath,
+        const { data, runId } = await runOpsCli({
+            label: 'Google Flow 视频生成',
             timeoutMs: (timeoutMinutes + 2) * 60 * 1000,
-            args: buildGoogleFlowWorkflowArgs({
-                prompt,
-                firstFrame,
-                referenceImages,
-                duration,
-                aspectRatio,
-                outputDir,
-                timeoutMinutes
-            })
+            args: [
+                'image-to-video', 'google-flow', 'generate',
+                ...buildGoogleFlowWorkflowArgs({
+                    prompt,
+                    firstFrame,
+                    referenceImages,
+                    duration,
+                    aspectRatio,
+                    outputDir,
+                    timeoutMinutes
+                })
+            ]
         });
-        const result = await loadVideoResult(payload.outputs);
-        return { ...result, runId: payload.run_id };
+        const result = await loadVideoResult(data);
+        return { ...result, runId };
     } finally {
         fs.rmSync(taskDir, { recursive: true, force: true });
     }

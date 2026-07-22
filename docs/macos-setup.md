@@ -222,6 +222,36 @@ npm run dev
 
 ---
 
+## 步骤 8.5 — 启动管理器（可选）
+
+`npm run dev` 需要一直开着终端。项目里带了一个管理器，支持后台运行：
+
+```bash
+npm run launcher
+```
+
+会出来一个菜单：启动 / 停止 / 重启 / 状态 / 日志 / 打开画布 / 打开项目文件夹。
+**服务是脱离终端运行的**，启动后可以直接关掉窗口。
+
+也支持直接传参：
+```bash
+npm run launcher start
+npm run launcher stop
+npm run launcher status
+npm run launcher open
+```
+
+日志在 `logs/dev-server.log`。
+
+> 这个管理器是跨平台的（Node 实现），Windows 那边还额外包了一层
+> 双击启动的 `.bat`。
+>
+> macOS 另有一个功能更全的原生版本 `Evan工作台.app`（AppleScript +
+> launchd 托管，支持开机自启），见 `launcher/启动管理说明.md`。
+> 那个是 Mac 专属的，`npm run launcher` 则三平台通用。
+
+---
+
 # 第二部分：轨道 B（可选，即梦 / Google Flow）
 
 > **先确认账号**，否则配了也用不了：

@@ -17,7 +17,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "setup:local-models": "node -e \"require('child_process').execSync(process.platform === 'win32' ? 'setup-local-models.bat' : 'bash setup-local-models.sh', {stdio: 'inherit'})\"",
-    "setup:browser-models": "node scripts/setup-browser-models.mjs"
+    "setup:browser-models": "node scripts/setup-browser-models.mjs",
+    "launcher": "node scripts/launcher.mjs"
   },
   "dependencies": {
     "@fal-ai/client": "^1.8.0",

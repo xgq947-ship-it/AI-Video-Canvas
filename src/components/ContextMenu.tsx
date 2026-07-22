@@ -17,7 +17,6 @@ import {
   Files,
   Layers,
   ChevronRight,
-  HardDrive,
   Mic,
   Volume2,
   Captions,
@@ -486,8 +485,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
             <div className={`border-t p-1 ${canvasTheme === 'dark' ? 'border-neutral-800' : 'border-neutral-100'}`}>
               <MenuItem icon={<PenTool size={16} />} label="图片编辑器" onClick={() => onSelectType(NodeType.IMAGE_EDITOR)} canvasTheme={canvasTheme} />
               <MenuItem icon={<Film size={16} />} label="视频编辑器" onClick={() => onSelectType(NodeType.VIDEO_EDITOR)} canvasTheme={canvasTheme} />
-              <MenuItem icon={<HardDrive size={16} />} label="本地图片模型" onClick={() => onSelectType(NodeType.LOCAL_IMAGE_MODEL)} canvasTheme={canvasTheme} />
-              <MenuItem icon={<HardDrive size={16} />} label="本地视频模型" onClick={() => onSelectType(NodeType.LOCAL_VIDEO_MODEL)} canvasTheme={canvasTheme} />
             </div>
           </details>
         )}

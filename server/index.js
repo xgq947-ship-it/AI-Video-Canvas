@@ -12,7 +12,6 @@ import crypto from 'crypto';
 import { spawn } from 'child_process';
 import generationRoutes from './routes/generation.js';
 import { processTikTokVideo, isValidTikTokUrl } from './tools/tiktok.js';
-import localModelsRoutes from './routes/local-models.js';
 import storyboardRoutes from './routes/storyboard.js';
 import audioRoutes from './routes/audio.js';
 import renderRoutes from './routes/render.js';
@@ -254,7 +253,6 @@ app.use('/api', codexImageJobRoutes);
 app.use('/api/settings', settingsRoutes);
 
 // Mount Local Models routes (local open-source model discovery)
-app.use('/api/local-models', localModelsRoutes);
 
 // Mount Storyboard routes (AI script generation)
 app.use('/api/storyboard', storyboardRoutes);

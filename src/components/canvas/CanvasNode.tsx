@@ -61,8 +61,6 @@ const NODE_TYPE_LABELS: Record<NodeType, string> = {
   [NodeType.VIDEO_EDITOR]: '视频编辑器',
   [NodeType.STORYBOARD]: '分镜管理',
   [NodeType.CAMERA_ANGLE]: '镜头角度',
-  [NodeType.LOCAL_IMAGE_MODEL]: '本地图片模型',
-  [NodeType.LOCAL_VIDEO_MODEL]: '本地视频模型',
   [NodeType.SFX]: '音效',
   [NodeType.BGM]: '背景音乐',
   [NodeType.SUBTITLE]: '字幕',

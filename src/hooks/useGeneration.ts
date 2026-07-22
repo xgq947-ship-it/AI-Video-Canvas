@@ -7,7 +7,6 @@
 
 import { NodeData, NodeType, NodeStatus } from '../types';
 import { generateImage, generateVideo, queueCodexImage } from '../services/generationService';
-import { generateLocalImage } from '../services/localModelService';
 import { extractVideoLastFrame } from '../utils/videoHelpers';
 import { minimumReferenceImages, shouldUseReferenceImages } from '../utils/videoModelCapabilities.js';
 import {
@@ -232,58 +231,6 @@ export const useGeneration = ({ nodes, updateNode, workflowId }: UseGenerationPr
                     errorMessage: undefined
                 });
 
-
-            } else if (node.type === NodeType.LOCAL_IMAGE_MODEL) {
-                // --- LOCAL MODEL GENERATION ---
-                // Check if model is selected
-                if (!node.localModelId && !node.localModelPath) {
-                    updateNode(id, {
-                        status: NodeStatus.ERROR,
-                        errorMessage: 'No local model selected. Please select a model first.'
-                    });
-                    return;
-                }
-
-                // Get parent images if any
-                const imageBase64s: string[] = [];
-                if (node.parentIds && node.parentIds.length > 0) {
-                    for (const parentId of node.parentIds.filter(parentId => shouldUseReferenceParent(parentId))) {
-                        const parent = nodes.find(n => n.id === parentId);
-                        const parentReferenceUrl = parent?.type === NodeType.VIDEO
-                            ? (parent.lastFrame || parent.resultUrl)
-                            : parent?.resultUrl;
-                        if (parent?.type !== NodeType.TEXT && parentReferenceUrl) {
-                            imageBase64s.push(parentReferenceUrl);
-                        }
-                    }
-                }
-
-                // Call local generation API
-                const result = await generateLocalImage({
-                    workflowId,
-                    modelId: node.localModelId,
-                    modelPath: node.localModelPath,
-                    prompt: combinedPrompt,
-                    aspectRatio: node.aspectRatio,
-                    resolution: node.resolution || '512'
-                });
-
-                if (result.success && result.resultUrl) {
-                    // Add cache-busting parameter
-                    const resultUrl = `${result.resultUrl}?t=${Date.now()}`;
-
-                    // Detect actual image dimensions
-                    const { resultAspectRatio } = await getImageAspectRatio(resultUrl);
-
-                    updateNode(id, {
-                        status: NodeStatus.SUCCESS,
-                        resultUrl,
-                        resultAspectRatio,
-                        errorMessage: undefined
-                    });
-                } else {
-                    throw new Error(result.error || 'Local generation failed');
-                }
 
             } else if (node.type === NodeType.VIDEO) {
                 // Get first parent image for video generation (start frame)

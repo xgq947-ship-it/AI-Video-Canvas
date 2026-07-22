@@ -11,7 +11,6 @@ import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertica
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { useBrowserModels } from '../../hooks/useBrowserModels';
 import { ChangeAnglePanel } from './ChangeAnglePanel';
-import { LocalModel, getLocalModels } from '../../services/localModelService';
 import type { NodeReference } from '../../utils/nodeReferences.js';
 import { extractReferenceLabels } from '../../utils/nodeReferences.js';
 import {
@@ -184,32 +183,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
         .filter(reference => reference.kind === 'audio' && reference.url)
         .map(reference => ({ id: reference.id, title: reference.title, url: reference.url! }));
 
-    // Local model state for LOCAL_IMAGE_MODEL and LOCAL_VIDEO_MODEL nodes
-    const [localModels, setLocalModels] = useState<LocalModel[]>([]);
-    const [isLoadingLocalModels, setIsLoadingLocalModels] = useState(false);
-    const isLocalModelNode = data.type === NodeType.LOCAL_IMAGE_MODEL || data.type === NodeType.LOCAL_VIDEO_MODEL;
-
-    // Fetch local models when node is a local model type
-    useEffect(() => {
-        if (!isLocalModelNode) return;
-
-        const fetchModels = async () => {
-            setIsLoadingLocalModels(true);
-            try {
-                const models = await getLocalModels();
-                // Filter based on node type
-                const filtered = data.type === NodeType.LOCAL_VIDEO_MODEL
-                    ? models.filter(m => m.type === 'video')
-                    : models.filter(m => m.type === 'image' || m.type === 'lora' || m.type === 'controlnet');
-                setLocalModels(filtered);
-            } catch (error) {
-                console.error('Error fetching local models:', error);
-            } finally {
-                setIsLoadingLocalModels(false);
-            }
-        };
-        fetchModels();
-    }, [isLocalModelNode, data.type]);
 
     // Google Flow / 即梦 依赖本机浏览器自动化运行时，未配置时置灰并说明原因。
     const { browserModelsHint, isModelUnavailable } = useBrowserModels();
@@ -380,15 +353,15 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
         onUpdate(data.id, { frameInputs: updatedFrameInputs });
     };
 
-    const currentSizeLabel = (data.type === NodeType.VIDEO || data.type === NodeType.LOCAL_VIDEO_MODEL)
+    const currentSizeLabel = (data.type === NodeType.VIDEO)
         ? (data.resolution || "Auto")
         : (data.aspectRatio || "Auto");
 
     // For image nodes, use model-specific aspect ratios (sizeOptions for video computed later with availableResolutions)
     const currentImageModelForRatios = IMAGE_MODELS.find(m => m.id === data.imageModel) || IMAGE_MODELS[0];
     const imageAspectRatioOptions = currentImageModelForRatios.aspectRatios || IMAGE_RATIOS;
-    const isVideoNode = data.type === NodeType.VIDEO || data.type === NodeType.LOCAL_VIDEO_MODEL;
-    const isImageNode = data.type === NodeType.IMAGE || data.type === NodeType.LOCAL_IMAGE_MODEL;
+    const isVideoNode = data.type === NodeType.VIDEO;
+    const isImageNode = data.type === NodeType.IMAGE;
     const hasConnectedImages = connectedImageNodes.length > 0;
 
     // Video model selection logic
@@ -547,7 +520,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const availableResolutions = getAvailableResolutions();
 
     // sizeOptions: For video nodes use model-specific resolutions, for image nodes use aspect ratios
-    const sizeOptions = (data.type === NodeType.VIDEO || data.type === NodeType.LOCAL_VIDEO_MODEL)
+    const sizeOptions = (data.type === NodeType.VIDEO)
         ? availableResolutions
         : imageAspectRatioOptions;
 
@@ -615,20 +588,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
         onUpdate(data.id, updates);
         setShowModelDropdown(false);
     };
-
-    // Handle local model selection
-    const handleLocalModelChange = (model: LocalModel) => {
-        onUpdate(data.id, {
-            localModelId: model.id,
-            localModelPath: model.path,
-            localModelType: model.type as NodeData['localModelType'],
-            localModelArchitecture: model.architecture
-        });
-        setShowModelDropdown(false);
-    };
-
-    // Get selected local model for display
-    const selectedLocalModel = localModels.find(m => m.id === data.localModelId);
 
     const handleResolutionSelect = (value: string) => {
         onUpdate(data.id, { resolution: value });
@@ -1005,58 +964,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-2 relative">
                     <div className="flex min-w-0 items-center gap-2">
                         {/* Model Selector - Local, Video, and Image nodes get different dropdowns */}
-                        {isLocalModelNode ? (
-                            <div className="relative" ref={modelDropdownRef}>
-                                <button
-                                    onClick={() => setShowModelDropdown(!showModelDropdown)}
-                                    className="flex min-w-[142px] items-center gap-1.5 whitespace-nowrap text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
-                                >
-                                    <HardDrive size={12} className="text-purple-400" />
-                                    <span className="font-medium">{selectedLocalModel?.name || '选择模型'}</span>
-                                    <ChevronDown size={12} className="ml-0.5 opacity-50" />
-                                </button>
-
-                                {/* Local Model Dropdown Menu */}
-                                {showModelDropdown && (
-                                    <div className="absolute top-full mt-1 left-0 w-56 bg-[#252525] border border-neutral-700 rounded-lg shadow-xl overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-100 max-h-64 overflow-y-auto">
-                                        {/* Header */}
-                                        <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-400 uppercase tracking-wider bg-[#1a1a1a] border-b border-neutral-700 flex items-center gap-1.5">
-                                            <HardDrive size={10} />
-                                            本地模型
-                                        </div>
-
-                                        {isLoadingLocalModels ? (
-                                            <div className="px-3 py-4 text-xs text-neutral-500 text-center">正在加载模型...</div>
-                                        ) : localModels.length === 0 ? (
-                                            <div className="px-3 py-4 text-xs text-neutral-500 text-center">
-                                                <p>未找到模型</p>
-                                                <p className="text-[10px] mt-1">请将 .safetensors 文件放入 models/</p>
-                                            </div>
-                                        ) : (
-                                            localModels.map(model => (
-                                                <button
-                                                    key={model.id}
-                                                    onClick={() => handleLocalModelChange(model)}
-                                                    className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${data.localModelId === model.id ? 'text-purple-400' : 'text-neutral-300'}`}
-                                                >
-                                                    <span className="flex flex-col items-start gap-0.5">
-                                                        <span className="flex items-center gap-2">
-                                                            <HardDrive size={12} className="text-purple-400" />
-                                                            {model.name}
-                                                            {model.architecture && model.architecture !== 'unknown' && (
-                                                                <span className="text-[9px] px-1 py-0.5 bg-purple-600/30 text-purple-400 rounded">{model.architecture.toUpperCase()}</span>
-                                                            )}
-                                                        </span>
-                                                        <span className="text-[10px] text-neutral-500 ml-5">{model.sizeFormatted}</span>
-                                                    </span>
-                                                    {data.localModelId === model.id && <Check size={12} />}
-                                                </button>
-                                            ))
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        ) : data.type === NodeType.VIDEO ? (
+                        {data.type === NodeType.VIDEO ? (
                             <div className="relative" ref={modelDropdownRef}>
                                 <button
                                     onClick={() => setShowModelDropdown(!showModelDropdown)}

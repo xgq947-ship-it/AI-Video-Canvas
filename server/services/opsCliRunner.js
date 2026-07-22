@@ -21,7 +21,7 @@ export const PYTHON_ROOT = path.resolve(SERVICES_DIR, '..', 'python');
 
 /**
  * venv 解释器路径。Windows 是 Scripts\python.exe，其余平台是 bin/python。
- * 参考 server/services/local-inference.js 的同款写法。
+ * 与项目内其它 Python 调用点保持一致的跨平台写法。
  */
 export function resolveOpsPython() {
     return process.platform === 'win32'

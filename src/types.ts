@@ -9,8 +9,6 @@ export enum NodeType {
   STORYBOARD = 'Storyboard Manager',
   CAMERA_ANGLE = 'Camera Angle',
   // Local open-source model nodes
-  LOCAL_IMAGE_MODEL = 'Local Image Model',
-  LOCAL_VIDEO_MODEL = 'Local Video Model',
   // AI 漫剧 0-1 生产节点（取值需与 shared/manifest.js 的 MANGA_NODE_TYPES 一致）
   SFX = 'SFX',            // 音效
   BGM = 'BGM',            // 背景音乐

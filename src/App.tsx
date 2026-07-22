@@ -611,7 +611,6 @@ export default function App() {
     const generatableTypes = new Set([
       NodeType.IMAGE,
       NodeType.IMAGE_EDITOR,
-      NodeType.LOCAL_IMAGE_MODEL,
       NodeType.VIDEO
     ]);
     const selected = nodes.filter(node =>

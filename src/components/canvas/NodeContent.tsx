@@ -6,7 +6,7 @@
  */
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Loader2, Maximize2, ImageIcon as ImageIcon, Film, Upload, Pencil, Video, GripVertical, Download, Expand, Shrink, HardDrive, RotateCcw, CircleAlert } from 'lucide-react';
+import { Loader2, Maximize2, ImageIcon as ImageIcon, Film, Upload, Pencil, Video, GripVertical, Download, Expand, Shrink, RotateCcw, CircleAlert } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 
 interface NodeContentProps {
@@ -55,12 +55,8 @@ export const NodeContent: React.FC<NodeContentProps> = ({
     const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const lastSentPromptRef = useRef<string | undefined>(data.prompt); // Track what we sent
 
-    // Helper: Check if node is image-type (includes local image model)
-    const isImageType = data.type === NodeType.IMAGE || data.type === NodeType.LOCAL_IMAGE_MODEL;
-    // Helper: Check if node is video-type (includes local video model)
-    const isVideoType = data.type === NodeType.VIDEO || data.type === NodeType.LOCAL_VIDEO_MODEL;
-    // Helper: Check if node is local model
-    const isLocalModel = data.type === NodeType.LOCAL_IMAGE_MODEL || data.type === NodeType.LOCAL_VIDEO_MODEL;
+    const isImageType = data.type === NodeType.IMAGE;
+    const isVideoType = data.type === NodeType.VIDEO;
 
     // Sync local state ONLY when data.prompt changes externally (not from our own update)
     useEffect(() => {
@@ -281,11 +277,7 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                             )}
 
                             <div className="text-neutral-700">
-                                {isVideoType ? (
-                                    isLocalModel ? <><Film size={40} /><HardDrive size={16} className="absolute -bottom-1 -right-1 text-purple-400" /></> : <Film size={40} />
-                                ) : (
-                                    isLocalModel ? <><ImageIcon size={40} /><HardDrive size={16} className="absolute -bottom-1 -right-1 text-purple-400" /></> : <ImageIcon size={40} />
-                                )}
+                                {isVideoType ? <Film size={40} /> : <ImageIcon size={40} />}
                             </div>
                             {selected && (
                                 <>
@@ -294,12 +286,10 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                                             ? "可以开始生成动画"
                                             : isVideoType
                                                 ? "等待输入..."
-                                                : isLocalModel
-                                                    ? "请选择模型并输入提示词"
-                                                    : "你可以："
+                                                : "你可以："
                                         }
                                     </div>
-                                    {!isVideoType && !isLocalModel && (
+                                    {!isVideoType && (
                                         <div className="flex flex-col gap-1 w-full px-2">
                                             <TextNodeMenuItem
                                                 icon={<ImageIcon size={16} />}

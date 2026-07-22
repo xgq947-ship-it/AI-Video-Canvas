@@ -16,7 +16,6 @@
     "render:e2e-test": "node scripts/proof-manifest-render.mjs",
     "build": "vite build",
     "preview": "vite preview",
-    "setup:local-models": "node -e \"require('child_process').execSync(process.platform === 'win32' ? 'setup-local-models.bat' : 'bash setup-local-models.sh', {stdio: 'inherit'})\"",
     "setup:browser-models": "node scripts/setup-browser-models.mjs",
     "launcher": "node scripts/launcher.mjs",
     "launcher:gui": "node scripts/launcher-gui.mjs"

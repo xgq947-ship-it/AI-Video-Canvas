@@ -24,6 +24,7 @@ import {
 import { shouldUseReferenceImages, usesReferenceMaterialsOnly } from '../../utils/videoModelCapabilities.js';
 
 interface NodeControlsProps {
+    workflowId?: string;
     data: NodeData;
     inputUrl?: string;
     isLoading: boolean;
@@ -130,6 +131,7 @@ const IMAGE_MODELS = [
 ];
 
 const NodeControlsComponent: React.FC<NodeControlsProps> = ({
+    workflowId,
     data,
     inputUrl,
     isLoading,
@@ -686,6 +688,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                     prompt: file.name,
                     originalFilename: file.name,
                     mimeType: file.type,
+                    workflowId,
                 }),
             });
             const result = await response.json().catch(() => null);

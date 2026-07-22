@@ -53,7 +53,7 @@ export const getJobRaw = (id) => jobs.get(id) || null;
  * @param {string} opts.rendersDir  成片输出目录
  * @returns {{job:any}|{error:string, code:number, existing?:any}}
  */
-export const createJob = ({ manifest, libraryDir, rendersDir }) => {
+export const createJob = ({ manifest, libraryDir, rendersDir, outputUrlPrefix = '/library/renders' }) => {
   const projectId = (manifest && manifest.project && manifest.project.id) || 'default';
 
   // 单项目单任务
@@ -128,7 +128,7 @@ export const createJob = ({ manifest, libraryDir, rendersDir }) => {
       job.status = 'success';
       job.stage = 'done';
       job.progress = 1;
-      job.outputUrl = '/library/renders/' + path.basename(res.output);
+      job.outputUrl = outputUrlPrefix + '/' + path.basename(res.output);
       job.updatedAt = new Date().toISOString();
       pushLog('渲染成功: ' + job.outputUrl);
     } catch (err) {

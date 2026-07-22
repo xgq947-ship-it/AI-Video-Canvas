@@ -5,17 +5,14 @@
  * (library/images/{assetsDirName}/, library/videos/{assetsDirName}/) so a
  * project's media can be browsed directly in Finder and filtered in-app.
  *
- * Generation/upload routes keep writing into the flat library/images|videos
- * pool (unchanged) — that pool remains the durable original, shared across
- * projects and the global History panel. This module runs at workflow-save
- * time, copying (never moving) whichever files the just-saved nodes/cover
- * reference into that workflow's own folder and rewriting the URLs to point
- * at the project-local copy. Because the flat pool is untouched, the same
- * source asset can be safely "adopted" by more than one project.
+ * New project media is written directly into library/projects/<project>/.
+ * The legacy flat pools remain readable so old workflows and explicitly saved
+ * library assets can still be copied into the active project.
  */
 
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 
 const MEDIA_URL_FIELDS = ['resultUrl', 'lastFrame', 'editorCanvasData', 'editorBackgroundUrl', 'mediaUrl', 'renderOutputUrl'];
 
@@ -134,6 +131,106 @@ export function ensureProjectFolder(workflow, { projectsDir }, { exactName = fal
         fs.mkdirSync(path.join(root, type), { recursive: true });
     }
     return root;
+}
+
+/** Resolve a workflow id to a writable project media directory and public URL prefix. */
+export function resolveProjectMediaTarget(workflowId, type, { workflowsDir, projectsDir }) {
+    if (!workflowId || typeof workflowId !== 'string') {
+        const error = new Error('请先新建或打开项目');
+        error.code = 'PROJECT_REQUIRED';
+        throw error;
+    }
+    if (!['images', 'videos', 'audio'].includes(type)) {
+        const error = new Error('不支持的项目素材类型');
+        error.code = 'UNSUPPORTED_MEDIA_TYPE';
+        throw error;
+    }
+    const workflowPath = path.join(workflowsDir, `${workflowId}.json`);
+    if (!fs.existsSync(workflowPath)) {
+        const error = new Error('项目不存在，请重新打开项目');
+        error.code = 'PROJECT_NOT_FOUND';
+        throw error;
+    }
+    const workflow = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
+    const previousProjectDirName = workflow.projectDirName;
+    ensureProjectFolder(workflow, { projectsDir });
+    if (!workflow.projectDirName) {
+        const error = new Error('项目目录不可用');
+        error.code = 'PROJECT_NOT_FOUND';
+        throw error;
+    }
+    if (!previousProjectDirName) {
+        const temporaryPath = `${workflowPath}.${process.pid}.${Date.now()}.tmp`;
+        fs.writeFileSync(temporaryPath, JSON.stringify(workflow, null, 2));
+        fs.renameSync(temporaryPath, workflowPath);
+    }
+    const targetDir = path.join(projectsDir, workflow.projectDirName, type);
+    fs.mkdirSync(targetDir, { recursive: true });
+    return {
+        workflow,
+        targetDir,
+        projectDirName: workflow.projectDirName,
+        urlPrefix: `/library/projects/${encodeURIComponent(workflow.projectDirName)}/${type}`
+    };
+}
+
+const IMAGE_EXTENSION_BY_MIME = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+    'image/avif': 'avif'
+};
+
+/** Save a pasted/dropped image directly into the active project's image folder. */
+export function saveProjectImageUpload(workflow, payload, { projectsDir }) {
+    const dataUrl = String(payload?.data || '');
+    const match = dataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif|avif));base64,([A-Za-z0-9+/=\r\n]+)$/);
+    if (!match) {
+        const error = new Error('只支持 PNG、JPEG、WebP、GIF 或 AVIF 图片');
+        error.code = 'UNSUPPORTED_IMAGE';
+        throw error;
+    }
+
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length === 0) {
+        const error = new Error('图片文件为空');
+        error.code = 'UNSUPPORTED_IMAGE';
+        throw error;
+    }
+    if (buffer.length > 100 * 1024 * 1024) {
+        const error = new Error('图片不能超过 100MB');
+        error.code = 'IMAGE_TOO_LARGE';
+        throw error;
+    }
+
+    ensureProjectFolder(workflow, { projectsDir });
+    const id = crypto.randomUUID();
+    const extension = IMAGE_EXTENSION_BY_MIME[match[1]];
+    const filename = `img_${Date.now()}_${id.slice(0, 8)}.${extension}`;
+    const imageDir = path.join(projectsDir, workflow.projectDirName, 'images');
+    const imagePath = path.join(imageDir, filename);
+    const metadataPath = path.join(imageDir, `${filename.slice(0, filename.lastIndexOf('.'))}.json`);
+    const metadata = {
+        id,
+        filename,
+        prompt: String(payload?.prompt || payload?.originalFilename || ''),
+        originalFilename: payload?.originalFilename || undefined,
+        mimeType: match[1],
+        createdAt: new Date().toISOString(),
+        type: 'images'
+    };
+
+    fs.writeFileSync(imagePath, buffer);
+    fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+
+    return {
+        id,
+        filename,
+        url: projectUrl(workflow.projectDirName, 'images', filename),
+        projectDirName: workflow.projectDirName,
+        metadata
+    };
 }
 
 function sourcePathFor(parsed, { libraryDir, projectsDir, imagesDir, videosDir, audioDir }) {

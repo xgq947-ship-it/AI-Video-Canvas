@@ -12,6 +12,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import { resolveProjectMediaTarget } from '../utils/projectAssets.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -484,6 +485,11 @@ router.post('/generate', async (req, res) => {
             seed
         } = req.body;
 
+        const projectTarget = resolveProjectMediaTarget(req.body.workflowId, 'images', {
+            workflowsDir: req.app.locals.WORKFLOWS_DIR,
+            projectsDir: req.app.locals.PROJECTS_DIR
+        });
+
         // Get model path from modelId if not provided directly
         let finalModelPath = modelPath;
         if (!finalModelPath && modelId) {
@@ -522,7 +528,9 @@ router.post('/generate', async (req, res) => {
             resolution,
             steps,
             guidanceScale,
-            seed
+            seed,
+            outputDir: projectTarget.targetDir,
+            urlPrefix: projectTarget.urlPrefix
         });
 
         if (result.success) {

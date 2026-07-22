@@ -22,7 +22,6 @@ import {
   Volume2,
   Captions,
   Clapperboard,
-  Sparkles,
   ArrowLeft,
   SlidersHorizontal,
   Scissors,
@@ -44,10 +43,8 @@ interface ContextMenuProps {
   onDuplicate?: () => void;
   onCreateAsset?: () => void;
   onAddAssets?: () => void;
-  onCreateMangaWorkflow?: () => void;
   onOpenStoryboard?: () => void;
   onOpenHistory?: () => void;
-  canCreateMangaWorkflow?: boolean;
   canUndo?: boolean;
   canRedo?: boolean;
   canvasTheme?: 'dark' | 'light';
@@ -65,10 +62,8 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onDuplicate,
   onCreateAsset,
   onAddAssets,
-  onCreateMangaWorkflow,
   onOpenStoryboard,
   onOpenHistory,
-  canCreateMangaWorkflow = true,
   canUndo = false,
   canRedo = false,
   canvasTheme = 'dark'
@@ -238,25 +233,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           onChange={handleFileChange}
         />
         <div className="p-2 flex flex-col gap-1">
-          {canCreateMangaWorkflow && (
-            <button
-              type="button"
-              onClick={() => {
-                onCreateMangaWorkflow?.();
-                onClose();
-              }}
-              className="mb-1 flex w-full items-center gap-3 rounded-xl bg-blue-600 px-3 py-3 text-left text-white transition-colors hover:bg-blue-500"
-            >
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/15">
-                <Sparkles size={18} />
-              </span>
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold">创建完整漫剧工作流</span>
-                <span className="mt-0.5 block text-xs text-blue-100">故事到成片，一次搭好</span>
-              </span>
-            </button>
-          )}
-
           <MenuItem
             icon={<Film size={16} />}
             label="AI 生成分镜"

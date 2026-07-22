@@ -46,10 +46,10 @@ function getPythonPath() {
 /**
  * Generate a unique output filename
  */
-function generateOutputPath(prefix = 'local') {
+function generateOutputPath(prefix = 'local', outputDir = OUTPUT_DIR) {
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(2, 8);
-    return path.join(OUTPUT_DIR, `${prefix}_${timestamp}_${random}.png`);
+    return path.join(outputDir, `${prefix}_${timestamp}_${random}.png`);
 }
 
 /**
@@ -96,7 +96,9 @@ export async function runLocalInference(params) {
         resolution = '512',
         steps = 30,
         guidanceScale = 7.5,
-        seed = -1
+        seed = -1,
+        outputDir = OUTPUT_DIR,
+        urlPrefix = '/library/images'
     } = params;
 
     // Validate model path
@@ -108,8 +110,8 @@ export async function runLocalInference(params) {
     }
 
     // Ensure output directory exists
-    if (!fs.existsSync(OUTPUT_DIR)) {
-        fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+    if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
     }
 
     // Calculate dimensions
@@ -117,7 +119,7 @@ export async function runLocalInference(params) {
     const { width, height } = parseAspectRatio(aspectRatio, baseSize);
 
     // Generate output path
-    const outputPath = generateOutputPath('local');
+    const outputPath = generateOutputPath('local', outputDir);
 
     // Get Python executable
     const pythonPath = getPythonPath();
@@ -167,7 +169,7 @@ export async function runLocalInference(params) {
                     if (result.success) {
                         // Convert file path to URL
                         const filename = path.basename(result.output_path);
-                        const resultUrl = `/library/images/${filename}`;
+                        const resultUrl = `${urlPrefix}/${filename}`;
 
                         console.log(`[Local Inference] Success! Output: ${resultUrl}`);
 

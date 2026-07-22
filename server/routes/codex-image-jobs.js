@@ -4,12 +4,17 @@ import {
     getCodexImageJob,
     listCodexImageJobs
 } from '../services/codexImageJobs.js';
+import { resolveProjectMediaTarget } from '../utils/projectAssets.js';
 
 const router = express.Router();
 
 router.post('/codex-image-jobs', (req, res) => {
     try {
-        const { CODEX_IMAGE_JOBS_DIR, LIBRARY_DIR } = req.app.locals;
+        const { CODEX_IMAGE_JOBS_DIR, LIBRARY_DIR, WORKFLOWS_DIR, PROJECTS_DIR } = req.app.locals;
+        const target = resolveProjectMediaTarget(req.body.workflowId, 'images', {
+            workflowsDir: WORKFLOWS_DIR,
+            projectsDir: PROJECTS_DIR
+        });
         const job = createCodexImageJob({
             jobsDir: CODEX_IMAGE_JOBS_DIR,
             libraryDir: LIBRARY_DIR,
@@ -17,7 +22,9 @@ router.post('/codex-image-jobs', (req, res) => {
             prompt: req.body.prompt,
             aspectRatio: req.body.aspectRatio,
             resolution: req.body.resolution,
-            referenceImages: req.body.referenceImages
+            referenceImages: req.body.referenceImages,
+            workflowId: req.body.workflowId,
+            projectDirName: target.projectDirName
         });
         req.app.locals.CODEX_IMAGE_AUTOMATION?.notify();
         res.status(202).json(job);

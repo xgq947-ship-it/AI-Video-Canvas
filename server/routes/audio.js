@@ -7,6 +7,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { resolveProjectMediaTarget } from '../utils/projectAssets.js';
 import {
   DEFAULT_TTS_PROVIDER,
   getTtsProvider,
@@ -50,6 +51,7 @@ router.post('/upload', (req, res) => {
       voiceName,
       speaker,
       text,
+      workflowId,
     } = req.body || {};
     if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
       return res.status(400).json({ error: '需要 base64 data URL 的 dataUrl' });
@@ -64,8 +66,10 @@ router.post('/upload', (req, res) => {
     if (!ext && filename && path.extname(filename)) ext = path.extname(filename);
     if (!ext) ext = '.mp3';
 
-    const audioDir = path.join(req.app.locals.LIBRARY_DIR, 'audio');
-    fs.mkdirSync(audioDir, { recursive: true });
+    const { targetDir: audioDir, urlPrefix } = resolveProjectMediaTarget(workflowId, 'audio', {
+      workflowsDir: req.app.locals.WORKFLOWS_DIR,
+      projectsDir: req.app.locals.PROJECTS_DIR,
+    });
     const id = `${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     // 仅使用安全的 basename，杜绝路径穿越
     const safeBase = filename ? path.basename(filename).replace(/[^\w一-龥.\-]+/g, '_') : `audio_${id}`;
@@ -85,7 +89,7 @@ router.post('/upload', (req, res) => {
 
     res.json({
       success: true,
-      url: `/library/audio/${outName}`,
+      url: `${urlPrefix}/${outName}`,
       filename: outName,
       provider,
       metadata,

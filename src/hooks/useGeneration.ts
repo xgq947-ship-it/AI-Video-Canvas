@@ -19,9 +19,10 @@ import {
 interface UseGenerationProps {
     nodes: NodeData[];
     updateNode: (id: string, updates: Partial<NodeData>) => void;
+    workflowId?: string | null;
 }
 
-export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
+export const useGeneration = ({ nodes, updateNode, workflowId }: UseGenerationProps) => {
     // ============================================================================
     // HELPERS
     // ============================================================================
@@ -89,6 +90,10 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
      * @param id - ID of the node to generate content for
      */
     const handleGenerate = async (id: string) => {
+        if (!workflowId) {
+            updateNode(id, { status: NodeStatus.ERROR, errorMessage: '请先新建或打开项目' });
+            return;
+        }
         const node = nodes.find(n => n.id === id);
         if (!node) return;
 
@@ -183,6 +188,7 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                 // The recovery hook polls this job and applies the finished image automatically.
                 if (node.imageModel === 'codex-imagegen') {
                     const job = await queueCodexImage({
+                        workflowId,
                         nodeId: id,
                         prompt: combinedPrompt,
                         aspectRatio: node.aspectRatio,
@@ -201,6 +207,7 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
 
                 // Generate image with all parent images and character references
                 const rawResultUrl = await generateImage({
+                    workflowId,
                     prompt: combinedPrompt,
                     aspectRatio: node.aspectRatio,
                     resolution: node.resolution,
@@ -253,6 +260,7 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
 
                 // Call local generation API
                 const result = await generateLocalImage({
+                    workflowId,
                     modelId: node.localModelId,
                     modelPath: node.localModelPath,
                     prompt: combinedPrompt,
@@ -382,6 +390,7 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                     ? `${combinedPrompt}\n\n音色控制：@音频1只作为人物固定音色参考，不复述参考音频中的原始台词。保持相同音色、年龄感、口音和自然说话方式；本镜头只说上文指定的台词，并按本次台词生成准确口型。不要新增旁白或背景音乐。`
                     : combinedPrompt;
                 const rawResultUrl = await generateVideo({
+                    workflowId,
                     prompt: videoPrompt,
                     imageBase64,
                     lastFrameBase64,

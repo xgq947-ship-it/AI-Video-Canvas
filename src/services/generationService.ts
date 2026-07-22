@@ -8,6 +8,7 @@
  */
 
 export interface GenerateImageParams {
+  workflowId: string;
   prompt: string;
   aspectRatio?: string;
   resolution?: string;
@@ -17,6 +18,7 @@ export interface GenerateImageParams {
 }
 
 export interface GenerateVideoParams {
+  workflowId: string;
   prompt: string;
   imageBase64?: string; // For Image-to-Video (start frame)
   lastFrameBase64?: string; // For frame-to-frame interpolation (end frame)
@@ -65,6 +67,7 @@ export interface CodexImageJob {
 }
 
 export interface QueueCodexImageParams {
+  workflowId: string;
   nodeId: string;
   prompt: string;
   aspectRatio?: string;

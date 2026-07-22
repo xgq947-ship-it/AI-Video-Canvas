@@ -17,6 +17,7 @@ import { NodeHoverToolbar, NodeHoverToolbarAction } from './NodeHoverToolbar';
 import type { NodeReference } from '../../utils/nodeReferences.js';
 
 interface CanvasNodeProps {
+  workflowId?: string;
   data: NodeData;
   allNodes?: NodeData[]; // 全部节点（漫剧成片节点用于组装 manifest）
   inputUrl?: string;
@@ -69,6 +70,7 @@ const NODE_TYPE_LABELS: Record<NodeType, string> = {
 };
 
 export const CanvasNode: React.FC<CanvasNodeProps> = ({
+  workflowId,
   data,
   allNodes,
   inputUrl,
@@ -384,6 +386,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   if (isMangaNode(data.type)) {
     return (
       <MangaNode
+        workflowId={workflowId}
         data={data}
         allNodes={allNodes || []}
         selected={selected}
@@ -582,6 +585,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
         {selected && showControls && data.type !== NodeType.TEXT && !(data.prompt && data.prompt.startsWith('Extract panel #')) && (
           <div className="absolute top-[calc(100%+12px)] left-1/2 -translate-x-1/2 w-[600px] flex justify-center z-[100]">
             <NodeControls
+              workflowId={workflowId}
               data={data}
               inputUrl={inputUrl}
               isLoading={isLoading}

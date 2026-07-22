@@ -29,6 +29,8 @@ import {
     renameWorkflowAssetDirs,
     ensureProjectFolder,
     importProjectAsset,
+    resolveProjectMediaTarget,
+    saveProjectImageUpload,
     sanitizeProjectDirName
 } from './utils/projectAssets.js';
 import { execFile } from 'child_process';
@@ -56,11 +58,21 @@ const AUDIO_DIR = path.join(LIBRARY_DIR, 'audio');
 const PROJECTS_DIR = path.join(LIBRARY_DIR, 'projects');
 const LIBRARY_ASSETS_DIR = path.join(LIBRARY_DIR, 'assets');
 const CODEX_IMAGE_JOBS_DIR = path.join(LIBRARY_DIR, 'codex-image-jobs');
+const MASSAGE_EQUIPMENT_SUBCATEGORY_NAMES = [
+    '足浴盆', '护眼仪', '筋膜枪', '按摩枕', '按摩披肩', '足疗机',
+    '按摩靠垫', '按摩椅', '按摩床垫', '膝盖按摩器', '护颈仪', '头部按摩器',
+    '腰腹按摩器', '按摩棒', '刮痧仪', '手部按摩器', '揉腹仪', '按摩座垫'
+];
 
 [LIBRARY_DIR, WORKFLOWS_DIR, IMAGES_DIR, VIDEOS_DIR, AUDIO_DIR, PROJECTS_DIR, LIBRARY_ASSETS_DIR, CODEX_IMAGE_JOBS_DIR].forEach(dir => {
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
+});
+
+// Materialize the two-level massage equipment library in Finder as well as UI.
+MASSAGE_EQUIPMENT_SUBCATEGORY_NAMES.forEach(subcategory => {
+    fs.mkdirSync(path.join(LIBRARY_ASSETS_DIR, 'Massage Equipment', subcategory), { recursive: true });
 });
 
 const API_KEY_OVERRIDES = loadApiKeyOverrides(LIBRARY_DIR);
@@ -113,6 +125,7 @@ app.locals.IMAGES_DIR = IMAGES_DIR;
 app.locals.VIDEOS_DIR = VIDEOS_DIR;
 app.locals.AUDIO_DIR = AUDIO_DIR;
 app.locals.PROJECTS_DIR = PROJECTS_DIR;
+app.locals.WORKFLOWS_DIR = WORKFLOWS_DIR;
 app.locals.LIBRARY_DIR = LIBRARY_DIR;
 app.locals.CODEX_IMAGE_JOBS_DIR = CODEX_IMAGE_JOBS_DIR;
 app.locals.CODEX_IMAGE_AUTOMATION = createCodexImageAutomation({
@@ -134,7 +147,7 @@ applyOptimizerPreferenceToApp(app, process.env, loadOptimizerPreference(LIBRARY_
  * @param {string} dataUrl - Base64 data URL (e.g., data:image/png;base64,...)
  * @returns {{ url: string } | null} - File URL path or null if not base64
  */
-function saveBase64ToFile(dataUrl) {
+function saveBase64ToFile(dataUrl, workflowId) {
     if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
         return null;
     }
@@ -149,23 +162,26 @@ function saveBase64ToFile(dataUrl) {
         const buffer = Buffer.from(base64Data, 'base64');
         const id = `wf_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
 
-        let filename, targetDir, urlType;
+        let filename, urlType;
 
         if (mimeType.startsWith('video/')) {
             filename = `${id}.mp4`;
-            targetDir = VIDEOS_DIR;
             urlType = 'videos';
         } else {
             const ext = mimeType === 'image/jpeg' ? 'jpg' : 'png';
             filename = `${id}.${ext}`;
-            targetDir = IMAGES_DIR;
             urlType = 'images';
         }
 
-        fs.writeFileSync(path.join(targetDir, filename), buffer);
-        console.log(`  [Workflow Sanitize] Saved base64 → /library/${urlType}/${filename}`);
+        const { targetDir, urlPrefix } = resolveProjectMediaTarget(workflowId, urlType, {
+            workflowsDir: WORKFLOWS_DIR,
+            projectsDir: PROJECTS_DIR
+        });
 
-        return { url: `/library/${urlType}/${filename}` };
+        fs.writeFileSync(path.join(targetDir, filename), buffer);
+        console.log(`  [Workflow Sanitize] Saved base64 → ${urlPrefix}/${filename}`);
+
+        return { url: `${urlPrefix}/${filename}` };
     } catch (err) {
         console.error('  [Workflow Sanitize] Failed to save base64:', err.message);
         return null;
@@ -178,7 +194,7 @@ function saveBase64ToFile(dataUrl) {
  * @param {Array} nodes - Array of workflow nodes
  * @returns {{ nodes: Array, sanitizedCount: number }} - Sanitized nodes with file URLs instead of base64, and how many fields were converted
  */
-function sanitizeWorkflowNodes(nodes) {
+function sanitizeWorkflowNodes(nodes, workflowId) {
     if (!nodes || !Array.isArray(nodes)) return { nodes, sanitizedCount: 0 };
 
     let sanitizedCount = 0;
@@ -188,7 +204,7 @@ function sanitizeWorkflowNodes(nodes) {
 
         // Check resultUrl for base64 data
         if (cleanNode.resultUrl && cleanNode.resultUrl.startsWith('data:')) {
-            const saved = saveBase64ToFile(cleanNode.resultUrl);
+            const saved = saveBase64ToFile(cleanNode.resultUrl, workflowId);
             if (saved) {
                 cleanNode.resultUrl = saved.url;
                 sanitizedCount++;
@@ -197,7 +213,7 @@ function sanitizeWorkflowNodes(nodes) {
 
         // Check lastFrame for base64 data (video nodes)
         if (cleanNode.lastFrame && cleanNode.lastFrame.startsWith('data:')) {
-            const saved = saveBase64ToFile(cleanNode.lastFrame);
+            const saved = saveBase64ToFile(cleanNode.lastFrame, workflowId);
             if (saved) {
                 cleanNode.lastFrame = saved.url;
                 sanitizedCount++;
@@ -206,7 +222,7 @@ function sanitizeWorkflowNodes(nodes) {
 
         // Check editorCanvasData for base64 data (Image Editor)
         if (cleanNode.editorCanvasData && cleanNode.editorCanvasData.startsWith('data:')) {
-            const saved = saveBase64ToFile(cleanNode.editorCanvasData);
+            const saved = saveBase64ToFile(cleanNode.editorCanvasData, workflowId);
             if (saved) {
                 cleanNode.editorCanvasData = saved.url;
                 sanitizedCount++;
@@ -215,7 +231,7 @@ function sanitizeWorkflowNodes(nodes) {
 
         // Check editorBackgroundUrl for base64 data (Image Editor)
         if (cleanNode.editorBackgroundUrl && cleanNode.editorBackgroundUrl.startsWith('data:')) {
-            const saved = saveBase64ToFile(cleanNode.editorBackgroundUrl);
+            const saved = saveBase64ToFile(cleanNode.editorBackgroundUrl, workflowId);
             if (saved) {
                 cleanNode.editorBackgroundUrl = saved.url;
                 sanitizedCount++;
@@ -251,13 +267,110 @@ app.use('/api/render', renderRoutes);
 
 // --- Library Assets API ---
 
+const CURATED_LIBRARY_CATEGORIES = new Set(['Character', 'Scene', 'Item', 'Massage Equipment']);
+const MASSAGE_EQUIPMENT_SUBCATEGORIES = new Set(MASSAGE_EQUIPMENT_SUBCATEGORY_NAMES);
+const LIBRARY_UPLOAD_MIME_EXTENSIONS = new Map([
+    ['image/png', '.png'],
+    ['image/jpeg', '.jpg'],
+    ['image/webp', '.webp'],
+    ['image/gif', '.gif'],
+    ['image/avif', '.avif'],
+    ['image/bmp', '.bmp'],
+    ['video/mp4', '.mp4'],
+    ['video/quicktime', '.mov'],
+    ['video/webm', '.webm'],
+    ['video/x-m4v', '.m4v']
+]);
+const LIBRARY_UPLOAD_EXTENSION_TYPES = new Map([
+    ['.png', 'image'], ['.jpg', 'image'], ['.jpeg', 'image'], ['.webp', 'image'],
+    ['.gif', 'image'], ['.avif', 'image'], ['.bmp', 'image'],
+    ['.mp4', 'video'], ['.mov', 'video'], ['.webm', 'video'], ['.m4v', 'video']
+]);
+
+const readLibraryIndex = () => {
+    const libraryJsonPath = path.join(LIBRARY_ASSETS_DIR, 'assets.json');
+    if (!fs.existsSync(libraryJsonPath)) return [];
+    const parsed = JSON.parse(fs.readFileSync(libraryJsonPath, 'utf8'));
+    return Array.isArray(parsed) ? parsed : [];
+};
+
+const writeLibraryIndex = (libraryData) => {
+    fs.writeFileSync(
+        path.join(LIBRARY_ASSETS_DIR, 'assets.json'),
+        JSON.stringify(libraryData, null, 2)
+    );
+};
+
+// Direct upload used by the asset library. Files are stored in the selected
+// top-level category, with massage products one folder deeper by product type.
+app.post('/api/library/upload', (req, res) => {
+    try {
+        const { data, name, category, subcategory } = req.body || {};
+        if (!data || !name || !CURATED_LIBRARY_CATEGORIES.has(category)) {
+            return res.status(400).json({ error: '请选择有效的素材分类' });
+        }
+        if (category === 'Massage Equipment' && !MASSAGE_EQUIPMENT_SUBCATEGORIES.has(subcategory)) {
+            return res.status(400).json({ error: '请选择有效的按摩器材子分类' });
+        }
+        if (category !== 'Massage Equipment' && subcategory) {
+            return res.status(400).json({ error: '该分类不支持子目录' });
+        }
+
+        const match = String(data).match(/^data:([^;,]+);base64,([A-Za-z0-9+/=\r\n]+)$/);
+        if (!match) return res.status(400).json({ error: '素材数据格式无效' });
+
+        const originalExtension = path.extname(String(name)).toLowerCase();
+        const mimeExtension = LIBRARY_UPLOAD_MIME_EXTENSIONS.get(match[1].toLowerCase());
+        const extension = LIBRARY_UPLOAD_EXTENSION_TYPES.has(originalExtension)
+            ? originalExtension
+            : mimeExtension;
+        const type = LIBRARY_UPLOAD_EXTENSION_TYPES.get(extension);
+        if (!extension || !type) {
+            return res.status(400).json({ error: '仅支持常见图片和视频格式' });
+        }
+
+        const buffer = Buffer.from(match[2], 'base64');
+        if (buffer.length === 0) return res.status(400).json({ error: '素材文件为空' });
+        if (buffer.length > 100 * 1024 * 1024) {
+            return res.status(400).json({ error: '单个素材不能超过 100MB' });
+        }
+
+        const assetId = crypto.randomUUID();
+        const displayName = path.basename(String(name), originalExtension || extension).trim() || '未命名素材';
+        const directorySegments = category === 'Massage Equipment'
+            ? [category, subcategory]
+            : [category];
+        const destinationDir = path.join(LIBRARY_ASSETS_DIR, ...directorySegments);
+        fs.mkdirSync(destinationDir, { recursive: true });
+        const filename = createUniqueAssetFilename(displayName, extension, assetId);
+        fs.writeFileSync(path.join(destinationDir, filename), buffer);
+
+        const relativeUrl = [...directorySegments, filename].join('/');
+        const asset = {
+            id: assetId,
+            name: displayName,
+            category,
+            ...(subcategory ? { subcategory } : {}),
+            url: `/library/assets/${relativeUrl}`,
+            type,
+            createdAt: new Date().toISOString()
+        };
+        const libraryData = readLibraryIndex();
+        libraryData.unshift(asset);
+        writeLibraryIndex(libraryData);
+        res.status(201).json({ success: true, asset });
+    } catch (error) {
+        console.error('Upload library asset error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Save curated asset to library
 app.post('/api/library', async (req, res) => {
     try {
         const { sourceUrl, name, meta, description } = req.body;
-        // 分类字段已从「新建素材」表单移除（简化为 名称+说明），新素材统一落到 Others 目录；
-        // 仍接受旧调用方传入 category，保持兼容。
-        const category = req.body.category || 'Others';
+        // 只有用户主动“保存到素材库”才进入全局素材库；未选分类时归入道具。
+        const category = req.body.category || 'Item';
 
         if (!sourceUrl || !name) {
             return res.status(400).json({ error: "Missing required fields" });
@@ -325,6 +438,10 @@ app.post('/api/library', async (req, res) => {
                 sourcePath = path.join(IMAGES_DIR, cleanUrl.replace('/library/images/', ''));
             } else if (cleanUrl.startsWith('/library/videos/')) {
                 sourcePath = path.join(VIDEOS_DIR, cleanUrl.replace('/library/videos/', ''));
+            } else if (cleanUrl.startsWith('/library/projects/')) {
+                const candidate = path.resolve(LIBRARY_DIR, cleanUrl.replace(/^\/library\//, ''));
+                const projectsRoot = path.resolve(PROJECTS_DIR) + path.sep;
+                if (candidate.startsWith(projectsRoot)) sourcePath = candidate;
             } else if (cleanUrl.startsWith('/assets/images/')) { // Legacy support
                 sourcePath = path.join(IMAGES_DIR, cleanUrl.replace('/assets/images/', ''));
             } else if (cleanUrl.startsWith('/assets/videos/')) { // Legacy support
@@ -515,6 +632,23 @@ app.post('/api/projects/:id/assets/import', (req, res) => {
     }
 });
 
+app.post('/api/projects/:id/assets/upload-image', (req, res) => {
+    try {
+        const workflowPath = path.join(WORKFLOWS_DIR, `${req.params.id}.json`);
+        if (!fs.existsSync(workflowPath)) return res.status(404).json({ error: '项目不存在' });
+        const workflow = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
+        const saved = saveProjectImageUpload(workflow, req.body, { projectsDir: PROJECTS_DIR });
+        workflow.updatedAt = new Date().toISOString();
+        fs.writeFileSync(workflowPath, JSON.stringify(workflow, null, 2));
+        writeProjectManifest(workflow);
+        res.status(201).json({ success: true, ...saved });
+    } catch (error) {
+        console.error('Upload project image error:', error);
+        const status = error.code === 'UNSUPPORTED_IMAGE' || error.code === 'IMAGE_TOO_LARGE' ? 400 : 500;
+        res.status(status).json({ error: error.message });
+    }
+});
+
 app.get('/api/projects/:id/assets', (req, res) => {
     try {
         const workflowPath = path.join(WORKFLOWS_DIR, `${req.params.id}.json`);
@@ -601,7 +735,7 @@ app.post('/api/workflows', async (req, res) => {
         // Sanitize nodes: convert any base64 data to file URLs before saving
         let sanitizedCount = 0;
         if (workflow.nodes) {
-            const result = sanitizeWorkflowNodes(workflow.nodes);
+            const result = sanitizeWorkflowNodes(workflow.nodes, workflow.id);
             workflow.nodes = result.nodes;
             sanitizedCount = result.sanitizedCount;
         }
@@ -1137,13 +1271,16 @@ app.post('/api/gemini/optimize-prompt', optimizePromptHandler);
 app.post('/api/assets/:type', async (req, res) => {
     try {
         const { type } = req.params;
-        const { data, prompt, originalFilename, mimeType } = req.body;
+        const { data, prompt, originalFilename, mimeType, workflowId } = req.body;
 
         if (!['images', 'videos'].includes(type)) {
             return res.status(400).json({ error: 'Invalid asset type' });
         }
 
-        const targetDir = type === 'images' ? IMAGES_DIR : VIDEOS_DIR;
+        const { targetDir, urlPrefix } = resolveProjectMediaTarget(workflowId, type, {
+            workflowsDir: WORKFLOWS_DIR,
+            projectsDir: PROJECTS_DIR
+        });
         const id = Date.now().toString();
         const requestedVideoExtension = path.extname(originalFilename || '').toLowerCase().replace('.', '');
         const supportedVideoExtensions = new Set(['mp4', 'webm', 'mov', 'm4v']);
@@ -1177,7 +1314,7 @@ app.post('/api/assets/:type', async (req, res) => {
         };
         fs.writeFileSync(path.join(targetDir, metaFilename), JSON.stringify(metadata, null, 2));
 
-        res.json({ success: true, id, filename, url: `/library/${type}/${filename}` });
+        res.json({ success: true, id, filename, url: `${urlPrefix}/${filename}` });
     } catch (error) {
         console.error('Save asset error:', error);
         res.status(500).json({ error: error.message });

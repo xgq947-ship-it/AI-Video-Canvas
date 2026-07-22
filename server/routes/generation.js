@@ -15,6 +15,7 @@ import { generateJimengWorkflowVideo, isJimengWorkflowModelId, resolveJimengMode
 import { generateGoogleFlowWorkflowImage, GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID, isGoogleFlowImageWorkflowModel } from '../services/googleFlowImageWorkflow.js';
 import { generateOpenAIImage } from '../services/openai.js';
 import { resolveAudioToBase64, resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
+import { resolveProjectMediaTarget } from '../utils/projectAssets.js';
 
 const router = express.Router();
 
@@ -24,8 +25,12 @@ const router = express.Router();
 
 router.post('/generate-image', async (req, res) => {
     try {
-        const { nodeId, prompt, aspectRatio, resolution, imageBase64: rawImageBase64, imageModel } = req.body;
-        const { GEMINI_API_KEY, OPENAI_API_KEY, IMAGES_DIR, LIBRARY_DIR } = req.app.locals;
+        const { nodeId, workflowId, prompt, aspectRatio, resolution, imageBase64: rawImageBase64, imageModel } = req.body;
+        const { GEMINI_API_KEY, OPENAI_API_KEY, LIBRARY_DIR, WORKFLOWS_DIR, PROJECTS_DIR } = req.app.locals;
+        const { targetDir, urlPrefix } = resolveProjectMediaTarget(workflowId, 'images', {
+            workflowsDir: WORKFLOWS_DIR,
+            projectsDir: PROJECTS_DIR
+        });
 
         if (imageModel?.startsWith('kling-')) {
             return res.status(400).json({ error: '该图片模型已下线，请切换为 Codex、Google Flow、Gemini 或 OpenAI 图片模型' });
@@ -102,7 +107,8 @@ router.post('/generate-image', async (req, res) => {
         }
 
         // Save to library - use unique filename to preserve previous generations
-        const saved = saveBufferToFile(imageBuffer, IMAGES_DIR, 'img', imageFormat);
+        const saved = saveBufferToFile(imageBuffer, targetDir, 'img', imageFormat);
+        const resultUrl = `${urlPrefix}/${saved.filename}`;
 
         // Determine metadata ID: use nodeId for recovery if available, otherwise use file ID
         const metadataId = nodeId || saved.id;
@@ -116,10 +122,10 @@ router.post('/generate-image', async (req, res) => {
             createdAt: new Date().toISOString(),
             type: 'images'
         };
-        fs.writeFileSync(path.join(IMAGES_DIR, `${metadataId}.json`), JSON.stringify(metadata, null, 2));
+        fs.writeFileSync(path.join(targetDir, `${metadataId}.json`), JSON.stringify(metadata, null, 2));
 
-        console.log(`Image saved: ${saved.url} (model: ${imageModel || 'gemini-pro'})`);
-        return res.json({ resultUrl: saved.url });
+        console.log(`Image saved: ${resultUrl} (model: ${imageModel || 'gemini-pro'})`);
+        return res.json({ resultUrl });
 
     } catch (error) {
         console.error("Server Image Gen Error:", error);
@@ -133,8 +139,12 @@ router.post('/generate-image', async (req, res) => {
 
 router.post('/generate-video', async (req, res) => {
     try {
-        const { nodeId, prompt, imageBase64: rawImageBase64, lastFrameBase64: rawLastFrameBase64, referenceImages: rawReferenceImages, referenceImageLabels: rawReferenceImageLabels, referenceAudioUrls: rawReferenceAudioUrls, aspectRatio, resolution, duration, videoModel } = req.body;
-        const { GEMINI_API_KEY, ARK_API_KEY, VIDEOS_DIR, LIBRARY_DIR } = req.app.locals;
+        const { nodeId, workflowId, prompt, imageBase64: rawImageBase64, lastFrameBase64: rawLastFrameBase64, referenceImages: rawReferenceImages, referenceImageLabels: rawReferenceImageLabels, referenceAudioUrls: rawReferenceAudioUrls, aspectRatio, resolution, duration, videoModel } = req.body;
+        const { GEMINI_API_KEY, ARK_API_KEY, LIBRARY_DIR, WORKFLOWS_DIR, PROJECTS_DIR } = req.app.locals;
+        const { targetDir, urlPrefix } = resolveProjectMediaTarget(workflowId, 'videos', {
+            workflowsDir: WORKFLOWS_DIR,
+            projectsDir: PROJECTS_DIR
+        });
 
         // 旧项目里的已下线模型不能静默回落到 Veo，避免误扣其他供应商额度。
         if (videoModel?.startsWith('kling-') || videoModel?.startsWith('hailuo-')) {
@@ -268,7 +278,8 @@ router.post('/generate-video', async (req, res) => {
         }
 
         // Save to library - use unique filename to preserve previous generations
-        const saved = saveBufferToFile(videoBuffer, VIDEOS_DIR, 'vid', videoExtension);
+        const saved = saveBufferToFile(videoBuffer, targetDir, 'vid', videoExtension);
+        const resultUrl = `${urlPrefix}/${saved.filename}`;
 
         // Determine metadata ID: use nodeId for recovery if available, otherwise use file ID
         const metadataId = nodeId || saved.id;
@@ -287,10 +298,10 @@ router.post('/generate-video', async (req, res) => {
             createdAt: new Date().toISOString(),
             type: 'videos'
         };
-        fs.writeFileSync(path.join(VIDEOS_DIR, `${metadataId}.json`), JSON.stringify(metadata, null, 2));
+        fs.writeFileSync(path.join(targetDir, `${metadataId}.json`), JSON.stringify(metadata, null, 2));
 
-        console.log(`Video saved: ${saved.url} (model: ${videoModel || 'veo-3.1'})`);
-        return res.json({ resultUrl: saved.url });
+        console.log(`Video saved: ${resultUrl} (model: ${videoModel || 'veo-3.1'})`);
+        return res.json({ resultUrl });
 
     } catch (error) {
         console.error("Server Video Gen Error:", error);
@@ -309,20 +320,26 @@ router.post('/generate-video', async (req, res) => {
 router.get('/generation-status/:nodeId', async (req, res) => {
     try {
         const { nodeId } = req.params;
-        const { IMAGES_DIR, VIDEOS_DIR } = req.app.locals;
+        const { workflowId } = req.query;
+        const dirs = {
+            workflowsDir: req.app.locals.WORKFLOWS_DIR,
+            projectsDir: req.app.locals.PROJECTS_DIR
+        };
 
         // Check images metadata
-        const imageMetaPath = path.join(IMAGES_DIR, `${nodeId}.json`);
+        const imageTarget = resolveProjectMediaTarget(workflowId, 'images', dirs);
+        const imageMetaPath = path.join(imageTarget.targetDir, `${nodeId}.json`);
         if (fs.existsSync(imageMetaPath)) {
             const meta = JSON.parse(fs.readFileSync(imageMetaPath, 'utf8'));
-            return res.json({ status: 'success', resultUrl: `/library/images/${meta.filename}`, type: 'image', createdAt: meta.createdAt });
+            return res.json({ status: 'success', resultUrl: `${imageTarget.urlPrefix}/${meta.filename}`, type: 'image', createdAt: meta.createdAt });
         }
 
         // Check videos metadata
-        const videoMetaPath = path.join(VIDEOS_DIR, `${nodeId}.json`);
+        const videoTarget = resolveProjectMediaTarget(workflowId, 'videos', dirs);
+        const videoMetaPath = path.join(videoTarget.targetDir, `${nodeId}.json`);
         if (fs.existsSync(videoMetaPath)) {
             const meta = JSON.parse(fs.readFileSync(videoMetaPath, 'utf8'));
-            return res.json({ status: 'success', resultUrl: `/library/videos/${meta.filename}`, type: 'video', createdAt: meta.createdAt });
+            return res.json({ status: 'success', resultUrl: `${videoTarget.urlPrefix}/${meta.filename}`, type: 'video', createdAt: meta.createdAt });
         }
 
         res.json({ status: 'pending' });

@@ -15,6 +15,7 @@ interface UseAssetHandlersOptions {
     viewport: Viewport;
     contextMenu: ContextMenuState;
     setNodes: React.Dispatch<React.SetStateAction<NodeData[]>>;
+    workflowId?: string | null;
 }
 
 export const useAssetHandlers = ({
@@ -22,6 +23,7 @@ export const useAssetHandlers = ({
     viewport,
     contextMenu,
     setNodes,
+    workflowId,
 }: UseAssetHandlersOptions) => {
     // ============================================================================
     // CREATE ASSET MODAL STATE
@@ -122,6 +124,10 @@ export const useAssetHandlers = ({
      */
     const handleContextUpload = useCallback((file: File) => {
         if (!file) return;
+        if (!workflowId) {
+            alert('请先新建或打开项目');
+            return;
+        }
 
         const isVideo = file.type.startsWith('video/');
         const isImage = file.type.startsWith('image/');
@@ -145,7 +151,10 @@ export const useAssetHandlers = ({
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         data: base64Data,
-                        prompt: file.name
+                        prompt: file.name,
+                        originalFilename: file.name,
+                        mimeType: file.type,
+                        workflowId
                     })
                 });
 
@@ -227,7 +236,7 @@ export const useAssetHandlers = ({
             }
         };
         reader.readAsDataURL(file);
-    }, [contextMenu.x, contextMenu.y, viewport.x, viewport.y, viewport.zoom, setNodes]);
+    }, [contextMenu.x, contextMenu.y, viewport.x, viewport.y, viewport.zoom, setNodes, workflowId]);
 
     // ============================================================================
     // RETURN

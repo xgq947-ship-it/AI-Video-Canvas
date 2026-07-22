@@ -264,6 +264,7 @@ export const canRunModel = (model: LocalModel, availableVram: number): boolean =
  * Generate image params for local model
  */
 export interface GenerateLocalImageParams {
+    workflowId: string;
     modelId?: string;
     modelPath?: string;
     prompt: string;

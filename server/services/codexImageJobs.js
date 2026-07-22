@@ -190,7 +190,9 @@ export function createCodexImageJob({
     prompt,
     aspectRatio = 'Auto',
     resolution = 'Auto',
-    referenceImages = []
+    referenceImages = [],
+    workflowId,
+    projectDirName
 }) {
     if (!nodeId || typeof nodeId !== 'string') throw new Error('nodeId is required');
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) throw new Error('prompt is required');
@@ -216,6 +218,8 @@ export function createCodexImageJob({
         id,
         type: 'codex-image-generation',
         nodeId,
+        workflowId,
+        projectDirName,
         attempt,
         status: 'pending',
         prompt: prompt.trim(),
@@ -241,7 +245,7 @@ export function claimCodexImageJob(jobsDir, jobId) {
     return updated;
 }
 
-export async function completeCodexImageJob({ jobsDir, imagesDir, jobId, sourceImage }) {
+export async function completeCodexImageJob({ jobsDir, imagesDir, projectsDir, jobId, sourceImage }) {
     const job = getCodexImageJob(jobsDir, jobId);
     if (!job) throw new Error(`Job not found: ${jobId}`);
     if (!['pending', 'processing'].includes(job.status)) {
@@ -255,10 +259,13 @@ export async function completeCodexImageJob({ jobsDir, imagesDir, jobId, sourceI
     const extension = path.extname(absoluteSource).toLowerCase();
     if (!IMAGE_EXTENSIONS.has(extension)) throw new Error(`Unsupported image extension: ${extension}`);
 
-    fs.mkdirSync(imagesDir, { recursive: true });
+    const destinationDir = job.projectDirName && projectsDir
+        ? path.join(projectsDir, job.projectDirName, 'images')
+        : imagesDir;
+    fs.mkdirSync(destinationDir, { recursive: true });
     const nodeSegment = safeSegment(job.nodeId);
     const filename = `codex_${nodeSegment}_v${String(job.attempt).padStart(3, '0')}_${job.id.slice(-8)}${extension}`;
-    const destination = path.join(imagesDir, filename);
+    const destination = path.join(destinationDir, filename);
     const normalizedOutput = await writeAspectRatioSafeImage({
         sourceImage: absoluteSource,
         destination,
@@ -266,7 +273,9 @@ export async function completeCodexImageJob({ jobsDir, imagesDir, jobId, sourceI
     });
 
     const now = new Date().toISOString();
-    const resultUrl = `/library/images/${filename}`;
+    const resultUrl = job.projectDirName && projectsDir
+        ? `/library/projects/${encodeURIComponent(job.projectDirName)}/images/${filename}`
+        : `/library/images/${filename}`;
     const updated = {
         ...job,
         status: 'completed',

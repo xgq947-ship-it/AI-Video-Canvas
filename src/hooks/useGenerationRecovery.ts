@@ -14,11 +14,13 @@ import { isGenerationRecoveryExpired } from '../utils/generationRecovery.js';
 interface UseGenerationRecoveryOptions {
     nodes: NodeData[];
     updateNode: (id: string, updates: Partial<NodeData>) => void;
+    workflowId?: string | null;
 }
 
 export const useGenerationRecovery = ({
     nodes,
-    updateNode
+    updateNode,
+    workflowId
 }: UseGenerationRecoveryOptions) => {
     // Use a ref to access current nodes without causing re-renders
     const nodesRef = useRef<NodeData[]>(nodes);
@@ -36,7 +38,8 @@ export const useGenerationRecovery = ({
                 return;
             }
 
-            const response = await fetch(`/api/generation-status/${nodeId}`);
+            if (!workflowId) return;
+            const response = await fetch(`/api/generation-status/${nodeId}?workflowId=${encodeURIComponent(workflowId)}`);
             if (response.ok) {
                 const data = await response.json();
                 if (data.status === 'success' && data.resultUrl) {
@@ -79,7 +82,7 @@ export const useGenerationRecovery = ({
         } catch (error) {
             console.error(`[Recovery] Error checking status for node ${nodeId}:`, error);
         }
-    }, [updateNode]); // Only updateNode as dependency, nodes accessed via ref
+    }, [updateNode, workflowId]);
 
     const checkCodexStatus = useCallback(async (nodeId: string, jobId: string) => {
         try {

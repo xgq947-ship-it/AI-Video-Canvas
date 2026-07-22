@@ -27,6 +27,7 @@ interface UseKeyboardShortcutsOptions {
     openNewNodeMenu: () => void;
     arrangeCanvas: () => void;
     setViewport: React.Dispatch<React.SetStateAction<Viewport>>;
+    onPasteImageFiles?: (files: File[]) => void | Promise<void>;
 }
 
 export const useKeyboardShortcuts = ({
@@ -48,7 +49,8 @@ export const useKeyboardShortcuts = ({
     generateSelected,
     openNewNodeMenu,
     arrangeCanvas,
-    setViewport
+    setViewport,
+    onPasteImageFiles
 }: UseKeyboardShortcutsOptions) => {
     const clipboardRef = useRef<NodeData[]>([]);
     const isSpacePressedRef = useRef(false);
@@ -182,12 +184,6 @@ export const useKeyboardShortcuts = ({
                 return;
             }
 
-            if (mod && key === 'v') {
-                e.preventDefault();
-                handlePaste();
-                return;
-            }
-
             if (mod && key === 'g' && e.shiftKey) {
                 e.preventDefault();
                 ungroupSelected();
@@ -266,14 +262,38 @@ export const useKeyboardShortcuts = ({
             if (e.code === 'Space') isSpacePressedRef.current = false;
         };
 
+        const handlePasteEvent = (e: ClipboardEvent) => {
+            const active = document.activeElement as HTMLElement | null;
+            const activeTag = active?.tagName.toLowerCase();
+            if (activeTag === 'input' || activeTag === 'textarea' || active?.isContentEditable) return;
+
+            const imageFiles = Array.from(e.clipboardData?.items || [])
+                .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+                .map(item => item.getAsFile())
+                .filter((file): file is File => Boolean(file));
+
+            if (imageFiles.length > 0 && onPasteImageFiles) {
+                e.preventDefault();
+                void onPasteImageFiles(imageFiles);
+                return;
+            }
+
+            if (clipboardRef.current.length > 0) {
+                e.preventDefault();
+                handlePaste();
+            }
+        };
+
         const handleBlur = () => { isSpacePressedRef.current = false; };
 
         window.addEventListener('keydown', handleKeyDown);
         window.addEventListener('keyup', handleKeyUp);
+        window.addEventListener('paste', handlePasteEvent);
         window.addEventListener('blur', handleBlur);
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
             window.removeEventListener('keyup', handleKeyUp);
+            window.removeEventListener('paste', handlePasteEvent);
             window.removeEventListener('blur', handleBlur);
         };
     }, [
@@ -295,6 +315,7 @@ export const useKeyboardShortcuts = ({
         fitCanvas,
         handlePaste,
         handleCopy,
+        onPasteImageFiles,
         setNodes,
         setContextMenu
     ]);

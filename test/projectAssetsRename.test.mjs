@@ -8,7 +8,8 @@ import {
     ensureProjectFolder,
     importProjectAsset,
     organizeWorkflowAssets,
-    renameWorkflowAssetDirs
+    renameWorkflowAssetDirs,
+    saveProjectImageUpload
 } from '../server/utils/projectAssets.js';
 
 function makeLibrary() {
@@ -89,6 +90,29 @@ test('new project creates an exact-name folder with image video and audio librar
     for (const type of ['images', 'videos', 'audio']) {
         assert.equal(fs.existsSync(path.join(projectRoot, type)), true);
     }
+});
+
+test('pasted image is written directly into the active project folder with metadata', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'twitcanva-project-paste-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const projectsDir = path.join(root, 'projects');
+    fs.mkdirSync(projectsDir);
+    const workflow = { id: 'project-paste', title: '粘贴测试', projectDirName: '粘贴测试' };
+    const data = `data:image/png;base64,${Buffer.from('fake-png').toString('base64')}`;
+
+    const saved = saveProjectImageUpload(workflow, {
+        data,
+        prompt: '剪贴板图片.png',
+        originalFilename: '剪贴板图片.png'
+    }, { projectsDir });
+
+    assert.match(saved.url, /^\/library\/projects\/%E7%B2%98%E8%B4%B4%E6%B5%8B%E8%AF%95\/images\/img_/);
+    const imagePath = path.join(projectsDir, '粘贴测试', 'images', saved.filename);
+    const metadataPath = imagePath.replace(/\.png$/, '.json');
+    assert.equal(fs.readFileSync(imagePath, 'utf8'), 'fake-png');
+    const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+    assert.equal(metadata.filename, saved.filename);
+    assert.equal(metadata.originalFilename, '剪贴板图片.png');
 });
 
 test('project organizer copies image video audio and rewrites every node media URL', (t) => {

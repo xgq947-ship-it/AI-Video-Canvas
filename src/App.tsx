@@ -31,6 +31,7 @@ import { useAssetHandlers } from './hooks/useAssetHandlers';
 import { useTextNodeHandlers } from './hooks/useTextNodeHandlers';
 import { useImageNodeHandlers } from './hooks/useImageNodeHandlers';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { isSupportedImageFile, useCanvasImageImport } from './hooks/useCanvasImageImport';
 import { useContextMenuHandlers } from './hooks/useContextMenuHandlers';
 import { useAutoSave } from './hooks/useAutoSave';
 import { useGenerationRecovery } from './hooks/useGenerationRecovery';
@@ -340,7 +341,8 @@ export default function App() {
 
   const { handleGenerate: handleGenerateNow } = useGeneration({
     nodes,
-    updateNode
+    updateNode,
+    workflowId
   });
 
   // Keep the low-level generator current. Dependency orchestration below always
@@ -522,75 +524,6 @@ export default function App() {
     }
   }, [workflowId, canvasTitle]);
 
-  /**
-   * 给新手一次性搭好完整的 0-1 漫剧骨架。
-   * 所有原子节点仍可单独增删，模板只负责减少重复搭建。
-   */
-  const handleCreateMangaWorkflow = React.useCallback(() => {
-    const storyId = crypto.randomUUID();
-    const imageId = crypto.randomUUID();
-    const videoId = crypto.randomUUID();
-    const audioId = crypto.randomUUID();
-    const sfxId = crypto.randomUUID();
-    const bgmId = crypto.randomUUID();
-    const subtitleId = crypto.randomUUID();
-    const renderId = crypto.randomUUID();
-
-    const base = {
-      prompt: '',
-      status: NodeStatus.IDLE,
-      model: 'Banana Pro',
-      aspectRatio: '16:9',
-      resolution: 'Auto',
-    };
-
-    const workflowNodes: NodeData[] = [
-      { ...base, id: storyId, type: NodeType.TEXT, title: '1. 故事与剧本', x: 0, y: 0, parentIds: [] },
-      { ...base, id: imageId, type: NodeType.IMAGE, title: '2. 关键帧图片', x: 420, y: 0, parentIds: [storyId], resolution: '1K' },
-      { ...base, id: videoId, type: NodeType.VIDEO, title: '3. 镜头视频', x: 840, y: 0, parentIds: [imageId], videoDuration: 5 },
-      {
-        ...base,
-        id: renderId,
-        type: NodeType.RENDER,
-        title: '8. 输出成片',
-        x: 1260,
-        y: 0,
-        parentIds: [videoId, audioId, sfxId, bgmId, subtitleId],
-        compWidth: 1280,
-        compHeight: 720,
-        compFps: 24,
-      },
-      {
-        ...base,
-        id: audioId,
-        type: NodeType.AUDIO,
-        title: '4. 角色配音',
-        x: 0,
-        y: 440,
-        parentIds: [storyId],
-        speaker: '林默',
-        ttsProvider: 'import',
-        voiceId: 'yuanboxiaoshu',
-        voiceSpeed: 1,
-        audioVolume: 1,
-      },
-      { ...base, id: sfxId, type: NodeType.SFX, title: '5. 音效', x: 360, y: 440, parentIds: [], audioVolume: 0.9 },
-      { ...base, id: bgmId, type: NodeType.BGM, title: '6. 背景音乐', x: 720, y: 440, parentIds: [], audioVolume: 0.15, fadeIn: 1, fadeOut: 1, ducking: true },
-      { ...base, id: subtitleId, type: NodeType.SUBTITLE, title: '7. 字幕', x: 1080, y: 440, parentIds: [storyId], timelineStart: 0, timelineEnd: 3 },
-    ];
-
-    ignoreNextChange.current = true;
-    setNodes(workflowNodes);
-    setGroups([]);
-    setSelectedNodeIds([]);
-    setCanvasTitle('AI漫剧新项目');
-    setEditingTitleValue('AI漫剧新项目');
-    resetWorkflowId();
-    setViewport({ x: 90, y: 82, zoom: 0.62 });
-    setIsDirty(true);
-    setContextMenu(prev => ({ ...prev, isOpen: false }));
-  }, [resetWorkflowId, setEditingTitleValue, setGroups, setNodes, setSelectedNodeIds, setViewport]);
-
   // Image editor modal
   const {
     editorModal,
@@ -643,7 +576,7 @@ export default function App() {
     handleOpenCreateAsset,
     handleSaveAssetToLibrary,
     handleContextUpload
-  } = useAssetHandlers({ nodes, viewport, contextMenu, setNodes });
+  } = useAssetHandlers({ nodes, viewport, contextMenu, setNodes, workflowId });
 
   // Keyboard shortcuts (copy/paste/delete/undo/redo)
   const groupSelected = React.useCallback(() => {
@@ -719,6 +652,14 @@ export default function App() {
     setNodes(prev => prev.map(node => positions.has(node.id) ? { ...node, ...positions.get(node.id)! } : node));
   }, [nodes, selectedNodeIds, setNodes]);
 
+  const { importImageFiles } = useCanvasImageImport({
+    workflowId,
+    viewport,
+    canvasRef,
+    setNodes,
+    setSelectedNodeIds
+  });
+
   /**
    * 侧边栏点击「画布元素」→ 跳转到该节点：居中并缩放到刚好铺满画布可视区。
    * 节点实际渲染宽高并不统一（文本/待生成 365、视频 385、出图后的图片节点 auto 随比例变），
@@ -774,7 +715,8 @@ export default function App() {
     generateSelected,
     openNewNodeMenu,
     arrangeCanvas,
-    setViewport
+    setViewport,
+    onPasteImageFiles: importImageFiles
   });
 
   // Auto-Save Management
@@ -788,7 +730,8 @@ export default function App() {
   // Generation Recovery Management
   useGenerationRecovery({
     nodes,
-    updateNode
+    updateNode,
+    workflowId
   });
 
   // Video Frame Extraction (auto-extract lastFrame for videos missing thumbnails)
@@ -1231,7 +1174,7 @@ export default function App() {
       const resp = await fetch('/api/assets/images', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: dataUrl, prompt: `${namePrefix}_尾帧` }),
+        body: JSON.stringify({ data: dataUrl, prompt: `${namePrefix}_尾帧`, workflowId }),
       });
       if (!resp.ok) { alert('尾帧保存失败'); return; }
       const saved = await resp.json();
@@ -1271,7 +1214,8 @@ export default function App() {
 
   /** Allow dropping sidebar assets onto the canvas (must preventDefault to enable drop) */
   const handleCanvasDragOver = (e: React.DragEvent) => {
-    if (e.dataTransfer.types.includes(ASSET_DRAG_TYPE)) {
+    const hasExternalFiles = e.dataTransfer.types.includes('Files');
+    if (e.dataTransfer.types.includes(ASSET_DRAG_TYPE) || hasExternalFiles) {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
     }
@@ -1279,6 +1223,19 @@ export default function App() {
 
   /** Create an image/video node where a sidebar asset was dropped on the canvas */
   const handleCanvasDrop = async (e: React.DragEvent) => {
+    const externalFiles = Array.from(e.dataTransfer.files);
+    if (externalFiles.length > 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      const droppedImages = externalFiles.filter(isSupportedImageFile);
+      if (droppedImages.length === 0) {
+        window.alert('目前支持拖入 PNG、JPEG、WebP、GIF 或 AVIF 图片。');
+        return;
+      }
+      await importImageFiles(droppedImages, { x: e.clientX, y: e.clientY });
+      return;
+    }
+
     const raw = e.dataTransfer.getData(ASSET_DRAG_TYPE);
     if (!raw) return;
     e.preventDefault();
@@ -1691,6 +1648,7 @@ export default function App() {
           <div className="pointer-events-auto">
             {nodes.map(node => (
               <CanvasNode
+                workflowId={workflowId || undefined}
                 key={node.id}
                 data={node}
                 allNodes={nodes}
@@ -1866,10 +1824,8 @@ export default function App() {
         onDuplicate={handleDuplicate}
         onCreateAsset={handleContextMenuCreateAsset}
         onAddAssets={handleContextMenuAddAssets}
-        onCreateMangaWorkflow={handleCreateMangaWorkflow}
         onOpenStoryboard={storyboardGenerator.openModal}
         onOpenHistory={handleContextMenuOpenHistory}
-        canCreateMangaWorkflow={nodes.length === 0}
         canUndo={canUndo}
         canRedo={canRedo}
         canvasTheme={canvasTheme}

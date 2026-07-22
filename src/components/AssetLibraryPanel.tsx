@@ -1,10 +1,22 @@
-import React, { useState, useEffect } from 'react';
-import { X, Search, Filter, Trash2 } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+    ArrowLeft,
+    ChevronRight,
+    ClipboardPaste,
+    Folder,
+    FolderOpen,
+    FolderUp,
+    ImageOff,
+    Trash2,
+    Upload,
+    X,
+} from 'lucide-react';
 
 export interface LibraryAsset {
     id: string;
     name: string;
     category: string;
+    subcategory?: string;
     url: string;
     type: 'image' | 'video';
     description?: string;
@@ -26,17 +38,55 @@ interface AssetLibraryPanelProps {
     previewAsset?: { name: string; url: string; type: 'image' | 'video' } | null;
 }
 
-// 分类的内部值保持英文（作为 library/assets/<分类>/ 的文件夹名与存储值），
-// 仅显示中文标签，避免中文文件夹名带来的兼容问题，也让新旧数据一致。
-const CATEGORIES: { value: string; label: string }[] = [
+const MASSAGE_CATEGORY = 'Massage Equipment';
+const TOP_CATEGORIES = [
     { value: 'All', label: '全部' },
     { value: 'Character', label: '角色' },
     { value: 'Scene', label: '场景' },
     { value: 'Item', label: '道具' },
-    { value: 'Style', label: '风格' },
-    { value: 'Sound Effect', label: '音效' },
-    { value: 'Others', label: '其他' },
-];
+    { value: MASSAGE_CATEGORY, label: '按摩器材' },
+] as const;
+
+const MASSAGE_SECTIONS = [
+    { title: '足部腿部', items: ['足浴盆', '足疗机', '膝盖按摩器'] },
+    { title: '头眼颈肩', items: ['护眼仪', '按摩枕', '按摩披肩', '护颈仪', '头部按摩器'] },
+    { title: '腰腹坐卧', items: ['按摩靠垫', '按摩椅', '按摩床垫', '腰腹按摩器', '揉腹仪', '按摩座垫'] },
+    { title: '手持理疗', items: ['筋膜枪', '按摩棒', '刮痧仪', '手部按摩器'] },
+] as const;
+
+const VISIBLE_CATEGORIES = new Set(TOP_CATEGORIES.filter(category => category.value !== 'All').map(category => category.value));
+const MEDIA_FILE_RE = /\.(png|jpe?g|webp|gif|avif|bmp|mp4|mov|webm|m4v)$/i;
+const ACCEPTED_MEDIA = 'image/png,image/jpeg,image/webp,image/gif,image/avif,image/bmp,video/mp4,video/quicktime,video/webm,video/x-m4v';
+
+const isSupportedMediaFile = (file: File) =>
+    file.type.startsWith('image/') || file.type.startsWith('video/') || MEDIA_FILE_RE.test(file.name);
+
+const readAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('文件读取失败'));
+    reader.readAsDataURL(file);
+});
+
+const collectEntryFiles = async (entry: any): Promise<File[]> => {
+    if (!entry) return [];
+    if (entry.isFile) {
+        return new Promise(resolve => entry.file((file: File) => resolve([file]), () => resolve([])));
+    }
+    if (!entry.isDirectory) return [];
+
+    const reader = entry.createReader();
+    const entries: any[] = [];
+    while (true) {
+        const batch = await new Promise<any[]>(resolve => reader.readEntries(resolve, () => resolve([])));
+        if (batch.length === 0) break;
+        entries.push(...batch);
+    }
+    const nested = await Promise.all(entries.map(collectEntryFiles));
+    return nested.flat();
+};
+
+const categoryLabel = (value: string) => TOP_CATEGORIES.find(category => category.value === value)?.label || value;
 
 export const AssetLibraryPanel: React.FC<AssetLibraryPanelProps> = ({
     isOpen,
@@ -49,50 +99,42 @@ export const AssetLibraryPanel: React.FC<AssetLibraryPanelProps> = ({
     previewAsset = null
 }) => {
     const [selectedCategory, setSelectedCategory] = useState('All');
+    const [selectedSubcategory, setSelectedSubcategory] = useState<string | null>(null);
     const [assets, setAssets] = useState<LibraryAsset[]>([]);
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
-        if (isOpen && !previewAsset) {
-            fetchLibrary();
-        }
+        if (isOpen && !previewAsset) void fetchLibrary();
     }, [isOpen, previewAsset]);
 
     const fetchLibrary = async () => {
         setLoading(true);
         try {
-            const res = await fetch('http://localhost:3001/api/library'); // Adjust port if needed, relative path preferred in helper
-            if (res.ok) {
-                setAssets(await res.json());
-            }
+            const response = await fetch('/api/library');
+            if (response.ok) setAssets(await response.json());
         } catch (error) {
-            console.error("Failed to load library:", error);
+            console.error('Failed to load library:', error);
         } finally {
             setLoading(false);
         }
     };
 
-    const handleDeleteAsset = async (id: string, e: React.MouseEvent) => {
-        e.stopPropagation(); // Prevent selection
-        // Confirmation is now handled in the UI before this is called
-
+    const handleDeleteAsset = async (id: string, event: React.MouseEvent) => {
+        event.stopPropagation();
         try {
-            const res = await fetch(`http://localhost:3001/api/library/${id}`, {
-                method: 'DELETE'
-            });
-            if (res.ok) {
-                setAssets(prev => prev.filter(a => a.id !== id));
-            } else {
-                console.error("Failed to delete asset");
-            }
+            const response = await fetch(`/api/library/${id}`, { method: 'DELETE' });
+            if (response.ok) setAssets(current => current.filter(asset => asset.id !== id));
         } catch (error) {
-            console.error("Delete error:", error);
+            console.error('Delete asset error:', error);
         }
     };
 
-    if (!isOpen) return null;
+    const selectCategory = (category: string) => {
+        setSelectedCategory(category);
+        setSelectedSubcategory(null);
+    };
 
-    // Theme helper
+    if (!isOpen) return null;
     const isDark = canvasTheme === 'dark';
 
     if (previewAsset && variant === 'panel') {
@@ -128,32 +170,40 @@ export const AssetLibraryPanel: React.FC<AssetLibraryPanelProps> = ({
         );
     }
 
+    const content = (
+        <AssetLibraryContent
+            selectedCategory={selectedCategory}
+            selectedSubcategory={selectedSubcategory}
+            onSelectCategory={selectCategory}
+            onSelectSubcategory={setSelectedSubcategory}
+            assets={assets}
+            loading={loading}
+            onSelectAsset={onSelectAsset}
+            onDeleteAsset={handleDeleteAsset}
+            onAssetsUploaded={uploaded => setAssets(current => [...uploaded, ...current])}
+            variant={variant}
+            canvasTheme={canvasTheme}
+        />
+    );
+
     if (variant === 'modal') {
         return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/55 p-6 backdrop-blur-sm animate-in fade-in duration-200">
                 <div
-                    className={`flex flex-col w-[800px] h-[600px] border rounded-2xl shadow-2xl overflow-hidden transition-colors duration-300 ${isDark ? 'bg-[#0a0a0a] border-neutral-800' : 'bg-white border-neutral-200'}`}
-                    onClick={(e) => e.stopPropagation()}
+                    className={`flex h-[min(720px,calc(100vh-48px))] w-[min(960px,calc(100vw-48px))] flex-col overflow-hidden rounded-3xl border shadow-2xl ${isDark ? 'border-neutral-800 bg-[#0a0a0a]' : 'border-neutral-200 bg-white'}`}
+                    onClick={event => event.stopPropagation()}
                 >
-                    <div className={`flex items-center justify-between p-4 border-b ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}>
-                        <h2 className={`text-lg font-medium pl-2 ${isDark ? 'text-white' : 'text-neutral-900'}`}>素材库</h2>
-                        <button onClick={onClose} className={`p-2 rounded-lg transition-colors ${isDark ? 'hover:bg-neutral-800 text-neutral-400 hover:text-white' : 'hover:bg-neutral-100 text-neutral-500 hover:text-neutral-900'}`}>
-                            <X size={20} />
+                    <div className={`flex h-[72px] shrink-0 items-center justify-between border-b px-6 ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}>
+                        <div>
+                            <h2 className={`text-xl font-semibold ${isDark ? 'text-white' : 'text-neutral-900'}`}>素材库</h2>
+                            <p className={`mt-1 text-xs ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>集中管理角色、场景、道具和按摩器材素材</p>
+                        </div>
+                        <button onClick={onClose} className={`rounded-xl p-2.5 transition-colors ${isDark ? 'text-neutral-400 hover:bg-neutral-800 hover:text-white' : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900'}`} aria-label="关闭素材库">
+                            <X size={21} />
                         </button>
                     </div>
-                    {/* Reuse internal content logic */}
-                    <AssetLibraryContent
-                        selectedCategory={selectedCategory}
-                        setSelectedCategory={setSelectedCategory}
-                        assets={assets}
-                        loading={loading}
-                        onSelectAsset={onSelectAsset}
-                        onDeleteAsset={handleDeleteAsset}
-                        variant={variant}
-                        canvasTheme={canvasTheme}
-                    />
+                    {content}
                 </div>
-                {/* Click outside to close */}
                 <div className="absolute inset-0 -z-10" onClick={onClose} />
             </div>
         );
@@ -161,204 +211,426 @@ export const AssetLibraryPanel: React.FC<AssetLibraryPanelProps> = ({
 
     return (
         <div
-            className={`fixed z-40 backdrop-blur-xl border rounded-2xl shadow-2xl flex flex-col max-h-[500px] overflow-hidden animate-in slide-in-from-left-4 duration-200 transition-colors ${isDark ? 'bg-[#0a0a0a]/95 border-neutral-800' : 'bg-white/95 border-neutral-200'}`}
+            className={`fixed z-40 flex max-h-[560px] flex-col overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-xl animate-in slide-in-from-left-4 duration-200 ${isDark ? 'border-neutral-800 bg-[#0a0a0a]/95' : 'border-neutral-200 bg-white/95'}`}
             style={{
                 left: panelLeft,
-                width: Math.max(320, Math.min(700, window.innerWidth - panelLeft - 24)),
-                top: Math.min(Math.max(72, window.innerHeight - 520), Math.max(72, panelY))
+                width: Math.max(360, Math.min(720, window.innerWidth - panelLeft - 24)),
+                top: Math.min(Math.max(72, window.innerHeight - 580), Math.max(72, panelY))
             }}
         >
-            <AssetLibraryContent
-                selectedCategory={selectedCategory}
-                setSelectedCategory={setSelectedCategory}
-                assets={assets}
-                loading={loading}
-                onSelectAsset={onSelectAsset}
-                onDeleteAsset={handleDeleteAsset}
-                variant={variant}
-                canvasTheme={canvasTheme}
-            />
+            {content}
         </div>
     );
 };
 
-// Extracted Internal Component for reuse
-const AssetLibraryContent = ({
-    selectedCategory, setSelectedCategory,
-    assets, loading, onSelectAsset, onDeleteAsset, variant, canvasTheme = 'dark'
-}: any) => {
+interface AssetLibraryContentProps {
+    selectedCategory: string;
+    selectedSubcategory: string | null;
+    onSelectCategory: (category: string) => void;
+    onSelectSubcategory: (subcategory: string | null) => void;
+    assets: LibraryAsset[];
+    loading: boolean;
+    onSelectAsset: (asset: LibraryAsset) => void;
+    onDeleteAsset: (id: string, event: React.MouseEvent) => void;
+    onAssetsUploaded: (assets: LibraryAsset[]) => void;
+    variant: 'panel' | 'modal';
+    canvasTheme?: 'dark' | 'light';
+}
+
+const AssetLibraryContent: React.FC<AssetLibraryContentProps> = ({
+    selectedCategory,
+    selectedSubcategory,
+    onSelectCategory,
+    onSelectSubcategory,
+    assets,
+    loading,
+    onSelectAsset,
+    onDeleteAsset,
+    onAssetsUploaded,
+    variant,
+    canvasTheme = 'dark'
+}) => {
     const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
     const [characterFilter, setCharacterFilter] = useState('All');
     const [lookFilter, setLookFilter] = useState('All');
+    const [isDragging, setIsDragging] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const folderInputRef = useRef<HTMLInputElement>(null);
     const isDark = canvasTheme === 'dark';
 
-    // 显式标注 Set<string>：assets 为 any，否则 Set 会被推断成 Set<unknown>，导致 localeCompare 报错
-    const characterNames = [...new Set<string>(
-        assets.filter((asset: LibraryAsset) => asset.category === 'Character' && asset.characterName)
-            .map((asset: LibraryAsset) => asset.characterName as string)
+    const visibleAssets = assets.filter(asset => VISIBLE_CATEGORIES.has(asset.category));
+    const characterNames = [...new Set(
+        visibleAssets.filter(asset => asset.category === 'Character' && asset.characterName)
+            .map(asset => asset.characterName as string)
     )].sort((a, b) => a.localeCompare(b, 'zh-CN'));
-
-    const lookNames = [...new Set<string>(
-        assets.filter((asset: LibraryAsset) =>
+    const lookNames = [...new Set(
+        visibleAssets.filter(asset =>
             asset.category === 'Character' &&
             asset.lookName &&
             (characterFilter === 'All' || asset.characterName === characterFilter)
-        ).map((asset: LibraryAsset) => asset.lookName as string)
+        ).map(asset => asset.lookName as string)
     )].sort((a, b) => a.localeCompare(b, 'zh-CN'));
 
-    const filteredAssets = assets.filter((asset: LibraryAsset) =>
+    const filteredAssets = visibleAssets.filter(asset =>
         (selectedCategory === 'All' || asset.category === selectedCategory) &&
+        (selectedCategory !== MASSAGE_CATEGORY || !selectedSubcategory || asset.subcategory === selectedSubcategory) &&
         (selectedCategory !== 'Character' || characterFilter === 'All' || asset.characterName === characterFilter) &&
         (selectedCategory !== 'Character' || lookFilter === 'All' || (lookFilter === 'identity' ? !asset.lookName : asset.lookName === lookFilter))
-    ).sort((a: LibraryAsset, b: LibraryAsset) => {
+    ).sort((a, b) => {
         if (selectedCategory !== 'Character') return 0;
         return `${a.characterName || ''}|${a.lookName || '身份库'}|${a.name}`
             .localeCompare(`${b.characterName || ''}|${b.lookName || '身份库'}|${b.name}`, 'zh-CN');
     });
 
-    const handleDeleteClick = (e: React.MouseEvent, id: string) => {
-        e.stopPropagation();
-        setDeleteConfirmId(id);
+    const canUpload = selectedCategory !== 'All' &&
+        (selectedCategory !== MASSAGE_CATEGORY || Boolean(selectedSubcategory));
+
+    const uploadFiles = React.useCallback(async (incomingFiles: File[]) => {
+        if (!canUpload) return;
+        const files = incomingFiles.filter(isSupportedMediaFile);
+        if (files.length === 0) {
+            window.alert('请选择图片或视频文件。');
+            return;
+        }
+        const oversized = files.find(file => file.size > 100 * 1024 * 1024);
+        if (oversized) {
+            window.alert(`${oversized.name} 超过 100MB，无法上传。`);
+            return;
+        }
+
+        const uploaded: LibraryAsset[] = [];
+        const failed: string[] = [];
+        setUploadProgress({ current: 0, total: files.length });
+        for (const [index, file] of files.entries()) {
+            try {
+                const data = await readAsDataUrl(file);
+                const response = await fetch('/api/library/upload', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        data,
+                        name: file.name,
+                        category: selectedCategory,
+                        subcategory: selectedSubcategory || undefined
+                    })
+                });
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok || !result.asset) throw new Error(result.error || '上传失败');
+                uploaded.push(result.asset);
+            } catch (error) {
+                console.error('[Asset Library Upload] Failed:', error);
+                failed.push(file.name);
+            } finally {
+                setUploadProgress({ current: index + 1, total: files.length });
+            }
+        }
+        setUploadProgress(null);
+        if (uploaded.length > 0) onAssetsUploaded(uploaded);
+        if (failed.length > 0) window.alert(`以下素材上传失败：${failed.join('、')}`);
+    }, [canUpload, onAssetsUploaded, selectedCategory, selectedSubcategory]);
+
+    useEffect(() => {
+        if (!canUpload) return;
+        const handlePaste = (event: ClipboardEvent) => {
+            const active = document.activeElement as HTMLElement | null;
+            if (active?.matches('input, textarea, [contenteditable="true"]')) return;
+            const files = Array.from(event.clipboardData?.items || [])
+                .filter(item => item.kind === 'file')
+                .map(item => item.getAsFile())
+                .filter((file): file is File => Boolean(file) && isSupportedMediaFile(file));
+            if (files.length === 0) return;
+            event.preventDefault();
+            void uploadFiles(files);
+        };
+        window.addEventListener('paste', handlePaste);
+        return () => window.removeEventListener('paste', handlePaste);
+    }, [canUpload, uploadFiles]);
+
+    const handleDrop = async (event: React.DragEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setIsDragging(false);
+        if (!canUpload) return;
+
+        const entries = Array.from(event.dataTransfer.items)
+            .map(item => (item as any).webkitGetAsEntry?.())
+            .filter(Boolean);
+        const droppedFiles = entries.length > 0
+            ? (await Promise.all(entries.map(collectEntryFiles))).flat()
+            : Array.from(event.dataTransfer.files);
+        await uploadFiles(droppedFiles);
     };
 
-    const handleConfirmDelete = (e: React.MouseEvent, id: string) => {
-        onDeleteAsset(id, e);
-        setDeleteConfirmId(null);
+    const selectTopCategory = (category: string) => {
+        onSelectCategory(category);
+        setCharacterFilter('All');
+        setLookFilter('All');
     };
 
-    const handleCancelDelete = (e: React.MouseEvent) => {
-        e.stopPropagation();
-        setDeleteConfirmId(null);
-    };
+    const showMassageFolders = selectedCategory === MASSAGE_CATEGORY && !selectedSubcategory;
+    const gridColumns = variant === 'modal' ? 'grid-cols-4' : 'grid-cols-3';
 
     return (
-        <>
+        <div
+            className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+            onDragEnter={event => {
+                if (event.dataTransfer.types.includes('Files') && canUpload) setIsDragging(true);
+            }}
+            onDragOver={event => {
+                if (!event.dataTransfer.types.includes('Files') || !canUpload) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'copy';
+            }}
+            onDragLeave={event => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node)) setIsDragging(false);
+            }}
+            onDrop={handleDrop}
+        >
+            <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept={ACCEPTED_MEDIA}
+                className="hidden"
+                onChange={event => {
+                    void uploadFiles(Array.from(event.target.files || []));
+                    event.target.value = '';
+                }}
+            />
+            <input
+                ref={folderInputRef}
+                type="file"
+                multiple
+                accept={ACCEPTED_MEDIA}
+                className="hidden"
+                {...({ webkitdirectory: '', directory: '' } as any)}
+                onChange={event => {
+                    void uploadFiles(Array.from(event.target.files || []));
+                    event.target.value = '';
+                }}
+            />
 
-            <div className="p-4 flex flex-col gap-4 h-full overflow-hidden">
-                {/* Filters */}
-                <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide shrink-0">
-                    {CATEGORIES.map(cat => (
+            <div className={`shrink-0 border-b px-5 py-4 ${isDark ? 'border-neutral-800/80' : 'border-neutral-200'}`}>
+                <div className="flex gap-2 overflow-x-auto scrollbar-hide">
+                    {TOP_CATEGORIES.map(category => (
                         <button
-                            key={cat.value}
-                            onClick={() => setSelectedCategory(cat.value)}
-                            className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors border ${selectedCategory === cat.value
-                                ? isDark ? 'bg-neutral-100 text-black border-white' : 'bg-neutral-900 text-white border-neutral-900'
-                                : isDark ? 'bg-neutral-900 text-neutral-400 border-neutral-800 hover:border-neutral-600' : 'bg-white text-neutral-600 border-neutral-200 hover:border-neutral-300'
+                            key={category.value}
+                            onClick={() => selectTopCategory(category.value)}
+                            className={`whitespace-nowrap rounded-full border px-4 py-2 text-sm font-medium transition-all ${selectedCategory === category.value
+                                ? isDark ? 'border-white bg-white text-black' : 'border-neutral-900 bg-neutral-900 text-white'
+                                : isDark ? 'border-neutral-800 bg-neutral-900/80 text-neutral-400 hover:border-neutral-600 hover:text-neutral-200' : 'border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300'
                                 }`}
                         >
-                            {cat.label}
+                            {category.label}
                         </button>
                     ))}
                 </div>
 
-                {selectedCategory === 'Character' && (
-                    <div className="grid grid-cols-2 gap-2">
-                        <select
-                            value={characterFilter}
-                            onChange={(event) => {
-                                setCharacterFilter(event.target.value);
-                                setLookFilter('All');
-                            }}
-                            className={`rounded-lg border px-2.5 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#1a1a1a] text-neutral-200' : 'border-neutral-200 bg-white text-neutral-700'}`}
-                        >
-                            <option value="All">全部角色</option>
-                            {characterNames.map(name => <option key={name} value={name}>{name}</option>)}
-                        </select>
-                        <select
-                            value={lookFilter}
-                            onChange={(event) => setLookFilter(event.target.value)}
-                            className={`rounded-lg border px-2.5 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#1a1a1a] text-neutral-200' : 'border-neutral-200 bg-white text-neutral-700'}`}
-                        >
-                            <option value="All">全部造型</option>
-                            <option value="identity">身份库</option>
-                            {lookNames.map(name => <option key={name} value={name}>{name}</option>)}
-                        </select>
+                {selectedCategory !== 'All' && (
+                    <div className="mt-4 flex min-h-10 items-center justify-between gap-4">
+                        <div className="min-w-0">
+                            {selectedCategory === MASSAGE_CATEGORY ? (
+                                <div className="flex items-center gap-2 text-sm">
+                                    {selectedSubcategory && (
+                                        <button
+                                            onClick={() => onSelectSubcategory(null)}
+                                            className={`rounded-lg p-1.5 transition-colors ${isDark ? 'text-neutral-400 hover:bg-neutral-800 hover:text-white' : 'text-neutral-500 hover:bg-neutral-100'}`}
+                                            aria-label="返回按摩器材分类"
+                                        >
+                                            <ArrowLeft size={16} />
+                                        </button>
+                                    )}
+                                    <button onClick={() => onSelectSubcategory(null)} className={isDark ? 'text-neutral-400 hover:text-white' : 'text-neutral-500 hover:text-neutral-900'}>
+                                        按摩器材
+                                    </button>
+                                    {selectedSubcategory && (
+                                        <>
+                                            <ChevronRight size={14} className="text-neutral-600" />
+                                            <span className={isDark ? 'font-medium text-white' : 'font-medium text-neutral-900'}>{selectedSubcategory}</span>
+                                        </>
+                                    )}
+                                </div>
+                            ) : (
+                                <span className={`text-sm font-medium ${isDark ? 'text-neutral-200' : 'text-neutral-800'}`}>{categoryLabel(selectedCategory)}</span>
+                            )}
+                            <p className={`mt-1 text-xs ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+                                {showMassageFolders ? '按产品类型进入对应素材文件夹' : '支持点击上传、粘贴，以及拖入文件或整个文件夹'}
+                            </p>
+                        </div>
+
+                        {canUpload && (
+                            <div className="flex shrink-0 items-center gap-2">
+                                <span className={`hidden items-center gap-1 text-[11px] lg:flex ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+                                    <ClipboardPaste size={13} /> ⌘V 粘贴
+                                </span>
+                                <button
+                                    onClick={() => folderInputRef.current?.click()}
+                                    className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${isDark ? 'border-neutral-700 text-neutral-300 hover:bg-neutral-800 hover:text-white' : 'border-neutral-200 text-neutral-600 hover:bg-neutral-100'}`}
+                                >
+                                    <FolderUp size={14} /> 文件夹
+                                </button>
+                                <button
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-blue-500"
+                                >
+                                    <Upload size={14} /> 上传素材
+                                </button>
+                            </div>
+                        )}
                     </div>
                 )}
+            </div>
 
-                {/* Content */}
-                <div
-                    className="flex-1 overflow-y-auto pr-2 grid gap-3 pb-4 content-start grid-cols-4"
-                    style={{
-                        scrollbarWidth: 'thin',
-                        scrollbarColor: isDark ? '#525252 #171717' : '#d4d4d4 #fafafa'
-                    }}
-                >
-                    {loading ? (
-                        <div className="col-span-full text-center py-10 text-neutral-500">加载中...</div>
-                    ) : filteredAssets.length === 0 ? (
-                        <div className="col-span-full text-center py-10 text-neutral-500 text-sm">
-                            该分类下暂无素材
-                        </div>
-                    ) : (
-                        filteredAssets.map((asset: LibraryAsset) => (
+            {selectedCategory === 'Character' && (
+                <div className={`grid shrink-0 grid-cols-2 gap-2 border-b px-5 py-3 ${isDark ? 'border-neutral-800/80' : 'border-neutral-200'}`}>
+                    <select
+                        value={characterFilter}
+                        onChange={event => {
+                            setCharacterFilter(event.target.value);
+                            setLookFilter('All');
+                        }}
+                        className={`rounded-lg border px-3 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#171717] text-neutral-200' : 'border-neutral-200 bg-white text-neutral-700'}`}
+                    >
+                        <option value="All">全部角色</option>
+                        {characterNames.map(name => <option key={name} value={name}>{name}</option>)}
+                    </select>
+                    <select
+                        value={lookFilter}
+                        onChange={event => setLookFilter(event.target.value)}
+                        className={`rounded-lg border px-3 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#171717] text-neutral-200' : 'border-neutral-200 bg-white text-neutral-700'}`}
+                    >
+                        <option value="All">全部造型</option>
+                        <option value="identity">身份库</option>
+                        {lookNames.map(name => <option key={name} value={name}>{name}</option>)}
+                    </select>
+                </div>
+            )}
+
+            <div
+                className="min-h-0 flex-1 overflow-y-auto px-5 py-5"
+                style={{ scrollbarWidth: 'thin', scrollbarColor: isDark ? '#525252 #171717' : '#d4d4d4 #fafafa' }}
+            >
+                {loading ? (
+                    <div className="py-16 text-center text-sm text-neutral-500">正在加载素材...</div>
+                ) : showMassageFolders ? (
+                    <div className="space-y-6">
+                        {MASSAGE_SECTIONS.map(section => (
+                            <section key={section.title}>
+                                <div className="mb-2.5 flex items-center gap-2">
+                                    <span className={`text-xs font-medium ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>{section.title}</span>
+                                    <span className={`h-px flex-1 ${isDark ? 'bg-neutral-800' : 'bg-neutral-200'}`} />
+                                </div>
+                                <div className={`grid gap-2.5 ${gridColumns}`}>
+                                    {section.items.map(name => {
+                                        const count = visibleAssets.filter(asset => asset.category === MASSAGE_CATEGORY && asset.subcategory === name).length;
+                                        return (
+                                            <button
+                                                key={name}
+                                                onClick={() => onSelectSubcategory(name)}
+                                                className={`group flex min-w-0 items-center gap-3 rounded-xl border p-3 text-left transition-all ${isDark ? 'border-neutral-800 bg-[#141414] hover:-translate-y-0.5 hover:border-neutral-600 hover:bg-[#191919]' : 'border-neutral-200 bg-neutral-50 hover:-translate-y-0.5 hover:border-neutral-300 hover:bg-white hover:shadow-sm'}`}
+                                            >
+                                                <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${isDark ? 'bg-blue-500/10 text-blue-400 group-hover:bg-blue-500/15' : 'bg-blue-50 text-blue-600'}`}>
+                                                    <Folder size={20} />
+                                                </span>
+                                                <span className="min-w-0 flex-1">
+                                                    <span className={`block truncate text-sm font-medium ${isDark ? 'text-neutral-200' : 'text-neutral-800'}`}>{name}</span>
+                                                    <span className={`mt-0.5 block text-[11px] ${isDark ? 'text-neutral-600' : 'text-neutral-400'}`}>{count} 个素材</span>
+                                                </span>
+                                                <ChevronRight size={15} className="shrink-0 text-neutral-600 transition-transform group-hover:translate-x-0.5" />
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </section>
+                        ))}
+                    </div>
+                ) : filteredAssets.length === 0 ? (
+                    <div className="flex min-h-[260px] flex-col items-center justify-center text-center">
+                        <span className={`flex h-14 w-14 items-center justify-center rounded-2xl ${isDark ? 'bg-neutral-900 text-neutral-500' : 'bg-neutral-100 text-neutral-400'}`}>
+                            {canUpload ? <Upload size={23} /> : <FolderOpen size={23} />}
+                        </span>
+                        <p className={`mt-4 text-sm font-medium ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
+                            {canUpload ? '这里还没有素材' : '素材库暂时为空'}
+                        </p>
+                        <p className={`mt-1.5 max-w-sm text-xs leading-5 ${isDark ? 'text-neutral-600' : 'text-neutral-400'}`}>
+                            {canUpload ? '点击上传，或直接粘贴、拖入图片与视频；拖入文件夹时会批量导入其中的素材。' : '选择一个具体分类后即可上传素材。'}
+                        </p>
+                        {canUpload && (
+                            <button onClick={() => fileInputRef.current?.click()} className="mt-5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-500">
+                                选择素材
+                            </button>
+                        )}
+                    </div>
+                ) : (
+                    <div className={`grid content-start gap-3 ${variant === 'modal' ? 'grid-cols-5' : 'grid-cols-4'}`}>
+                        {filteredAssets.map(asset => (
                             <div
                                 key={asset.id}
-                                className="group relative aspect-square bg-neutral-900 rounded-lg overflow-hidden border border-neutral-800 hover:border-neutral-600 cursor-pointer"
+                                className={`group relative aspect-square cursor-pointer overflow-hidden rounded-xl border ${isDark ? 'border-neutral-800 bg-neutral-900 hover:border-neutral-600' : 'border-neutral-200 bg-neutral-100 hover:border-neutral-300'}`}
                                 onClick={() => onSelectAsset(asset)}
                             >
-                                <img
-                                    src={asset.url}
-                                    alt={asset.name}
-                                    className="w-full h-full object-cover"
-                                    onError={(e) => {
-                                        const target = e.target as HTMLImageElement;
-                                        target.onerror = null; // Prevent infinite loop
-                                        target.src = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiMzMzMiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cmVjdCB4PSIzIiB5PSIzIiB3aWR0aD0iMTgiIGhlaWdodD0iMTgiIHJ4PSIyIiByeT0iMiI+PC9yZWN0PjxjaXJjbGUgY3g9IjguNSIgY3k9IjguNSIgcj0iMS41Ij48L2NpcmNsZT48cG9seWxpbmUgcG9pbnRzPSIyMSAxNSAxNiAxMCA1IDIxIj48LcG9lyxpbmU+PC9zdmc+';
-                                        target.classList.add('p-8', 'opacity-50');
-                                    }}
-                                />
-                                <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-2 pointer-events-none">
-                                    <span className="text-white text-xs font-medium truncate">{asset.name}</span>
-                                    {asset.description && (
-                                        <span className="text-neutral-300 text-[10px] truncate">{asset.description}</span>
-                                    )}
+                                <ImageOff size={22} className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-neutral-700" />
+                                {asset.type === 'video' ? (
+                                    <video src={asset.url} muted playsInline preload="metadata" className="relative h-full w-full object-cover" />
+                                ) : (
+                                    <img src={asset.url} alt={asset.name} className="relative h-full w-full object-cover" />
+                                )}
+                                <div className="pointer-events-none absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/85 via-black/10 to-transparent p-2.5 opacity-0 transition-opacity group-hover:opacity-100">
+                                    <span className="truncate text-xs font-medium text-white">{asset.name}</span>
+                                    {asset.description && <span className="mt-0.5 truncate text-[10px] text-neutral-300">{asset.description}</span>}
                                 </div>
 
                                 {asset.category === 'Character' && asset.characterName && (
                                     <div className="pointer-events-none absolute left-1.5 top-1.5 flex max-w-[calc(100%-12px)] flex-col items-start gap-1">
-                                        <span className="max-w-full truncate rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">
-                                            {asset.characterName}
-                                        </span>
-                                        <span className={`max-w-full truncate rounded-md px-1.5 py-0.5 text-[9px] font-medium backdrop-blur-sm ${asset.lookName ? 'bg-fuchsia-500/80 text-white' : 'bg-blue-500/80 text-white'}`}>
-                                            {asset.lookName || '身份库'}
-                                        </span>
+                                        <span className="max-w-full truncate rounded-md bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm">{asset.characterName}</span>
+                                        <span className={`max-w-full truncate rounded-md px-1.5 py-0.5 text-[9px] font-medium text-white backdrop-blur-sm ${asset.lookName ? 'bg-fuchsia-500/80' : 'bg-blue-500/80'}`}>{asset.lookName || '身份库'}</span>
                                     </div>
                                 )}
 
-                                {/* Delete Button or Confirmation */}
                                 {deleteConfirmId === asset.id ? (
-                                    <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center gap-2 z-20 animate-in fade-in duration-200" onClick={(e) => e.stopPropagation()}>
-                                        <span className="text-white text-xs font-medium">确认删除？</span>
+                                    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/85" onClick={event => event.stopPropagation()}>
+                                        <span className="text-xs font-medium text-white">确认删除？</span>
                                         <div className="flex gap-2">
-                                            <button
-                                                className="px-2 py-1 bg-red-500 hover:bg-red-600 text-white text-xs rounded transition-colors"
-                                                onClick={(e) => handleConfirmDelete(e, asset.id)}
-                                            >
-                                                删除
-                                            </button>
-                                            <button
-                                                className="px-2 py-1 bg-neutral-700 hover:bg-neutral-600 text-white text-xs rounded transition-colors"
-                                                onClick={handleCancelDelete}
-                                            >
-                                                取消
-                                            </button>
+                                            <button className="rounded bg-red-500 px-2 py-1 text-xs text-white hover:bg-red-600" onClick={event => {
+                                                onDeleteAsset(asset.id, event);
+                                                setDeleteConfirmId(null);
+                                            }}>删除</button>
+                                            <button className="rounded bg-neutral-700 px-2 py-1 text-xs text-white hover:bg-neutral-600" onClick={event => {
+                                                event.stopPropagation();
+                                                setDeleteConfirmId(null);
+                                            }}>取消</button>
                                         </div>
                                     </div>
                                 ) : (
                                     <button
-                                        className="absolute top-1 right-1 p-1.5 bg-black/60 text-white rounded-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500/80 z-10"
-                                        onClick={(e) => handleDeleteClick(e, asset.id)}
+                                        className="absolute right-1.5 top-1.5 z-10 rounded-md bg-black/65 p-1.5 text-white opacity-0 transition-opacity hover:bg-red-500/90 group-hover:opacity-100"
+                                        onClick={event => {
+                                            event.stopPropagation();
+                                            setDeleteConfirmId(asset.id);
+                                        }}
                                         title="删除素材"
                                     >
-                                        <Trash2 size={14} />
+                                        <Trash2 size={13} />
                                     </button>
                                 )}
                             </div>
-                        ))
-                    )}
-                </div>
+                        ))}
+                    </div>
+                )}
             </div>
-        </>
+
+            {(isDragging || uploadProgress) && (
+                <div className={`absolute inset-2 z-30 flex flex-col items-center justify-center rounded-2xl border-2 border-dashed backdrop-blur-md ${isDark ? 'border-blue-500/70 bg-[#0a0a0a]/90' : 'border-blue-500 bg-white/90'}`}>
+                    <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-950/20">
+                        {uploadProgress ? <Upload size={24} /> : <FolderUp size={24} />}
+                    </span>
+                    <p className={`mt-4 text-sm font-medium ${isDark ? 'text-white' : 'text-neutral-900'}`}>
+                        {uploadProgress ? `正在上传 ${uploadProgress.current}/${uploadProgress.total}` : `拖到这里上传到“${selectedSubcategory || categoryLabel(selectedCategory)}”`}
+                    </p>
+                    {!uploadProgress && <p className="mt-1.5 text-xs text-neutral-500">支持文件和整个文件夹</p>}
+                </div>
+            )}
+        </div>
     );
 };

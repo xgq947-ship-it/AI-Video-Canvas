@@ -21,6 +21,7 @@ import { buildManifestFromNodes } from '@/shared/manifest.js';
 import { TTS_PROVIDERS, canGenerateTtsDirectly, getTtsProvider } from '@/shared/ttsProviders.js';
 
 interface MangaNodeProps {
+  workflowId?: string;
   data: NodeData;
   allNodes: NodeData[];
   selected: boolean;
@@ -70,6 +71,7 @@ const NumField: React.FC<{ label: string; value: any; onChange: (v: number) => v
 );
 
 export const MangaNode: React.FC<MangaNodeProps> = ({
+  workflowId,
   data, allNodes, selected, canvasTheme = 'dark',
   onUpdate, onNodePointerDown, onContextMenu, onConnectorDown, onExpand,
 }) => {
@@ -115,6 +117,7 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
           voiceName: data.ttsVoiceName,
           speaker: data.speaker,
           text: data.ttsText || data.subtitleText || data.prompt || '',
+          workflowId,
         }),
       });
       const json = await res.json();
@@ -165,7 +168,7 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
   // ---- 成片节点：清单预览 + 渲染 + 轮询 ----
   const manifestPreview = data.type === NodeType.RENDER
     ? buildManifestFromNodes(data.id, allNodes, {
-        project: { id: data.id, title: data.title || '漫剧成片' },
+        project: { id: workflowId || data.id, title: data.title || '漫剧成片' },
         composition: { width: NUM(data.compWidth, 1280), height: NUM(data.compHeight, 720), fps: NUM(data.compFps, 24) },
       })
     : null;
@@ -176,7 +179,7 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
     try {
       const res = await fetch('/api/render/remotion', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ manifest: manifestPreview }),
+        body: JSON.stringify({ manifest: manifestPreview, workflowId }),
       });
       const json = await res.json();
       if (!res.ok) {

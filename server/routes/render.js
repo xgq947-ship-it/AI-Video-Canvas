@@ -15,6 +15,7 @@ import { spawn } from 'child_process';
 import { validateManifestShape } from '../../shared/manifest.js';
 import { findMissingAssets } from '../utils/manifestAssets.js';
 import { createJob, getJob, getJobRaw, cancelJob } from '../services/renderJobs.js';
+import { resolveProjectMediaTarget } from '../utils/projectAssets.js';
 
 const router = express.Router();
 
@@ -36,17 +37,31 @@ router.post('/validate', (req, res) => {
 
 // 提交渲染
 router.post('/remotion', (req, res) => {
-  const { manifest } = req.body || {};
+  const { manifest, workflowId } = req.body || {};
   const shape = validateManifestShape(manifest);
   if (!shape.valid) {
     return res.status(400).json({ error: '清单校验失败', errors: shape.errors });
   }
-  const { libraryDir, rendersDir } = getDirs(req);
+  const { libraryDir } = getDirs(req);
+  let projectTarget;
+  try {
+    projectTarget = resolveProjectMediaTarget(workflowId, 'videos', {
+      workflowsDir: req.app.locals.WORKFLOWS_DIR,
+      projectsDir: req.app.locals.PROJECTS_DIR,
+    });
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
   const missing = findMissingAssets(libraryDir, manifest);
   if (missing.length > 0) {
     return res.status(400).json({ error: '缺失素材', missing });
   }
-  const result = createJob({ manifest, libraryDir, rendersDir });
+  const result = createJob({
+    manifest,
+    libraryDir,
+    rendersDir: projectTarget.targetDir,
+    outputUrlPrefix: projectTarget.urlPrefix,
+  });
   if (result.error) {
     return res.status(result.code || 500).json({ error: result.error, existing: result.existing });
   }

@@ -112,6 +112,19 @@ test('文件夹名变化时同步 category', () => {
     assert.equal(data[0].url, '/library/assets/Scene/x.png');
 });
 
+test('扫描按摩器材二级分类并保留 subcategory', () => {
+    const dir = makeAssetsDir();
+    fs.mkdirSync(path.join(dir, 'Massage Equipment', '足疗机'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'Massage Equipment', '足疗机', 'product.png'), 'x');
+
+    const res = scanAssetLibrary(dir, { logger: silent });
+    assert.equal(res.added, 1);
+    const asset = readJson(dir)[0];
+    assert.equal(asset.category, 'Massage Equipment');
+    assert.equal(asset.subcategory, '足疗机');
+    assert.equal(asset.url, '/library/assets/Massage Equipment/足疗机/product.png');
+});
+
 test('缺失目录时安全返回，不抛错', () => {
     const res = scanAssetLibrary(path.join(os.tmpdir(), 'nonexistent-assets-dir-xyz'), { logger: silent });
     assert.deepEqual(res, { added: 0, removed: 0, total: 0, changed: false });

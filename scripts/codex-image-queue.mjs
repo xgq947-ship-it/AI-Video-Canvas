@@ -15,6 +15,7 @@ const projectDir = path.resolve(__dirname, '..');
 const libraryDir = path.join(projectDir, 'library');
 const jobsDir = path.join(libraryDir, 'codex-image-jobs');
 const imagesDir = path.join(libraryDir, 'images');
+const projectsDir = path.join(libraryDir, 'projects');
 
 const args = process.argv.slice(2);
 const command = args[0] || 'list';
@@ -47,7 +48,7 @@ try {
         const jobId = args[1];
         const sourceImage = option('--image');
         if (!jobId || !sourceImage) throw new Error('Usage: complete <jobId> --image <path>');
-        print(await completeCodexImageJob({ jobsDir, imagesDir, jobId, sourceImage }));
+        print(await completeCodexImageJob({ jobsDir, imagesDir, projectsDir, jobId, sourceImage }));
     } else if (command === 'verify') {
         const jobId = args[1];
         const sourceImage = option('--image');

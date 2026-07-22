@@ -108,6 +108,11 @@ export function runOpsCli({ args, timeoutMs, label }) {
                 ...process.env,
                 PYTHONUNBUFFERED: '1',
                 PYTHONPATH: PYTHON_ROOT,
+                // 强制 Python 用 UTF-8 读写 stdio。
+                // 不设的话，Python 在管道模式下按系统 locale 编码输出，
+                // 中文 Windows 是 cp936(GBK)，而下面按 UTF-8 解，
+                // 报错里的中文会变成「DURATION_NOT_SUPPORTED��x��δ�s��」这种乱码。
+                PYTHONIOENCODING: 'utf-8',
                 // 服务端调用无 tty，Python 侧据此保持静默、不抢前台。
                 NO_COLOR: '1'
             },

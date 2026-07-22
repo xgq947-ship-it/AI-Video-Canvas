@@ -174,21 +174,33 @@ def _configure_video(page: Any, *, duration: int, aspect_ratio: str, model: str,
         _exact_count(frames_tab, "FIRST_FRAME_UPLOAD_FAILED", "未找到 Frames 首尾帧模式。")
         frames_tab.click()
 
-    ratio_name = "crop_9_16 9:16" if aspect_ratio == "9:16" else "crop_16_9 16:9"
-    ratio_tab = menu.get_by_role("tab", name=ratio_name, exact=True)
-    _exact_count(ratio_tab, "ASPECT_RATIO_NOT_SUPPORTED", f"页面未提供比例 {aspect_ratio}。")
-    ratio_tab.click()
-
-    duration_tab = menu.get_by_role("tab", name=f"{duration}s", exact=True)
-    _exact_count(duration_tab, "DURATION_NOT_SUPPORTED", f"页面未提供时长 {duration}s。")
-    duration_tab.click()
-
+    # ⚠️ 顺序很重要：必须先选模型，再选比例和时长。
+    # Flow 的可选时长是**跟着模型变**的（例如 Veo 3.1 - Lite 与 Omni Flash
+    # 提供的时长档位不同）。若先点时长，校验的是「上一个模型」的选项，
+    # 会误报 DURATION_NOT_SUPPORTED；即使侥幸点中，切模型后也可能被重置。
     model_button = menu.locator('button[aria-haspopup="menu"]')
     _exact_count(model_button, "MODEL_NOT_FOUND", "未找到视频模型下拉框。")
     model_button.click()
     model_item = page.get_by_role("menuitem", name=f"volume_up {model}", exact=True)
     _exact_count(model_item, "MODEL_NOT_FOUND", f"页面未提供模型：{model}")
     model_item.click()
+    # 选完模型菜单会收起，设置菜单也可能一起关掉，重新打开再设比例/时长。
+    page.wait_for_timeout(800)
+    if menu.count() == 0 or not menu.is_visible():
+        menu = _open_settings_menu(page)
+
+    ratio_name = "crop_9_16 9:16" if aspect_ratio == "9:16" else "crop_16_9 16:9"
+    ratio_tab = menu.get_by_role("tab", name=ratio_name, exact=True)
+    _exact_count(ratio_tab, "ASPECT_RATIO_NOT_SUPPORTED", f"页面未提供比例 {aspect_ratio}。")
+    ratio_tab.click()
+
+    duration_tab = menu.get_by_role("tab", name=f"{duration}s", exact=True)
+    _exact_count(
+        duration_tab,
+        "DURATION_NOT_SUPPORTED",
+        f"模型「{model}」不提供 {duration}s 时长，请换一个时长或换模型。",
+    )
+    duration_tab.click()
     page.keyboard.press("Escape")
 
 
@@ -297,16 +309,23 @@ def _execute_generation(
                         raise GoogleFlowError("PAGE_NAVIGATION_FAILED", f"打开 Google Flow 项目失败：{exc}", retryable=True) from exc
                     _ensure_editor(page)
                     _configure_video(page, duration=duration, aspect_ratio=aspect_ratio, model=model, mode=mode)
-                    if mode == MODE_INGREDIENTS:
-                        # 清掉上次残留的提示词/参考图，再逐张把本次参考图 Add to Prompt。
-                        _clear_existing_prompt(page)
-                        _attach_reference_images(page, reference_paths)
-                    else:
-                        _upload_first_frame(page, first_frame)
-
                     prompt_box = page.locator('[role="textbox"][contenteditable="true"][data-slate-editor="true"]')
                     _exact_count(prompt_box, "PROMPT_INPUT_NOT_FOUND", "未找到提示词输入框。")
-                    prompt_box.fill(prompt)
+
+                    if mode == MODE_INGREDIENTS:
+                        # 清掉上次残留的提示词/参考图。
+                        _clear_existing_prompt(page)
+                        # ⚠️ 必须「先写提示词、再挂参考图」。
+                        # Add to Prompt 是把素材作为 chip **插进提示词框**的，
+                        # 而 Playwright 的 fill() 会替换输入框的全部内容——
+                        # 先挂图再 fill，刚插入的参考图 chip 会被整个清掉，
+                        # 结果就是「图传上去了，但生成时压根没用上」。
+                        prompt_box.fill(prompt)
+                        _attach_reference_images(page, reference_paths)
+                    else:
+                        # 首帧走独立的 Start 槽位，不在提示词框里，顺序无影响。
+                        _upload_first_frame(page, first_frame)
+                        prompt_box.fill(prompt)
 
                     previous_urls = set(_video_urls(page))
                     previous_failure_count = _generation_failure_count(page)

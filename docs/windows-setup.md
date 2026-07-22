@@ -1,0 +1,422 @@
+# Windows 首次配置指南
+
+> **这份文档是写给 AI 助手执行的。** 如果你是 AI，请从上往下逐步执行，
+> **每一步都要跑「验收」命令确认通过再进入下一步**，不要跳步、不要合并步骤。
+> 遇到验收不通过，先看该步的「排错」小节；仍解决不了就停下来，把命令、
+> 完整报错、以及你所在的步骤编号告诉用户，不要自己发明替代方案。
+
+**目标**：在一台全新的 Windows 电脑上，把这个项目从零跑起来。
+
+**重要前提**：本项目此前只在 macOS 上验证过。Windows 适配的代码已经写好，
+但**没有在真实 Windows 上跑通过**。所以遇到报错是预期内的——请把报错完整
+记录下来反馈，由 Mac 那边修复后推送，你再 `git pull` 继续。
+
+---
+
+## 术语：两条轨道
+
+| | 轨道 A | 轨道 B |
+|---|---|---|
+| 模型 | Gemini、OpenAI、Kling、Hailuo、**Seedance 2.0 (ARK)** | 即梦 Seedance VIP、Google Flow |
+| 原理 | 调官方 HTTP API | 驱动一个**你手动登录过的 Chrome** |
+| 需要 | 填 API 密钥 | Python + Playwright + Chrome + **自己的会员账号** |
+| 难度 | 简单 | 复杂，问题多发 |
+
+**必须先把轨道 A 跑通，再做轨道 B。** 轨道 A 不通就去搞轨道 B，只会把两类
+问题混在一起，排查难度翻倍。
+
+如果只需要「能出片」，**轨道 A 就够了**：`Seedance 2.0 (ARK)` 和
+`即梦 Seedance 2.0` 是同一个模型，只是前者按量付费、后者吃 VIP 会员额度。
+
+---
+
+# 第一部分：轨道 A（必做）
+
+## 步骤 1 — 安装 Git
+
+```powershell
+winget install --id Git.Git -e
+```
+
+装完**必须新开一个 PowerShell 窗口**（PATH 变更不会影响已打开的窗口）。
+
+**验收**
+```powershell
+git --version
+```
+能打印版本号即通过。
+
+---
+
+## 步骤 2 — 安装 Node.js（必须 22 或更高）
+
+```powershell
+winget install --id OpenJS.NodeJS.LTS -e
+```
+
+新开 PowerShell 窗口。
+
+**验收**
+```powershell
+node --version
+npm --version
+```
+
+**`node --version` 必须 ≥ v22.0.0。**
+
+> **为什么卡这个版本**：`npm test` 用的是 `node --test test/*.test.mjs`。
+> Windows 的 cmd/PowerShell **不会展开** `*` 通配符，靠的是 Node 自己展开——
+> 这个能力 Node 21 才有。装了 Node 20 会出现"测试一个都跑不了"且看不出原因。
+
+**排错**：如果版本低于 22，去 https://nodejs.org/ 下载 LTS 安装包手动安装。
+
+---
+
+## 步骤 3 — 安装 ffmpeg（渲染出片必需）
+
+```powershell
+winget install --id Gyan.FFmpeg -e
+```
+
+新开 PowerShell 窗口。
+
+**验收**
+```powershell
+ffmpeg -version
+ffprobe -version
+```
+
+两条都要能打印版本号。
+
+**排错**：如果提示"不是内部或外部命令"，说明 PATH 没配好：
+1. 找到 ffmpeg 的 `bin` 目录（winget 装的通常在
+   `%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg...\ffmpeg-*\bin`）
+2. 把该目录加入系统环境变量 PATH
+3. **新开** PowerShell 再验收
+
+---
+
+## 步骤 4 — 拉取代码
+
+选一个**纯英文路径**的目录（避免中文路径带来的编码问题）：
+
+```powershell
+cd C:\Users\%USERNAME%\Documents
+git clone https://github.com/xgq947-ship-it/AI-Video-Canvas.git
+cd AI-Video-Canvas
+```
+
+> 这是**私有仓库**。如果提示需要登录，让用户在浏览器完成 GitHub 授权，
+> 或用 `gh auth login`。**不要把用户的密码或 token 写进任何文件或命令行里。**
+
+**验收**
+```powershell
+git log --oneline -1
+dir
+```
+能看到最新 commit，且目录下有 `package.json`、`server`、`src`。
+
+---
+
+## 步骤 5 — 安装 Node 依赖
+
+```powershell
+npm install
+```
+
+这一步会下载 Remotion 的 Chromium，**耗时较长（5–15 分钟）属于正常**，不要中断。
+
+**验收**
+```powershell
+npm test
+```
+此刻（轨道 B 尚未配置）正确的结果是：
+
+```
+ℹ tests 127
+ℹ pass 124
+ℹ fail 0
+ℹ skipped 3
+```
+
+**关键：`fail 0`。** 那 3 个 skipped 是即梦相关测试，因为还没装 Python 运行时
+而自动跳过 —— **这是正常的，不是失败**。（做完轨道 B 后会变成 `pass 127 / skipped 0`。）
+
+**排错**
+- 报 `EPERM` / 权限错误 → 用管理员身份打开 PowerShell 重试
+- 卡在 sharp / node-gyp → 先 `npm cache clean --force` 再 `npm install`
+
+---
+
+## 步骤 6 — 配置密钥
+
+```powershell
+copy .env.example .env
+notepad .env
+```
+
+在打开的记事本里填入密钥。**至少填一个**才能生成，全空也能启动（只是不能生成）。
+
+推荐先只填这两个，够跑通验证：
+
+| 变量 | 用途 | 获取地址 |
+|---|---|---|
+| `ARK_API_KEY` | Seedance 2.0 视频（**推荐**，与即梦同模型） | 火山方舟控制台 |
+| `GEMINI_API_KEY` | 图片生成、剧本分镜 | Google AI Studio |
+
+其余（`OPENAI_API_KEY`、`KLING_API_KEY`、`HAILUO_API_KEY`、
+`DEEPSEEK_API_KEY`、`MINIMAX_API_KEY`）按需再填。
+
+> **安全**：`.env` 已被 `.gitignore` 忽略，不会进版本控制。
+> **绝不要**把密钥贴到聊天里、提交到 git、或写进任何 `.md` 文件。
+
+---
+
+## 步骤 7 — 启动并验证
+
+```powershell
+npm run dev
+```
+
+等待出现 `Backend server running on http://localhost:3001`，
+浏览器打开 **http://localhost:5173**。
+
+**验收（三项都要过）**
+
+1. 页面能正常打开，左侧显示"画布暂无节点"
+2. 另开一个 PowerShell 窗口执行：
+   ```powershell
+   curl http://localhost:3001/api/capabilities
+   ```
+   应返回 JSON，其中 `"platform":"win32"`、`"browserModels":{"ready":false...}`。
+   **`ready:false` 在此阶段是正确的**（轨道 B 还没配）。
+3. 在页面上点「新建节点」→「视频」，节点出现，模型下拉框里
+   **Seedance 2.0 可选**，而"即梦""Google Flow"是**灰色且不可点**的。
+
+✅ **三项都过 = 轨道 A 完成。** 此时项目已经可用。
+如果不需要即梦/Flow，**到这里就可以停了。**
+
+---
+
+# 第二部分：轨道 B（可选，即梦 / Google Flow）
+
+> **先确认账号**，否则配了也用不了：
+> - 即梦 → 需要**自己的即梦 VIP 会员**
+> - Google Flow → 需要**有 Flow 权限的 Google 账号**
+>
+> 登录态**无法随项目分发**，必须在这台电脑上用自己的账号登录一次。
+
+## 步骤 8 — 安装 Python 3.11+
+
+```powershell
+winget install --id Python.Python.3.12 -e
+```
+
+新开 PowerShell 窗口。
+
+**验收**
+```powershell
+py -3.12 --version
+```
+应打印 `Python 3.12.x`。
+
+> 安装脚本会按 `py -3.13` → `py -3.12` → `py -3.11` → `python` 的顺序探测，
+> 只要有一个 ≥3.11 即可。
+
+---
+
+## 步骤 9 — 安装 Chrome
+
+轨道 B 需要一个 Chrome 来做页面自动化。
+
+```powershell
+winget install --id Google.Chrome -e
+```
+
+**验收**
+```powershell
+Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe"
+```
+返回 `True` 即可。
+
+**排错**：如果返回 `False`，代码还会自动探测这两个位置：
+- `C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`
+- `%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe`
+
+都不在的话，找到 `chrome.exe` 的真实路径，然后在 `.env` 里加一行：
+```
+SESSIONHUB_CHROME_APP=C:\你的实际路径\chrome.exe
+```
+
+> **关于 Chrome Beta**：Mac 上默认用 Chrome Beta，是为了和日常用的 Chrome
+> 隔离（避免点链接时误投到自动化实例）。**Windows 上不需要装 Beta**，
+> 用普通 Chrome 即可——代码已经针对非 macOS 改用普通 Chrome 路径，
+> 且用的是**独立的用户数据目录**（`%USERPROFILE%\.sessionhub\chrome-9222`），
+> 与你日常的 Chrome 配置完全隔离，不会互相干扰。
+
+---
+
+## 步骤 10 — 安装 Python 运行时
+
+```powershell
+npm run setup:browser-models
+```
+
+脚本会自动：建虚拟环境 → 装依赖（playwright、typer 等）→ 自检。
+
+**验收**
+看到 `✅ ops_cli 正常，image-to-video / text-to-image 均已就绪` 即通过。
+
+手动复验：
+```powershell
+cd server\python
+.venv\Scripts\python.exe -m ops_cli --help
+cd ..\..
+```
+应列出 `image-to-video` 和 `text-to-image` 两个命令。
+
+**排错**
+- 提示找不到 Python → 回步骤 8，并确认**新开了** PowerShell 窗口
+- pip 下载超时 → 配国内镜像：
+  ```powershell
+  server\python\.venv\Scripts\python.exe -m pip install -r server\python\requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+  ```
+
+---
+
+## 步骤 11 — 启动 9222 浏览器并登录 ⚠️ 关键步骤
+
+**这一步必须用「有头」（能看见窗口的）浏览器，因为要手动输入账号密码。**
+
+先确保没有旧实例占用端口：
+```powershell
+netstat -ano | findstr :9222
+```
+有输出的话记下 PID，用 `taskkill /PID <PID> /T /F` 结束。
+
+然后启动：
+```powershell
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" `
+  --remote-debugging-port=9222 `
+  --user-data-dir="$env:USERPROFILE\.sessionhub\chrome-9222" `
+  --no-first-run --no-default-browser-check `
+  about:blank
+```
+
+会弹出一个**全新的、空白的 Chrome 窗口**（不是你日常那个）。在这个窗口里：
+
+1. 打开 https://jimeng.jianying.com → 登录你的即梦账号（确认是 VIP）
+2. 打开 https://labs.google/fx/tools/flow → 登录你的 Google 账号
+
+**验收**
+```powershell
+curl http://localhost:9222/json/version
+```
+返回 JSON 且含 `"Browser": "Chrome/..."` 即通过。
+
+### 关于无头（headless）—— 必读
+
+代码的实际行为是这样的，理解清楚能少走弯路：
+
+| 情况 | 行为 |
+|---|---|
+| 9222 **已经在跑**（你刚登录的那个） | **直接复用**，不重启、不切无头 |
+| 9222 **没在跑**，由后端自动拉起 | **自动用无头模式**启动 |
+
+两种模式**共用同一个用户数据目录**，所以登录状态是通用的——
+你有头登录一次之后，后续无头运行也是已登录状态。
+
+**但是**：
+- **首次登录必须有头**，无头窗口你看不见也没法输密码
+- 有头和无头**不能同时**用同一个数据目录，代码会先关掉再切换
+- Windows 上"隐藏窗口"功能是**关闭的**（那是 macOS 专有的 API），
+  所以你手动开的这个窗口会一直显示着 —— **这是正常的，别关它**
+
+**建议：登录完就让这个窗口一直开着。** 这样最稳定，也避免了模式切换。
+
+---
+
+## 步骤 12 — 验证轨道 B
+
+确认后端认到了运行时：
+```powershell
+curl http://localhost:3001/api/capabilities
+```
+`"browserModels":{"ready":true...}` 即通过。
+（如果 `npm run dev` 在步骤 10 之前就启动了，**需要重启它**才能重新探测。）
+
+先做**不消耗额度**的连通性测试：
+```powershell
+cd server\python
+.venv\Scripts\python.exe -m ops_cli --json image-to-video jimeng generate --prompt "连通性测试" --duration 5 --aspect-ratio 16:9 --resolution 720P --output-dir "$env:TEMP\opstest" --dry-run
+cd ..\..
+```
+返回的 JSON 里 `"success": true`、`"dry_run": true` 即通过。
+**`--dry-run` 不会打开即梦、不会扣积分。**
+
+最后做真实生成：在画布里新建视频节点 → 选「即梦 Seedance 2.0 VIP」→
+输入提示词 → 点生成。这一步**会消耗 VIP 额度**。
+
+---
+
+# 常见问题
+
+### 模型下拉里即梦/Flow 一直是灰的
+后端没探测到 Python 运行时。依次检查：
+1. `server\python\.venv\Scripts\python.exe` 存在吗？不存在 → 回步骤 10
+2. `npm run dev` 是在步骤 10 **之后**启动的吗？不是 → 重启它
+3. `curl http://localhost:3001/api/capabilities` 看 `ready` 的值
+
+### 报错「未找到 Chrome」
+`.env` 里加 `SESSIONHUB_CHROME_APP=` 指向 `chrome.exe` 的绝对路径（见步骤 9）。
+
+### 报错 `BROWSER_CLOSED`
+生成过程中 9222 浏览器被关了。任务**可能已经提交到即梦**——
+先去即梦历史会话确认结果，避免重复生成扣积分。重试前保持窗口开着。
+
+### 报错 `JIMENG_CONTENT_REJECTED`
+**这不是程序错误**，是即梦的内容审核拒绝了你的素材。
+常见原因：参考图含知名 IP 形象（如卡通角色）、真人肖像、敏感画面。
+**换一张参考图**即可；只改提示词通常无效。
+
+### 报错 `AUTH_REQUIRED` / 提示需要登录
+9222 浏览器的登录态失效了。回步骤 11 重新登录。
+
+### 端口被占用
+```powershell
+netstat -ano | findstr "3001 5173 9222"
+taskkill /PID <PID> /T /F
+```
+
+### 中文显示成乱码
+```powershell
+chcp 65001
+```
+
+---
+
+# 出问题了怎么办
+
+Windows 适配尚未在真机验证过，**遇到报错是预期内的**。请这样反馈：
+
+1. **哪一步**（步骤编号）
+2. **执行了什么命令**（原样复制）
+3. **完整报错**（不要截断，尤其是 Python 的 Traceback）
+4. 附上环境信息：
+   ```powershell
+   node --version; git --version
+   py -3.12 --version
+   curl http://localhost:3001/api/capabilities
+   ```
+
+Mac 那边修复推送后，你这样更新：
+```powershell
+git pull origin main
+npm install
+npm test
+```
+如果改动涉及 Python 侧，再跑一次 `npm run setup:browser-models`。
+
+> **给 AI 助手的提醒**：如果某一步卡住，不要自行改动项目源代码去绕过——
+> 那会让 Mac 那边的修复和你的本地改动冲突。**如实报告，等待修复推送。**
+> 你可以自由排查环境问题（PATH、端口、权限），但**不要修改仓库里的代码文件**。

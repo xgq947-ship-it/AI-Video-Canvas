@@ -27,6 +27,10 @@ A modern, AI-powered canvas application for generating and manipulating images a
 
 ### 安装
 
+> 🪟 **Windows 用户请直接看 [`docs/windows-setup.md`](docs/windows-setup.md)**
+> —— 分步骤写全了 Node / Python / Chrome / ffmpeg 的安装与验收，
+> 可以直接交给 AI 助手照着执行。
+
 项目分两条轨道，**先跑通轨道 A 即可正常使用**，轨道 B 是可选增强。
 
 #### 轨道 A — 开箱即用（推荐先跑这个）

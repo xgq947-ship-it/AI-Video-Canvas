@@ -7,6 +7,7 @@ Google 的 cookie / token / storage。浏览器生命周期、登录恢复、页
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -194,13 +195,27 @@ def _configure_video(page: Any, *, duration: int, aspect_ratio: str, model: str,
     _exact_count(ratio_tab, "ASPECT_RATIO_NOT_SUPPORTED", f"页面未提供比例 {aspect_ratio}。")
     ratio_tab.click()
 
-    duration_tab = menu.get_by_role("tab", name=f"{duration}s", exact=True)
-    _exact_count(
-        duration_tab,
-        "DURATION_NOT_SUPPORTED",
-        f"模型「{model}」不提供 {duration}s 时长，请换一个时长或换模型。",
-    )
-    duration_tab.click()
+    # 有些 Flow 模型（如 Veo 3.1 - Lite）**完全不提供时长选择**，菜单里一个
+    # "Ns" tab 都没有，只有比例和输出数量。这种情况要跳过而不是报错——
+    # 之前无条件找 tab，导致这类模型必然 DURATION_NOT_SUPPORTED，根本没法用。
+    duration_tabs = menu.get_by_role("tab").filter(has_text=re.compile(r"^\d+s$"))
+    if duration_tabs.count() == 0:
+        # 该模型时长固定，用它自己的默认值即可。
+        pass
+    else:
+        duration_tab = menu.get_by_role("tab", name=f"{duration}s", exact=True)
+        if duration_tab.count() != 1:
+            offered = sorted({
+                text.strip()
+                for text in duration_tabs.all_inner_texts()
+                if text.strip()
+            })
+            raise GoogleFlowError(
+                "DURATION_NOT_SUPPORTED",
+                f"模型「{model}」不提供 {duration}s 时长"
+                + (f"，只支持 {'、'.join(offered)}。" if offered else "。"),
+            )
+        duration_tab.click()
     page.keyboard.press("Escape")
 
 

@@ -18,6 +18,10 @@ export const GOOGLE_FLOW_WORKFLOW_MODELS = {
     [GOOGLE_FLOW_VEO_3_1_LITE_WORKFLOW_MODEL_ID]: 'Veo 3.1 - Lite'
 };
 export const GOOGLE_FLOW_SUPPORTED_DURATIONS = [4, 6, 8, 10];
+// 部分 Flow 模型（如 Veo 3.1 - Lite）不提供时长选择，前端也就不会传 duration。
+// CLI 仍要求 --duration 是合法值，这里给个占位——Python 侧发现该模型没有时长
+// tab 时会跳过设置，所以这个值对这类模型不产生影响。
+export const GOOGLE_FLOW_DEFAULT_DURATION = 8;
 export const GOOGLE_FLOW_SUPPORTED_ASPECT_RATIOS = ['16:9', '9:16'];
 
 export function isGoogleFlowWorkflowModelId(modelId) {
@@ -117,7 +121,11 @@ async function executeGoogleFlowWorkflow({
     if (!GOOGLE_FLOW_SUPPORTED_ASPECT_RATIOS.includes(aspectRatio)) {
         throw new Error('Google Flow 画面比例只支持 16:9 或 9:16');
     }
-    if (!GOOGLE_FLOW_SUPPORTED_DURATIONS.includes(Number(duration))) {
+    // 未传时长 = 该模型不提供时长选择，用占位值；显式传了非法值才算用户错误。
+    const effectiveDuration = duration === undefined || duration === null || duration === ''
+        ? GOOGLE_FLOW_DEFAULT_DURATION
+        : Number(duration);
+    if (!GOOGLE_FLOW_SUPPORTED_DURATIONS.includes(effectiveDuration)) {
         throw new Error('Google Flow 视频时长只支持 4、6、8、10 秒');
     }
 
@@ -139,7 +147,7 @@ async function executeGoogleFlowWorkflow({
                     prompt,
                     firstFrame,
                     referenceImages,
-                    duration,
+                    duration: effectiveDuration,
                     model: resolveGoogleFlowModelLabel(modelId),
                     aspectRatio,
                     outputDir,

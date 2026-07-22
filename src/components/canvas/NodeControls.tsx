@@ -52,7 +52,9 @@ const VIDEO_DURATIONS = [5, 6, 8, 10];
 // supportsTextToVideo: Can generate video from text prompt only
 // supportsImageToVideo: Can use a single input image (start frame)
 // supportsMultiImage: Can use multiple input images (frame-to-frame)
-// durations: Supported video durations in seconds
+// durations: Supported video durations in seconds.
+//   **空数组 = 该模型不提供时长选择**（时长由模型自己固定），此时界面不显示时长控件。
+//   例如 Google Flow 的 Veo 3.1 - Lite，其设置菜单里根本没有时长 tab。
 // resolutions: Supported resolutions (model-specific)
 // aspectRatios: Supported aspect ratios (most video models support 16:9 and 9:16)
 const VIDEO_ASPECT_RATIOS = ["16:9", "9:16"];
@@ -74,7 +76,7 @@ interface VideoModelOption {
 
 const VIDEO_MODELS: VideoModelOption[] = [
     { id: 'google-flow-omni-flash', name: 'Google Flow · Omni Flash', provider: 'workflow', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, supportsIngredients: true, durations: [4, 6, 8, 10], resolutions: ['自动'], aspectRatios: ['16:9', '9:16'] },
-    { id: 'google-flow-veo-3-1-lite', name: 'Google Flow · Veo 3.1 - Lite', provider: 'workflow', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, supportsIngredients: true, durations: [4, 6, 8, 10], resolutions: ['自动'], aspectRatios: ['16:9', '9:16'] },
+    { id: 'google-flow-veo-3-1-lite', name: 'Google Flow · Veo 3.1 - Lite', provider: 'workflow', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, supportsIngredients: true, durations: [], resolutions: ['自动'], aspectRatios: ['16:9', '9:16'] },
     { id: 'jimeng-seedance-2-0-mini', name: '即梦 · Seedance 2.0 mini', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
     { id: 'jimeng-seedance-2-0-fast', name: '即梦 · Seedance 2.0 Fast VIP', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
     { id: 'jimeng-seedance-2-0', name: '即梦 · Seedance 2.0 VIP', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
@@ -454,7 +456,9 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
 
         // Reset duration if current duration is not supported by new model
         if (newModel?.durations && data.videoDuration && !newModel.durations.includes(data.videoDuration)) {
-            updates.videoDuration = newModel.durations[0];
+            // 目标模型不提供时长选择时，清空而不是取 durations[0]（那会是 undefined）,
+            // 否则会把上一个模型的时长带过去，导致 DURATION_NOT_SUPPORTED。
+            updates.videoDuration = newModel.durations.length > 0 ? newModel.durations[0] : undefined;
         }
 
         // Reset resolution if current resolution is not supported by new model
@@ -476,6 +480,8 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     };
 
     // Get available durations for current model
+    // 注意：空数组是 truthy，所以「不提供时长选择」的模型会正确得到 []，
+    // 下游 `availableDurations.length > 0` 的守卫据此隐藏时长控件。
     const availableDurations = currentVideoModel.durations || [5];
     const currentDuration = data.videoDuration || availableDurations[0];
 

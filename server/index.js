@@ -89,23 +89,6 @@ const getClient = () => {
 };
 
 // ============================================================================
-// KLING AI CONFIGURATION
-// ============================================================================
-
-const KLING_ACCESS_KEY = API_KEY_OVERRIDES.KLING_ACCESS_KEY || process.env.KLING_ACCESS_KEY;
-const KLING_SECRET_KEY = API_KEY_OVERRIDES.KLING_SECRET_KEY || process.env.KLING_SECRET_KEY;
-const KLING_API_KEY = API_KEY_OVERRIDES.KLING_API_KEY || process.env.KLING_API_KEY;
-const KLING_BASE_URL = 'https://api-singapore.klingai.com';
-
-if (!KLING_ACCESS_KEY || !KLING_SECRET_KEY) {
-    console.warn("SERVER WARNING: KLING_ACCESS_KEY or KLING_SECRET_KEY not set. Kling 图片兼容模型将不可用。");
-}
-
-if (!KLING_API_KEY) {
-    console.warn("SERVER WARNING: KLING_API_KEY not set. Kling 3 models will not work.");
-}
-
-// ============================================================================
 // SEEDANCE / 火山方舟中国区 CONFIGURATION
 // ============================================================================
 
@@ -113,16 +96,6 @@ const ARK_API_KEY = API_KEY_OVERRIDES.ARK_API_KEY || process.env.ARK_API_KEY;
 
 if (!ARK_API_KEY) {
     console.warn("SERVER WARNING: ARK_API_KEY not set. 火山方舟 Seedance models will not work.");
-}
-
-// ============================================================================
-// HAILUO AI CONFIGURATION
-// ============================================================================
-
-const HAILUO_API_KEY = API_KEY_OVERRIDES.HAILUO_API_KEY || process.env.HAILUO_API_KEY;
-
-if (!HAILUO_API_KEY) {
-    console.warn("SERVER WARNING: HAILUO_API_KEY not set. Hailuo AI models will not work.");
 }
 
 // ============================================================================
@@ -134,12 +107,6 @@ const OPENAI_API_KEY = API_KEY_OVERRIDES.OPENAI_API_KEY || process.env.OPENAI_AP
 if (!OPENAI_API_KEY) {
     console.warn("SERVER WARNING: OPENAI_API_KEY not set. OpenAI GPT Image models will not work.");
 }
-
-// ============================================================================
-// FAL.AI CONFIGURATION (for Kling 2.6 Motion Control)
-// ============================================================================
-
-const FAL_API_KEY = API_KEY_OVERRIDES.FAL_API_KEY || process.env.FAL_API_KEY;
 
 // Set up app.locals for sharing config with route modules
 app.locals.IMAGES_DIR = IMAGES_DIR;
@@ -276,13 +243,11 @@ app.use('/api/local-models', localModelsRoutes);
 // Mount Storyboard routes (AI script generation)
 app.use('/api/storyboard', storyboardRoutes);
 
-// Mount Audio routes (MiniMax TTS 配音 / 本地音频导入)
+// Mount Audio routes (外部平台或本地音频导入)
 app.use('/api/audio', audioRoutes);
 
 // Mount Render routes (通用 Remotion 成片渲染任务)
 app.use('/api/render', renderRoutes);
-
-// NOTE: Old Kling helpers removed - now in server/services/kling.js
 
 // --- Library Assets API ---
 
@@ -835,8 +800,13 @@ app.get('/api/capabilities', (req, res) => {
             ready: isBrowserModelsReady(),
             models: [
                 'google-flow-omni-flash',
-                'google-flow-nano-banana-2',
+                'google-flow-veo-3-1-lite',
                 'google-flow-nano-banana-pro',
+                'google-flow-nano-banana-2',
+                'google-flow-nano-banana-2-lite',
+                'jimeng-seedance-2-0-mini',
+                'jimeng-seedance-2-0-fast-standard',
+                'jimeng-seedance-2-0-standard',
                 'jimeng-seedance-2-0',
                 'jimeng-seedance-2-0-fast'
             ],

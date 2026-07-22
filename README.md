@@ -3,7 +3,7 @@
   <h1>Evan</h1>
 </div>
 
-A modern, AI-powered canvas application for generating and manipulating images and videos using OpenAI GPT Image, Google Gemini, Kling AI, Hailuo AI (MiniMax), and Fal.ai. Built with React, TypeScript, and Vite.
+A modern, AI-powered canvas application for generating and manipulating images and videos using OpenAI GPT Image, Google Gemini, Seedance, Google Flow, and Jimeng. Built with React, TypeScript, and Vite.
 
 ---
 
@@ -45,7 +45,7 @@ cp .env.example .env             # Windows: copy .env.example .env
 npm run dev
 ```
 
-可用：Gemini、OpenAI、Kling、Hailuo、**Seedance 2.0 (ARK)**、DeepSeek 提示词优化，
+可用：Gemini、OpenAI、**Seedance 2.0 (ARK)**、DeepSeek 提示词优化，
 以及完全本地的画布编辑 / 素材导入 / Remotion 渲染。
 
 需系统已安装 `ffmpeg` 与 `ffprobe`（响度母带与成片验收用）。
@@ -81,11 +81,11 @@ npm run setup:browser-models     # 自动建 Python 环境、装依赖
 | 功能 | 需要的密钥 |
 |---|---|
 | 图片/视频提示词优化 | `DEEPSEEK_API_KEY` |
-| 图片生成 | `GEMINI_API_KEY` / `OPENAI_API_KEY` / Kling 兼容图片模型：`KLING_ACCESS_KEY`+`KLING_SECRET_KEY` |
-| 视频生成 | Seedance 2.0：`ARK_API_KEY` / Kling 3.0：`KLING_API_KEY` / Hailuo 2.3：`HAILUO_API_KEY` |
+| 图片生成 | `GEMINI_API_KEY` / `OPENAI_API_KEY` |
+| 视频生成 | Seedance 2.0：`ARK_API_KEY` |
 | Google Flow 图片/视频、即梦视频 | 无需 API Key；需完成上面的**轨道 B**（本机 9222 Chrome 登录对应账号） |
 | 剧本 / 分镜 | `GEMINI_API_KEY` |
-| 配音 (TTS) | MiniMax 画布直连需要 `MINIMAX_API_KEY` + `MINIMAX_GROUP_ID`（可回退 `HAILUO_API_KEY`）；ChatCut/ElevenLabs、豆包、Fish、本地 Qwen 与其他平台可生成后导入 |
+| 配音 (TTS) | ChatCut/ElevenLabs、豆包、Fish、本地 Qwen 与其他平台生成后导入 |
 | 画布 / 导入本地素材 / Remotion 渲染 / ffmpeg 母带 | **完全本地，无需密钥** |
 
 > **API 费用由谁产生**：生图/生视频/配音调用线上 API，费用由对应密钥所属账号承担。

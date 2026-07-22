@@ -38,7 +38,7 @@ def register(app: typer.Typer, capabilities: dict[str, CapabilitySpec]) -> None:
         ),
         duration: int = typer.Option(10, "--duration", help="Duration: 4, 6, 8, or 10 seconds."),
         aspect_ratio: str = typer.Option("9:16", "--aspect-ratio", help="Aspect ratio: 9:16 or 16:9."),
-        model: str = typer.Option("Omni Flash", "--model", help="Google Flow video model."),
+        model: str = typer.Option("Omni Flash", "--model", help="Model: Omni Flash / Veo 3.1 - Lite."),
         output_dir: str | None = typer.Option(None, "--output-dir", help="Video and screenshot output directory."),
         timeout_minutes: int = typer.Option(15, "--timeout-minutes", help="Generation timeout in minutes."),
         dry_run: bool = typer.Option(False, "--dry-run", help="Preview only; do not open Flow or consume credits."),

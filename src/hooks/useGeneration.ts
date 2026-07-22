@@ -110,16 +110,7 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
         const selectedReferenceIds = new Set(selectedReferences.map(reference => reference.id));
         const shouldUseReferenceParent = (parentId: string) =>
             explicitReferenceLabels.size === 0 || selectedReferenceIds.has(parentId);
-        const selectedVisualReferences = selectedReferences.filter(reference => reference.kind !== 'audio');
-
-        // Check if prompt is required
-        // For Kling frame-to-frame with both start and end frames, prompt is optional
-        const isKlingFrameToFrame =
-            node.type === NodeType.VIDEO &&
-            node.videoModel?.startsWith('kling-') &&
-            selectedVisualReferences.length >= 2;
-
-        if (!combinedPrompt && !isKlingFrameToFrame) return;
+        if (!combinedPrompt) return;
 
         updateNode(id, {
             status: NodeStatus.LOADING,
@@ -216,10 +207,6 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                     imageBase64: imageBase64s.length > 0 ? imageBase64s : undefined,
                     imageModel: node.imageModel,
                     nodeId: id,
-                    // Kling V1.5 reference settings
-                    klingReferenceMode: node.klingReferenceMode,
-                    klingFaceIntensity: node.klingFaceIntensity,
-                    klingSubjectIntensity: node.klingSubjectIntensity
                 });
 
                 // Add cache-busting parameter to force browser to fetch new image
@@ -322,22 +309,6 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                 const hasMultipleInputs = imageParentIds.length >= 2;
                 const hasExplicitFrameInputs = node.frameInputs && node.frameInputs.length >= 2;
 
-                // Motion Reference logic (Kling 2.6)
-                let motionReferenceUrl: string | undefined;
-                let isMotionControl = false;
-                if (node.videoModel === 'kling-v2-6') {
-                    // Find a parent video node that has a result
-                    const videoParent = node.parentIds
-                        ?.filter(parentId => shouldUseReferenceParent(parentId))
-                        ?.map(pid => nodes.find(n => n.id === pid))
-                        .find(n => n?.type === NodeType.VIDEO && n.resultUrl);
-
-                    if (videoParent) {
-                        motionReferenceUrl = videoParent.resultUrl;
-                        isMotionControl = true;
-                    }
-                }
-
                 // 多参考图 / 参考素材：把所有连接的图片整体交给 workflow（--reference-image ×N），
                 // 而不是当作首/尾帧插值。判定收敛在 videoModelCapabilities：
                 //   Google Flow —— 连 1 张仍是首帧，≥2 张才走 Ingredients；
@@ -352,8 +323,7 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                     && shouldUseReferenceParent(reference.id)
                     && Boolean(reference.previewUrl || reference.url)
                 );
-                const useReferenceImages = !isMotionControl
-                    && shouldUseReferenceImages(node.videoModel, visualReferences.length);
+                const useReferenceImages = shouldUseReferenceImages(node.videoModel, visualReferences.length);
                 if (useReferenceImages) {
                     videoReferenceImages = visualReferences.map(reference => (reference.previewUrl || reference.url)!);
                     videoReferenceLabels = visualReferences.map(reference => reference.label);
@@ -363,8 +333,7 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                     }
                 }
 
-                // Only evaluate as frame-to-frame if NOT in motion control mode and NOT reference images
-                const isFrameToFrame = !isMotionControl && !useReferenceImages && (node.videoMode === 'frame-to-frame' || hasMultipleInputs || hasExplicitFrameInputs);
+                const isFrameToFrame = !useReferenceImages && (node.videoMode === 'frame-to-frame' || hasMultipleInputs || hasExplicitFrameInputs);
 
                 if (isFrameToFrame && imageParentIds.length >= 2) {
                     // Get start and end frames from frameInputs (if user reordered) or default order
@@ -395,29 +364,13 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                         if (parent2?.resultUrl) lastFrameBase64 = parent2.resultUrl;
                     }
                 } else if (imageParentIds.length > 0) {
-                    // Standard mode or Motion Control: get character reference or first parent image
-                    if (isMotionControl) {
-                        // For Motion Control, look specifically for an IMAGE parent as character reference
-                        const characterParent = node.parentIds
-                            ?.filter(parentId => shouldUseReferenceParent(parentId))
-                            ?.map(pid => nodes.find(n => n.id === pid))
-                            .find(n => n?.type === NodeType.IMAGE && n.resultUrl);
+                    // Standard mode: get first parent image or video last frame.
+                    const parent = nodes.find(n => n.id === imageParentIds[0]);
 
-                        if (characterParent?.resultUrl) {
-                            imageBase64 = characterParent.resultUrl;
-                        }
-                    } else {
-                        // Standard mode: get first parent image or video last frame
-                        // Use imageParentIds (filtered to exclude TEXT nodes) instead of raw parentIds
-                        const parent = nodes.find(n => n.id === imageParentIds[0]);
-
-                        if (parent?.type === NodeType.VIDEO && parent.lastFrame) {
-                            // Use last frame from parent video
-                            imageBase64 = parent.lastFrame;
-                        } else if (parent?.resultUrl) {
-                            // Use parent image directly
-                            imageBase64 = parent.resultUrl;
-                        }
+                    if (parent?.type === NodeType.VIDEO && parent.lastFrame) {
+                        imageBase64 = parent.lastFrame;
+                    } else if (parent?.resultUrl) {
+                        imageBase64 = parent.resultUrl;
                     }
                 }
 
@@ -438,7 +391,6 @@ export const useGeneration = ({ nodes, updateNode }: UseGenerationProps) => {
                     resolution: node.resolution,
                     duration: node.videoDuration,
                     videoModel: node.videoModel,
-                    motionReferenceUrl,
                     referenceAudioUrls,
                     generateAudio: true, // 支持原生音频的视频模型固定生成音频
                     nodeId: id

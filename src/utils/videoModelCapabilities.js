@@ -6,12 +6,26 @@
  */
 
 export const GOOGLE_FLOW_VIDEO_MODEL = 'google-flow-omni-flash';
+export const GOOGLE_FLOW_VEO_3_1_LITE_VIDEO_MODEL = 'google-flow-veo-3-1-lite';
 export const JIMENG_VIDEO_MODEL = 'jimeng-seedance-2-0';
 export const JIMENG_FAST_VIDEO_MODEL = 'jimeng-seedance-2-0-fast';
-const JIMENG_VIDEO_MODELS = new Set([JIMENG_VIDEO_MODEL, JIMENG_FAST_VIDEO_MODEL]);
+export const JIMENG_MINI_VIDEO_MODEL = 'jimeng-seedance-2-0-mini';
+export const JIMENG_STANDARD_FAST_VIDEO_MODEL = 'jimeng-seedance-2-0-fast-standard';
+export const JIMENG_STANDARD_VIDEO_MODEL = 'jimeng-seedance-2-0-standard';
+const JIMENG_VIDEO_MODELS = new Set([
+    JIMENG_MINI_VIDEO_MODEL,
+    JIMENG_FAST_VIDEO_MODEL,
+    JIMENG_VIDEO_MODEL,
+    JIMENG_STANDARD_FAST_VIDEO_MODEL,
+    JIMENG_STANDARD_VIDEO_MODEL
+]);
 
 // 走本地 9222 页面 workflow 的视频模型（相对 API 直连供应商）。
-export const BROWSER_WORKFLOW_VIDEO_MODELS = new Set([GOOGLE_FLOW_VIDEO_MODEL, ...JIMENG_VIDEO_MODELS]);
+export const BROWSER_WORKFLOW_VIDEO_MODELS = new Set([
+    GOOGLE_FLOW_VIDEO_MODEL,
+    GOOGLE_FLOW_VEO_3_1_LITE_VIDEO_MODEL,
+    ...JIMENG_VIDEO_MODELS
+]);
 
 export function isBrowserWorkflowVideoModel(videoModel) {
     return BROWSER_WORKFLOW_VIDEO_MODELS.has(videoModel);

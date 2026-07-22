@@ -25,8 +25,13 @@ interface BrowserModelsState {
 
 const FALLBACK_MODELS = [
     'google-flow-omni-flash',
-    'google-flow-nano-banana-2',
+    'google-flow-veo-3-1-lite',
     'google-flow-nano-banana-pro',
+    'google-flow-nano-banana-2',
+    'google-flow-nano-banana-2-lite',
+    'jimeng-seedance-2-0-mini',
+    'jimeng-seedance-2-0-fast-standard',
+    'jimeng-seedance-2-0-standard',
     'jimeng-seedance-2-0',
     'jimeng-seedance-2-0-fast'
 ];

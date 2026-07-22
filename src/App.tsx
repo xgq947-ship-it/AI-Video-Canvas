@@ -569,7 +569,7 @@ export default function App() {
         y: 440,
         parentIds: [storyId],
         speaker: '林默',
-        ttsProvider: 'minimax',
+        ttsProvider: 'import',
         voiceId: 'yuanboxiaoshu',
         voiceSpeed: 1,
         audioVolume: 1,

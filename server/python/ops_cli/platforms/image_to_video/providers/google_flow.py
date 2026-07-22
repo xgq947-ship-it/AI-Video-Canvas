@@ -37,6 +37,7 @@ GOOGLE_FLOW_SCENE = "google_flow/video_generate"
 SUPPORTED_DURATIONS = (4, 6, 8, 10)
 SUPPORTED_ASPECT_RATIOS = ("9:16", "16:9")
 DEFAULT_MODEL = "Omni Flash"
+SUPPORTED_MODELS = ("Omni Flash", "Veo 3.1 - Lite")
 # 视频生成两种输入模式：
 #   frames      —— 首帧图（Frames 子模式，Start 槽位），单张，历史行为。
 #   ingredients —— 多参考图（Ingredients 子模式，composer 逐张 Add to Prompt）。
@@ -69,6 +70,10 @@ def _validate_inputs(
     normalized_model = str(model or "").strip()
     if not normalized_model:
         raise GoogleFlowError("MODEL_NOT_FOUND", "--model 不能为空。")
+    if normalized_model not in SUPPORTED_MODELS:
+        raise GoogleFlowError(
+            "MODEL_NOT_SUPPORTED", f"--model 只支持 {', '.join(SUPPORTED_MODELS)}。"
+        )
     if timeout_minutes <= 0:
         raise GoogleFlowError("GENERATION_TIMEOUT", "--timeout-minutes 必须大于 0。")
 

@@ -1,14 +1,12 @@
 /**
  * server/routes/audio.js
  *
- * 音频相关 API。
- *   POST /api/audio/minimax/tts   MiniMax 文本转语音（配音），保存到本地素材库。
+ * 音频相关 API：外部平台/本地生成后的音频统一导入素材库。
  */
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { synthesizeSpeech, DEFAULT_VOICE_ID } from '../services/minimaxTts.js';
 import {
   DEFAULT_TTS_PROVIDER,
   getTtsProvider,
@@ -18,112 +16,26 @@ import {
 
 const router = express.Router();
 
-const handleTts = async (req, res) => {
-  try {
-    const {
-      provider: requestedProvider,
-      text,
-      voiceId,
-      voiceName,
-      speaker,
-      speed,
-      vol,
-      volume, // 兼容别名
-      pitch,
-      emotion,
-      model,
-      format,
-    } = req.body || {};
-
-    if (requestedProvider && !isKnownTtsProvider(requestedProvider)) {
-      return res.status(400).json({
-        error: `不支持的配音供应商: ${requestedProvider}`,
-        code: 'TTS_PROVIDER_UNSUPPORTED',
-      });
-    }
-    const provider = normalizeTtsProvider(requestedProvider || DEFAULT_TTS_PROVIDER);
-    const providerDefinition = getTtsProvider(provider);
-    if (providerDefinition.mode !== 'direct') {
-      return res.status(422).json({
-        error: `${providerDefinition.label} 当前使用“平台生成后导入”模式`,
-        code: 'TTS_EXTERNAL_IMPORT_REQUIRED',
-        provider,
-        mode: providerDefinition.mode,
-      });
-    }
-
-    const apiKey = req.app.locals.MINIMAX_API_KEY || req.app.locals.HAILUO_API_KEY;
-    const groupId = req.app.locals.MINIMAX_GROUP_ID;
-
-    if (!apiKey || !groupId) {
-      return res.status(400).json({
-        error: 'MiniMax 配音未配置：请在设置中配置 MINIMAX_API_KEY 与 MINIMAX_GROUP_ID',
-        needsConfig: true,
-      });
-    }
-
-    const { buffer, format: outFmt, durationSec } = await synthesizeSpeech({
-      apiKey,
-      groupId,
-      text,
-      voiceId: voiceId || DEFAULT_VOICE_ID,
-      speed,
-      vol: vol != null ? vol : volume,
-      pitch,
-      emotion,
-      model,
-      format,
+const handleTts = (req, res) => {
+  const requestedProvider = req.body?.provider;
+  if (requestedProvider && !isKnownTtsProvider(requestedProvider)) {
+    return res.status(400).json({
+      error: `不支持的配音供应商: ${requestedProvider}`,
+      code: 'TTS_PROVIDER_UNSUPPORTED',
     });
-
-    // 保存到本地素材库 library/audio
-    const audioDir = path.join(req.app.locals.LIBRARY_DIR, 'audio');
-    fs.mkdirSync(audioDir, { recursive: true });
-    const id = `${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-    const filename = `tts_${id}.${outFmt}`;
-    const filePath = path.join(audioDir, filename);
-    fs.writeFileSync(filePath, buffer);
-
-    // 写入元数据（供素材库/历史面板）
-    const metadata = {
-      id,
-      filename,
-      type: 'audio',
-      subtype: 'dialogue',
-      text,
-      speaker: speaker || '',
-      provider,
-      providerLabel: providerDefinition.label,
-      model: model || 'speech-2.8-hd',
-      voiceId: voiceId || DEFAULT_VOICE_ID,
-      voiceName: voiceName || '',
-      durationSec,
-      source: 'generated',
-      createdAt: new Date().toISOString(),
-    };
-    fs.writeFileSync(path.join(audioDir, `${id}.json`), JSON.stringify(metadata, null, 2));
-
-    res.json({
-      success: true,
-      url: `/library/audio/${filename}`,
-      filename,
-      durationSec,
-      speaker: speaker || '',
-      provider,
-      model: metadata.model,
-      voiceId: metadata.voiceId,
-    });
-  } catch (err) {
-    console.error('[MiniMax TTS] Error:', err);
-    res.status(500).json({ error: err.message || 'TTS 失败' });
   }
+  const provider = normalizeTtsProvider(requestedProvider || DEFAULT_TTS_PROVIDER);
+  const providerDefinition = getTtsProvider(provider);
+  return res.status(422).json({
+    error: `${providerDefinition.label} 当前使用“平台生成后导入”模式`,
+    code: 'TTS_EXTERNAL_IMPORT_REQUIRED',
+    provider,
+    mode: providerDefinition.mode,
+  });
 };
 
-// 供应商中立入口；旧 MiniMax 路径继续保留，兼容已有项目与调用方。
+// 供应商中立入口：目前所有供应商均采用生成后导入模式。
 router.post('/tts', handleTts);
-router.post('/minimax/tts', (req, res) => {
-  req.body = { ...(req.body || {}), provider: 'minimax' };
-  return handleTts(req, res);
-});
 
 // 导入本地音频（音效/背景音乐/配音）到素材库
 router.post('/upload', (req, res) => {

@@ -23,12 +23,18 @@ import {
 
 export const JIMENG_WORKFLOW_MODEL_ID = 'jimeng-seedance-2-0';
 export const JIMENG_FAST_WORKFLOW_MODEL_ID = 'jimeng-seedance-2-0-fast';
+export const JIMENG_MINI_WORKFLOW_MODEL_ID = 'jimeng-seedance-2-0-mini';
+export const JIMENG_STANDARD_FAST_WORKFLOW_MODEL_ID = 'jimeng-seedance-2-0-fast-standard';
+export const JIMENG_STANDARD_WORKFLOW_MODEL_ID = 'jimeng-seedance-2-0-standard';
 export const JIMENG_DEFAULT_MODEL = '即梦 Seedance 2.0 VIP';
 
 // 画布模型 id → 即梦页面模型下拉框里的**精确文案**（provider 按文案精确匹配选项）。
 export const JIMENG_MODEL_LABELS = {
+    [JIMENG_MINI_WORKFLOW_MODEL_ID]: '即梦 Seedance 2.0 mini',
+    [JIMENG_FAST_WORKFLOW_MODEL_ID]: '即梦 Seedance 2.0 Fast VIP',
     [JIMENG_WORKFLOW_MODEL_ID]: '即梦 Seedance 2.0 VIP',
-    [JIMENG_FAST_WORKFLOW_MODEL_ID]: '即梦 Seedance 2.0 Fast VIP'
+    [JIMENG_STANDARD_FAST_WORKFLOW_MODEL_ID]: '即梦 Seedance 2.0 Fast',
+    [JIMENG_STANDARD_WORKFLOW_MODEL_ID]: '即梦 Seedance 2.0'
 };
 
 export function isJimengWorkflowModelId(videoModel) {

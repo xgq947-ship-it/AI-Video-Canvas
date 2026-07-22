@@ -5,7 +5,10 @@ import {
     buildGoogleFlowWorkflowArgs,
     GOOGLE_FLOW_SUPPORTED_ASPECT_RATIOS,
     GOOGLE_FLOW_SUPPORTED_DURATIONS,
-    GOOGLE_FLOW_WORKFLOW_MODEL_ID
+    GOOGLE_FLOW_VEO_3_1_LITE_WORKFLOW_MODEL_ID,
+    GOOGLE_FLOW_WORKFLOW_MODEL_ID,
+    isGoogleFlowWorkflowModelId,
+    resolveGoogleFlowModelLabel
 } from '../server/services/googleFlowWorkflow.js';
 import { extractOpsJson } from '../server/services/opsCliRunner.js';
 
@@ -61,6 +64,26 @@ test('Google Flow workflow 使用稳定的前端模型 ID 与能力范围', () =
     assert.equal(GOOGLE_FLOW_WORKFLOW_MODEL_ID, 'google-flow-omni-flash');
     assert.deepEqual(GOOGLE_FLOW_SUPPORTED_DURATIONS, [4, 6, 8, 10]);
     assert.deepEqual(GOOGLE_FLOW_SUPPORTED_ASPECT_RATIOS, ['16:9', '9:16']);
+});
+
+test('Google Flow 视频支持 Veo 3.1 Lite 精确模型映射', () => {
+    assert.equal(GOOGLE_FLOW_VEO_3_1_LITE_WORKFLOW_MODEL_ID, 'google-flow-veo-3-1-lite');
+    assert.equal(isGoogleFlowWorkflowModelId(GOOGLE_FLOW_WORKFLOW_MODEL_ID), true);
+    assert.equal(isGoogleFlowWorkflowModelId(GOOGLE_FLOW_VEO_3_1_LITE_WORKFLOW_MODEL_ID), true);
+    assert.equal(isGoogleFlowWorkflowModelId('google-flow-unknown'), false);
+    assert.equal(resolveGoogleFlowModelLabel(GOOGLE_FLOW_WORKFLOW_MODEL_ID), 'Omni Flash');
+    assert.equal(resolveGoogleFlowModelLabel(GOOGLE_FLOW_VEO_3_1_LITE_WORKFLOW_MODEL_ID), 'Veo 3.1 - Lite');
+
+    const args = buildGoogleFlowWorkflowArgs({
+        prompt: '人物向镜头走来',
+        firstFrame: '/tmp/first-frame.png',
+        duration: 6,
+        aspectRatio: '16:9',
+        model: resolveGoogleFlowModelLabel(GOOGLE_FLOW_VEO_3_1_LITE_WORKFLOW_MODEL_ID),
+        outputDir: '/tmp/output',
+        timeoutMinutes: 15
+    });
+    assert.equal(args[args.indexOf('--model') + 1], 'Veo 3.1 - Lite');
 });
 
 test('ops_cli 输出能从附带日志的 stdout 提取运行结果', () => {

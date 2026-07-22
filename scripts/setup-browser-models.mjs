@@ -119,6 +119,6 @@ log(`
 ⚠️ 登录态只保存在你本机，不会也不能随项目分发。
    如果 Chrome 装在非默认位置，可设置环境变量 SESSIONHUB_CHROME_APP 指向它。
 
-不配置这一套也没关系：Gemini / OpenAI / Kling / Hailuo / Seedance(ARK)
+不配置这一套也没关系：Gemini / OpenAI / Seedance(ARK)
 等官方 API 模型不依赖它，填好 .env 即可直接使用。
 `);

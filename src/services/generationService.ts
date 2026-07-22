@@ -3,8 +3,8 @@
  * 
  * Frontend service layer for AI content generation.
  * Proxies requests to backend API which handles multiple providers:
- * - Image: Gemini Pro, Kling AI
- * - Video: Veo 3.1, Kling AI
+ * - Image: Gemini, OpenAI, Google Flow, Codex
+ * - Video: Seedance, 即梦工作流, Google Flow
  */
 
 export interface GenerateImageParams {
@@ -12,12 +12,8 @@ export interface GenerateImageParams {
   aspectRatio?: string;
   resolution?: string;
   imageBase64?: string | string[]; // Supports single image or array of images
-  imageModel?: string; // Image model version (e.g., 'gemini-pro', 'kling-v2')
+  imageModel?: string; // Image model version
   nodeId?: string; // ID of the node initiating generation
-  // Kling V1.5 reference settings
-  klingReferenceMode?: 'subject' | 'face';
-  klingFaceIntensity?: number; // 0-100
-  klingSubjectIntensity?: number; // 0-100
 }
 
 export interface GenerateVideoParams {
@@ -31,8 +27,7 @@ export interface GenerateVideoParams {
   aspectRatio?: string;
   resolution?: string; // Add resolution to params
   duration?: number; // Video duration in seconds (e.g., 5, 6, 8, 10)
-  videoModel?: string; // Video model version (e.g., 'veo-3.1', 'kling-v2-1')
-  motionReferenceUrl?: string; // For Kling 2.6 motion control
+  videoModel?: string;
   referenceAudioUrls?: string[]; // Seedance 2.0 reference audio (voice/tone anchor)
   generateAudio?: boolean; // 支持原生音频的视频模型，默认开启
   nodeId?: string; // ID of the node initiating generation

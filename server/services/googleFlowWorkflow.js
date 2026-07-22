@@ -12,8 +12,21 @@ import { enqueueGoogleFlowWorkflow } from './googleFlowWorkflowQueue.js';
 import { runOpsCli } from './opsCliRunner.js';
 
 export const GOOGLE_FLOW_WORKFLOW_MODEL_ID = 'google-flow-omni-flash';
+export const GOOGLE_FLOW_VEO_3_1_LITE_WORKFLOW_MODEL_ID = 'google-flow-veo-3-1-lite';
+export const GOOGLE_FLOW_WORKFLOW_MODELS = {
+    [GOOGLE_FLOW_WORKFLOW_MODEL_ID]: 'Omni Flash',
+    [GOOGLE_FLOW_VEO_3_1_LITE_WORKFLOW_MODEL_ID]: 'Veo 3.1 - Lite'
+};
 export const GOOGLE_FLOW_SUPPORTED_DURATIONS = [4, 6, 8, 10];
 export const GOOGLE_FLOW_SUPPORTED_ASPECT_RATIOS = ['16:9', '9:16'];
+
+export function isGoogleFlowWorkflowModelId(modelId) {
+    return Object.prototype.hasOwnProperty.call(GOOGLE_FLOW_WORKFLOW_MODELS, modelId);
+}
+
+export function resolveGoogleFlowModelLabel(modelId) {
+    return GOOGLE_FLOW_WORKFLOW_MODELS[modelId] || GOOGLE_FLOW_WORKFLOW_MODELS[GOOGLE_FLOW_WORKFLOW_MODEL_ID];
+}
 
 export function resolveLocalLibraryImage(input, libraryDir) {
     if (!input || typeof input !== 'string') return null;
@@ -96,6 +109,7 @@ async function executeGoogleFlowWorkflow({
     referenceImageInputs = [],
     aspectRatio,
     duration,
+    modelId = GOOGLE_FLOW_WORKFLOW_MODEL_ID,
     libraryDir,
     timeoutMinutes = 15
 }) {
@@ -126,6 +140,7 @@ async function executeGoogleFlowWorkflow({
                     firstFrame,
                     referenceImages,
                     duration,
+                    model: resolveGoogleFlowModelLabel(modelId),
                     aspectRatio,
                     outputDir,
                     timeoutMinutes
@@ -144,6 +159,7 @@ export function buildGoogleFlowWorkflowArgs({
     firstFrame,
     referenceImages = [],
     duration,
+    model = 'Omni Flash',
     aspectRatio,
     outputDir,
     timeoutMinutes
@@ -160,7 +176,7 @@ export function buildGoogleFlowWorkflowArgs({
     args.push(
         '--duration', String(duration),
         '--aspect-ratio', aspectRatio,
-        '--model', 'Omni Flash',
+        '--model', model,
         '--output-dir', outputDir,
         '--timeout-minutes', String(timeoutMinutes),
         '--execute'

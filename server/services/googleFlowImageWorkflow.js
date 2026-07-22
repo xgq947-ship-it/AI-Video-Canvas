@@ -14,8 +14,9 @@ import { enqueueGoogleFlowWorkflow } from './googleFlowWorkflowQueue.js';
 export const GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID = 'google-flow-nano-banana-2';
 // 画布模型 id → Ops-Cli text_to_image --model 值（Flow Image 模式下拉里的模型名）。
 export const GOOGLE_FLOW_IMAGE_WORKFLOW_MODELS = {
+    'google-flow-nano-banana-pro': 'Nano Banana Pro',
     'google-flow-nano-banana-2': 'Nano Banana 2',
-    'google-flow-nano-banana-pro': 'Nano Banana Pro'
+    'google-flow-nano-banana-2-lite': 'Nano Banana 2 Lite'
 };
 export const GOOGLE_FLOW_IMAGE_SUPPORTED_ASPECT_RATIOS = ['16:9', '4:3', '1:1', '3:4', '9:16'];
 

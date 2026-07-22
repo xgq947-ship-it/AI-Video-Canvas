@@ -1,5 +1,4 @@
 export const TTS_PROVIDER_IDS = {
-  MINIMAX: 'minimax',
   CHATCUT_ELEVENLABS: 'chatcut-elevenlabs',
   DOUBAO: 'doubao',
   FISH_AUDIO: 'fish-audio',
@@ -8,12 +7,6 @@ export const TTS_PROVIDER_IDS = {
 };
 
 export const TTS_PROVIDERS = [
-  {
-    id: TTS_PROVIDER_IDS.MINIMAX,
-    label: 'MiniMax',
-    mode: 'direct',
-    description: '画布内直接生成，需要配置 MiniMax API',
-  },
   {
     id: TTS_PROVIDER_IDS.CHATCUT_ELEVENLABS,
     label: 'ChatCut / ElevenLabs',
@@ -46,7 +39,7 @@ export const TTS_PROVIDERS = [
   },
 ];
 
-export const DEFAULT_TTS_PROVIDER = TTS_PROVIDER_IDS.MINIMAX;
+export const DEFAULT_TTS_PROVIDER = TTS_PROVIDER_IDS.IMPORT;
 
 export const isKnownTtsProvider = (value) =>
   typeof value === 'string' && TTS_PROVIDERS.some((provider) => provider.id === value);

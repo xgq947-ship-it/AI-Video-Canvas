@@ -1,5 +1,4 @@
 export type TtsProviderId =
-  | 'minimax'
   | 'chatcut-elevenlabs'
   | 'doubao'
   | 'fish-audio'

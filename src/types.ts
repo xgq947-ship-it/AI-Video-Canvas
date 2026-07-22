@@ -54,11 +54,11 @@ export interface NodeData {
   linkedVideoNodeId?: string; // For Text nodes: linked video node for prompt sync
 
   // Video node specific
-  videoMode?: 'standard' | 'frame-to-frame' | 'motion-control'; // Video generation mode
+  videoMode?: 'standard' | 'frame-to-frame'; // Video generation mode
   frameInputs?: { nodeId: string; order: 'start' | 'end' }[]; // For frame-to-frame: connected image nodes
-  videoModel?: string; // Video model version (e.g., 'veo-3.1', 'kling-v2-1')
+  videoModel?: string; // Video model version
   videoDuration?: number; // Video duration in seconds (e.g., 5, 6, 8, 10)
-  generateAudio?: boolean; // 是否生成原生音频（Seedance、Kling 等支持音频的模型）
+  generateAudio?: boolean; // 是否生成原生音频（如 Seedance）
   inputUrl?: string; // Input URL for video generation (image-to-video)
 
   // Video Editor specific
@@ -67,7 +67,7 @@ export interface NodeData {
 
   // Settings
   model: string;
-  imageModel?: string; // Image model version (e.g., 'gemini-pro', 'kling-v2')
+  imageModel?: string; // Image model version
   aspectRatio: string;
   resolution: string;
   isPromptExpanded?: boolean; // Whether the prompt editing area is expanded
@@ -82,13 +82,6 @@ export interface NodeData {
     attempt: number;
     createdAt: string;
   }>;
-
-  // Kling V1.5 Image Reference Settings
-  klingReferenceMode?: 'subject' | 'face'; // Reference type for image-to-image
-  klingFaceIntensity?: number; // Face reference intensity (0-100)
-  klingSubjectIntensity?: number; // Subject reference intensity (0-100)
-  detectedFaces?: { x: number; y: number; width: number; height: number }[]; // Detected face bounding boxes
-  faceDetectionStatus?: 'idle' | 'loading' | 'success' | 'error'; // Face detection status
 
   // Image Editor state persistence
   editorElements?: Array<{
@@ -164,7 +157,7 @@ export interface NodeData {
 
   // 配音(TTS)参数
   ttsText?: string;
-  ttsProvider?: 'minimax' | 'chatcut-elevenlabs' | 'doubao' | 'fish-audio' | 'qwen-local' | 'import';
+  ttsProvider?: 'chatcut-elevenlabs' | 'doubao' | 'fish-audio' | 'qwen-local' | 'import';
   ttsModel?: string;
   ttsVoiceName?: string;
   ttsSource?: 'generated' | 'imported';

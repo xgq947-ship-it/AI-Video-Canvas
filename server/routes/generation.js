@@ -2,17 +2,15 @@
  * generation.js
  * 
  * Routes for AI image and video generation.
- * Supports Gemini, Veo, Kling AI, Hailuo AI, and OpenAI GPT Image providers.
+ * Supports Gemini, Veo, Seedance, browser workflows, and OpenAI GPT Image providers.
  */
 
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { generateKlingVideo, generateKlingImage, generateKlingMultiImage } from '../services/kling.js';
 import { generateGeminiImage, generateVeoVideo } from '../services/gemini.js';
-import { generateHailuoVideo } from '../services/hailuo.js';
 import { generateSeedanceVideo } from '../services/seedance.js';
-import { generateGoogleFlowWorkflowVideo, GOOGLE_FLOW_WORKFLOW_MODEL_ID } from '../services/googleFlowWorkflow.js';
+import { generateGoogleFlowWorkflowVideo, isGoogleFlowWorkflowModelId } from '../services/googleFlowWorkflow.js';
 import { generateJimengWorkflowVideo, isJimengWorkflowModelId, resolveJimengModelLabel } from '../services/jimengVideoWorkflow.js';
 import { generateGoogleFlowWorkflowImage, GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID, isGoogleFlowImageWorkflowModel } from '../services/googleFlowImageWorkflow.js';
 import { generateOpenAIImage } from '../services/openai.js';
@@ -26,11 +24,14 @@ const router = express.Router();
 
 router.post('/generate-image', async (req, res) => {
     try {
-        const { nodeId, prompt, aspectRatio, resolution, imageBase64: rawImageBase64, imageModel, klingReferenceMode, klingFaceIntensity, klingSubjectIntensity } = req.body;
-        const { GEMINI_API_KEY, KLING_ACCESS_KEY, KLING_SECRET_KEY, OPENAI_API_KEY, IMAGES_DIR, LIBRARY_DIR } = req.app.locals;
+        const { nodeId, prompt, aspectRatio, resolution, imageBase64: rawImageBase64, imageModel } = req.body;
+        const { GEMINI_API_KEY, OPENAI_API_KEY, IMAGES_DIR, LIBRARY_DIR } = req.app.locals;
+
+        if (imageModel?.startsWith('kling-')) {
+            return res.status(400).json({ error: '该图片模型已下线，请切换为 Codex、Google Flow、Gemini 或 OpenAI 图片模型' });
+        }
 
         // Determine provider
-        const isKlingModel = imageModel && imageModel.startsWith('kling-');
         const isOpenAIModel = imageModel && imageModel.startsWith('gpt-image-');
         const isGoogleFlowWorkflowModel = isGoogleFlowImageWorkflowModel(imageModel);
 
@@ -54,82 +55,6 @@ router.post('/generate-image', async (req, res) => {
             });
             imageBuffer = result.buffer;
             imageFormat = result.extension;
-        } else if (isKlingModel) {
-            // --- KLING AI IMAGE GENERATION ---
-            if (!KLING_ACCESS_KEY || !KLING_SECRET_KEY) {
-                return res.status(500).json({
-                    error: "Kling API credentials not configured. Add KLING_ACCESS_KEY and KLING_SECRET_KEY to .env"
-                });
-            }
-
-            console.log(`Using Kling AI model for image: ${imageModel}`);
-
-            // Resolve images if provided
-            let resolvedImages = null;
-            if (rawImageBase64) {
-                const rawImages = Array.isArray(rawImageBase64) ? rawImageBase64 : [rawImageBase64];
-                resolvedImages = rawImages.map(img => resolveImageToBase64(img)).filter(Boolean);
-            }
-
-            let klingImageUrl;
-
-            // Determine which API to use based on model and reference images:
-            // - kling-v1-5: Uses standard API with image_reference parameter
-            // - kling-v2, kling-v2-1: Use Multi-Image API (image_reference not supported)
-            const isV2Model = imageModel === 'kling-v2' || imageModel === 'kling-v2-1' || imageModel === 'kling-v2-new';
-            const hasReferenceImages = resolvedImages && resolvedImages.length > 0;
-
-            if (hasReferenceImages && isV2Model) {
-                // V2 models: Use Multi-Image API for image-to-image
-                console.log(`Using Kling Multi-Image API for ${imageModel} with ${resolvedImages.length} subject image(s)`);
-                klingImageUrl = await generateKlingMultiImage({
-                    prompt,
-                    subjectImages: resolvedImages,
-                    modelId: imageModel,
-                    aspectRatio,
-                    resolution,
-                    accessKey: KLING_ACCESS_KEY,
-                    secretKey: KLING_SECRET_KEY
-                });
-            } else if (hasReferenceImages && resolvedImages.length > 1) {
-                // Multiple images with non-V2 model: Use Multi-Image API
-                console.log(`Using Kling Multi-Image API with ${resolvedImages.length} subject images`);
-                klingImageUrl = await generateKlingMultiImage({
-                    prompt,
-                    subjectImages: resolvedImages,
-                    modelId: imageModel,
-                    aspectRatio,
-                    resolution,
-                    accessKey: KLING_ACCESS_KEY,
-                    secretKey: KLING_SECRET_KEY
-                });
-            } else {
-                // V1.5 or text-to-image: Use standard API (V1.5 supports image_reference)
-                klingImageUrl = await generateKlingImage({
-                    prompt,
-                    imageBase64: resolvedImages,
-                    modelId: imageModel,
-                    aspectRatio,
-                    resolution,
-                    klingReferenceMode,
-                    klingFaceIntensity,
-                    klingSubjectIntensity,
-                    accessKey: KLING_ACCESS_KEY,
-                    secretKey: KLING_SECRET_KEY
-                });
-            }
-
-            // Download from Kling's URL
-            const imageResponse = await fetch(klingImageUrl);
-            if (!imageResponse.ok) {
-                throw new Error('Failed to download image from Kling');
-            }
-            imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
-
-            if (klingImageUrl.includes('.jpg') || klingImageUrl.includes('.jpeg')) {
-                imageFormat = 'jpg';
-            }
-
         } else if (isOpenAIModel) {
             // --- OPENAI GPT IMAGE GENERATION ---
             if (!OPENAI_API_KEY) {
@@ -208,14 +133,17 @@ router.post('/generate-image', async (req, res) => {
 
 router.post('/generate-video', async (req, res) => {
     try {
-        const { nodeId, prompt, imageBase64: rawImageBase64, lastFrameBase64: rawLastFrameBase64, referenceImages: rawReferenceImages, referenceImageLabels: rawReferenceImageLabels, motionReferenceUrl: rawMotionReferenceUrl, referenceAudioUrls: rawReferenceAudioUrls, aspectRatio, resolution, duration, videoModel } = req.body;
-        const { GEMINI_API_KEY, KLING_ACCESS_KEY, KLING_SECRET_KEY, KLING_API_KEY, ARK_API_KEY, HAILUO_API_KEY, VIDEOS_DIR, LIBRARY_DIR } = req.app.locals;
+        const { nodeId, prompt, imageBase64: rawImageBase64, lastFrameBase64: rawLastFrameBase64, referenceImages: rawReferenceImages, referenceImageLabels: rawReferenceImageLabels, referenceAudioUrls: rawReferenceAudioUrls, aspectRatio, resolution, duration, videoModel } = req.body;
+        const { GEMINI_API_KEY, ARK_API_KEY, VIDEOS_DIR, LIBRARY_DIR } = req.app.locals;
+
+        // 旧项目里的已下线模型不能静默回落到 Veo，避免误扣其他供应商额度。
+        if (videoModel?.startsWith('kling-') || videoModel?.startsWith('hailuo-')) {
+            return res.status(400).json({ error: '该视频模型已下线，请切换为即梦、Google Flow 或 Seedance' });
+        }
 
         // Determine provider
-        const isKlingModel = videoModel && videoModel.startsWith('kling-');
         const isSeedanceModel = videoModel && videoModel.startsWith('seedance-');
-        const isHailuoModel = videoModel && videoModel.startsWith('hailuo-');
-        const isGoogleFlowWorkflowModel = videoModel === GOOGLE_FLOW_WORKFLOW_MODEL_ID;
+        const isGoogleFlowWorkflowModel = isGoogleFlowWorkflowModelId(videoModel);
         const isJimengWorkflowModel = isJimengWorkflowModelId(videoModel);
         // 两个 provider 都走本地 9222 页面 workflow：输入是真实文件路径而非 base64。
         const isBrowserWorkflowModel = isGoogleFlowWorkflowModel || isJimengWorkflowModel;
@@ -223,7 +151,6 @@ router.post('/generate-video', async (req, res) => {
         // 页面 workflow 需要真实首帧路径；其他供应商继续使用 base64 输入。
         const imageBase64 = isBrowserWorkflowModel ? null : resolveImageToBase64(rawImageBase64);
         const lastFrameBase64 = isBrowserWorkflowModel ? null : resolveImageToBase64(rawLastFrameBase64);
-        const motionReferenceUrl = isBrowserWorkflowModel ? null : resolveImageToBase64(rawMotionReferenceUrl);
         const referenceAudioUrls = isBrowserWorkflowModel
             ? []
             : (Array.isArray(rawReferenceAudioUrls) ? rawReferenceAudioUrls : [])
@@ -255,6 +182,7 @@ router.post('/generate-video', async (req, res) => {
                 referenceImageInputs: useIngredients ? referenceImageInputs : [],
                 aspectRatio: aspectRatio || '16:9',
                 duration: duration || 4,
+                modelId: videoModel,
                 libraryDir: LIBRARY_DIR,
                 timeoutMinutes: 15
             });
@@ -317,127 +245,6 @@ router.post('/generate-video', async (req, res) => {
             });
             const videoResponse = await fetch(resultVideoUrl);
             if (!videoResponse.ok) throw new Error('Seedance 视频下载失败');
-            videoBuffer = Buffer.from(await videoResponse.arrayBuffer());
-
-        } else if (isKlingModel) {
-            // --- KLING AI VIDEO GENERATION ---
-
-            // Check if this is a Kling 2.6 model (route to Fal.ai - official API doesn't support v2.6)
-            const isKling26 = videoModel === 'kling-v2-6';
-            // Check if this is a motion control request (kling-v2-6 with motion reference)
-            const isMotionControl = isKling26 && motionReferenceUrl;
-
-            let resultVideoUrl;
-
-            if (isKling26) {
-                // --- KLING 2.6 VIA FAL.AI ---
-                // Official Kling API doesn't support v2.6, use fal.ai instead
-                const { FAL_API_KEY } = req.app.locals;
-
-                if (!FAL_API_KEY) {
-                    return res.status(500).json({
-                        error: "FAL_API_KEY not configured. Add FAL_API_KEY to .env for Kling 2.6."
-                    });
-                }
-
-                if (isMotionControl) {
-                    // Motion Control mode
-                    console.log(`\n[Route] Kling 2.6 Motion Control detected - routing to fal.ai`);
-                    console.log(`[Route] Motion Reference: ${motionReferenceUrl ? 'YES (' + Math.round(motionReferenceUrl.length / 1024) + ' KB)' : 'NO'}`);
-                    console.log(`[Route] Character Image: ${imageBase64 ? 'YES (' + Math.round(imageBase64.length / 1024) + ' KB)' : 'NO'}`);
-                    console.log(`[Route] Prompt: ${prompt ? prompt.substring(0, 50) + '...' : '(none)'}`);
-
-                    const { generateFalMotionControl } = await import('../services/fal.js');
-
-                    resultVideoUrl = await generateFalMotionControl({
-                        prompt,
-                        characterImageBase64: imageBase64,
-                        motionVideoBase64: motionReferenceUrl,
-                        characterOrientation: 'video',
-                        apiKey: FAL_API_KEY
-                    });
-                } else {
-                    // Standard Image-to-Video mode
-                    console.log(`\n[Route] Kling 2.6 Image-to-Video - routing to fal.ai`);
-                    console.log(`[Route] Image: ${imageBase64 ? 'YES (' + Math.round(imageBase64.length / 1024) + ' KB)' : 'NO'}`);
-                    console.log(`[Route] Duration: ${duration || 5}s`);
-                    console.log(`[Route] Generate Audio: ${req.body.generateAudio !== false}`);
-
-                    const { generateFalImageToVideo } = await import('../services/fal.js');
-
-                    resultVideoUrl = await generateFalImageToVideo({
-                        prompt,
-                        imageBase64,
-                        duration: String(duration || 5),
-                        generateAudio: req.body.generateAudio !== false, // Default to true
-                        apiKey: FAL_API_KEY
-                    });
-                }
-            } else {
-                // --- STANDARD KLING VIDEO GENERATION ---
-                const isKling3 = videoModel === 'kling-v3' || videoModel === 'kling-v3-turbo';
-                if (isKling3 && !KLING_API_KEY) {
-                    return res.status(500).json({
-                        error: 'Kling 3 API Key 未配置，请在 .env 中添加 KLING_API_KEY'
-                    });
-                }
-                if (!isKling3 && (!KLING_ACCESS_KEY || !KLING_SECRET_KEY)) {
-                    return res.status(500).json({
-                        error: "Kling API credentials not configured. Add KLING_ACCESS_KEY and KLING_SECRET_KEY to .env"
-                    });
-                }
-
-                console.log(`Using Kling AI model: ${videoModel}, duration: ${duration || 5}s`);
-
-                resultVideoUrl = await generateKlingVideo({
-                    prompt,
-                    imageBase64,
-                    lastFrameBase64,
-                    modelId: videoModel,
-                    aspectRatio,
-                    resolution,
-                    duration: duration || 5,
-                    generateAudio: req.body.generateAudio !== false,
-                    motionReferenceUrl,
-                    apiKey: isKling3 ? KLING_API_KEY : undefined,
-                    accessKey: KLING_ACCESS_KEY,
-                    secretKey: KLING_SECRET_KEY
-                });
-            }
-
-            // Download from the result URL
-            const videoResponse = await fetch(resultVideoUrl);
-            if (!videoResponse.ok) {
-                throw new Error('Failed to download generated video');
-            }
-            videoBuffer = Buffer.from(await videoResponse.arrayBuffer());
-
-        } else if (isHailuoModel) {
-            // --- HAILUO AI VIDEO GENERATION ---
-            if (!HAILUO_API_KEY) {
-                return res.status(500).json({
-                    error: "Hailuo API key not configured. Add HAILUO_API_KEY to .env"
-                });
-            }
-
-            console.log(`Using Hailuo AI model: ${videoModel}, duration: ${duration || 6}s`);
-
-            const hailuoVideoUrl = await generateHailuoVideo({
-                prompt,
-                imageBase64,
-                lastFrameBase64,
-                modelId: videoModel,
-                aspectRatio,
-                resolution,
-                duration: duration || 6,
-                apiKey: HAILUO_API_KEY
-            });
-
-            // Download from Hailuo's URL
-            const videoResponse = await fetch(hailuoVideoUrl);
-            if (!videoResponse.ok) {
-                throw new Error('Failed to download video from Hailuo');
-            }
             videoBuffer = Buffer.from(await videoResponse.arrayBuffer());
 
         } else {

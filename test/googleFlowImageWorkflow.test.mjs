@@ -41,11 +41,14 @@ test('Google Flow 文生图使用稳定模型 ID 与上游支持的画幅', () =
     assert.deepEqual(GOOGLE_FLOW_IMAGE_SUPPORTED_ASPECT_RATIOS, ['16:9', '4:3', '1:1', '3:4', '9:16']);
 });
 
-test('Google Flow 文生图支持 Nano Banana Pro 模型映射', () => {
+test('Google Flow 文生图支持页面全部三个模型映射', () => {
     assert.equal(isGoogleFlowImageWorkflowModel('google-flow-nano-banana-2'), true);
     assert.equal(isGoogleFlowImageWorkflowModel('google-flow-nano-banana-pro'), true);
+    assert.equal(isGoogleFlowImageWorkflowModel('google-flow-nano-banana-2-lite'), true);
     assert.equal(isGoogleFlowImageWorkflowModel('gemini-pro'), false);
     assert.equal(resolveGoogleFlowImageModelName('google-flow-nano-banana-pro'), 'Nano Banana Pro');
+    assert.equal(resolveGoogleFlowImageModelName('google-flow-nano-banana-2'), 'Nano Banana 2');
+    assert.equal(resolveGoogleFlowImageModelName('google-flow-nano-banana-2-lite'), 'Nano Banana 2 Lite');
     assert.equal(resolveGoogleFlowImageModelName('unknown'), 'Nano Banana 2');
 
     const proArgs = buildGoogleFlowImageWorkflowArgs({
@@ -56,6 +59,15 @@ test('Google Flow 文生图支持 Nano Banana Pro 模型映射', () => {
         flowModel: 'Nano Banana Pro'
     });
     assert.equal(proArgs[proArgs.indexOf('--model') + 1], 'Nano Banana Pro');
+
+    const liteArgs = buildGoogleFlowImageWorkflowArgs({
+        prompt: 'p',
+        aspectRatio: '1:1',
+        outputDir: '/tmp/out',
+        timeoutMinutes: 10,
+        flowModel: 'Nano Banana 2 Lite'
+    });
+    assert.equal(liteArgs[liteArgs.indexOf('--model') + 1], 'Nano Banana 2 Lite');
 });
 
 test('Google Flow 文生图读取 workflow 返回的本地图片', async () => {

@@ -79,7 +79,6 @@ export interface ImageModel {
     provider: 'codex' | 'workflow' | 'kling';
     supportsImageToImage: boolean;
     supportsMultiImage: boolean;
-    recommended?: boolean;
     resolutions: string[];
     aspectRatios: string[];
 }
@@ -90,15 +89,13 @@ export interface ImageModel {
 
 /**
  * Available image generation models
- * Note: Only kling-v1-5 supports single-image reference via image_reference parameter
- * Note: Kling V2/V2.1 only support references via Multi-Image API
+ * Browser workflow models support reference images through Google Flow.
  */
 export const IMAGE_MODELS: ImageModel[] = [
-    { id: 'codex-imagegen', name: 'Codex 生图', provider: 'codex', supportsImageToImage: true, supportsMultiImage: true, recommended: true, resolutions: ["Auto"], aspectRatios: ["Auto", "1:1", "9:16", "16:9", "3:4", "4:3", "3:2", "2:3", "5:4", "4:5", "21:9"] },
-    { id: 'google-flow-nano-banana-2', name: 'Google Flow · Nano Banana 2', provider: 'workflow', supportsImageToImage: true, supportsMultiImage: true, recommended: true, resolutions: ["自动"], aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"] },
+    { id: 'codex-imagegen', name: 'Codex 生图', provider: 'codex', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["Auto"], aspectRatios: ["Auto", "1:1", "9:16", "16:9", "3:4", "4:3", "3:2", "2:3", "5:4", "4:5", "21:9"] },
     { id: 'google-flow-nano-banana-pro', name: 'Google Flow · Nano Banana Pro', provider: 'workflow', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["自动"], aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"] },
-    // Kling AI models - Consolidated: removed legacy v1, v2, v2-new
-    { id: 'kling-v1-5', name: 'Kling V1.5', provider: 'kling', supportsImageToImage: true, supportsMultiImage: false, resolutions: ["1K", "2K"], aspectRatios: ["Auto", "1:1", "9:16", "16:9", "3:4", "4:3", "3:2", "2:3", "21:9"] },
+    { id: 'google-flow-nano-banana-2', name: 'Google Flow · Nano Banana 2', provider: 'workflow', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["自动"], aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"] },
+    { id: 'google-flow-nano-banana-2-lite', name: 'Google Flow · Nano Banana 2 Lite', provider: 'workflow', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["自动"], aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"] },
 ];
 
 /**

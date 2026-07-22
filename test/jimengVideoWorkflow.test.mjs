@@ -7,8 +7,11 @@ import {
     JIMENG_DEFAULT_MODEL,
     JIMENG_SUPPORTED_ASPECT_RATIOS,
     JIMENG_SUPPORTED_DURATIONS,
+    JIMENG_MINI_WORKFLOW_MODEL_ID,
     JIMENG_WORKFLOW_MODEL_ID,
     JIMENG_FAST_WORKFLOW_MODEL_ID,
+    JIMENG_STANDARD_FAST_WORKFLOW_MODEL_ID,
+    JIMENG_STANDARD_WORKFLOW_MODEL_ID,
     isJimengWorkflowModelId,
     resolveJimengModelLabel
 } from '../server/services/jimengVideoWorkflow.js';
@@ -90,6 +93,7 @@ test('支持的时长/比例与即梦页面一致', () => {
 test('即梦与 Google Flow 共用本地 workflow 的恢复超时档位', () => {
     assert.equal(getGenerationRecoveryTimeoutMs('jimeng-seedance-2-0'), GOOGLE_FLOW_RECOVERY_TIMEOUT_MS);
     assert.equal(getGenerationRecoveryTimeoutMs('google-flow-omni-flash'), GOOGLE_FLOW_RECOVERY_TIMEOUT_MS);
+    assert.equal(getGenerationRecoveryTimeoutMs('google-flow-veo-3-1-lite'), GOOGLE_FLOW_RECOVERY_TIMEOUT_MS);
     assert.notEqual(getGenerationRecoveryTimeoutMs('seedance-2-0'), GOOGLE_FLOW_RECOVERY_TIMEOUT_MS);
 });
 
@@ -115,11 +119,9 @@ test('Google Flow 首帧行为不变：1 张仍是首帧，≥2 张才走 Ingred
     assert.equal(minimumReferenceImages('google-flow-omni-flash'), 2);
 });
 
-test('API 直连供应商不受参考素材判定影响', () => {
-    for (const model of ['seedance-2-0', 'kling-v3', 'hailuo-2.3']) {
-        assert.equal(shouldUseReferenceImages(model, 3), false, model);
-        assert.equal(usesReferenceMaterialsOnly(model), false, model);
-    }
+test('ARK Seedance 不受本地 workflow 参考素材判定影响', () => {
+    assert.equal(shouldUseReferenceImages('seedance-2-0', 3), false);
+    assert.equal(usesReferenceMaterialsOnly('seedance-2-0'), false);
 });
 
 
@@ -174,4 +176,22 @@ test('Fast VIP 同样走参考素材语义与本地 workflow 恢复窗口', () =
     assert.equal(usesReferenceMaterialsOnly('jimeng-seedance-2-0-fast'), true);
     assert.equal(shouldUseReferenceImages('jimeng-seedance-2-0-fast', 1), true);
     assert.equal(getGenerationRecoveryTimeoutMs('jimeng-seedance-2-0-fast'), GOOGLE_FLOW_RECOVERY_TIMEOUT_MS);
+});
+
+test('即梦页面五个模型全部映射到精确文案和参考图工作流', () => {
+    const models = new Map([
+        [JIMENG_MINI_WORKFLOW_MODEL_ID, '即梦 Seedance 2.0 mini'],
+        [JIMENG_FAST_WORKFLOW_MODEL_ID, '即梦 Seedance 2.0 Fast VIP'],
+        [JIMENG_WORKFLOW_MODEL_ID, '即梦 Seedance 2.0 VIP'],
+        [JIMENG_STANDARD_FAST_WORKFLOW_MODEL_ID, '即梦 Seedance 2.0 Fast'],
+        [JIMENG_STANDARD_WORKFLOW_MODEL_ID, '即梦 Seedance 2.0']
+    ]);
+
+    for (const [modelId, label] of models) {
+        assert.equal(resolveJimengModelLabel(modelId), label);
+        assert.equal(isJimengWorkflowModelId(modelId), true);
+        assert.equal(usesReferenceMaterialsOnly(modelId), true);
+        assert.equal(shouldUseReferenceImages(modelId, 1), true);
+        assert.equal(getGenerationRecoveryTimeoutMs(modelId), GOOGLE_FLOW_RECOVERY_TIMEOUT_MS);
+    }
 });

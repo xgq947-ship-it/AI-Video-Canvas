@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { buildSeedanceRequest, mapSeedanceModelName, SEEDANCE_BASE_URL } from '../server/services/seedance.js';
-import { buildKlingVideoRequest, mapKlingVideoModelName } from '../server/services/kling.js';
 
 test('Seedance 前端模型 ID 映射到官方模型名', () => {
     assert.equal(mapSeedanceModelName('seedance-2-0'), 'doubao-seedance-2-0-260128');
@@ -104,33 +103,4 @@ test('Seedance 1.5 Pro 不接受输入参考音频', () => {
         referenceAudioUrls: ['data:audio/mpeg;base64,VOICE'],
         modelId: 'seedance-1-5-pro'
     }), /仅支持 Seedance 2.0/);
-});
-
-test('Kling 3 前端模型 ID 映射到官方模型名', () => {
-    assert.equal(mapKlingVideoModelName('kling-v3'), 'kling-v3');
-    assert.equal(mapKlingVideoModelName('kling-v3-turbo'), 'kling-v3-0-turbo');
-});
-
-test('Kling 3 请求真实携带原生音频开关', () => {
-    const withAudio = buildKlingVideoRequest({
-        prompt: '人物说话',
-        modelId: 'kling-v3',
-        aspectRatio: '1:1',
-        resolution: '1080p',
-        duration: 8,
-        generateAudio: true
-    });
-    const withoutAudio = buildKlingVideoRequest({
-        prompt: '静音镜头',
-        imageBase64: 'data:image/png;base64,AAA',
-        modelId: 'kling-v3-turbo',
-        generateAudio: false
-    });
-
-    assert.equal(withAudio.endpoint, 'text2video');
-    assert.equal(withAudio.body.sound, 'on');
-    assert.equal(withAudio.body.mode, 'pro');
-    assert.equal(withAudio.body.aspect_ratio, '1:1');
-    assert.equal(withoutAudio.endpoint, 'image2video');
-    assert.equal(withoutAudio.body.sound, 'off');
 });

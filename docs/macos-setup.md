@@ -15,7 +15,7 @@ Windows 版见 [`windows-setup.md`](windows-setup.md)。
 
 | | 轨道 A | 轨道 B |
 |---|---|---|
-| 模型 | Gemini、OpenAI、Kling、Hailuo、**Seedance 2.0 (ARK)** | 即梦 Seedance VIP、Google Flow |
+| 模型 | Gemini、OpenAI、**Seedance 2.0 (ARK)** | 即梦 Seedance、Google Flow |
 | 原理 | 调官方 HTTP API | 驱动一个**你手动登录过的 Chrome** |
 | 需要 | 填 API 密钥 | Python + Playwright + Chrome + **自己的会员账号** |
 | 难度 | 简单 | 复杂，问题多发 |
@@ -189,8 +189,7 @@ open -e .env
 | `ARK_API_KEY` | Seedance 2.0 视频（**推荐**，与即梦同模型） | 火山方舟控制台 |
 | `GEMINI_API_KEY` | 图片生成、剧本分镜 | Google AI Studio |
 
-其余（`OPENAI_API_KEY`、`KLING_API_KEY`、`HAILUO_API_KEY`、
-`DEEPSEEK_API_KEY`、`MINIMAX_API_KEY`）按需再填。
+其余（`OPENAI_API_KEY`、`DEEPSEEK_API_KEY`）按需再填。
 
 > **安全**：`.env` 已被 `.gitignore` 忽略。
 > **绝不要**把密钥贴到聊天里、提交到 git、或写进任何 `.md` 文件。

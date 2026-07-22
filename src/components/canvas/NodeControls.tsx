@@ -9,8 +9,6 @@
 import React, { useState, useRef, useEffect, memo } from 'react';
 import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Film, Clock, Expand, Shrink, Monitor, Crop, HardDrive, Upload, Loader2, Mic2 } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
-import { KlingIcon, HailuoIcon } from '../icons/BrandIcons';
-import { useFaceDetection } from '../../hooks/useFaceDetection';
 import { useBrowserModels } from '../../hooks/useBrowserModels';
 import { ChangeAnglePanel } from './ChangeAnglePanel';
 import { LocalModel, getLocalModels } from '../../services/localModelService';
@@ -60,13 +58,12 @@ const VIDEO_ASPECT_RATIOS = ["16:9", "9:16"];
 interface VideoModelOption {
     id: string;
     name: string;
-    provider: 'google' | 'workflow' | 'seedance' | 'kling' | 'hailuo';
+    provider: 'google' | 'workflow' | 'seedance';
     supportsTextToVideo: boolean;
     supportsImageToVideo: boolean;
     supportsMultiImage: boolean;
     supportsIngredients?: boolean; // Google Flow Ingredients：多参考图合成（≥2 张自动触发）
     supportsAudio?: boolean;
-    recommended?: boolean;
     durations: number[];
     resolutions: string[];
     durationResolutionMap?: Record<number, string[]>;
@@ -74,21 +71,20 @@ interface VideoModelOption {
 }
 
 const VIDEO_MODELS: VideoModelOption[] = [
-    { id: 'google-flow-omni-flash', name: 'Google Flow · Omni Flash', provider: 'workflow', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, supportsIngredients: true, recommended: true, durations: [4, 6, 8, 10], resolutions: ['自动'], aspectRatios: ['16:9', '9:16'] },
-    { id: 'jimeng-seedance-2-0', name: '即梦 · Seedance 2.0 VIP', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
-    { id: 'jimeng-seedance-2-0-fast', name: '即梦 · Seedance 2.0 Fast VIP', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
+    { id: 'google-flow-omni-flash', name: 'Google Flow · Omni Flash', provider: 'workflow', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, supportsIngredients: true, durations: [4, 6, 8, 10], resolutions: ['自动'], aspectRatios: ['16:9', '9:16'] },
+    { id: 'google-flow-veo-3-1-lite', name: 'Google Flow · Veo 3.1 - Lite', provider: 'workflow', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, supportsIngredients: true, durations: [4, 6, 8, 10], resolutions: ['自动'], aspectRatios: ['16:9', '9:16'] },
+    { id: 'jimeng-seedance-2-0-mini', name: '即梦 · Seedance 2.0 mini', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
+    { id: 'jimeng-seedance-2-0-fast', name: '即梦 · Seedance 2.0 Fast VIP', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
+    { id: 'jimeng-seedance-2-0', name: '即梦 · Seedance 2.0 VIP', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
+    { id: 'jimeng-seedance-2-0-fast-standard', name: '即梦 · Seedance 2.0 Fast', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
+    { id: 'jimeng-seedance-2-0-standard', name: '即梦 · Seedance 2.0', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
     // 供应商仅保留当前主模型，避免同一能力出现多套过时入口。
-    { id: 'seedance-2-0', name: 'Seedance 2.0', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
-    { id: 'kling-v3', name: 'Kling 3.0', provider: 'kling', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, recommended: true, durations: [3, 4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1'] },
-    { id: 'hailuo-2.3', name: 'Hailuo 2.3', provider: 'hailuo', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: false, recommended: true, durations: [6, 10], resolutions: ['768p', '1080p'], durationResolutionMap: { 6: ['768p', '1080p'], 10: ['768p'] }, aspectRatios: ['16:9', '9:16'] },
+    { id: 'seedance-2-0', name: 'Seedance 2.0', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
 ];
 
 // Image model versions with metadata
 // supportsImageToImage: Can use a single reference image (for image-to-image transformation)
 // supportsMultiImage: Can use multiple reference images (2-4) via Multi-Image API
-// Note: Kling V1 and V2-new don't support reference images in standard API
-// Note: Kling V1.5 is the only Kling model supporting single-image reference via image_reference
-// Note: Kling V2/V2.1 only support references via Multi-Image API
 // aspectRatios: Supported aspect ratios for the model
 const IMAGE_MODELS = [
     {
@@ -97,19 +93,8 @@ const IMAGE_MODELS = [
         provider: 'codex',
         supportsImageToImage: true,
         supportsMultiImage: true,
-        recommended: true,
         resolutions: ["Auto"],
         aspectRatios: ["Auto", "1:1", "9:16", "16:9", "3:4", "4:3", "3:2", "2:3", "5:4", "4:5", "21:9"]
-    },
-    {
-        id: 'google-flow-nano-banana-2',
-        name: 'Google Flow · Nano Banana 2',
-        provider: 'workflow',
-        supportsImageToImage: true,
-        supportsMultiImage: true,
-        recommended: true,
-        resolutions: ["自动"],
-        aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"]
     },
     {
         id: 'google-flow-nano-banana-pro',
@@ -120,15 +105,23 @@ const IMAGE_MODELS = [
         resolutions: ["自动"],
         aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"]
     },
-    // Kling AI models - Consolidated: removed legacy v1, v2, v2-new
     {
-        id: 'kling-v1-5',
-        name: 'Kling V1.5',
-        provider: 'kling',
-        supportsImageToImage: true, // V1.5 supports image_reference for subject/face
-        supportsMultiImage: false,
-        resolutions: ["1K", "2K"],
-        aspectRatios: ["Auto", "1:1", "9:16", "16:9", "3:4", "4:3", "3:2", "2:3", "21:9"]
+        id: 'google-flow-nano-banana-2',
+        name: 'Google Flow · Nano Banana 2',
+        provider: 'workflow',
+        supportsImageToImage: true,
+        supportsMultiImage: true,
+        resolutions: ["自动"],
+        aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"]
+    },
+    {
+        id: 'google-flow-nano-banana-2-lite',
+        name: 'Google Flow · Nano Banana 2 Lite',
+        provider: 'workflow',
+        supportsImageToImage: true,
+        supportsMultiImage: true,
+        resolutions: ["自动"],
+        aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"]
     },
 ];
 
@@ -212,34 +205,8 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
         fetchModels();
     }, [isLocalModelNode, data.type]);
 
-    // Face detection hook for Kling V1.5 Face mode
-    const { detectFaces, isModelLoaded: isFaceModelLoaded } = useFaceDetection();
     // Google Flow / 即梦 依赖本机浏览器自动化运行时，未配置时置灰并说明原因。
     const { browserModelsHint, isModelUnavailable } = useBrowserModels();
-
-    // Trigger face detection when Face mode is selected
-    useEffect(() => {
-        const runFaceDetection = async () => {
-            if (
-                data.klingReferenceMode === 'face' &&
-                data.faceDetectionStatus === 'loading' &&
-                connectedImageNodes?.[0]?.url &&
-                isFaceModelLoaded
-            ) {
-                try {
-                    const faces = await detectFaces(connectedImageNodes[0].url);
-                    onUpdate(data.id, {
-                        detectedFaces: faces,
-                        faceDetectionStatus: faces.length > 0 ? 'success' : 'error'
-                    });
-                } catch (err) {
-                    console.error('Face detection failed:', err);
-                    onUpdate(data.id, { detectedFaces: [], faceDetectionStatus: 'error' });
-                }
-            }
-        };
-        runFaceDetection();
-    }, [data.klingReferenceMode, data.faceDetectionStatus, connectedImageNodes, isFaceModelLoaded, detectFaces, onUpdate, data.id]);
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -922,13 +889,9 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                     <textarea
                         ref={promptRef}
                         className={`w-full resize-none bg-transparent text-[17px] font-normal leading-7 outline-none ${isDark ? 'text-white placeholder-neutral-600' : 'text-neutral-900 placeholder-neutral-400'}`}
-                        placeholder={
-                            data.type === NodeType.VIDEO && isFrameToFrame && currentVideoModel.provider === 'kling'
-                                ? "Prompt optional for Kling frame-to-frame..."
-                                : data.type === NodeType.VIDEO && inputUrl
-                                    ? "描述这个画面要如何运动，输入 @ 选择参考素材..."
-                                    : "描述你想生成的内容，输入 @ 选择参考素材..."
-                        }
+                        placeholder={data.type === NodeType.VIDEO && inputUrl
+                            ? "描述这个画面要如何运动，输入 @ 选择参考素材..."
+                            : "描述你想生成的内容，输入 @ 选择参考素材..."}
                         rows={data.isPromptExpanded ? 12 : 4}
                         value={localPrompt}
                         onChange={(e) => {
@@ -1061,11 +1024,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                     onClick={() => setShowModelDropdown(!showModelDropdown)}
                                     className="flex min-w-[142px] items-center gap-1.5 whitespace-nowrap text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
                                 >
-                                    {currentVideoModel.provider === 'kling' ? (
-                                        <KlingIcon size={14} />
-                                    ) : (
-                                        <Film size={12} className="text-cyan-400" />
-                                    )}
+                                    <Film size={12} className="text-cyan-400" />
                                     <span className="font-medium whitespace-nowrap">{currentVideoModel.name}</span>
                                     <ChevronDown size={12} className="ml-0.5 opacity-50" />
                                 </button>
@@ -1122,9 +1081,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                                                 <span className="flex flex-col gap-0.5">
                                                                     <span className="flex items-center gap-2">
                                                                         {model.name}
-                                                                        {model.recommended && !isUnavailable && (
-                                                                            <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">推荐</span>
-                                                                        )}
                                                                     </span>
                                                                     {unavailableReason && (
                                                                         <span className="text-[10px] font-normal text-amber-500/80">{unavailableReason}</span>
@@ -1153,9 +1109,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                                         <span className="flex items-center gap-2">
                                                             <Film size={12} className="text-cyan-400" />
                                                             {model.name}
-                                                            {model.recommended && (
-                                                                <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">推荐</span>
-                                                            )}
                                                         </span>
                                                         {currentVideoModel.id === model.id && <Check size={12} />}
                                                     </button>
@@ -1163,54 +1116,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                             </>
                                         )}
 
-                                        {/* Kling Models */}
-                                        {availableVideoModels.filter(m => m.provider === 'kling').length > 0 && (
-                                            <>
-                                                <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f] border-t border-neutral-700">
-                                                    Kling AI
-                                                </div>
-                                                {availableVideoModels.filter(m => m.provider === 'kling').map(model => (
-                                                    <button
-                                                        key={model.id}
-                                                        onClick={() => handleVideoModelChange(model.id)}
-                                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${currentVideoModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'
-                                                            }`}
-                                                    >
-                                                        <span className="flex items-center gap-2">
-                                                            <KlingIcon size={14} />
-                                                            {model.name}
-                                                            {model.recommended && (
-                                                                <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">推荐</span>
-                                                            )}
-                                                        </span>
-                                                        {currentVideoModel.id === model.id && <Check size={12} />}
-                                                    </button>
-                                                ))}
-                                            </>
-                                        )}
-
-                                        {/* Hailuo Models */}
-                                        {availableVideoModels.filter(m => m.provider === 'hailuo').length > 0 && (
-                                            <>
-                                                <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f] border-t border-neutral-700">
-                                                    Hailuo AI
-                                                </div>
-                                                {availableVideoModels.filter(m => m.provider === 'hailuo').map(model => (
-                                                    <button
-                                                        key={model.id}
-                                                        onClick={() => handleVideoModelChange(model.id)}
-                                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${currentVideoModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'
-                                                            }`}
-                                                    >
-                                                        <span className="flex items-center gap-2">
-                                                            <HailuoIcon size={14} />
-                                                            {model.name}
-                                                        </span>
-                                                        {currentVideoModel.id === model.id && <Check size={12} />}
-                                                    </button>
-                                                ))}
-                                            </>
-                                        )}
                                     </div>
                                 )}
                             </div>
@@ -1224,8 +1129,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                         <Banana size={12} className="text-cyan-400" />
                                     ) : currentImageModel.provider === 'codex' ? (
                                         <Sparkles size={12} className="text-blue-400" />
-                                    ) : currentImageModel.provider === 'kling' ? (
-                                        <KlingIcon size={14} />
                                     ) : (
                                         <ImageIcon size={12} className="text-cyan-400" />
                                     )}
@@ -1260,7 +1163,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                                         <span className="flex items-center gap-2">
                                                             <Sparkles size={12} className="text-blue-400" />
                                                             {model.name}
-                                                            <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">推荐</span>
                                                         </span>
                                                         {currentImageModel.id === model.id && <Check size={12} />}
                                                     </button>
@@ -1291,9 +1193,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                                             <span className="flex flex-col gap-0.5">
                                                                 <span className="flex items-center gap-2">
                                                                     {model.name}
-                                                                    {!isUnavailable && (
-                                                                        <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">推荐</span>
-                                                                    )}
                                                                 </span>
                                                                 {isUnavailable && (
                                                                     <span className="text-[10px] font-normal text-amber-500/80">{browserModelsHint}</span>
@@ -1304,31 +1203,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                                     </button>
                                                     );
                                                 })}
-                                            </>
-                                        )}
-                                        {/* Kling Models */}
-                                        {availableImageModels.filter(m => m.provider === 'kling').length > 0 && (
-                                            <>
-                                                <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f] border-t border-neutral-700">
-                                                    Kling AI
-                                                </div>
-                                                {availableImageModels.filter(m => m.provider === 'kling').map(model => (
-                                                    <button
-                                                        key={model.id}
-                                                        onClick={() => handleImageModelChange(model.id)}
-                                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${currentImageModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'
-                                                            }`}
-                                                    >
-                                                        <span className="flex items-center gap-2">
-                                                            <KlingIcon size={14} />
-                                                            {model.name}
-                                                            {model.recommended && (
-                                                                <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">推荐</span>
-                                                            )}
-                                                        </span>
-                                                        {currentImageModel.id === model.id && <Check size={12} />}
-                                                    </button>
-                                                ))}
                                             </>
                                         )}
                                     </div>
@@ -1493,201 +1367,27 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                         )}
 
                         {/* Generate Button - Active even after success to allow re-generation */}
-                        {!isLoading && (() => {
-                            // Check if generation is blocked due to no face detected in Face mode
-                            const isFaceModeBlocked = !isVideoNode &&
-                                data.imageModel === 'kling-v1-5' &&
-                                data.klingReferenceMode === 'face' &&
-                                (data.faceDetectionStatus === 'error' || data.faceDetectionStatus === 'loading');
-
-                            return (
-                                <button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        if (isFaceModeBlocked) {
-                                            // Show a warning - this is handled by the warning component
-                                            return;
-                                        }
-                                        onGenerate(data.id);
-                                    }}
-                                    disabled={isFaceModeBlocked}
-                                    className={`group w-9 h-9 rounded-full flex items-center justify-center transition-all duration-200 ${isFaceModeBlocked
-                                        ? 'bg-neutral-700/50 cursor-not-allowed opacity-50'
-                                        : isDark
-                                            ? 'bg-white text-neutral-900 hover:bg-neutral-100 active:scale-95'
-                                            : 'bg-neutral-900 text-white hover:bg-neutral-800 active:scale-95'
-                                        }`}
-                                    title={isFaceModeBlocked ? '无法生成：参考图片中未检测到人脸' : '生成'}
-                                >
-                                    <svg
-                                        viewBox="0 0 24 24"
-                                        className="w-4 h-4 transition-transform duration-200"
-                                        fill="currentColor"
-                                    >
-                                        <polygon points="5 3 19 12 5 21 5 3" />
-                                    </svg>
-                                </button>
-                            );
-                        })()}
-                    </div>
-                </div>
+            {!isLoading && (
+                <button
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onGenerate(data.id);
+                    }}
+                    className={'group w-9 h-9 rounded-full flex items-center justify-center transition-all duration-200 ' + (isDark
+                        ? 'bg-white text-neutral-900 hover:bg-neutral-100 active:scale-95'
+                        : 'bg-neutral-900 text-white hover:bg-neutral-800 active:scale-95')}
+                    title="生成"
+                >
+                    <svg
+                        viewBox="0 0 24 24"
+                        className="w-4 h-4 transition-transform duration-200"
+                        fill="currentColor"
+                    >
+                        <polygon points="5 3 19 12 5 21 5 3" />
+                    </svg>
+                </button>
             )}
-
-            {/* Kling V1.5 Reference Settings - For Image nodes with connected input */}
-            {!isVideoNode && data.imageModel === 'kling-v1-5' && connectedImageNodes.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-neutral-800">
-                    <div className="text-[10px] text-neutral-500 uppercase tracking-wider mb-2">参考设置</div>
-
-                    {/* Mode Tabs */}
-                    <div className="flex gap-1 mb-3 p-1 bg-neutral-800/50 rounded-lg">
-                        <button
-                            onClick={() => onUpdate(data.id, { klingReferenceMode: 'subject', detectedFaces: undefined, faceDetectionStatus: undefined })}
-                            className={`flex-1 px-3 py-1.5 text-xs rounded-md transition-colors ${(data.klingReferenceMode || 'subject') === 'subject'
-                                ? 'bg-neutral-700 text-white font-medium'
-                                : 'text-neutral-400 hover:text-white hover:bg-neutral-700/50'
-                                }`}
-                        >
-                            主体
-                        </button>
-                        <button
-                            onClick={() => {
-                                // Just switch mode, face detection will be triggered by effect
-                                onUpdate(data.id, { klingReferenceMode: 'face', faceDetectionStatus: 'loading', detectedFaces: undefined });
-                            }}
-                            className={`flex-1 px-3 py-1.5 text-xs rounded-md transition-colors ${data.klingReferenceMode === 'face'
-                                ? 'bg-neutral-700 text-white font-medium'
-                                : 'text-neutral-400 hover:text-white hover:bg-neutral-700/50'
-                                }`}
-                        >
-                            人脸
-                        </button>
                     </div>
-
-                    {/* Reference Image Preview with Face Detection Overlay */}
-                    {connectedImageNodes[0]?.url && (
-                        <div className="mb-3">
-                            {/* Main image with face highlight */}
-                            <div className="rounded-lg overflow-hidden bg-black relative flex items-center justify-center" style={{ maxHeight: '200px' }}>
-                                <div className="relative">
-                                    <img
-                                        src={connectedImageNodes[0].url}
-                                        alt="Reference"
-                                        className="max-h-[200px] w-auto h-auto block object-contain"
-                                    />
-                                    {/* Face detection corner brackets - Kling style */}
-                                    {data.klingReferenceMode === 'face' && data.faceDetectionStatus === 'success' && data.detectedFaces && data.detectedFaces.length > 0 && (
-                                        <>
-                                            {data.detectedFaces.map((face, idx) => (
-                                                <div
-                                                    key={idx}
-                                                    className="absolute pointer-events-none"
-                                                    style={{
-                                                        left: `${face.x}%`,
-                                                        top: `${face.y}%`,
-                                                        width: `${face.width}%`,
-                                                        height: `${face.height}%`,
-                                                    }}
-                                                >
-                                                    {/* Corner brackets - larger with glow */}
-                                                    <div className="absolute -top-1 -left-1 w-8 h-8 border-t-4 border-l-4 border-green-400 rounded-tl-xl" style={{ filter: 'drop-shadow(0 0 4px rgba(74, 222, 128, 0.8))' }} />
-                                                    <div className="absolute -top-1 -right-1 w-8 h-8 border-t-4 border-r-4 border-green-400 rounded-tr-xl" style={{ filter: 'drop-shadow(0 0 4px rgba(74, 222, 128, 0.8))' }} />
-                                                    <div className="absolute -bottom-1 -left-1 w-8 h-8 border-b-4 border-l-4 border-green-400 rounded-bl-xl" style={{ filter: 'drop-shadow(0 0 4px rgba(74, 222, 128, 0.8))' }} />
-                                                    <div className="absolute -bottom-1 -right-1 w-8 h-8 border-b-4 border-r-4 border-green-400 rounded-br-xl" style={{ filter: 'drop-shadow(0 0 4px rgba(74, 222, 128, 0.8))' }} />
-                                                </div>
-                                            ))}
-                                        </>
-                                    )}
-                                    {/* Loading indicator */}
-                                    {data.klingReferenceMode === 'face' && data.faceDetectionStatus === 'loading' && (
-                                        <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                                            <div className="text-xs text-white">正在检测人脸...</div>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-
-                            {/* Face thumbnail below - Kling style */}
-                            {data.klingReferenceMode === 'face' && data.faceDetectionStatus === 'success' && data.detectedFaces && data.detectedFaces.length > 0 && (
-                                <div className="flex justify-center mt-3">
-                                    <div className="w-14 h-14 rounded-lg border-2 border-green-400 overflow-hidden bg-black">
-                                        <img
-                                            src={connectedImageNodes[0].url}
-                                            alt="Detected face"
-                                            className="w-full h-full object-cover"
-                                            style={{
-                                                objectPosition: `${data.detectedFaces[0].x + data.detectedFaces[0].width / 2}% ${data.detectedFaces[0].y + data.detectedFaces[0].height / 2}%`,
-                                                transform: `scale(${100 / Math.max(data.detectedFaces[0].width, data.detectedFaces[0].height) * 0.8})`
-                                            }}
-                                        />
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {/* No Face Detected Warning */}
-                    {data.klingReferenceMode === 'face' && data.faceDetectionStatus === 'error' && (
-                        <div className="mb-3 p-2 bg-amber-900/20 border border-amber-700/50 rounded-lg">
-                            <div className="flex items-start gap-2 text-amber-400 text-xs">
-                                <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                                </svg>
-                                <span>未检测到人脸，请使用人脸更清晰的参考图片。</span>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Subject Mode: Show BOTH Face Reference and Subject Reference sliders */}
-                    {(data.klingReferenceMode || 'subject') === 'subject' && (
-                        <>
-                            <div className="space-y-1 mb-3">
-                                <div className="flex justify-between text-[10px]">
-                                    <span className="text-neutral-400">人脸参考强度</span>
-                                    <span className="text-white font-medium">{data.klingFaceIntensity ?? 65}</span>
-                                </div>
-                                <input
-                                    type="range"
-                                    min="0"
-                                    max="100"
-                                    value={data.klingFaceIntensity ?? 65}
-                                    onChange={(e) => onUpdate(data.id, { klingFaceIntensity: parseInt(e.target.value) })}
-                                    className="w-full h-1.5 bg-neutral-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-md"
-                                />
-                            </div>
-                            <div className="space-y-1">
-                                <div className="flex justify-between text-[10px]">
-                                    <span className="text-neutral-400">主体参考强度</span>
-                                    <span className="text-white font-medium">{data.klingSubjectIntensity ?? 50}</span>
-                                </div>
-                                <input
-                                    type="range"
-                                    min="0"
-                                    max="100"
-                                    value={data.klingSubjectIntensity ?? 50}
-                                    onChange={(e) => onUpdate(data.id, { klingSubjectIntensity: parseInt(e.target.value) })}
-                                    className="w-full h-1.5 bg-neutral-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-md"
-                                />
-                            </div>
-                        </>
-                    )}
-
-                    {/* Face Mode: Show single Reference Strength slider */}
-                    {data.klingReferenceMode === 'face' && data.faceDetectionStatus === 'success' && (
-                        <div className="space-y-1">
-                            <div className="flex justify-between text-[10px]">
-                                <span className="text-neutral-400">参考强度</span>
-                                <span className="text-white font-medium">{data.klingFaceIntensity ?? 42}</span>
-                            </div>
-                            <input
-                                type="range"
-                                min="0"
-                                max="100"
-                                value={data.klingFaceIntensity ?? 42}
-                                onChange={(e) => onUpdate(data.id, { klingFaceIntensity: parseInt(e.target.value) })}
-                                className="w-full h-1.5 bg-neutral-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-md"
-                            />
-                        </div>
-                    )}
                 </div>
             )}
 

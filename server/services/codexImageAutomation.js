@@ -5,6 +5,31 @@ import { failCodexImageJob, listCodexImageJobs } from './codexImageJobs.js';
 
 const DEFAULT_CODEX_PATH = '/Applications/ChatGPT.app/Contents/Resources/codex';
 const ACTIVE_STATUSES = new Set(['pending', 'processing']);
+const LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_LOG_FILES = 10;
+
+export function pruneCodexAutomationLogs(
+    automationDir,
+    { now = Date.now(), maxAgeMs = LOG_RETENTION_MS, maxFiles = MAX_LOG_FILES } = {}
+) {
+    if (!fs.existsSync(automationDir)) return [];
+
+    const logs = fs.readdirSync(automationDir)
+        .filter(filename => /^worker-.*\.log$/.test(filename))
+        .map(filename => {
+            const filePath = path.join(automationDir, filename);
+            return { filePath, mtimeMs: fs.statSync(filePath).mtimeMs };
+        })
+        .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+    const removed = [];
+    logs.forEach((log, index) => {
+        if (now - log.mtimeMs <= maxAgeMs && index < maxFiles) return;
+        fs.rmSync(log.filePath, { force: true });
+        removed.push(log.filePath);
+    });
+    return removed;
+}
 
 export function buildCodexAutomationCommand(projectRoot, codexPath) {
     const command = codexPath
@@ -123,6 +148,11 @@ export function createCodexImageAutomation({
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const logFile = path.join(automationDir, `worker-${timestamp}.log`);
         const logFd = fs.openSync(logFile, 'a');
+        try {
+            pruneCodexAutomationLogs(automationDir);
+        } catch (error) {
+            console.warn(`[Codex 自动生图] 清理旧日志失败：${error.message}`);
+        }
         runAttempts += 1;
         state = {
             ...state,

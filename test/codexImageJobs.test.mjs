@@ -8,6 +8,7 @@ import {
     claimCodexImageJob,
     completeCodexImageJob,
     createCodexImageJob,
+    failCodexImageJob,
     getCodexImageJob,
     inspectCodexImageOutput,
     listCodexImageJobs
@@ -82,6 +83,43 @@ test('claims and completes a job without overwriting another attempt', async t =
     assert.deepEqual(await sharp(completedOne.resultPath).metadata().then(({ width, height }) => ({ width, height })), { width: 64, height: 64 });
     assert.deepEqual(await sharp(completedTwo.resultPath).metadata().then(({ width, height }) => ({ width, height })), { width: 80, height: 48 });
     assert.equal(getCodexImageJob(dirs.jobsDir, first.id).resultUrl, completedOne.resultUrl);
+});
+
+test('removes frozen references after success but preserves them after failure', async t => {
+    const dirs = fixture();
+    t.after(() => fs.rmSync(dirs.root, { recursive: true, force: true }));
+
+    const reference = path.join(dirs.imagesDir, 'character.png');
+    fs.writeFileSync(reference, Buffer.from('reference'));
+    const successful = createCodexImageJob({
+        ...dirs,
+        nodeId: 'successful-node',
+        prompt: '成功任务',
+        referenceImages: ['/library/images/character.png']
+    });
+    const failed = createCodexImageJob({
+        ...dirs,
+        nodeId: 'failed-node',
+        prompt: '失败任务',
+        referenceImages: ['/library/images/character.png']
+    });
+    const successfulReferenceDir = path.dirname(successful.references[0].filePath);
+    const failedReferenceDir = path.dirname(failed.references[0].filePath);
+    const source = path.join(dirs.root, 'generated.png');
+    await sharp({ create: { width: 64, height: 64, channels: 3, background: { r: 0, g: 255, b: 0 } } }).png().toFile(source);
+
+    const completed = await completeCodexImageJob({
+        jobsDir: dirs.jobsDir,
+        imagesDir: dirs.imagesDir,
+        jobId: successful.id,
+        sourceImage: source
+    });
+    failCodexImageJob(dirs.jobsDir, failed.id, '生成失败');
+
+    assert.equal(fs.existsSync(successfulReferenceDir), false);
+    assert.equal(fs.existsSync(failedReferenceDir), true);
+    assert.ok(completed.referenceFilesCleanedAt);
+    assert.ok(getCodexImageJob(dirs.jobsDir, successful.id).referenceFilesCleanedAt);
 });
 
 test('records but preserves ignored Codex aspect ratios', async t => {

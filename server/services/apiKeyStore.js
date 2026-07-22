@@ -49,8 +49,14 @@ export function saveApiKeyOverrides(libraryDir, current, values = {}, clear = []
 
     const filePath = getApiKeyConfigPath(libraryDir);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    // 仅属主可读写：这个文件里是明文密钥。
+    // 注意 Windows：NTFS 没有 POSIX 权限位，chmod 基本是空操作，
+    // 实际权限由该文件所在目录（用户目录下的 library/config）的 ACL 继承决定。
+    // 因此在 Windows 上不要依赖这里的 0o600 做安全保证。
     fs.writeFileSync(filePath, JSON.stringify(next, null, 2), { mode: 0o600 });
-    fs.chmodSync(filePath, 0o600);
+    if (process.platform !== 'win32') {
+        fs.chmodSync(filePath, 0o600);
+    }
     return next;
 }
 

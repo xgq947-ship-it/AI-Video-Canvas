@@ -13,6 +13,51 @@
 
 ---
 
+## ⚠️ 开始前必读：两个环境前提
+
+下面每一步都默认 **winget 可用** 且 **网络通畅**。实际机器上这两条经常不成立，
+先看清楚，别照着理想剧本走到一半卡死。
+
+### 前提 A — winget 可能不可用
+
+`winget` 是 Windows 包管理器，但**不是所有机器都有**：
+Win10 较旧版本、精简版系统、或没装「应用安装程序」的机器上都没有。
+
+先确认：
+```powershell
+winget --version
+```
+
+**能打印版本号** → 后面的 `winget install` 都能用。
+
+**提示不是内部或外部命令** → 你有两条路：
+
+1. **装上它**：微软商店搜索「应用安装程序 / App Installer」安装，然后新开窗口重试
+2. **全部改用手动下载**（本文档每一步都给了官网下载地址，见各步骤的「方式二」）
+
+> 手动安装同样能跑通，只是要自己去官网下载安装包。
+> **不要因为没有 winget 就停下**——照着各步骤的手动方式做即可。
+
+### 前提 B — 网络可能受限
+
+GitHub、Google、npm、PyPI 在国内网络下经常**下载慢、中断、或直接被拦**。
+这不是配置错误，是网络环境问题。
+
+通用应对：
+
+| 情况 | 处理 |
+|---|---|
+| 下载中断/超时 | **直接重试**，多试几次往往就通了。不要改配置 |
+| `npm install` 卡住或失败 | 换淘宝镜像：`npm config set registry https://registry.npmmirror.com` |
+| `pip install` 超时 | 加清华镜像参数，见步骤 10 的排错 |
+| GitHub clone 失败 | 重试；仍不行让用户开代理，或改用 SSH 方式 |
+| 官网下载页打不开 | 需要代理。这一步没有替代方案，必须能访问 |
+
+> **给 AI 助手**：遇到网络类失败，**先重试 2–3 次**再判定为失败。
+> 反馈时请注明是"网络问题"还是"配置问题"——这两类的处理方式完全不同。
+
+---
+
 ## 术语：两条轨道
 
 | | 轨道 A | 轨道 B |
@@ -34,9 +79,14 @@
 
 ## 步骤 1 — 安装 Git
 
+**方式一：winget**
 ```powershell
 winget install --id Git.Git -e
 ```
+
+**方式二：手动下载**（没有 winget 时用）
+1. 打开 https://git-scm.com/download/win
+2. 下载 64-bit 安装包，双击安装，**一路默认**即可
 
 装完**必须新开一个 PowerShell 窗口**（PATH 变更不会影响已打开的窗口）。
 
@@ -50,9 +100,15 @@ git --version
 
 ## 步骤 2 — 安装 Node.js（必须 22 或更高）
 
+**方式一：winget**
 ```powershell
 winget install --id OpenJS.NodeJS.LTS -e
 ```
+
+**方式二：手动下载**（没有 winget 时用）
+1. 打开 https://nodejs.org/zh-cn/download
+2. 选 **LTS**、Windows、`.msi` 安装包
+3. 双击安装，一路默认（会自动加入 PATH）
 
 新开 PowerShell 窗口。
 
@@ -74,9 +130,18 @@ npm --version
 
 ## 步骤 3 — 安装 ffmpeg（渲染出片必需）
 
+**方式一：winget**
 ```powershell
 winget install --id Gyan.FFmpeg -e
 ```
+
+**方式二：手动下载**（没有 winget 时用）
+1. 打开 https://www.gyan.dev/ffmpeg/builds/
+2. 下载 **release essentials** 的 7z/zip 包
+3. 解压到一个固定位置，例如 `C:\ffmpeg`
+4. 把里面的 **`bin` 目录**（如 `C:\ffmpeg\bin`）加入系统环境变量 PATH：
+   Win 键搜索「环境变量」→ 编辑系统环境变量 → 环境变量 → 选中 Path → 编辑 → 新建 → 粘贴路径
+5. **新开** PowerShell
 
 新开 PowerShell 窗口。
 
@@ -126,6 +191,12 @@ npm install
 
 这一步会下载 Remotion 的 Chromium，**耗时较长（5–15 分钟）属于正常**，不要中断。
 
+> **网络慢或反复失败**：换成国内镜像后重试
+> ```powershell
+> npm config set registry https://registry.npmmirror.com
+> npm install
+> ```
+
 **验收**
 ```powershell
 npm test
@@ -133,14 +204,20 @@ npm test
 此刻（轨道 B 尚未配置）正确的结果是：
 
 ```
-ℹ tests 127
-ℹ pass 124
+ℹ tests 133
+ℹ pass 130
 ℹ fail 0
 ℹ skipped 3
 ```
 
-**关键：`fail 0`。** 那 3 个 skipped 是即梦相关测试，因为还没装 Python 运行时
-而自动跳过 —— **这是正常的，不是失败**。（做完轨道 B 后会变成 `pass 127 / skipped 0`。）
+**判断标准只有一条：`fail 0`。**
+
+- `skipped 3` 是**正常的** —— 那 3 个是即梦相关测试，还没装 Python 运行时
+  所以自动跳过。做完轨道 B 后会变成 `pass 133 / skipped 0`。
+- **总数可能和上面对不上**：随着功能增删，测试数量会变。
+  **不要拿数字逐个核对**，只看 `fail` 是不是 0。
+
+**如果出现 `fail 1` 或更多**，把完整输出（含失败的测试名和报错）反馈，不要自行修改代码绕过。
 
 **排错**
 - 报 `EPERM` / 权限错误 → 用管理员身份打开 PowerShell 重试
@@ -292,9 +369,15 @@ npm run launcher open       # 打开画布（必要时先启动）
 
 ## 步骤 8 — 安装 Python 3.11+
 
+**方式一：winget**
 ```powershell
 winget install --id Python.Python.3.12 -e
 ```
+
+**方式二：手动下载**（没有 winget 时用）
+1. 打开 https://www.python.org/downloads/windows/
+2. 下载 **Python 3.12.x** 的 Windows installer (64-bit)
+3. 双击安装，**第一屏务必勾选 “Add python.exe to PATH”**（漏勾会导致后面找不到 Python）
 
 新开 PowerShell 窗口。
 
@@ -586,6 +669,23 @@ taskkill /PID <PID> /T /F
 ```powershell
 chcp 65001
 ```
+
+---
+
+### `npm test` 出现 1 个 fail，提示 438 ≠ 384
+
+**这个已经修复了**，如果你还遇到，说明代码不是最新的，先 `git pull origin main`。
+
+原因：`438` 和 `384` 不是什么长度，是**八进制权限位的十进制值** ——
+`0o600` = 384，`0o666` = 438。那条断言在检查密钥文件是否「仅属主可读写」，
+而 **Windows 的 NTFS 没有 POSIX 权限位**，`chmod` 是空操作，
+所以永远拿到 `0o666`，在 Windows 上**必然失败**。
+
+现在该断言只在非 Windows 上执行。
+
+> 顺带一提安全影响：Windows 上 `library\config\api-keys.json`（存放手动填的密钥）
+> 无法靠 `chmod` 限制权限，实际权限由所在目录的 ACL 继承。
+> 如果这台机器有多个用户账号，注意这一点。
 
 ---
 

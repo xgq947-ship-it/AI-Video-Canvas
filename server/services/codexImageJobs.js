@@ -85,6 +85,13 @@ function jobPath(jobsDir, jobId) {
     return path.join(jobsDir, 'jobs', `${safeSegment(jobId)}.json`);
 }
 
+function cleanupCompletedJobReferences(jobsDir, jobId) {
+    const referenceDir = path.join(jobsDir, 'references', safeSegment(jobId));
+    if (!fs.existsSync(referenceDir)) return false;
+    fs.rmSync(referenceDir, { recursive: true, force: true });
+    return true;
+}
+
 function assertInside(baseDir, candidatePath) {
     const base = path.resolve(baseDir);
     const candidate = path.resolve(candidatePath);
@@ -296,6 +303,17 @@ export async function completeCodexImageJob({ jobsDir, imagesDir, jobId, sourceI
         type: 'images'
     };
     writeJsonAtomic(path.join(imagesDir, `${job.id}.json`), metadata);
+
+    try {
+        if (cleanupCompletedJobReferences(jobsDir, jobId)) {
+            const cleaned = { ...updated, referenceFilesCleanedAt: new Date().toISOString() };
+            writeJsonAtomic(jobPath(jobsDir, jobId), cleaned);
+            return cleaned;
+        }
+    } catch (error) {
+        console.warn(`[Codex 生图] 清理已完成任务的参考图副本失败：${error.message}`);
+    }
+
     return updated;
 }
 

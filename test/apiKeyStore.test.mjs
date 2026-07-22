@@ -20,7 +20,14 @@ test('手动 API 密钥以本机文件保存并覆盖环境变量', () => {
 
     assert.equal(loadApiKeyOverrides(libraryDir).ARK_API_KEY, 'manual-seedance-key');
     assert.equal(app.locals.ARK_API_KEY, 'manual-seedance-key');
-    assert.equal(fs.statSync(path.join(libraryDir, 'config', 'api-keys.json')).mode & 0o777, 0o600);
+
+    // 权限位只在 POSIX 上有意义。Windows 的 NTFS 没有 POSIX 权限位，
+    // chmod 是空操作，这里恒为 0o666(438) 而非 0o600(384)——
+    // 原来无条件断言 0o600 会导致 Windows 上必然有 1 个 fail，
+    // 且报错信息（438 ≠ 384）完全看不出是权限问题。
+    if (process.platform !== 'win32') {
+        assert.equal(fs.statSync(path.join(libraryDir, 'config', 'api-keys.json')).mode & 0o777, 0o600);
+    }
     fs.rmSync(libraryDir, { recursive: true, force: true });
 });
 

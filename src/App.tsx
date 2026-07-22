@@ -64,6 +64,13 @@ import { collectNodeReferences } from './utils/nodeReferences.js';
 // MAIN COMPONENT
 // ============================================================================
 
+type CanvasHistoryState = { nodes: NodeData[]; groups: ReturnType<typeof useGroupManagement>['groups'] };
+
+// Nodes and groups are always updated immutably. Reference equality therefore
+// preserves the existing history semantics without serializing every media URL.
+const isSameCanvasHistoryState = (left: CanvasHistoryState, right: CanvasHistoryState) =>
+  left.nodes === right.nodes && left.groups === right.groups;
+
 // Helper to convert URL/Blob to Base64
 const urlToBase64 = async (url: string): Promise<string> => {
   if (url.startsWith('data:image')) return url;
@@ -213,7 +220,7 @@ export default function App() {
     pushHistory,
     canUndo,
     canRedo
-  } = useHistory({ nodes, groups }, 50);
+  } = useHistory({ nodes, groups }, 50, isSameCanvasHistoryState);
 
   // Mark as dirty when nodes or title change
   const isInitialMount = React.useRef(true);

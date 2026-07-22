@@ -7,7 +7,7 @@
  */
 
 import React, { useState, useRef, useEffect, memo } from 'react';
-import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Film, Clock, Expand, Shrink, Monitor, Crop, HardDrive, Upload, Loader2, Mic2 } from 'lucide-react';
+import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Film, Clock, Expand, Shrink, Monitor, Crop, HardDrive, Upload, Loader2, Mic2, ScanSearch } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { useBrowserModels } from '../../hooks/useBrowserModels';
 import { ChangeAnglePanel } from './ChangeAnglePanel';
@@ -21,6 +21,7 @@ import {
     type PromptOptimizationProfile
 } from '../../../shared/promptOptimizationProfiles.js';
 import { shouldUseReferenceImages, usesReferenceMaterialsOnly } from '../../utils/videoModelCapabilities.js';
+import { buildReverseImagePromptInstruction, type ReverseImagePromptMode } from '../../../shared/reverseImagePrompt.js';
 
 interface NodeControlsProps {
     workflowId?: string;
@@ -153,7 +154,9 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const [isUploadingVideo, setIsUploadingVideo] = useState(false);
     const [localPrompt, setLocalPrompt] = useState(data.prompt || '');
     const [showPromptOptimizer, setShowPromptOptimizer] = useState(false);
+    const [showImagePromptMenu, setShowImagePromptMenu] = useState(false);
     const [isOptimizingPrompt, setIsOptimizingPrompt] = useState(false);
+    const [isGeneratingImagePrompt, setIsGeneratingImagePrompt] = useState(false);
     const [promptOptimizationError, setPromptOptimizationError] = useState('');
     const [mentionStart, setMentionStart] = useState<number | null>(null);
     const [mentionQuery, setMentionQuery] = useState('');
@@ -165,6 +168,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const resolutionDropdownRef = useRef<HTMLDivElement>(null);
     const modelDropdownRef = useRef<HTMLDivElement>(null);
     const promptOptimizerRef = useRef<HTMLDivElement>(null);
+    const imagePromptMenuRef = useRef<HTMLDivElement>(null);
     const videoUploadInputRef = useRef<HTMLInputElement>(null);
     const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const lastSentPromptRef = useRef<string | undefined>(data.prompt); // Track what we sent
@@ -206,6 +210,9 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
             }
             if (promptOptimizerRef.current && !promptOptimizerRef.current.contains(event.target as Node)) {
                 setShowPromptOptimizer(false);
+            }
+            if (imagePromptMenuRef.current && !imagePromptMenuRef.current.contains(event.target as Node)) {
+                setShowImagePromptMenu(false);
             }
         };
         document.addEventListener('mousedown', handleClickOutside);
@@ -509,6 +516,42 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
         }
     };
 
+    const handleGenerateImagePrompt = async (mode: ReverseImagePromptMode) => {
+        if (!isImageNode || !data.resultUrl || isGeneratingImagePrompt) return;
+
+        setIsGeneratingImagePrompt(true);
+        setPromptOptimizationError('');
+        setShowPromptOptimizer(false);
+        setShowImagePromptMenu(false);
+
+        try {
+            const response = await fetch('/api/gemini/describe-image', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    imageUrl: data.resultUrl,
+                    prompt: buildReverseImagePromptInstruction(mode)
+                })
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || !result.description) {
+                throw new Error(result.error || '图片提示词生成失败');
+            }
+
+            if (updateTimeoutRef.current) clearTimeout(updateTimeoutRef.current);
+            const generatedPrompt = String(result.description).trim();
+            setLocalPrompt(generatedPrompt);
+            lastSentPromptRef.current = generatedPrompt;
+            onUpdate(data.id, { prompt: generatedPrompt });
+            requestAnimationFrame(() => promptRef.current?.focus());
+        } catch (error) {
+            console.error('Image prompt generation failed:', error);
+            setPromptOptimizationError(error instanceof Error ? error.message : '图片提示词生成失败');
+        } finally {
+            setIsGeneratingImagePrompt(false);
+        }
+    };
+
     // Get available resolutions for current model (considering duration for models with durationResolutionMap)
     const getAvailableResolutions = () => {
         const model = currentVideoModel;
@@ -809,12 +852,63 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                         </div>
 
                         {(isImageNode || isVideoNode) && (
-                            <div className="relative flex-none" ref={promptOptimizerRef}>
+                            <div className="flex flex-none items-start gap-2">
+                                {isImageNode && (
+                                    <div className="relative" ref={imagePromptMenuRef}>
+                                        <button
+                                            type="button"
+                                            disabled={!data.resultUrl || isGeneratingImagePrompt || isOptimizingPrompt}
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                setShowPromptOptimizer(false);
+                                                setShowImagePromptMenu(current => !current);
+                                            }}
+                                            className={`flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isDark
+                                                ? 'border-neutral-700 bg-[#252525] text-neutral-200 hover:border-cyan-500 hover:bg-cyan-500/10 hover:text-cyan-300'
+                                                : 'border-neutral-300 bg-white text-neutral-700 hover:border-cyan-500 hover:bg-cyan-50 hover:text-cyan-700'}`}
+                                            title={data.resultUrl ? '选择当前节点图片的反推模式' : '当前节点生成图片后才可反推提示词'}
+                                        >
+                                            {isGeneratingImagePrompt ? <Loader2 size={14} className="animate-spin" /> : <ScanSearch size={14} />}
+                                            <span>{isGeneratingImagePrompt ? '识别中' : '生成图片提示词'}</span>
+                                            <ChevronDown size={13} className="opacity-60" />
+                                        </button>
+
+                                        {showImagePromptMenu && (
+                                            <div className={`absolute right-0 top-full z-[180] mt-2 w-72 overflow-hidden rounded-xl border p-1.5 shadow-2xl ${isDark ? 'border-neutral-700 bg-[#252525]' : 'border-neutral-200 bg-white'}`}>
+                                                <button
+                                                    type="button"
+                                                    onClick={(event) => {
+                                                        event.stopPropagation();
+                                                        void handleGenerateImagePrompt('normal');
+                                                    }}
+                                                    className={`w-full rounded-lg px-3 py-2.5 text-left transition-colors ${isDark ? 'hover:bg-neutral-700' : 'hover:bg-neutral-100'}`}
+                                                >
+                                                    <span className={`block text-sm font-semibold ${isDark ? 'text-white' : 'text-neutral-900'}`}>正常图片提示词</span>
+                                                    <span className="mt-0.5 block text-xs text-neutral-500">完整识别画面，包括可见文案与字幕</span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={(event) => {
+                                                        event.stopPropagation();
+                                                        void handleGenerateImagePrompt('no-text');
+                                                    }}
+                                                    className={`w-full rounded-lg px-3 py-2.5 text-left transition-colors ${isDark ? 'hover:bg-neutral-700' : 'hover:bg-neutral-100'}`}
+                                                >
+                                                    <span className={`block text-sm font-semibold ${isDark ? 'text-white' : 'text-neutral-900'}`}>去除文案字幕</span>
+                                                    <span className="mt-0.5 block text-xs text-neutral-500">忽略文字、标题、标签、水印和排版描述</span>
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                <div className="relative" ref={promptOptimizerRef}>
                                 <button
                                     type="button"
-                                    disabled={!canOptimizePrompt || isOptimizingPrompt}
+                                    disabled={!canOptimizePrompt || isOptimizingPrompt || isGeneratingImagePrompt}
                                     onClick={(event) => {
                                         event.stopPropagation();
+                                        setShowImagePromptMenu(false);
                                         setShowPromptOptimizer(current => !current);
                                     }}
                                     className={`flex h-9 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isDark
@@ -880,6 +974,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                 {promptOptimizationError && (
                                     <div className="mt-1 max-w-72 text-right text-[11px] text-red-400">{promptOptimizationError}</div>
                                 )}
+                                </div>
                             </div>
                         )}
                     </div>

@@ -8,6 +8,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Loader2, Maximize2, ImageIcon as ImageIcon, Film, Upload, Pencil, Video, GripVertical, Download, Expand, Shrink, RotateCcw, CircleAlert } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
+import { LazyImage } from '../LazyImage';
 
 interface NodeContentProps {
     data: NodeData;
@@ -119,9 +120,14 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                     style={getAspectRatioStyle()}
                 >
                     {isVideoType ? (
-                        <video src={data.resultUrl} controls loop className="w-full h-full object-cover" />
+                        <video src={data.resultUrl} controls loop preload="metadata" className="w-full h-full object-cover" />
                     ) : (
-                        <img src={data.resultUrl} alt="Generated" className="w-full h-full object-cover pointer-events-none" />
+                        <LazyImage
+                            src={data.resultUrl}
+                            alt="Generated"
+                            className="w-full h-full pointer-events-none"
+                            rootMargin="1200px"
+                        />
                     )}
 
                     {/* Regenerating Overlay - Shows when loading with existing content */}

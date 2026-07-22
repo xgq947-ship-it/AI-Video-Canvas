@@ -7,6 +7,7 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { HistoryState, EditorElement } from '../components/modals/imageEditor/imageEditor.types';
+import { dataUrlToBlob, snapshotImageSource } from '@/shared/canvasSnapshots.js';
 
 // ============================================================================
 // TYPES
@@ -33,6 +34,36 @@ interface UseImageEditorHistoryReturn {
     handleRedo: () => void;
     isUndoRedoRef: React.MutableRefObject<boolean>;
 }
+
+const captureCanvas = (canvas: HTMLCanvasElement | null): Blob | null =>
+    canvas ? dataUrlToBlob(canvas.toDataURL()) : null;
+
+const restoreCanvas = (
+    canvas: HTMLCanvasElement,
+    canvasData: string | Blob,
+    onComplete: () => void
+) => {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+        onComplete();
+        return;
+    }
+
+    const source = snapshotImageSource(canvasData);
+    const img = new Image();
+    const finish = () => {
+        source.release();
+        onComplete();
+    };
+
+    img.onload = () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+        finish();
+    };
+    img.onerror = finish;
+    img.src = source.src;
+};
 
 // ============================================================================
 // HOOK
@@ -75,7 +106,7 @@ export const useImageEditorHistory = ({
         if (isUndoRedoRef.current) return;
 
         const canvas = canvasRef.current;
-        const canvasData = canvas ? canvas.toDataURL() : null;
+        const canvasData = captureCanvas(canvas);
 
         pendingStateRef.current = {
             canvasData,
@@ -102,7 +133,7 @@ export const useImageEditorHistory = ({
         if (isUndoRedoRef.current) return;
 
         const canvas = canvasRef.current;
-        const canvasData = canvas ? canvas.toDataURL() : null;
+        const canvasData = captureCanvas(canvas);
 
         const newState: HistoryState = {
             canvasData,
@@ -132,7 +163,7 @@ export const useImageEditorHistory = ({
 
         // Save current state to redo stack (including current image URL)
         const canvas = canvasRef.current;
-        const currentCanvasData = canvas ? canvas.toDataURL() : null;
+        const currentCanvasData = captureCanvas(canvas);
         const currentState: HistoryState = {
             canvasData: currentCanvasData,
             elements: [...elementsRef.current],
@@ -154,16 +185,9 @@ export const useImageEditorHistory = ({
 
         // Restore canvas
         if (previousState.canvasData && canvas) {
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-                const img = new Image();
-                img.onload = () => {
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
-                    ctx.drawImage(img, 0, 0);
-                    isUndoRedoRef.current = false;
-                };
-                img.src = previousState.canvasData;
-            }
+            restoreCanvas(canvas, previousState.canvasData, () => {
+                isUndoRedoRef.current = false;
+            });
         } else if (canvas) {
             const ctx = canvas.getContext('2d');
             if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -191,7 +215,7 @@ export const useImageEditorHistory = ({
 
         // Save current state to history stack (including current image URL)
         const canvas = canvasRef.current;
-        const currentCanvasData = canvas ? canvas.toDataURL() : null;
+        const currentCanvasData = captureCanvas(canvas);
         const currentState: HistoryState = {
             canvasData: currentCanvasData,
             elements: [...elementsRef.current],
@@ -213,16 +237,9 @@ export const useImageEditorHistory = ({
 
         // Restore canvas
         if (nextState.canvasData && canvas) {
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-                const img = new Image();
-                img.onload = () => {
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
-                    ctx.drawImage(img, 0, 0);
-                    isUndoRedoRef.current = false;
-                };
-                img.src = nextState.canvasData;
-            }
+            restoreCanvas(canvas, nextState.canvasData, () => {
+                isUndoRedoRef.current = false;
+            });
         } else if (canvas) {
             const ctx = canvas.getContext('2d');
             if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);

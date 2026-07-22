@@ -7,7 +7,15 @@
 
 import { useState, useCallback } from 'react';
 
-export const useHistory = <T>(initialState: T, maxHistorySize: number = 50) => {
+type HistoryEquality<T> = (left: T, right: T) => boolean;
+
+const deepEqual = <T,>(left: T, right: T) => JSON.stringify(left) === JSON.stringify(right);
+
+export const useHistory = <T>(
+    initialState: T,
+    maxHistorySize: number = 50,
+    isEqual: HistoryEquality<T> = deepEqual
+) => {
     // ============================================================================
     // STATE
     // ============================================================================
@@ -63,8 +71,9 @@ export const useHistory = <T>(initialState: T, maxHistorySize: number = 50) => {
      * @param newState - New state to push
      */
     const pushHistory = useCallback((newState: T) => {
-        // Skip if state hasn't changed (deep comparison)
-        if (JSON.stringify(newState) === JSON.stringify(present)) {
+        // Callers with immutable state can provide a reference-based comparator.
+        // This avoids creating large temporary JSON strings for media-heavy canvases.
+        if (isEqual(newState, present)) {
             return;
         }
 
@@ -74,7 +83,7 @@ export const useHistory = <T>(initialState: T, maxHistorySize: number = 50) => {
         setPast(newPast);
         setPresent(newState);
         setFuture([]); // Clear redo stack on new action
-    }, [past, present, maxHistorySize]);
+    }, [past, present, maxHistorySize, isEqual]);
 
     /**
      * Reset history to a new initial state

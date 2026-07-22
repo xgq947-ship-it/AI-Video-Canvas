@@ -45,9 +45,14 @@ export function resolveImageToBase64(input) {
             const pathWithoutQuery = filePath.split('?')[0];
 
             // Get the library directory from environment or default
-            const libraryDir = process.env.LIBRARY_DIR || path.join(process.cwd(), 'library');
+            const libraryDir = path.resolve(process.env.LIBRARY_DIR || path.join(process.cwd(), 'library'));
             const relativePath = pathWithoutQuery.replace('/library/', '');
-            const absolutePath = path.join(libraryDir, relativePath);
+            const absolutePath = path.resolve(libraryDir, relativePath);
+
+            if (absolutePath !== libraryDir && !absolutePath.startsWith(`${libraryDir}${path.sep}`)) {
+                console.warn('Rejected image path outside library:', input.substring(0, 100));
+                return null;
+            }
 
             if (fs.existsSync(absolutePath)) {
                 const fileBuffer = fs.readFileSync(absolutePath);
@@ -58,6 +63,7 @@ export function resolveImageToBase64(input) {
                     '.jpeg': 'image/jpeg',
                     '.gif': 'image/gif',
                     '.webp': 'image/webp',
+                    '.avif': 'image/avif',
                     '.mp4': 'video/mp4',
                     '.webm': 'video/webm'
                 }[ext] || 'image/png';

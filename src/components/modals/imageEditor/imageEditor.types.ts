@@ -45,7 +45,7 @@ export type EditorElement = ArrowElement | TextElement;
  * Snapshot of editor state for undo/redo
  */
 export interface HistoryState {
-    canvasData: string | null; // Base64 image data of brush canvas
+    canvasData: string | Blob | null; // Binary in memory; string retained for backward compatibility
     elements: EditorElement[];
     imageUrl?: string; // Current image URL (for crop undo/redo)
 }

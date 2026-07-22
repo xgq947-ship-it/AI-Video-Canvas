@@ -453,7 +453,7 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
               {data.renderStatus === 'success' && data.renderOutputUrl && (
                 <div className="flex flex-col gap-1.5">
                   <div className="flex items-center gap-1 text-[11px] text-emerald-400"><CheckCircle2 size={13} /> 渲染成功</div>
-                  <video src={data.renderOutputUrl} controls className="w-full rounded" style={{ aspectRatio: '16/9' }}
+                  <video src={data.renderOutputUrl} controls preload="metadata" className="w-full rounded" style={{ aspectRatio: '16/9' }}
                     onPointerDown={stop} onDoubleClick={() => onExpand?.(data.renderOutputUrl!)} />
                   <div className="flex gap-1.5">
                     <a href={data.renderOutputUrl} download onPointerDown={stop}

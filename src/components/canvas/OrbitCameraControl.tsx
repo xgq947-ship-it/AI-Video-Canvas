@@ -130,10 +130,17 @@ const ImagePlane: React.FC<{ imageUrl: string }> = ({ imageUrl }) => {
 
         const loader = new THREE.TextureLoader();
         loader.crossOrigin = 'anonymous';
+        let disposed = false;
+        let loaded: THREE.Texture | null = null;
 
         loader.load(
             imageUrl,
             (loadedTexture) => {
+                if (disposed) {
+                    loadedTexture.dispose();
+                    return;
+                }
+                loaded = loadedTexture;
                 // Set filters for sharper texture rendering
                 loadedTexture.minFilter = THREE.LinearFilter;
                 loadedTexture.magFilter = THREE.LinearFilter;
@@ -148,7 +155,8 @@ const ImagePlane: React.FC<{ imageUrl: string }> = ({ imageUrl }) => {
         );
 
         return () => {
-            texture?.dispose();
+            disposed = true;
+            loaded?.dispose();
         };
     }, [imageUrl]);
 
@@ -166,6 +174,16 @@ const ImagePlane: React.FC<{ imageUrl: string }> = ({ imageUrl }) => {
             </mesh>
         </group>
     );
+};
+
+const RenderWhileDragging: React.FC<{ active: boolean }> = ({ active }) => {
+    const invalidate = useThree(state => state.invalidate);
+
+    useFrame(() => {
+        if (active) invalidate();
+    });
+
+    return null;
 };
 
 // ============================================================================
@@ -592,6 +610,7 @@ const Scene: React.FC<SceneProps> = ({
 
     return (
         <>
+            <RenderWhileDragging active={dragging !== null} />
             {/* Lighting */}
             <ambientLight intensity={0.6} />
             <directionalLight position={[5, 10, 5]} intensity={0.8} />
@@ -718,6 +737,7 @@ export const OrbitCameraControl: React.FC<OrbitCameraControlProps> = ({
             {/* Three.js Canvas */}
             <div className="w-full h-[340px] rounded-xl overflow-hidden bg-[#1a1a2e] border border-neutral-800">
                 <Canvas
+                    frameloop="demand"
                     camera={{
                         position: [3.5, 2.5, 4.5],
                         fov: 55,

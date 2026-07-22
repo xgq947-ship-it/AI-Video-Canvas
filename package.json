@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "concurrently \"npm run server\" \"vite\"",
+    "dev": "concurrently --kill-others-on-fail \"npm run server\" \"vite --strictPort\"",
     "server": "node server/index.js",
     "mcp:claude": "node mcp/twitcanva-mcp.js",
     "test": "node --test test/*.test.mjs",

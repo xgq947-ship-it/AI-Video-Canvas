@@ -161,12 +161,18 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
     if (data.type === NodeType.VIDEO) {
       // Detect video dimensions
       const video = document.createElement('video');
+      video.preload = 'metadata';
       video.onloadedmetadata = () => {
         if (video.videoWidth && video.videoHeight) {
           onUpdate(data.id, { resultAspectRatio: `${video.videoWidth}/${video.videoHeight}` });
         }
       };
       video.src = data.resultUrl;
+      return () => {
+        video.onloadedmetadata = null;
+        video.removeAttribute('src');
+        video.load();
+      };
     } else {
       // Detect image dimensions
       const img = new Image();
@@ -176,6 +182,10 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
         }
       };
       img.src = data.resultUrl;
+      return () => {
+        img.onload = null;
+        img.src = '';
+      };
     }
   }, [isSuccess, data.resultUrl, data.resultAspectRatio, data.type, data.id, onUpdate]);
 
@@ -443,6 +453,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
             {videoUrl ? (
               <video
                 src={videoUrl}
+                preload="metadata"
                 className={`rounded-xl w-full h-auto object-cover ${selected ? 'ring-2 ring-purple-500 shadow-2xl' : ''}`}
                 style={{ maxHeight: '500px', aspectRatio: '16/9' }}
                 muted

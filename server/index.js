@@ -41,6 +41,7 @@ import {
 import { getPromptOptimizerProvider } from './services/promptOptimizerProviders.js';
 import { applyOptimizerPreferenceToApp, loadOptimizerPreference } from './services/optimizerPreference.js';
 import { BROWSER_MODELS_SETUP_HINT, isBrowserModelsReady } from './services/opsCliRunner.js';
+import { resolveImageToBase64 } from './utils/imageHelpers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1074,72 +1075,15 @@ app.post('/api/gemini/describe-image', async (req, res) => {
             return res.status(400).json({ error: 'Image URL is required' });
         }
 
-        // Handle base64 or file URL
-        let imagePart;
-
-        // Check if it's a data URL (base64)
-        if (imageUrl.startsWith('data:')) {
-            const matches = imageUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-            if (matches && matches.length === 3) {
-                imagePart = {
-                    inlineData: {
-                        data: matches[2],
-                        mimeType: matches[1]
-                    }
-                };
+        // 统一支持 data URL、旧素材路径和 project 项目目录路径。
+        const imageDataUrl = resolveImageToBase64(imageUrl);
+        const imageMatch = imageDataUrl?.match(/^data:(image\/[A-Za-z0-9.+-]+);base64,(.+)$/s);
+        const imagePart = imageMatch ? {
+            inlineData: {
+                data: imageMatch[2],
+                mimeType: imageMatch[1]
             }
-        }
-        // Handle local file paths (e.g., /library/images/...)
-        else {
-            // Strip domain if present to get relative path
-            let cleanUrl = imageUrl;
-            try {
-                if (imageUrl.startsWith('http')) {
-                    const u = new URL(imageUrl);
-                    cleanUrl = u.pathname;
-                }
-            } catch (e) {
-                // ignore invalid url parse, treat as path
-            }
-
-            // CRITICAL: Strip query string (cache busting params like ?t=123)
-            if (cleanUrl.includes('?')) {
-                cleanUrl = cleanUrl.split('?')[0];
-            }
-
-            console.log(`[Gemini DescribeV2] Cleaned path: ${cleanUrl}`);
-
-            if (cleanUrl.startsWith('/library/')) {
-                // Need to read the file from disk
-                // Convert URL path to system path
-                let fullPath = '';
-
-                if (cleanUrl.startsWith('/library/images/')) {
-                    const relativePath = cleanUrl.replace('/library/images/', '');
-                    fullPath = path.join(IMAGES_DIR, relativePath);
-                } else if (cleanUrl.startsWith('/library/videos/')) {
-                    return res.status(400).json({ error: 'Video description not directly supported, use a frame.' });
-                }
-
-                console.log(`[Gemini DescribeV2] Resolved path: ${fullPath}`);
-
-                if (fullPath && fs.existsSync(fullPath)) {
-                    const imageData = fs.readFileSync(fullPath);
-                    const base64Data = imageData.toString('base64');
-                    const mimeType = fullPath.endsWith('.png') ? 'image/png' :
-                        fullPath.endsWith('.jpg') || fullPath.endsWith('.jpeg') ? 'image/jpeg' : 'image/webp';
-
-                    imagePart = {
-                        inlineData: {
-                            data: base64Data,
-                            mimeType: mimeType
-                        }
-                    };
-                } else {
-                    console.log(`[Gemini DescribeV2] File not found at: ${fullPath}`);
-                }
-            }
-        }
+        } : null;
 
         if (!imagePart) {
             console.log('[Gemini DescribeV2] Failed to process image part');

@@ -3,6 +3,10 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "//": "需要 Node 22+：npm test 依赖 node --test 自身的通配符展开（Node 21 起支持）。Windows 的 cmd 不展开 test/*.test.mjs，低版本 Node 会直接跑不了测试。",
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "concurrently \"npm run server\" \"vite\"",
     "server": "node server/index.js",

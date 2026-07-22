@@ -42,13 +42,20 @@ def _default_chrome_bin() -> Path:
         return Path(f"/Applications/{CHROME_APP_NAME}.app/Contents/MacOS/{CHROME_APP_NAME}")
 
     if IS_WINDOWS:
-        candidates = [
-            Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Google/Chrome/Application/chrome.exe",
-            Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")) / "Google/Chrome/Application/chrome.exe",
-            Path(os.environ.get("LOCALAPPDATA", "")) / "Google/Chrome/Application/chrome.exe",
+        roots = [
+            Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")),
+            Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")),
+            Path(os.environ.get("LOCALAPPDATA", "")),
         ]
+        # Beta 优先：Windows 上窗口隐藏是 no-op（没有 osascript 等价物），
+        # 自动化窗口会一直显示在桌面上。若用与日常同款的 Chrome，用户极易
+        # 把它当成自己的窗口顺手关掉，触发 BROWSER_CLOSED 中断生成。
+        # Beta 图标颜色不同，一眼可辨。找不到 Beta 再回退到普通 Chrome。
+        candidates = [root / "Google/Chrome Beta/Application/chrome.exe" for root in roots]
+        candidates += [root / "Google/Chrome/Application/chrome.exe" for root in roots]
     else:  # Linux 等
         candidates = [
+            Path("/usr/bin/google-chrome-beta"),
             Path("/usr/bin/google-chrome"),
             Path("/usr/bin/chromium"),
             Path("/usr/bin/chromium-browser"),

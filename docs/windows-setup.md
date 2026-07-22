@@ -225,34 +225,50 @@ py -3.12 --version
 
 ---
 
-## 步骤 9 — 安装 Chrome
+## 步骤 9 — 安装 Chrome Beta（推荐）
 
-轨道 B 需要一个 Chrome 来做页面自动化。
+轨道 B 需要一个 Chrome 来做页面自动化。**推荐专门装一个 Chrome Beta 来干这事。**
 
 ```powershell
-winget install --id Google.Chrome -e
+winget install --id Google.Chrome.Beta -e
 ```
 
 **验收**
 ```powershell
-Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe"
+Test-Path "C:\Program Files\Google\Chrome Beta\Application\chrome.exe"
 ```
 返回 `True` 即可。
 
-**排错**：如果返回 `False`，代码还会自动探测这两个位置：
-- `C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`
-- `%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe`
+### 为什么专门装 Beta，而不是用你日常的 Chrome
 
-都不在的话，找到 `chrome.exe` 的真实路径，然后在 `.env` 里加一行：
+不是洁癖，是有实际后果的：
+
+1. **Windows 上自动化窗口会一直显示在桌面上。** 「隐藏窗口」那个功能是
+   macOS 专有的 API（AppleScript），Windows 上没有等价物，代码里是空操作。
+2. 所以那个 9222 窗口会一直杵在你的任务栏里。**如果它长得和你日常的 Chrome
+   一模一样，你极容易顺手把它关掉** —— 而一旦在生成过程中关掉，任务会直接
+   中断并报 `BROWSER_CLOSED`，即梦那边可能已经扣了额度。
+3. **Beta 的图标是不同颜色的，一眼就能分辨**，误关的概率大幅降低。
+
+另外它的安装位置和配置目录都与日常 Chrome 完全独立，不会互相干扰。
+
+### 代码怎么找浏览器（探测顺序）
+
+1. `.env` 里的 `SESSIONHUB_CHROME_APP`（**优先级最高**，手动指定用这个）
+2. **Chrome Beta**，依次探测：
+   - `%ProgramFiles%\Google\Chrome Beta\Application\chrome.exe`
+   - `%ProgramFiles(x86)%\Google\Chrome Beta\Application\chrome.exe`
+   - `%LOCALAPPDATA%\Google\Chrome Beta\Application\chrome.exe`
+3. **普通 Chrome**（Beta 没装时自动回退），同样探测上面三个位置的
+   `Google\Chrome\Application\chrome.exe`
+
+**所以不装 Beta 也能跑** —— 会自动回退到普通 Chrome，只是有上面说的误关风险。
+
+**排错**：如果报「找不到 Chrome」，说明两个都没探测到。
+找到 `chrome.exe` 的真实路径后，在 `.env` 里加一行（注意路径**不要**加引号）：
 ```
 SESSIONHUB_CHROME_APP=C:\你的实际路径\chrome.exe
 ```
-
-> **关于 Chrome Beta**：Mac 上默认用 Chrome Beta，是为了和日常用的 Chrome
-> 隔离（避免点链接时误投到自动化实例）。**Windows 上不需要装 Beta**，
-> 用普通 Chrome 即可——代码已经针对非 macOS 改用普通 Chrome 路径，
-> 且用的是**独立的用户数据目录**（`%USERPROFILE%\.sessionhub\chrome-9222`），
-> 与你日常的 Chrome 配置完全隔离，不会互相干扰。
 
 ---
 
@@ -295,15 +311,21 @@ netstat -ano | findstr :9222
 有输出的话记下 PID，用 `taskkill /PID <PID> /T /F` 结束。
 
 然后启动：
+装了 Chrome Beta 的话（推荐）：
 ```powershell
-& "C:\Program Files\Google\Chrome\Application\chrome.exe" `
+& "C:\Program Files\Google\Chrome Beta\Application\chrome.exe" `
   --remote-debugging-port=9222 `
   --user-data-dir="$env:USERPROFILE\.sessionhub\chrome-9222" `
   --no-first-run --no-default-browser-check `
   about:blank
 ```
 
-会弹出一个**全新的、空白的 Chrome 窗口**（不是你日常那个）。在这个窗口里：
+只装了普通 Chrome 的话，把上面第一行换成：
+```powershell
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" `
+```
+
+会弹出一个**全新的、空白的浏览器窗口**（不是你日常那个）。在这个窗口里：
 
 1. 打开 https://jimeng.jianying.com → 登录你的即梦账号（确认是 VIP）
 2. 打开 https://labs.google/fx/tools/flow → 登录你的 Google 账号

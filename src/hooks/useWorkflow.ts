@@ -76,8 +76,11 @@ export const useWorkflow = ({
                 body: JSON.stringify(workflow)
             });
 
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(result.error || '项目保存失败');
+            }
             if (response.ok) {
-                const result = await response.json();
                 setWorkflowId(result.id);
                 if (result.projectDirName) setProjectDirName(result.projectDirName);
                 console.log('Workflow saved:', result.id);
@@ -94,6 +97,7 @@ export const useWorkflow = ({
             }
         } catch (error) {
             console.error('Failed to save workflow:', error);
+            throw error;
         }
     }, [workflowId, canvasTitle, nodes, groups, viewport, setNodes, ignoreNextChangeRef]);
 

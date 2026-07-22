@@ -158,6 +158,16 @@ export function importProjectAsset(workflow, sourceUrl, dirs) {
         error.code = 'UNSUPPORTED_ASSET_URL';
         throw error;
     }
+    if (path.basename(parsed.filename) !== parsed.filename || parsed.filename === '.' || parsed.filename === '..') {
+        const error = new Error('素材文件名不合法');
+        error.code = 'UNSUPPORTED_ASSET_URL';
+        throw error;
+    }
+    if (parsed.projectDir && path.basename(parsed.projectDir) !== parsed.projectDir) {
+        const error = new Error('素材项目目录不合法');
+        error.code = 'UNSUPPORTED_ASSET_URL';
+        throw error;
+    }
     ensureProjectFolder(workflow, dirs);
     if (parsed.layout === 'project' && parsed.projectDir === workflow.projectDirName) {
         return { url: projectUrl(workflow.projectDirName, parsed.type, parsed.filename, parsed.origin), type: parsed.type };

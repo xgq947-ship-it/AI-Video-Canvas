@@ -18,13 +18,12 @@
     "preview": "vite preview",
     "setup:local-models": "node -e \"require('child_process').execSync(process.platform === 'win32' ? 'setup-local-models.bat' : 'bash setup-local-models.sh', {stdio: 'inherit'})\"",
     "setup:browser-models": "node scripts/setup-browser-models.mjs",
-    "launcher": "node scripts/launcher.mjs"
+    "launcher": "node scripts/launcher.mjs",
+    "launcher:gui": "node scripts/launcher-gui.mjs"
   },
   "dependencies": {
-    "@fal-ai/client": "^1.8.0",
     "@google/genai": "^1.32.0",
     "@google/generative-ai": "^0.24.1",
-    "@lobehub/icons": "^3.0.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",

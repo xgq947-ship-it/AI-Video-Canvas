@@ -16,15 +16,15 @@ import { spawn, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline/promises';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const IS_WIN = process.platform === 'win32';
-const FRONTEND = 'http://localhost:5173';
+export const FRONTEND = 'http://localhost:5173';
 const BACKEND = 'http://localhost:3001/api/capabilities';
 const PORTS = [5173, 3001];
 const LOG_DIR = path.join(ROOT, 'logs');
-const LOG_FILE = path.join(LOG_DIR, 'dev-server.log');
+export const LOG_FILE = path.join(LOG_DIR, 'dev-server.log');
 
 // ---------------------------------------------------------------- 健康检查
 
@@ -40,7 +40,7 @@ async function ping(url, timeoutMs = 2000) {
     }
 }
 
-async function status() {
+export async function status() {
     const [frontend, backend] = await Promise.all([ping(FRONTEND), ping(BACKEND)]);
     return { frontend, backend, running: frontend && backend };
 }
@@ -83,7 +83,7 @@ function killPid(pid) {
     }
 }
 
-async function start() {
+export async function start() {
     const s = await status();
     if (s.running) {
         console.log('✅ 服务已在运行，无需重复启动');
@@ -95,12 +95,16 @@ async function start() {
     fs.writeSync(logFd, `\n===== ${new Date().toLocaleString()} 启动 =====\n`);
 
     // Windows 的 npm 是 npm.cmd；直接 spawn('npm') 会 ENOENT。
-    const npm = IS_WIN ? 'npm.cmd' : 'npm';
-    const child = spawn(npm, ['run', 'dev'], {
+    // Windows：不能用 shell:true —— 那会弹出一个 cmd 黑框并且关不掉。
+    // 改为显式调 cmd.exe /c 并配合 windowsHide，后端就完全静默地跑在后台。
+    const [cmd, args] = IS_WIN
+        ? ['cmd.exe', ['/c', 'npm', 'run', 'dev']]
+        : ['npm', ['run', 'dev']];
+    const child = spawn(cmd, args, {
         cwd: ROOT,
         detached: true,              // 脱离本进程，关掉菜单窗口服务仍在跑
         stdio: ['ignore', logFd, logFd],
-        shell: IS_WIN                // .cmd 需要走 shell 才能被解析
+        windowsHide: true            // 不弹控制台窗口
     });
     child.unref();
 
@@ -118,7 +122,7 @@ async function start() {
     return false;
 }
 
-async function stop() {
+export async function stop() {
     let killed = 0;
     for (const port of PORTS) {
         for (const pid of pidsOnPort(port)) {
@@ -141,14 +145,14 @@ async function stop() {
 
 // ---------------------------------------------------------------- 系统集成
 
-function openExternal(target) {
+export function openExternal(target) {
     const cmd = IS_WIN ? 'cmd' : process.platform === 'darwin' ? 'open' : 'xdg-open';
     // Windows: start 的第一个引号参数会被当成窗口标题，故补一个空标题占位。
     const args = IS_WIN ? ['/c', 'start', '', target] : [target];
     spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
 }
 
-async function openCanvas() {
+export async function openCanvas() {
     const s = await status();
     if (!s.running && !(await start())) return;
     openExternal(FRONTEND);
@@ -226,4 +230,7 @@ async function main() {
     }
 }
 
-main();
+// 被 import 时不启动菜单，只有直接执行本文件才跑。
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+    main();
+}

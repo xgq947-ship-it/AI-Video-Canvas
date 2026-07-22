@@ -3,13 +3,11 @@ chcp 65001 >nul
 title Evan 工作台
 
 rem ============================================================
-rem  双击即可启动 / 管理 Evan 工作台（Windows）
+rem  Evan 工作台 —— 命令行版（带黑框，用于排错）
 rem
-rem  本文件只做三件事：切到项目根目录、确认 Node 可用、把活交给
-rem  scripts\launcher.mjs。真正的逻辑都在那个 Node 脚本里——
-rem  一份代码三平台通用，也便于在 Mac 上测试。
-rem
-rem  可以把这个 .bat 发送到桌面快捷方式，之后双击就能用。
+rem  ⚠️ 日常使用请双击同目录下的 **Evan工作台.vbs**，那个是图形界面、
+rem     没有黑框。本文件保留下来是为了在出问题时能看到完整报错——
+rem     .vbs 是静默运行的，报错看不见。
 rem ============================================================
 
 rem 切到本文件所在目录的上一级（= 项目根目录）
@@ -52,5 +50,9 @@ if not exist "node_modules" (
     )
 )
 
+echo.
+echo 提示：日常使用请双击 Evan工作台.vbs（图形界面、无黑框）。
+echo       本窗口用于查看详细报错。
+echo.
 node scripts\launcher.mjs
 if errorlevel 1 pause

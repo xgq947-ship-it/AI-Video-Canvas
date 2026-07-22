@@ -53,6 +53,7 @@ export const useWorkflow = ({
 }: UseWorkflowOptions) => {
     // Workflow state
     const [workflowId, setWorkflowId] = useState<string | null>(null);
+    const [projectDirName, setProjectDirName] = useState<string | null>(null);
     const [isWorkflowPanelOpen, setIsWorkflowPanelOpen] = useState(false);
     const [workflowPanelY, setWorkflowPanelY] = useState(0);
 
@@ -78,6 +79,7 @@ export const useWorkflow = ({
             if (response.ok) {
                 const result = await response.json();
                 setWorkflowId(result.id);
+                if (result.projectDirName) setProjectDirName(result.projectDirName);
                 console.log('Workflow saved:', result.id);
 
                 // Server converts any base64 image/video data into saved files and,
@@ -116,8 +118,10 @@ export const useWorkflow = ({
                 // For public workflows, don't set the workflowId so it saves as a new workflow
                 if (!isPublic) {
                     setWorkflowId(workflow.id);
+                    setProjectDirName(workflow.projectDirName || null);
                 } else {
                     setWorkflowId(null); // New copy, not linked to public workflow
+                    setProjectDirName(null);
                 }
 
                 setCanvasTitle(workflow.title || 'Untitled');
@@ -188,16 +192,32 @@ export const useWorkflow = ({
      */
     const resetWorkflowId = useCallback(() => {
         setWorkflowId(null);
+        setProjectDirName(null);
+    }, []);
+
+    const handleCreateWorkflow = useCallback(async (title: string) => {
+        const response = await fetch('/api/projects', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || '项目创建失败');
+        setWorkflowId(data.id);
+        setProjectDirName(data.projectDirName || null);
+        return data as WorkflowData & { projectDirName?: string };
     }, []);
 
     return {
         workflowId,
+        projectDirName,
         isWorkflowPanelOpen,
         workflowPanelY,
         handleSaveWorkflow,
         handleLoadWorkflow,
         handleWorkflowsClick,
         closeWorkflowPanel,
-        resetWorkflowId
+        resetWorkflowId,
+        handleCreateWorkflow
     };
 };

@@ -24,6 +24,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Trash2,
+  Volume2,
 } from 'lucide-react';
 import { NodeData, NodeGroup, NodeType } from '../types';
 
@@ -37,7 +38,7 @@ interface SidebarAsset {
   id: string;
   name: string;
   url: string;
-  type: 'image' | 'video';
+  type: 'image' | 'video' | 'audio';
   category?: string;
   prompt?: string;
   characterId?: string;
@@ -164,25 +165,9 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
           const data = response.ok ? await response.json() : [];
           if (!cancelled) setAssets(Array.isArray(data) ? data : []);
         } else {
-          const [imagesResponse, videosResponse] = await Promise.all([
-            fetch('/api/assets/images'),
-            fetch('/api/assets/videos'),
-          ]);
-          const images = imagesResponse.ok ? await imagesResponse.json() : [];
-          const videos = videosResponse.ok ? await videosResponse.json() : [];
-          const normalized = [
-            ...(Array.isArray(images) ? images : []).map((asset: any) => ({
-              ...asset,
-              name: asset.prompt || asset.filename || '图片素材',
-              type: 'image' as const,
-            })),
-            ...(Array.isArray(videos) ? videos : []).map((asset: any) => ({
-              ...asset,
-              name: asset.prompt || asset.filename || '视频素材',
-              type: 'video' as const,
-            })),
-          ];
-          if (!cancelled) setAssets(normalized);
+          const response = workflowId ? await fetch(`/api/projects/${encodeURIComponent(workflowId)}/assets`) : null;
+          const data = response?.ok ? await response.json() : [];
+          if (!cancelled) setAssets(Array.isArray(data) ? data : []);
         }
       } catch (error) {
         console.error('Failed to load sidebar assets:', error);
@@ -193,7 +178,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
     };
     load();
     return () => { cancelled = true; };
-  }, [activeTab, assetScope]);
+  }, [activeTab, assetScope, workflowId, nodes]);
 
   const handleDeleteLocalImage = async (asset: SidebarAsset) => {
     if (assetScope !== 'personal' || asset.type !== 'image' || deletingAssetId) return;
@@ -467,7 +452,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
               </div>
             )}
             {assetsLoading ? <EmptyState label="正在加载资产" /> : visibleAssets.length === 0 ? <EmptyState label="暂无资产" /> : visibleAssets.map(asset => {
-              const dragType = asset.type === 'video' ? 'video' : 'image';
+              const dragType = asset.type;
               const draggable = Boolean(asset.url);
               const canDeleteLocalImage = assetScope === 'personal' && asset.type === 'image';
               const usedByCanvas = nodes.some(node => [node.resultUrl, node.mediaUrl, node.lastFrame].some(url => url === asset.url || url?.endsWith(asset.url)));
@@ -477,14 +462,14 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                   role="button"
                   tabIndex={0}
                   className={`group relative mb-1 flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-left ${hover} ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
-                  onClick={event => onPreviewAsset({ name: asset.name, url: asset.url, type: asset.type }, event)}
+                  onClick={event => asset.type !== 'audio' && onPreviewAsset({ name: asset.name, url: asset.url, type: asset.type }, event)}
                   onKeyDown={event => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault();
-                      onPreviewAsset(
-                        { name: asset.name, url: asset.url, type: asset.type },
-                        event as unknown as React.MouseEvent<HTMLElement>
-                      );
+                      if (asset.type !== 'audio') onPreviewAsset(
+                          { name: asset.name, url: asset.url, type: asset.type },
+                          event as unknown as React.MouseEvent<HTMLElement>
+                        );
                     }
                   }}
                   draggable={draggable}
@@ -508,7 +493,9 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                   title={draggable ? '拖到画布添加节点，或点击预览' : undefined}
                 >
                   <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-neutral-700 bg-neutral-800">
-                    {asset.type === 'image' ? <img src={asset.url} alt="" className="h-full w-full object-cover" draggable={false} /> : <Film size={20} className={muted} />}
+                    {asset.type === 'image'
+                      ? <img src={asset.url} alt="" className="h-full w-full object-cover" draggable={false} />
+                      : asset.type === 'audio' ? <Volume2 size={20} className={muted} /> : <Film size={20} className={muted} />}
                   </div>
                   <span className="min-w-0 flex-1 truncate text-sm">{asset.name}</span>
                   {canDeleteLocalImage ? (

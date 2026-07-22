@@ -23,7 +23,14 @@ import { normalizeCharacterAssetMeta } from './services/characterAssets.js';
 import { createUniqueAssetFilename } from './services/assetFilenames.js';
 import { createCodexImageAutomation } from './services/codexImageAutomation.js';
 import { scanAssetLibrary } from './utils/scanAssetLibrary.js';
-import { organizeWorkflowAssets, deleteWorkflowAssetDirs, renameWorkflowAssetDirs } from './utils/projectAssets.js';
+import {
+    organizeWorkflowAssets,
+    deleteWorkflowAssetDirs,
+    renameWorkflowAssetDirs,
+    ensureProjectFolder,
+    importProjectAsset,
+    sanitizeProjectDirName
+} from './utils/projectAssets.js';
 import { execFile } from 'child_process';
 import {
     buildPromptOptimizationInstruction,
@@ -45,10 +52,12 @@ const LIBRARY_DIR = path.join(__dirname, '..', 'library');
 const WORKFLOWS_DIR = path.join(LIBRARY_DIR, 'workflows');
 const IMAGES_DIR = path.join(LIBRARY_DIR, 'images');
 const VIDEOS_DIR = path.join(LIBRARY_DIR, 'videos');
+const AUDIO_DIR = path.join(LIBRARY_DIR, 'audio');
+const PROJECTS_DIR = path.join(LIBRARY_DIR, 'projects');
 const LIBRARY_ASSETS_DIR = path.join(LIBRARY_DIR, 'assets');
 const CODEX_IMAGE_JOBS_DIR = path.join(LIBRARY_DIR, 'codex-image-jobs');
 
-[LIBRARY_DIR, WORKFLOWS_DIR, IMAGES_DIR, VIDEOS_DIR, LIBRARY_ASSETS_DIR, CODEX_IMAGE_JOBS_DIR].forEach(dir => {
+[LIBRARY_DIR, WORKFLOWS_DIR, IMAGES_DIR, VIDEOS_DIR, AUDIO_DIR, PROJECTS_DIR, LIBRARY_ASSETS_DIR, CODEX_IMAGE_JOBS_DIR].forEach(dir => {
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
@@ -135,6 +144,8 @@ const FAL_API_KEY = API_KEY_OVERRIDES.FAL_API_KEY || process.env.FAL_API_KEY;
 // Set up app.locals for sharing config with route modules
 app.locals.IMAGES_DIR = IMAGES_DIR;
 app.locals.VIDEOS_DIR = VIDEOS_DIR;
+app.locals.AUDIO_DIR = AUDIO_DIR;
+app.locals.PROJECTS_DIR = PROJECTS_DIR;
 app.locals.LIBRARY_DIR = LIBRARY_DIR;
 app.locals.CODEX_IMAGE_JOBS_DIR = CODEX_IMAGE_JOBS_DIR;
 app.locals.CODEX_IMAGE_AUTOMATION = createCodexImageAutomation({
@@ -457,6 +468,126 @@ app.delete('/api/library/:id', async (req, res) => {
 
 // --- Workflow API Routes ---
 
+const projectAssetDirs = () => ({
+    libraryDir: LIBRARY_DIR,
+    projectsDir: PROJECTS_DIR,
+    imagesDir: IMAGES_DIR,
+    videosDir: VIDEOS_DIR,
+    audioDir: AUDIO_DIR
+});
+
+const writeProjectManifest = (workflow) => {
+    if (!workflow?.projectDirName) return;
+    const manifestPath = path.join(PROJECTS_DIR, workflow.projectDirName, 'project.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({
+        id: workflow.id,
+        title: workflow.title,
+        createdAt: workflow.createdAt,
+        updatedAt: workflow.updatedAt
+    }, null, 2));
+};
+
+const findWorkflowByTitle = (title, exceptId = null) => {
+    const normalized = title.trim().toLocaleLowerCase();
+    for (const file of fs.readdirSync(WORKFLOWS_DIR).filter(name => name.endsWith('.json'))) {
+        try {
+            const workflow = JSON.parse(fs.readFileSync(path.join(WORKFLOWS_DIR, file), 'utf8'));
+            if (workflow.id !== exceptId && String(workflow.title || '').trim().toLocaleLowerCase() === normalized) {
+                return workflow;
+            }
+        } catch { /* invalid legacy file is ignored here and handled by its own load path */ }
+    }
+    return null;
+};
+
+// Create a real, empty project immediately. This is intentionally separate
+// from the legacy save endpoint so clicking "新建" reserves the name and folder
+// before any generation/upload can start.
+app.post('/api/projects', (req, res) => {
+    try {
+        const title = String(req.body?.title || '').trim();
+        if (!title) return res.status(400).json({ error: '项目名称不能为空' });
+        const dirName = sanitizeProjectDirName(title);
+        if (!dirName || dirName === 'untitled') return res.status(400).json({ error: '项目名称不合法' });
+        if (findWorkflowByTitle(title) || fs.existsSync(path.join(PROJECTS_DIR, dirName))) {
+            return res.status(409).json({ error: '项目名称已存在，请换一个名称' });
+        }
+        const now = new Date().toISOString();
+        const workflow = {
+            id: crypto.randomUUID(),
+            title,
+            projectDirName: dirName,
+            nodes: [],
+            groups: [],
+            viewport: { x: 0, y: 0, zoom: 1 },
+            createdAt: now,
+            updatedAt: now
+        };
+        ensureProjectFolder(workflow, { projectsDir: PROJECTS_DIR }, { exactName: true });
+        fs.writeFileSync(path.join(WORKFLOWS_DIR, `${workflow.id}.json`), JSON.stringify(workflow, null, 2));
+        writeProjectManifest(workflow);
+        res.status(201).json(workflow);
+    } catch (error) {
+        console.error('Create project error:', error);
+        res.status(error.code === 'EEXIST' ? 409 : 500).json({ error: error.message });
+    }
+});
+
+app.post('/api/projects/:id/assets/import', (req, res) => {
+    try {
+        const workflowPath = path.join(WORKFLOWS_DIR, `${req.params.id}.json`);
+        if (!fs.existsSync(workflowPath)) return res.status(404).json({ error: '项目不存在' });
+        const workflow = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
+        const imported = importProjectAsset(workflow, req.body?.sourceUrl, projectAssetDirs());
+        workflow.updatedAt = new Date().toISOString();
+        fs.writeFileSync(workflowPath, JSON.stringify(workflow, null, 2));
+        writeProjectManifest(workflow);
+        res.json({ success: true, ...imported, projectDirName: workflow.projectDirName });
+    } catch (error) {
+        console.error('Import project asset error:', error);
+        const status = error.code === 'ENOENT' ? 404 : error.code === 'UNSUPPORTED_ASSET_URL' ? 400 : 500;
+        res.status(status).json({ error: error.message });
+    }
+});
+
+app.get('/api/projects/:id/assets', (req, res) => {
+    try {
+        const workflowPath = path.join(WORKFLOWS_DIR, `${req.params.id}.json`);
+        if (!fs.existsSync(workflowPath)) return res.status(404).json({ error: '项目不存在' });
+        const workflow = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
+        if (!workflow.projectDirName) return res.json([]);
+        const result = [];
+        for (const type of ['images', 'videos', 'audio']) {
+            const dir = path.join(PROJECTS_DIR, workflow.projectDirName, type);
+            if (!fs.existsSync(dir)) continue;
+            const allowed = type === 'images'
+                ? /\.(png|jpe?g|webp|gif|avif)$/i
+                : type === 'videos' ? /\.(mp4|webm|mov|m4v|mkv)$/i : /\.(mp3|wav|aac|ogg|m4a)$/i;
+            for (const filename of fs.readdirSync(dir).filter(name => allowed.test(name))) {
+                const base = filename.slice(0, filename.lastIndexOf('.'));
+                let meta = {};
+                const sidecar = path.join(dir, `${base}.json`);
+                try { if (fs.existsSync(sidecar)) meta = JSON.parse(fs.readFileSync(sidecar, 'utf8')); } catch { /* ignore bad sidecar */ }
+                const stat = fs.statSync(path.join(dir, filename));
+                result.push({
+                    ...meta,
+                    id: meta.id || `${type}:${base}`,
+                    filename,
+                    name: meta.prompt || meta.originalName || meta.text || filename,
+                    type: type === 'images' ? 'image' : type === 'videos' ? 'video' : 'audio',
+                    url: `/library/projects/${encodeURIComponent(workflow.projectDirName)}/${type}/${encodeURIComponent(filename)}`,
+                    createdAt: meta.createdAt || stat.mtime.toISOString()
+                });
+            }
+        }
+        result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        res.json(result);
+    } catch (error) {
+        console.error('List project assets error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Save/Update workflow
 app.post('/api/workflows', async (req, res) => {
     try {
@@ -472,17 +603,30 @@ app.post('/api/workflows', async (req, res) => {
 
         const filePath = path.join(WORKFLOWS_DIR, `${workflow.id}.json`);
 
-        // Preserve existing coverUrl and assetsDirName if they exist — neither is
+        // Preserve existing coverUrl and project directory identity — neither is
         // sent by the client, so without this they'd be lost/regenerated on every save
         // (assetsDirName in particular must stay frozen once assigned; see projectAssets.js).
         if (fs.existsSync(filePath)) {
             try {
                 const existingData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+                if (existingData.title !== workflow.title && findWorkflowByTitle(workflow.title, workflow.id)) {
+                    return res.status(409).json({ error: '项目名称已存在，请换一个名称' });
+                }
                 if (existingData.coverUrl) {
                     workflow.coverUrl = existingData.coverUrl;
                 }
                 if (existingData.assetsDirName) {
                     workflow.assetsDirName = existingData.assetsDirName;
+                }
+                if (existingData.projectDirName) {
+                    workflow.projectDirName = existingData.projectDirName;
+                    if (existingData.title !== workflow.title) {
+                        renameWorkflowAssetDirs(workflow, workflow.title, {
+                            projectsDir: PROJECTS_DIR,
+                            imagesDir: IMAGES_DIR,
+                            videosDir: VIDEOS_DIR
+                        });
+                    }
                 }
             } catch (readError) {
                 console.warn("Could not read existing workflow to preserve cover:", readError);
@@ -501,11 +645,15 @@ app.post('/api/workflows', async (req, res) => {
         // (library/images|videos/{assetsDirName}/) so it can be browsed both
         // in-app (filtered by project) and directly in Finder.
         const { changed: assetsOrganized } = organizeWorkflowAssets(workflow, {
+            libraryDir: LIBRARY_DIR,
+            projectsDir: PROJECTS_DIR,
             imagesDir: IMAGES_DIR,
-            videosDir: VIDEOS_DIR
+            videosDir: VIDEOS_DIR,
+            audioDir: AUDIO_DIR
         });
 
         fs.writeFileSync(filePath, JSON.stringify(workflow, null, 2));
+        writeProjectManifest(workflow);
 
         // Only send nodes back when something actually changed (base64 sanitized
         // and/or media relocated into the project folder), so the client can sync
@@ -513,6 +661,7 @@ app.post('/api/workflows', async (req, res) => {
         res.json({
             success: true,
             id: workflow.id,
+            projectDirName: workflow.projectDirName,
             ...(sanitizedCount > 0 || assetsOrganized ? { nodes: workflow.nodes } : {})
         });
     } catch (error) {
@@ -639,8 +788,14 @@ app.get('/api/workflows/:id', async (req, res) => {
         if (!fs.existsSync(filePath)) {
             return res.status(404).json({ error: "Workflow not found" });
         }
-        const content = fs.readFileSync(filePath, 'utf8');
-        res.json(JSON.parse(content));
+        const workflow = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        const { changed } = organizeWorkflowAssets(workflow, projectAssetDirs());
+        if (changed) {
+            workflow.updatedAt = new Date().toISOString();
+            fs.writeFileSync(filePath, JSON.stringify(workflow, null, 2));
+            writeProjectManifest(workflow);
+        }
+        res.json(workflow);
     } catch (error) {
         console.error("Load workflow error:", error);
         res.status(500).json({ error: error.message });
@@ -663,7 +818,7 @@ app.delete('/api/workflows/:id', async (req, res) => {
         fs.unlinkSync(filePath);
         // Also remove this project's own asset folders (the flat pool / other
         // projects' copies are untouched — see projectAssets.js).
-        deleteWorkflowAssetDirs(workflow, { imagesDir: IMAGES_DIR, videosDir: VIDEOS_DIR });
+        deleteWorkflowAssetDirs(workflow, { imagesDir: IMAGES_DIR, videosDir: VIDEOS_DIR, projectsDir: PROJECTS_DIR });
         res.json({ success: true });
     } catch (error) {
         console.error("Delete workflow error:", error);
@@ -700,10 +855,12 @@ app.post('/api/workflows/:id/reveal-assets', async (req, res) => {
             return res.status(404).json({ error: "Workflow not found" });
         }
         const workflow = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-        if (!workflow.assetsDirName) {
+        if (!workflow.projectDirName && !workflow.assetsDirName) {
             return res.status(404).json({ error: "该项目还没有生成任何素材" });
         }
-        const dir = path.join(IMAGES_DIR, workflow.assetsDirName);
+        const dir = workflow.projectDirName
+            ? path.join(PROJECTS_DIR, workflow.projectDirName)
+            : path.join(IMAGES_DIR, workflow.assetsDirName);
         fs.mkdirSync(dir, { recursive: true });
         // 三平台各自的「打开目录」命令，写法与 server/routes/render.js 保持一致。
         const opener = process.platform === 'darwin'
@@ -740,7 +897,11 @@ app.put('/api/workflows/:id/title', async (req, res) => {
 
         const workflowData = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
         const nextTitle = title.trim();
+        if (findWorkflowByTitle(nextTitle, workflowData.id)) {
+            return res.status(409).json({ error: '项目名称已存在，请换一个名称' });
+        }
         assetRename = renameWorkflowAssetDirs(workflowData, nextTitle, {
+            projectsDir: PROJECTS_DIR,
             imagesDir: IMAGES_DIR,
             videosDir: VIDEOS_DIR
         });
@@ -750,11 +911,13 @@ app.put('/api/workflows/:id/title', async (req, res) => {
         fs.writeFileSync(tempFilePath, JSON.stringify(workflowData, null, 2));
         fs.renameSync(tempFilePath, filePath);
         tempFilePath = null;
+        writeProjectManifest(workflowData);
 
         res.json({
             success: true,
             title: workflowData.title,
             assetsDirName: workflowData.assetsDirName || null,
+            projectDirName: workflowData.projectDirName || null,
             nodes: workflowData.nodes || [],
             coverUrl: workflowData.coverUrl || null
         });
@@ -1074,14 +1237,22 @@ app.get('/api/assets/:type', async (req, res) => {
             const wfPath = path.join(WORKFLOWS_DIR, `${workflowId}.json`);
             if (!fs.existsSync(wfPath)) return emptyResult();
             let assetsDirName;
+            let projectDirName;
             try {
-                assetsDirName = JSON.parse(fs.readFileSync(wfPath, 'utf8')).assetsDirName;
+                const workflow = JSON.parse(fs.readFileSync(wfPath, 'utf8'));
+                assetsDirName = workflow.assetsDirName;
+                projectDirName = workflow.projectDirName;
             } catch (e) {
                 return emptyResult();
             }
-            if (!assetsDirName) return emptyResult(); // project has no organized media yet
-            targetDir = path.join(targetDir, assetsDirName);
-            urlPrefix = `${urlPrefix}/${assetsDirName}`;
+            if (projectDirName) {
+                targetDir = path.join(PROJECTS_DIR, projectDirName, type);
+                urlPrefix = `/library/projects/${encodeURIComponent(projectDirName)}/${type}`;
+            } else {
+                if (!assetsDirName) return emptyResult(); // legacy project has no organized media yet
+                targetDir = path.join(targetDir, assetsDirName);
+                urlPrefix = `${urlPrefix}/${assetsDirName}`;
+            }
         }
 
         if (!fs.existsSync(targetDir)) {

@@ -17,11 +17,11 @@
 import fs from 'fs';
 import path from 'path';
 
-const MEDIA_URL_FIELDS = ['resultUrl', 'lastFrame', 'editorCanvasData', 'editorBackgroundUrl'];
+const MEDIA_URL_FIELDS = ['resultUrl', 'lastFrame', 'editorCanvasData', 'editorBackgroundUrl', 'mediaUrl', 'renderOutputUrl'];
 
 const ILLEGAL_CHARS_RE = new RegExp('[\\/\\\\:*?"<>|]', 'g');
 
-function sanitizeDirName(title) {
+export function sanitizeDirName(title) {
     const fallback = 'untitled';
     if (!title || typeof title !== 'string') return fallback;
     const cleaned = title
@@ -29,6 +29,70 @@ function sanitizeDirName(title) {
         .replace(/\s/g, '')            // any Unicode whitespace (regular, full-width, etc.)
         .slice(0, 40);
     return cleaned || fallback;
+}
+
+export function sanitizeProjectDirName(title) {
+    const fallback = 'untitled';
+    if (!title || typeof title !== 'string') return fallback;
+    const cleaned = title
+        .replace(ILLEGAL_CHARS_RE, '')
+        .trim()
+        .replace(/[. ]+$/g, '')
+        .slice(0, 40);
+    return cleaned || fallback;
+}
+
+function projectUrl(projectDirName, type, filename, origin = '') {
+    return `${origin}/library/projects/${encodeURIComponent(projectDirName)}/${type}/${encodeURIComponent(filename)}`;
+}
+
+function parseProjectUrl(url) {
+    if (!url || typeof url !== 'string') return null;
+    let origin = '';
+    let pathname = url.split('?')[0];
+    if (/^https?:\/\//i.test(url)) {
+        try {
+            const parsed = new URL(url);
+            origin = parsed.origin;
+            pathname = parsed.pathname;
+        } catch {
+            return null;
+        }
+    }
+    const match = pathname.match(/^\/library\/projects\/([^/]+)\/(images|videos|audio)\/([^/]+)$/);
+    if (!match) return null;
+    try {
+        return {
+            origin,
+            projectDir: decodeURIComponent(match[1]),
+            type: match[2],
+            filename: decodeURIComponent(match[3])
+        };
+    } catch {
+        return null;
+    }
+}
+
+function parseAnyLibraryUrl(url) {
+    const project = parseProjectUrl(url);
+    if (project) return { ...project, layout: 'project' };
+    const legacy = parseLibraryUrl(url);
+    if (legacy) return { ...legacy, layout: 'legacy' };
+    if (!url || typeof url !== 'string') return null;
+    let origin = '';
+    let pathname = url.split('?')[0];
+    if (/^https?:\/\//i.test(url)) {
+        try {
+            const parsed = new URL(url);
+            origin = parsed.origin;
+            pathname = parsed.pathname;
+        } catch { return null; }
+    }
+    const audioMatch = pathname.match(/^\/library\/audio\/([^/]+)$/);
+    if (!audioMatch) return null;
+    try {
+        return { origin, type: 'audio', projectDir: null, filename: decodeURIComponent(audioMatch[1]), layout: 'legacy' };
+    } catch { return null; }
 }
 
 function buildAssetsDirName(workflow, title) {
@@ -45,6 +109,68 @@ export function ensureAssetsDirName(workflow) {
         workflow.assetsDirName = buildAssetsDirName(workflow, workflow.title);
     }
     return workflow.assetsDirName;
+}
+
+/**
+ * Creates the durable project folder. New projects use the exact sanitized
+ * title; legacy/duplicate projects fall back to a stable id suffix.
+ */
+export function ensureProjectFolder(workflow, { projectsDir }, { exactName = false } = {}) {
+    if (!projectsDir) return null;
+    if (!workflow.projectDirName) {
+        const baseName = sanitizeProjectDirName(workflow.title);
+        const exactPath = path.join(projectsDir, baseName);
+        if (exactName && fs.existsSync(exactPath)) {
+            const error = new Error(`项目名称已存在：${workflow.title}`);
+            error.code = 'EEXIST';
+            throw error;
+        }
+        workflow.projectDirName = !fs.existsSync(exactPath)
+            ? baseName
+            : buildAssetsDirName(workflow, workflow.title);
+    }
+    const root = path.join(projectsDir, workflow.projectDirName);
+    for (const type of ['images', 'videos', 'audio']) {
+        fs.mkdirSync(path.join(root, type), { recursive: true });
+    }
+    return root;
+}
+
+function sourcePathFor(parsed, { libraryDir, projectsDir, imagesDir, videosDir, audioDir }) {
+    if (parsed.layout === 'project') {
+        return path.join(projectsDir, parsed.projectDir, parsed.type, parsed.filename);
+    }
+    const bases = {
+        images: imagesDir || path.join(libraryDir, 'images'),
+        videos: videosDir || path.join(libraryDir, 'videos'),
+        audio: audioDir || path.join(libraryDir, 'audio')
+    };
+    return parsed.projectDir
+        ? path.join(bases[parsed.type], parsed.projectDir, parsed.filename)
+        : path.join(bases[parsed.type], parsed.filename);
+}
+
+/** Copy one local library asset into a project and return its project-local URL. */
+export function importProjectAsset(workflow, sourceUrl, dirs) {
+    const parsed = parseAnyLibraryUrl(sourceUrl);
+    if (!parsed) {
+        const error = new Error('只支持导入本地素材库文件');
+        error.code = 'UNSUPPORTED_ASSET_URL';
+        throw error;
+    }
+    ensureProjectFolder(workflow, dirs);
+    if (parsed.layout === 'project' && parsed.projectDir === workflow.projectDirName) {
+        return { url: projectUrl(workflow.projectDirName, parsed.type, parsed.filename, parsed.origin), type: parsed.type };
+    }
+    const sourcePath = sourcePathFor(parsed, dirs);
+    if (!fs.existsSync(sourcePath)) {
+        const error = new Error('素材源文件不存在');
+        error.code = 'ENOENT';
+        throw error;
+    }
+    const destination = path.join(dirs.projectsDir, workflow.projectDirName, parsed.type, parsed.filename);
+    copyIfNeeded(sourcePath, destination);
+    return { url: projectUrl(workflow.projectDirName, parsed.type, parsed.filename, parsed.origin), type: parsed.type };
 }
 
 /**
@@ -94,7 +220,20 @@ function copyIfNeeded(srcPath, destPath) {
     if (!fs.existsSync(destPath)) {
         fs.copyFileSync(srcPath, destPath);
     }
-    const srcJson = sidecarPathFor(srcPath);
+    let srcJson = sidecarPathFor(srcPath);
+    if (!fs.existsSync(srcJson)) {
+        // Audio metadata uses an id-based JSON filename while the media filename
+        // may have a tts_/original-name prefix. Resolve it by its filename field.
+        try {
+            srcJson = fs.readdirSync(path.dirname(srcPath))
+                .filter(name => name.endsWith('.json'))
+                .map(name => path.join(path.dirname(srcPath), name))
+                .find(candidate => {
+                    try { return JSON.parse(fs.readFileSync(candidate, 'utf8')).filename === path.basename(srcPath); }
+                    catch { return false; }
+                }) || srcJson;
+        } catch { /* no readable metadata directory */ }
+    }
     if (fs.existsSync(srcJson)) {
         const destJson = sidecarPathFor(destPath);
         if (!fs.existsSync(destJson)) {
@@ -112,7 +251,45 @@ function copyIfNeeded(srcPath, destPath) {
  * Mutates `workflow` only after all filesystem renames succeed.
  * @returns {{ changed: boolean, oldDirName: string | null, newDirName: string, rollback: () => void }}
  */
-export function renameWorkflowAssetDirs(workflow, newTitle, { imagesDir, videosDir }) {
+export function renameWorkflowAssetDirs(workflow, newTitle, { imagesDir, videosDir, projectsDir }) {
+    if (projectsDir && workflow?.projectDirName) {
+        const oldDirName = workflow.projectDirName;
+        const newDirName = sanitizeProjectDirName(newTitle);
+        if (oldDirName === newDirName) {
+            return { changed: false, oldDirName, newDirName, rollback: () => {} };
+        }
+        const from = path.join(projectsDir, oldDirName);
+        const to = path.join(projectsDir, newDirName);
+        if (fs.existsSync(to)) {
+            const error = new Error(`目标项目目录已存在：${newDirName}`);
+            error.code = 'EEXIST';
+            throw error;
+        }
+        if (fs.existsSync(from)) fs.renameSync(from, to);
+        const rewrite = (url) => {
+            const parsed = parseProjectUrl(url);
+            if (!parsed || parsed.projectDir !== oldDirName) return url;
+            return projectUrl(newDirName, parsed.type, parsed.filename, parsed.origin);
+        };
+        workflow.projectDirName = newDirName;
+        for (const node of workflow.nodes || []) {
+            for (const field of MEDIA_URL_FIELDS) {
+                if (typeof node[field] === 'string') node[field] = rewrite(node[field]);
+            }
+            if (Array.isArray(node.imageVersions)) {
+                node.imageVersions = node.imageVersions.map(version => ({ ...version, url: rewrite(version.url) }));
+            }
+        }
+        if (typeof workflow.coverUrl === 'string') workflow.coverUrl = rewrite(workflow.coverUrl);
+        return {
+            changed: true,
+            oldDirName,
+            newDirName,
+            rollback: () => {
+                if (fs.existsSync(to) && !fs.existsSync(from)) fs.renameSync(to, from);
+            }
+        };
+    }
     const oldDirName = workflow?.assetsDirName || null;
     const newDirName = buildAssetsDirName(workflow, newTitle);
     if (!oldDirName || oldDirName === newDirName) {
@@ -188,8 +365,44 @@ export function renameWorkflowAssetDirs(workflow, newTitle, { imagesDir, videosD
  * Mutates `workflow` in place (assetsDirName, node URLs, coverUrl).
  * @returns {{ changed: boolean }}
  */
-export function organizeWorkflowAssets(workflow, { imagesDir, videosDir }) {
+export function organizeWorkflowAssets(workflow, { imagesDir, videosDir, audioDir, libraryDir, projectsDir }) {
     if (!workflow?.id) return { changed: false };
+
+    if (projectsDir) {
+        let changed = false;
+        const before = workflow.projectDirName;
+        ensureProjectFolder(workflow, { projectsDir });
+        if (before !== workflow.projectDirName) changed = true;
+
+        const relocate = (url) => {
+            if (typeof url !== 'string') return url;
+            try {
+                const imported = importProjectAsset(workflow, url, {
+                    libraryDir,
+                    projectsDir,
+                    imagesDir,
+                    videosDir,
+                    audioDir
+                });
+                if (imported.url !== url) changed = true;
+                return imported.url;
+            } catch (error) {
+                if (error.code === 'UNSUPPORTED_ASSET_URL' || error.code === 'ENOENT') return url;
+                throw error;
+            }
+        };
+
+        for (const node of workflow.nodes || []) {
+            for (const field of MEDIA_URL_FIELDS) {
+                if (typeof node[field] === 'string') node[field] = relocate(node[field]);
+            }
+            if (Array.isArray(node.imageVersions)) {
+                node.imageVersions = node.imageVersions.map(version => ({ ...version, url: relocate(version.url) }));
+            }
+        }
+        if (typeof workflow.coverUrl === 'string') workflow.coverUrl = relocate(workflow.coverUrl);
+        return { changed };
+    }
 
     let changed = false;
     const dirNameBefore = workflow.assetsDirName;
@@ -247,9 +460,15 @@ export function organizeWorkflowAssets(workflow, { imagesDir, videosDir }) {
 }
 
 /** Removes a workflow's per-project asset folders entirely (called on workflow delete). */
-export function deleteWorkflowAssetDirs(workflow, { imagesDir, videosDir }) {
-    if (!workflow?.assetsDirName) return;
-    for (const dir of [path.join(imagesDir, workflow.assetsDirName), path.join(videosDir, workflow.assetsDirName)]) {
+export function deleteWorkflowAssetDirs(workflow, { imagesDir, videosDir, projectsDir }) {
+    const dirs = [];
+    if (workflow?.assetsDirName) {
+        dirs.push(path.join(imagesDir, workflow.assetsDirName), path.join(videosDir, workflow.assetsDirName));
+    }
+    if (projectsDir && workflow?.projectDirName) {
+        dirs.push(path.join(projectsDir, workflow.projectDirName));
+    }
+    for (const dir of dirs) {
         if (fs.existsSync(dir)) {
             fs.rmSync(dir, { recursive: true, force: true });
         }

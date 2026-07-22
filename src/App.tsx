@@ -43,6 +43,7 @@ import { ImageEditorModal } from './components/modals/ImageEditorModal';
 import { VideoEditorModal } from './components/modals/VideoEditorModal';
 import { ExpandedMediaModal } from './components/modals/ExpandedMediaModal';
 import { CreateAssetModal } from './components/modals/CreateAssetModal';
+import { CreateProjectModal } from './components/modals/CreateProjectModal';
 import { TikTokImportModal } from './components/modals/TikTokImportModal';
 import { AssetLibraryPanel, type LibraryAsset } from './components/AssetLibraryPanel';
 import { useTikTokImport } from './hooks/useTikTokImport';
@@ -97,6 +98,7 @@ export default function App() {
   const [canvasTheme, setCanvasTheme] = useState<'dark' | 'light'>('dark');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarAssetPreview, setSidebarAssetPreview] = useState<(SidebarAssetPreview & { panelY: number }) | null>(null);
+  const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
   const [isMinimapOpen, setIsMinimapOpen] = useState(false);
 
   // Panel state management (history, asset library, expand)
@@ -220,13 +222,15 @@ export default function App() {
   // Workflow management
   const {
     workflowId,
+    projectDirName,
     isWorkflowPanelOpen,
     workflowPanelY,
     handleSaveWorkflow,
     handleLoadWorkflow,
     handleWorkflowsClick,
     closeWorkflowPanel,
-    resetWorkflowId
+    resetWorkflowId,
+    handleCreateWorkflow
   } = useWorkflow({
     nodes,
     groups,
@@ -248,6 +252,51 @@ export default function App() {
   // Simple dirty flag for unsaved changes tracking
   const [isDirty, setIsDirty] = React.useState(false);
   const hasUnsavedChanges = isDirty && nodes.length > 0;
+
+  // Any generated/imported local media is adopted by the active project as soon
+  // as it appears on a node. The server copies across projects, so references
+  // never couple one project's lifetime to another project.
+  const adoptingProjectAssets = React.useRef(new Set<string>());
+  React.useEffect(() => {
+    if (!workflowId || !projectDirName) return;
+    const currentPrefix = `/library/projects/${encodeURIComponent(projectDirName)}/`;
+    const fields: Array<keyof Pick<NodeData, 'resultUrl' | 'lastFrame' | 'editorCanvasData' | 'editorBackgroundUrl' | 'mediaUrl' | 'renderOutputUrl'>> = [
+      'resultUrl', 'lastFrame', 'editorCanvasData', 'editorBackgroundUrl', 'mediaUrl', 'renderOutputUrl'
+    ];
+
+    const pathnameOf = (value: string) => {
+      try { return value.startsWith('http') ? new URL(value).pathname : value.split('?')[0]; }
+      catch { return value.split('?')[0]; }
+    };
+
+    for (const node of nodes) {
+      for (const field of fields) {
+        const sourceUrl = node[field];
+        if (typeof sourceUrl !== 'string') continue;
+        const pathname = pathnameOf(sourceUrl);
+        if (!pathname.startsWith('/library/') || pathname.startsWith(currentPrefix)) continue;
+        const key = `${workflowId}:${node.id}:${field}:${sourceUrl}`;
+        if (adoptingProjectAssets.current.has(key)) continue;
+        adoptingProjectAssets.current.add(key);
+        void fetch(`/api/projects/${encodeURIComponent(workflowId)}/assets/import`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourceUrl })
+        }).then(async response => {
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.error || '项目素材入库失败');
+          setNodes(current => current.map(item => item.id === node.id && item[field] === sourceUrl
+            ? { ...item, [field]: data.url }
+            : item));
+        }).catch(error => {
+          console.error('[Project Assets] Failed to adopt asset:', error);
+        }).finally(() => {
+          adoptingProjectAssets.current.delete(key);
+        });
+        return;
+      }
+    }
+  }, [workflowId, projectDirName, nodes, setNodes]);
 
   React.useEffect(() => {
     if (isInitialMount.current) {
@@ -435,18 +484,30 @@ export default function App() {
     handleGenerateRef.current = handleGenerate;
   }, [handleGenerate]);
 
-  // Create new canvas
-  const handleNewCanvas = () => {
+  const clearCanvas = React.useCallback((title = '未命名项目') => {
     ignoreNextChange.current = true;
     setNodes([]);
     setGroups([]); // Reset groups for new canvas
     setSelectedNodeIds([]);
-    setCanvasTitle('未命名项目');
-    setEditingTitleValue('未命名项目');
-    resetWorkflowId(); // Important: ensures new workflow gets a new ID
+    setCanvasTitle(title);
+    setEditingTitleValue(title);
     setViewport({ x: 0, y: 0, zoom: 1 });
     setIsDirty(false);
-  };
+  }, [setNodes, setGroups, setSelectedNodeIds, setCanvasTitle, setEditingTitleValue, setViewport]);
+
+  const handleRequestNewProject = React.useCallback(() => {
+    setIsCreateProjectModalOpen(true);
+  }, []);
+
+  const handleCreateProject = React.useCallback(async (title: string) => {
+    const workflow = await handleCreateWorkflow(title);
+    clearCanvas(workflow.title);
+  }, [handleCreateWorkflow, clearCanvas]);
+
+  const handleNewCanvas = React.useCallback(() => {
+    clearCanvas();
+    resetWorkflowId();
+  }, [clearCanvas, resetWorkflowId]);
 
   const handleDeleteCurrentProject = React.useCallback(async () => {
     if (!workflowId) return;
@@ -1222,7 +1283,7 @@ export default function App() {
     if (!raw) return;
     e.preventDefault();
 
-    let asset: Partial<LibraryAsset> & { prompt?: string };
+    let asset: any;
     try {
       asset = JSON.parse(raw);
     } catch {
@@ -1234,6 +1295,25 @@ export default function App() {
     const { x: canvasX, y: canvasY } = centerNodeAt(
       screenToCanvas(e.clientX, e.clientY, getCanvasRect(), viewport)
     );
+
+    if (asset.type === 'audio') {
+      const newNode: NodeData = {
+        id: crypto.randomUUID(),
+        type: NodeType.AUDIO,
+        x: canvasX,
+        y: canvasY,
+        prompt: asset.prompt || asset.name || '音频素材',
+        status: NodeStatus.SUCCESS,
+        mediaUrl: asset.url,
+        model: 'Upload',
+        aspectRatio: '16:9',
+        resolution: 'Auto',
+        ttsSource: 'imported'
+      };
+      setNodes(current => [...current, newNode]);
+      setSelectedNodeIds([newNode.id]);
+      return;
+    }
 
     const characterMetadata = await resolveCharacterNodeMetadata(asset);
     handleSelectAsset(
@@ -1435,7 +1515,7 @@ export default function App() {
           onOpenAssets={handleAssetsClick}
           onPreviewAsset={handleSidebarAssetPreview}
           onOpenStoryboard={storyboardGenerator.openModal}
-          onCreateProject={handleNewCanvas}
+          onCreateProject={handleRequestNewProject}
           onDeleteProject={handleDeleteCurrentProject}
           onCollapsedChange={setSidebarCollapsed}
           canvasTheme={canvasTheme}
@@ -1499,6 +1579,13 @@ export default function App() {
         onSave={handleSaveAssetToLibrary}
       />
 
+      <CreateProjectModal
+        isOpen={isCreateProjectModalOpen}
+        onClose={() => setIsCreateProjectModalOpen(false)}
+        onCreate={handleCreateProject}
+        canvasTheme={canvasTheme}
+      />
+
       {/* TikTok Import Modal */}
       <TikTokImportModal
         isOpen={isTikTokModalOpen}
@@ -1536,7 +1623,7 @@ export default function App() {
           setIsEditingTitle={setIsEditingTitle}
           setEditingTitleValue={setEditingTitleValue}
           onSave={handleSaveWithTracking}
-          onNew={handleNewCanvas}
+          onNew={handleRequestNewProject}
           hasUnsavedChanges={hasUnsavedChanges}
           canvasTheme={canvasTheme}
           onToggleTheme={() => setCanvasTheme(prev => prev === 'dark' ? 'light' : 'dark')}

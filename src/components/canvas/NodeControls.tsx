@@ -11,6 +11,7 @@ import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertica
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { KlingIcon, HailuoIcon } from '../icons/BrandIcons';
 import { useFaceDetection } from '../../hooks/useFaceDetection';
+import { useBrowserModels } from '../../hooks/useBrowserModels';
 import { ChangeAnglePanel } from './ChangeAnglePanel';
 import { LocalModel, getLocalModels } from '../../services/localModelService';
 import type { NodeReference } from '../../utils/nodeReferences.js';
@@ -213,6 +214,8 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
 
     // Face detection hook for Kling V1.5 Face mode
     const { detectFaces, isModelLoaded: isFaceModelLoaded } = useFaceDetection();
+    // Google Flow / 即梦 依赖本机浏览器自动化运行时，未配置时置灰并说明原因。
+    const { browserModelsHint, isModelUnavailable } = useBrowserModels();
 
     // Trigger face detection when Face mode is selected
     useEffect(() => {
@@ -432,6 +435,9 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
 
     // Filter video models based on mode
     const availableVideoModels = VIDEO_MODELS.filter(model => {
+        // 未装浏览器自动化运行时的 Flow / 即梦 不参与「自动选中」，
+        // 否则新建节点会默认停在一个点不动的模型上。它们仍会在下拉里显示（置灰）。
+        if (isModelUnavailable(model.id)) return false;
         if (videoGenerationMode === 'text-to-video') return model.supportsTextToVideo;
         if (videoGenerationMode === 'image-to-video') return model.supportsImageToVideo;
         return model.supportsMultiImage || Boolean(model.supportsIngredients); // frame-to-frame / Ingredients 多参考图
@@ -439,6 +445,10 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const workflowVideoModels = VIDEO_MODELS.filter(model => model.provider === 'workflow');
 
     const getVideoModelUnavailableReason = (model: VideoModelOption) => {
+        // 浏览器自动化模型（Flow / 即梦）需要本机 Python 运行时，未装时先于能力判断置灰。
+        if (isModelUnavailable(model.id)) {
+            return browserModelsHint;
+        }
         if (videoGenerationMode === 'text-to-video' && !model.supportsTextToVideo) {
             return '需连接一张首帧图片';
         }
@@ -596,10 +606,13 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     useEffect(() => {
         if (data.type !== NodeType.IMAGE && data.type !== NodeType.IMAGE_EDITOR) return;
 
-        const isCurrentModelAvailable = availableImageModels.some(m => m.id === data.imageModel);
-        if (!isCurrentModelAvailable && availableImageModels.length > 0) {
+        // 这里额外排掉未配置的浏览器自动化模型：availableImageModels 还要喂下拉渲染
+        // （需要显示但置灰），所以不能在上面的过滤里直接去掉。
+        const selectable = availableImageModels.filter(m => !isModelUnavailable(m.id));
+        const isCurrentModelAvailable = selectable.some(m => m.id === data.imageModel);
+        if (!isCurrentModelAvailable && selectable.length > 0) {
             // Auto-select first available model
-            onUpdate(data.id, { imageModel: availableImageModels[0].id });
+            onUpdate(data.id, { imageModel: selectable[0].id });
         }
     }, [inputCount, data.imageModel, data.type, data.id, availableImageModels, onUpdate]);
 
@@ -1260,20 +1273,37 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                                 <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f] border-t border-neutral-700">
                                                     Google Flow
                                                 </div>
-                                                {availableImageModels.filter(m => m.provider === 'workflow').map(model => (
+                                                {availableImageModels.filter(m => m.provider === 'workflow').map(model => {
+                                                    const isUnavailable = isModelUnavailable(model.id);
+                                                    return (
                                                     <button
                                                         key={model.id}
-                                                        onClick={() => handleImageModelChange(model.id)}
-                                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${currentImageModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'}`}
+                                                        onClick={() => !isUnavailable && handleImageModelChange(model.id)}
+                                                        disabled={isUnavailable}
+                                                        title={isUnavailable ? browserModelsHint : model.name}
+                                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left transition-colors ${isUnavailable
+                                                            ? 'cursor-not-allowed text-neutral-600'
+                                                            : `hover:bg-[#333] ${currentImageModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'}`
+                                                            }`}
                                                     >
                                                         <span className="flex items-center gap-2">
-                                                            <Banana size={12} className="text-cyan-400" />
-                                                            {model.name}
-                                                            <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">推荐</span>
+                                                            <Banana size={12} className={isUnavailable ? 'text-neutral-600' : 'text-cyan-400'} />
+                                                            <span className="flex flex-col gap-0.5">
+                                                                <span className="flex items-center gap-2">
+                                                                    {model.name}
+                                                                    {!isUnavailable && (
+                                                                        <span className="text-[9px] px-1 py-0.5 bg-green-600/30 text-green-400 rounded">推荐</span>
+                                                                    )}
+                                                                </span>
+                                                                {isUnavailable && (
+                                                                    <span className="text-[10px] font-normal text-amber-500/80">{browserModelsHint}</span>
+                                                                )}
+                                                            </span>
                                                         </span>
-                                                        {currentImageModel.id === model.id && <Check size={12} />}
+                                                        {currentImageModel.id === model.id && !isUnavailable && <Check size={12} />}
                                                     </button>
-                                                ))}
+                                                    );
+                                                })}
                                             </>
                                         )}
                                         {/* Kling Models */}

@@ -3,11 +3,11 @@ import test from 'node:test';
 
 import {
     buildGoogleFlowWorkflowArgs,
-    extractWorkflowJson,
     GOOGLE_FLOW_SUPPORTED_ASPECT_RATIOS,
     GOOGLE_FLOW_SUPPORTED_DURATIONS,
     GOOGLE_FLOW_WORKFLOW_MODEL_ID
 } from '../server/services/googleFlowWorkflow.js';
+import { extractOpsJson } from '../server/services/opsCliRunner.js';
 
 test('Google Flow workflow 原样传递输入框提示词与真实生成参数', () => {
     const args = buildGoogleFlowWorkflowArgs({
@@ -63,13 +63,15 @@ test('Google Flow workflow 使用稳定的前端模型 ID 与能力范围', () =
     assert.deepEqual(GOOGLE_FLOW_SUPPORTED_ASPECT_RATIOS, ['16:9', '9:16']);
 });
 
-test('Google Flow workflow 能从附带日志的 stdout 提取运行结果', () => {
-    const payload = extractWorkflowJson(`
+test('ops_cli 输出能从附带日志的 stdout 提取运行结果', () => {
+    // 结构与 ops_cli --json 真实输出一致：success / platform / command / data。
+    const payload = extractOpsJson(`
 状态提示
 {
-  "run_id": "run_123",
-  "status": "success",
-  "outputs": {
+  "success": true,
+  "platform": "image_to_video",
+  "command": "google-flow.generate",
+  "data": {
     "video_path": "/tmp/result.mp4",
     "prompt": "人物说：{开始}"
   }
@@ -78,11 +80,12 @@ test('Google Flow workflow 能从附带日志的 stdout 提取运行结果', () 
 日志：/tmp/workflow.json
 `);
 
-    assert.equal(payload.run_id, 'run_123');
-    assert.equal(payload.status, 'success');
-    assert.equal(payload.outputs.video_path, '/tmp/result.mp4');
+    assert.equal(payload.success, true);
+    assert.equal(payload.data.video_path, '/tmp/result.mp4');
+    // 提示词里的花括号不得干扰括号配对扫描。
+    assert.equal(payload.data.prompt, '人物说：{开始}');
 });
 
-test('Google Flow workflow 缺少 JSON 时返回明确错误', () => {
-    assert.throws(() => extractWorkflowJson('只有普通日志'), /未返回可解析的 JSON/);
+test('ops_cli 输出缺少 JSON 时返回明确错误', () => {
+    assert.throws(() => extractOpsJson('只有普通日志'), /未能解析浏览器自动化 CLI 的 JSON 输出/);
 });

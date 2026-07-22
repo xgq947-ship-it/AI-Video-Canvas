@@ -1,15 +1,14 @@
 /**
  * Google Flow 文生图 workflow 适配器。
  *
- * 只负责把画布参数转成运营项目的 text_to_image_generate 参数，
- * 页面自动化、登录态恢复和产物下载继续由运营项目与 Ops-Cli 负责。
+ * 只负责把画布参数转成 ops_cli 的 text-to-image 参数，
+ * 页面自动化、登录态恢复和产物下载由 server/python 下的 provider 负责。
  */
 
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { extractWorkflowJson } from './googleFlowWorkflow.js';
+import { runOpsCli } from './opsCliRunner.js';
 import { enqueueGoogleFlowWorkflow } from './googleFlowWorkflowQueue.js';
 
 export const GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID = 'google-flow-nano-banana-2';
@@ -26,69 +25,6 @@ export function isGoogleFlowImageWorkflowModel(modelId) {
 
 export function resolveGoogleFlowImageModelName(modelId) {
     return GOOGLE_FLOW_IMAGE_WORKFLOW_MODELS[modelId] || 'Nano Banana 2';
-}
-
-const DEFAULT_WORKFLOW_ROOT = path.join(
-    os.homedir(),
-    'Desktop',
-    '电商Brain',
-    '02-运营店铺',
-    '运营自动化工具'
-);
-
-function resolveWorkflowRoot() {
-    const root = path.resolve(process.env.GOOGLE_FLOW_WORKFLOW_ROOT || DEFAULT_WORKFLOW_ROOT);
-    const runPath = path.join(root, 'run.py');
-    if (!fs.existsSync(runPath)) {
-        throw new Error(`未找到 Google Flow 文生图 workflow：${runPath}`);
-    }
-    return { root, runPath };
-}
-
-function runWorkflowProcess({ root, runPath, args, timeoutMs }) {
-    const venvPython = path.join(root, '.venv', 'bin', 'python');
-    const python = fs.existsSync(venvPython) ? venvPython : 'python3';
-
-    return new Promise((resolve, reject) => {
-        const child = spawn(python, [runPath, 'workflow', 'text_to_image_generate', '--provider', 'google-flow', ...args], {
-            cwd: root,
-            env: {
-                ...process.env,
-                NF_DISABLE: '1',
-                PYTHONUNBUFFERED: '1'
-            },
-            stdio: ['ignore', 'pipe', 'pipe']
-        });
-        let stdout = '';
-        let stderr = '';
-        const timer = setTimeout(() => {
-            child.kill('SIGTERM');
-            reject(new Error('Google Flow 文生图 workflow 执行超时'));
-        }, timeoutMs);
-
-        child.stdout.on('data', chunk => { stdout += chunk.toString(); });
-        child.stderr.on('data', chunk => { stderr += chunk.toString(); });
-        child.on('error', error => {
-            clearTimeout(timer);
-            reject(error);
-        });
-        child.on('close', code => {
-            clearTimeout(timer);
-            let payload;
-            try {
-                payload = extractWorkflowJson(stdout);
-            } catch (error) {
-                reject(new Error(`${error.message}${stderr.trim() ? `：${stderr.trim()}` : ''}`));
-                return;
-            }
-            if (code !== 0 || !['success', 'dry_run_success'].includes(payload.status)) {
-                const detail = payload.errors?.[0] || stderr.trim() || `进程退出码 ${code}`;
-                reject(new Error(`Google Flow 文生图 workflow 失败：${detail}`));
-                return;
-            }
-            resolve(payload);
-        });
-    });
 }
 
 function inferImageExtension(value, contentType = '') {
@@ -239,22 +175,23 @@ async function executeGoogleFlowImageWorkflow({
     try {
         const outputDir = path.join(taskDir, 'output');
         const referenceImages = await resolveGoogleFlowReferenceImages(referenceImageInputs, libraryDir, taskDir);
-        const { root, runPath } = resolveWorkflowRoot();
-        const payload = await runWorkflowProcess({
-            root,
-            runPath,
+        const { data, runId } = await runOpsCli({
+            label: 'Google Flow 文生图',
             timeoutMs: (timeoutMinutes + 2) * 60 * 1000,
-            args: buildGoogleFlowImageWorkflowArgs({
-                prompt,
-                aspectRatio,
-                referenceImages,
-                outputDir,
-                timeoutMinutes,
-                flowModel: resolveGoogleFlowImageModelName(modelId)
-            })
+            args: [
+                'text-to-image', 'google-flow', 'generate',
+                ...buildGoogleFlowImageWorkflowArgs({
+                    prompt,
+                    aspectRatio,
+                    referenceImages,
+                    outputDir,
+                    timeoutMinutes,
+                    flowModel: resolveGoogleFlowImageModelName(modelId)
+                })
+            ]
         });
-        const result = await loadGoogleFlowImageResult(payload.outputs);
-        return { ...result, runId: payload.run_id };
+        const result = await loadGoogleFlowImageResult(data);
+        return { ...result, runId };
     } finally {
         fs.rmSync(taskDir, { recursive: true, force: true });
     }

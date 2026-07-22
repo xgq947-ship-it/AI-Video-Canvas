@@ -27,12 +27,45 @@ A modern, AI-powered canvas application for generating and manipulating images a
 
 ### 安装
 
+项目分两条轨道，**先跑通轨道 A 即可正常使用**，轨道 B 是可选增强。
+
+#### 轨道 A — 开箱即用（推荐先跑这个）
+
 ```bash
-npm install           # 安装依赖（含 Remotion 渲染引擎）
-cp .env.example .env  # 配置密钥（可留空，见下）
+git clone <仓库地址> && cd AI-Video-Canvas
+npm install                      # 安装依赖（含 Remotion 渲染引擎）
+cp .env.example .env             # Windows: copy .env.example .env
+# 编辑 .env 填入你自己的密钥（都可留空，见下表）
+npm run dev
 ```
 
+可用：Gemini、OpenAI、Kling、Hailuo、**Seedance 2.0 (ARK)**、DeepSeek 提示词优化，
+以及完全本地的画布编辑 / 素材导入 / Remotion 渲染。
+
 需系统已安装 `ffmpeg` 与 `ffprobe`（响度母带与成片验收用）。
+
+#### 轨道 B — 浏览器自动化模型（可选，约 15 分钟）
+
+即梦 Seedance VIP 与 Google Flow **不走官方 API**，而是驱动一个你手动登录过的
+Chrome（CDP 端口 9222）。好处是走会员额度而非按量付费。
+
+```bash
+npm run setup:browser-models     # 自动建 Python 环境、装依赖
+```
+
+然后在脚本提示的专用浏览器里分别登录：
+
+| 平台 | 地址 | 账号前置条件 |
+|---|---|---|
+| 即梦 | https://jimeng.jianying.com | **需要你自己的即梦 VIP 会员** |
+| Google Flow | https://labs.google/fx/tools/flow | **需要有 Flow 权限的 Google 账号** |
+
+> ⚠️ **登录态无法随项目分发**，每个人必须用自己的账号在本机登录一次。
+> 没有上述会员/权限的话，轨道 B 装了也用不了——直接用轨道 A 的 Seedance 2.0 (ARK) 即可，
+> 它和即梦 Seedance **是同一个模型**，只是改成按量付费。
+>
+> 不装轨道 B 完全不影响应用启动，这些模型会自动置灰。
+> 环境要求：Python 3.11+、Chrome。可用 `/api/capabilities` 查看当前就绪状态。
 
 ### 配置 .env
 
@@ -42,9 +75,9 @@ cp .env.example .env  # 配置密钥（可留空，见下）
 | 功能 | 需要的密钥 |
 |---|---|
 | 图片/视频提示词优化 | `DEEPSEEK_API_KEY` |
-| 图片生成 | Google Flow 本地 workflow（无需 API Key）/ `GEMINI_API_KEY` / `OPENAI_API_KEY` / Kling 兼容图片模型：`KLING_ACCESS_KEY`+`KLING_SECRET_KEY` |
+| 图片生成 | `GEMINI_API_KEY` / `OPENAI_API_KEY` / Kling 兼容图片模型：`KLING_ACCESS_KEY`+`KLING_SECRET_KEY` |
 | 视频生成 | Seedance 2.0：`ARK_API_KEY` / Kling 3.0：`KLING_API_KEY` / Hailuo 2.3：`HAILUO_API_KEY` |
-| Google Flow 工作流视频 | 无需 API Key；需要本机 9222 Chrome 已登录 Google Flow |
+| Google Flow 图片/视频、即梦视频 | 无需 API Key；需完成上面的**轨道 B**（本机 9222 Chrome 登录对应账号） |
 | 剧本 / 分镜 | `GEMINI_API_KEY` |
 | 配音 (TTS) | MiniMax 画布直连需要 `MINIMAX_API_KEY` + `MINIMAX_GROUP_ID`（可回退 `HAILUO_API_KEY`）；ChatCut/ElevenLabs、豆包、Fish、本地 Qwen 与其他平台可生成后导入 |
 | 画布 / 导入本地素材 / Remotion 渲染 / ffmpeg 母带 | **完全本地，无需密钥** |
@@ -105,6 +138,9 @@ npm run dev        # 同时启动前端 + 后端
 npm run server     # 仅启动后端（3001 端口）
 npm run build      # 生产构建
 npm run preview    # 预览生产构建
+npm test           # 运行测试（不调用任何付费 API）
+
+npm run setup:browser-models   # 轨道 B：安装 Google Flow / 即梦 的浏览器自动化环境
 ```
 
 ### 安全性

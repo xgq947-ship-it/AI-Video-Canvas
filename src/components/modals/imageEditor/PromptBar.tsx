@@ -8,6 +8,7 @@
 import React, { useRef, useEffect } from 'react';
 import { ChevronDown, Check, Banana, Image as ImageIcon, Crop, Monitor, Sparkles } from 'lucide-react';
 import { ImageModel, IMAGE_MODELS } from './imageEditor.types';
+import { useBrowserModels } from '../../../hooks/useBrowserModels';
 import { KlingIcon } from '../../icons/BrandIcons';
 
 // ============================================================================
@@ -70,6 +71,9 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     const modelDropdownRef = useRef<HTMLDivElement>(null);
     const aspectDropdownRef = useRef<HTMLDivElement>(null);
     const resolutionDropdownRef = useRef<HTMLDivElement>(null);
+
+    // Google Flow 依赖本机浏览器自动化运行时，未配置时置灰。
+    const { browserModelsHint, isModelUnavailable } = useBrowserModels();
 
     // --- Derived State ---
     const currentModel = IMAGE_MODELS.find(m => m.id === selectedModel) || IMAGE_MODELS[0];
@@ -146,19 +150,29 @@ export const PromptBar: React.FC<PromptBarProps> = ({
                         {availableModels.filter(m => m.provider === 'workflow').length > 0 && (
                             <>
                                 <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f] border-t border-neutral-700">Google Flow</div>
-                                {availableModels.filter(m => m.provider === 'workflow').map(model => (
+                                {availableModels.filter(m => m.provider === 'workflow').map(model => {
+                                    const isUnavailable = isModelUnavailable(model.id);
+                                    return (
                                     <button
                                         key={model.id}
-                                        onClick={() => onModelChange(model.id)}
-                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${currentModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'}`}
+                                        onClick={() => !isUnavailable && onModelChange(model.id)}
+                                        disabled={isUnavailable}
+                                        title={isUnavailable ? browserModelsHint : model.name}
+                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left transition-colors ${isUnavailable
+                                            ? 'cursor-not-allowed text-neutral-600'
+                                            : `hover:bg-[#333] ${currentModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'}`
+                                            }`}
                                     >
                                         <span className="flex items-center gap-2">
-                                            <Banana size={12} className="text-cyan-400" />
+                                            <Banana size={12} className={isUnavailable ? 'text-neutral-600' : 'text-cyan-400'} />
                                             {model.name}
                                         </span>
-                                        {currentModel.id === model.id && <Check size={12} />}
+                                        {isUnavailable
+                                            ? <span className="text-[9px] text-neutral-500 shrink-0">需本地配置</span>
+                                            : currentModel.id === model.id && <Check size={12} />}
                                     </button>
-                                ))}
+                                    );
+                                })}
                             </>
                         )}
                         {availableModels.filter(m => m.provider === 'kling').length > 0 && (

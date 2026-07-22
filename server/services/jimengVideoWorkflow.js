@@ -1,7 +1,7 @@
 /**
- * 即梦（Seedance）视频 workflow 适配器。
+ * 即梦（Seedance）视频生成适配器。
  *
- * 通过运营自动化工具的 image_to_video_generate workflow（--provider jimeng）
+ * 调用内置的 server/python/ops_cli（image-to-video jimeng generate）
  * 驱动可见的 9222 Chrome 页面，不在 Evan 内复制任何即梦页面自动化逻辑。
  *
  * 与 Google Flow 适配器的差异：
@@ -11,13 +11,12 @@
  * 共用同一个 9222 串行队列——两个 provider 抢同一个浏览器。
  */
 
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { enqueueBrowserWorkflow } from './googleFlowWorkflowQueue.js';
+import { runOpsCli } from './opsCliRunner.js';
 import {
-    extractWorkflowJson,
     resolveLocalLibraryImage,
     writeDataUrlImage
 } from './googleFlowWorkflow.js';
@@ -43,25 +42,6 @@ export const JIMENG_SUPPORTED_DURATIONS = [4, 5, 6, 8, 10, 15];
 export const JIMENG_SUPPORTED_ASPECT_RATIOS = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'];
 export const JIMENG_SUPPORTED_RESOLUTIONS = ['720P', '1080P', '4K'];
 export const JIMENG_MAX_REFERENCE_IMAGES = 12;
-
-const DEFAULT_WORKFLOW_ROOT = path.join(
-    os.homedir(),
-    'Desktop',
-    '电商Brain',
-    '02-运营店铺',
-    '运营自动化工具'
-);
-
-function resolveWorkflowRoot() {
-    const root = path.resolve(
-        process.env.JIMENG_WORKFLOW_ROOT || process.env.GOOGLE_FLOW_WORKFLOW_ROOT || DEFAULT_WORKFLOW_ROOT
-    );
-    const runPath = path.join(root, 'run.py');
-    if (!fs.existsSync(runPath)) {
-        throw new Error(`未找到即梦视频 workflow：${runPath}`);
-    }
-    return { root, runPath };
-}
 
 export function normalizeJimengResolution(input) {
     const value = String(input || '').trim().toUpperCase();
@@ -112,55 +92,6 @@ export function buildJimengWorkflowArgs({
         '--execute'
     );
     return args;
-}
-
-function runWorkflowProcess({ root, runPath, args, timeoutMs }) {
-    const venvPython = path.join(root, '.venv', 'bin', 'python');
-    const python = fs.existsSync(venvPython) ? venvPython : 'python3';
-
-    return new Promise((resolve, reject) => {
-        const child = spawn(python, [runPath, 'workflow', 'image_to_video_generate', '--provider', 'jimeng', ...args], {
-            cwd: root,
-            env: {
-                ...process.env,
-                NF_DISABLE: '1',
-                PYTHONUNBUFFERED: '1'
-            },
-            stdio: ['ignore', 'pipe', 'pipe']
-        });
-        let stdout = '';
-        let stderr = '';
-        let timedOut = false;
-        const timer = setTimeout(() => {
-            timedOut = true;
-            child.kill('SIGTERM');
-            reject(new Error('即梦视频 workflow 执行超时'));
-        }, timeoutMs);
-
-        child.stdout.on('data', chunk => { stdout += chunk.toString(); });
-        child.stderr.on('data', chunk => { stderr += chunk.toString(); });
-        child.on('error', error => {
-            clearTimeout(timer);
-            reject(error);
-        });
-        child.on('close', code => {
-            clearTimeout(timer);
-            if (timedOut) return;
-            let payload;
-            try {
-                payload = extractWorkflowJson(stdout);
-            } catch (error) {
-                reject(new Error(`${error.message}${stderr.trim() ? `：${stderr.trim()}` : ''}`));
-                return;
-            }
-            if (code !== 0 || !['success', 'dry_run_success'].includes(payload.status)) {
-                const detail = payload.errors?.[0] || stderr.trim() || `进程退出码 ${code}`;
-                reject(new Error(`即梦视频 workflow 失败：${detail}`));
-                return;
-            }
-            resolve(payload);
-        });
-    });
 }
 
 async function loadVideoResult(outputs) {
@@ -221,25 +152,26 @@ async function executeJimengWorkflow({
     try {
         const referenceImages = resolveReferenceImages(inputs, libraryDir, taskDir);
         const outputDir = path.join(taskDir, 'output');
-        const { root, runPath } = resolveWorkflowRoot();
-        const payload = await runWorkflowProcess({
-            root,
-            runPath,
+        const { data, runId } = await runOpsCli({
+            label: '即梦视频生成',
             timeoutMs: (timeoutMinutes + 2) * 60 * 1000,
-            args: buildJimengWorkflowArgs({
-                prompt,
-                referenceImages,
-                referenceLabels: labels,
-                duration,
-                aspectRatio,
-                resolution: normalizedResolution,
-                model,
-                outputDir,
-                timeoutMinutes
-            })
+            args: [
+                'image-to-video', 'jimeng', 'generate',
+                ...buildJimengWorkflowArgs({
+                    prompt,
+                    referenceImages,
+                    referenceLabels: labels,
+                    duration,
+                    aspectRatio,
+                    resolution: normalizedResolution,
+                    model,
+                    outputDir,
+                    timeoutMinutes
+                })
+            ]
         });
-        const result = await loadVideoResult(payload.outputs);
-        return { ...result, runId: payload.run_id };
+        const result = await loadVideoResult(data);
+        return { ...result, runId };
     } finally {
         fs.rmSync(taskDir, { recursive: true, force: true });
     }

@@ -9,6 +9,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, Sparkles, Film, Loader2, Play, Check, ChevronDown, Wand2, Trash2 } from 'lucide-react';
 import { NodeData } from '../../types';
 import { KlingIcon, HailuoIcon } from '../icons/BrandIcons';
+import { useBrowserModels } from '../../hooks/useBrowserModels';
 
 interface StoryboardVideoModalProps {
     isOpen: boolean;
@@ -70,6 +71,9 @@ export const StoryboardVideoModal: React.FC<StoryboardVideoModalProps> = ({
     onCreateVideos,
     storyContext
 }) => {
+    // Google Flow / 即梦 依赖本机浏览器自动化运行时，未配置时置灰而不是让用户点了才报错。
+    const { browserModelsHint, isModelUnavailable } = useBrowserModels();
+
     // Track removed scenes (locally within modal session)
     const [removedSceneIds, setRemovedSceneIds] = useState<Set<string>>(new Set());
 
@@ -422,19 +426,26 @@ export const StoryboardVideoModal: React.FC<StoryboardVideoModalProps> = ({
 
                                             {/* 本地工作流 */}
                                             <div className="px-3 py-2 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1a1a1a]">本地工作流</div>
-                                            {VIDEO_MODELS.filter(m => m.provider === 'workflow').map(model => (
+                                            {VIDEO_MODELS.filter(m => m.provider === 'workflow').map(model => {
+                                                const unavailable = isModelUnavailable(model.id);
+                                                return (
                                                 <button
                                                     key={model.id}
-                                                    onClick={() => handleModelChange(model.id)}
-                                                    className={`w-full flex items-center justify-between px-3 py-2.5 text-xs hover:bg-[#2a2a2a] transition-colors ${settings.model === model.id ? 'text-blue-400 bg-blue-500/10' : 'text-neutral-300'}`}
+                                                    onClick={() => !unavailable && handleModelChange(model.id)}
+                                                    disabled={unavailable}
+                                                    title={unavailable ? browserModelsHint : undefined}
+                                                    className={`w-full flex items-center justify-between px-3 py-2.5 text-xs transition-colors ${unavailable ? 'opacity-40 cursor-not-allowed' : 'hover:bg-[#2a2a2a]'} ${settings.model === model.id ? 'text-blue-400 bg-blue-500/10' : 'text-neutral-300'}`}
                                                     >
                                                     <div className="flex items-center gap-2">
                                                         <Film size={14} className={settings.model === model.id ? 'text-cyan-400' : 'text-neutral-400'} />
                                                         {model.name}
                                                     </div>
-                                                    {settings.model === model.id && <Check size={14} />}
+                                                    {unavailable
+                                                        ? <span className="text-[9px] text-neutral-500 shrink-0">需本地配置</span>
+                                                        : settings.model === model.id && <Check size={14} />}
                                                 </button>
-                                            ))}
+                                                );
+                                            })}
 
                                             {/* Seedance */}
                                             <div className="px-3 py-2 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1a1a1a] border-t border-neutral-700">Seedance</div>

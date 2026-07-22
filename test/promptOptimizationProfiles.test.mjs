@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  IMAGE_PROMPT_OPTIMIZATION_PROFILES,
-  buildPromptOptimizationInstruction,
-  formatOptimizedPrompt,
-  getPromptOptimizationProfile,
+    IMAGE_PROMPT_OPTIMIZATION_PROFILES,
+    VIDEO_PROMPT_OPTIMIZATION_PROFILES,
+    buildPromptOptimizationInstruction,
+    formatOptimizedPrompt,
+    getPromptOptimizationProfile,
+    resolveVideoProfileForModel
 } from '../shared/promptOptimizationProfiles.js';
 
 test('图片提示词优化配置固定包含三种角色身份图', () => {
@@ -59,4 +61,38 @@ test('全身综合设定板左侧固定为无人物的隐形模特服装展示',
   const profile = getPromptOptimizationProfile('image-identity-board');
   assert.match(profile.systemInstruction, /左侧仅展示完整服装正面/);
   assert.match(profile.systemInstruction, /绝对不能出现人物、头部、脸、皮肤/);
+});
+
+// —— 视频提示词分两套：Flow 与即梦的参考图约定完全不通用 ——
+test('Flow 与即梦的视频提示词按模型正确分流', () => {
+    assert.equal(resolveVideoProfileForModel('google-flow-veo-3-1-lite').id, 'video-flow');
+    assert.equal(resolveVideoProfileForModel('google-flow-omni-flash').id, 'video-flow');
+    assert.equal(resolveVideoProfileForModel('jimeng-seedance-2-0').id, 'video');
+    assert.equal(resolveVideoProfileForModel('jimeng-seedance-2-0-fast').id, 'video');
+    // 未知/空模型回落到即梦版（历史默认），不能报错
+    assert.equal(resolveVideoProfileForModel('').id, 'video');
+    assert.equal(resolveVideoProfileForModel(undefined).id, 'video');
+});
+
+test('Flow 版明确禁用 @ 标签，即梦版明确保留 @ 标签', () => {
+    const flow = getPromptOptimizationProfile('video-flow');
+    const jimeng = getPromptOptimizationProfile('video');
+
+    // Flow 不支持 @名称 指认素材，必须明确要求把 @tag 翻译成外观描述
+    assert.match(flow.systemInstruction, /不要使用 @ 标签/);
+    assert.match(flow.systemInstruction, /翻译成对该素材的具体外观描述/);
+    // Flow 版不得残留「保留 @tag」这类即梦专用指令
+    assert.equal(/必须原样保留、不能改名或删除/.test(flow.systemInstruction), false);
+
+    // 即梦反过来：必须保留 @tag，否则指不到具体某张参考图
+    assert.match(jimeng.systemInstruction, /必须原样保留、不能改名或删除/);
+});
+
+test('两套视频 profile 都挂在 video 节点下且各自标明供应商', () => {
+    const ids = VIDEO_PROMPT_OPTIMIZATION_PROFILES.map(p => p.id);
+    assert.deepEqual(ids.sort(), ['video', 'video-flow']);
+    for (const profile of VIDEO_PROMPT_OPTIMIZATION_PROFILES) {
+        assert.equal(profile.nodeType, 'video');
+        assert.ok(profile.videoProvider, `${profile.id} 缺少 videoProvider`);
+    }
 });

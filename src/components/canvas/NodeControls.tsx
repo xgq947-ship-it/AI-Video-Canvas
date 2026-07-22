@@ -16,6 +16,8 @@ import type { NodeReference } from '../../utils/nodeReferences.js';
 import { extractReferenceLabels } from '../../utils/nodeReferences.js';
 import {
     IMAGE_PROMPT_OPTIMIZATION_PROFILES,
+    VIDEO_PROMPT_OPTIMIZATION_PROFILES,
+    resolveVideoProfileForModel,
     PROMPT_OPTIMIZATION_PROFILES,
     type PromptOptimizationProfile
 } from '../../../shared/promptOptimizationProfiles.js';
@@ -845,21 +847,48 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                     disabled={!canOptimizePrompt || isOptimizingPrompt}
                                     onClick={(event) => {
                                         event.stopPropagation();
-                                        if (isImageNode) {
-                                            setShowPromptOptimizer(current => !current);
-                                        } else {
-                                            void handleOptimizePrompt(PROMPT_OPTIMIZATION_PROFILES.video);
-                                        }
+                                        setShowPromptOptimizer(current => !current);
                                     }}
                                     className={`flex h-9 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isDark
                                         ? 'border-neutral-700 bg-[#252525] text-neutral-200 hover:border-violet-500 hover:bg-violet-500/10 hover:text-violet-300'
                                         : 'border-neutral-300 bg-white text-neutral-700 hover:border-violet-500 hover:bg-violet-50 hover:text-violet-700'}`}
-                                    title={isImageNode ? '选择图片提示词优化类型' : '直接优化视频提示词'}
+                                    title={isImageNode ? '选择图片提示词优化类型' : '选择视频提示词优化类型'}
                                 >
                                     {isOptimizingPrompt ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
                                     <span>{isOptimizingPrompt ? '优化中' : '提示词优化'}</span>
-                                    {isImageNode && <ChevronDown size={13} className="opacity-60" />}
+                                    <ChevronDown size={13} className="opacity-60" />
                                 </button>
+
+                                {isVideoNode && showPromptOptimizer && (
+                                    <div className={`absolute right-0 top-full z-[180] mt-2 w-72 overflow-hidden rounded-xl border p-1.5 shadow-2xl ${isDark ? 'border-neutral-700 bg-[#252525]' : 'border-neutral-200 bg-white'}`}>
+                                        {VIDEO_PROMPT_OPTIMIZATION_PROFILES.map(profile => {
+                                            // 两种提示词风格互不通用：Flow 不认 @tag，即梦靠 @tag 指图。
+                                            // 这里把与当前所选模型匹配的那个标出来，避免选错。
+                                            const matched = resolveVideoProfileForModel(data.videoModel).id === profile.id;
+                                            return (
+                                            <button
+                                                key={profile.id}
+                                                type="button"
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    void handleOptimizePrompt(profile);
+                                                }}
+                                                className={`w-full rounded-lg px-3 py-2.5 text-left transition-colors ${isDark ? 'hover:bg-neutral-700' : 'hover:bg-neutral-100'}`}
+                                            >
+                                                <span className={`flex items-center gap-2 text-sm font-semibold ${isDark ? 'text-white' : 'text-neutral-900'}`}>
+                                                    {profile.label}
+                                                    {matched && (
+                                                        <span className="rounded bg-green-600/30 px-1 py-0.5 text-[9px] font-medium text-green-400">
+                                                            匹配当前模型
+                                                        </span>
+                                                    )}
+                                                </span>
+                                                <span className="mt-0.5 block text-xs text-neutral-500">{profile.description}</span>
+                                            </button>
+                                            );
+                                        })}
+                                    </div>
+                                )}
 
                                 {isImageNode && showPromptOptimizer && (
                                     <div className={`absolute right-0 top-full z-[180] mt-2 w-72 overflow-hidden rounded-xl border p-1.5 shadow-2xl ${isDark ? 'border-neutral-700 bg-[#252525]' : 'border-neutral-200 bg-white'}`}>

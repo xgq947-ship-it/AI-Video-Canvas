@@ -73,6 +73,8 @@ const PAGE = `<!doctype html>
     flex:1;min-height:0;background:#101010;border:1px solid #262626;border-radius:10px;
     padding:11px 13px;font-family:ui-monospace,Menlo,Consolas,monospace;
     font-size:11px;line-height:1.65;color:#8a8a8a;overflow-y:auto;white-space:pre-wrap;
+    /* 日志里全是长路径，不折行会撑出横向滚动条 */
+    overflow-x:hidden;overflow-wrap:anywhere;word-break:break-word;
     user-select:text;-webkit-user-select:text;
   }
   .log::-webkit-scrollbar{width:7px}
@@ -156,16 +158,51 @@ const PAGE = `<!doctype html>
   $('folder').onclick  = () => fetch('/api/folder', { method:'POST' });
   $('refresh').onclick = loadLog;
 
+  // Chrome --app 窗口没有"自动居中"参数，这里在页面里按屏幕尺寸摆一次。
+  // 非 app 模式（普通标签页）下 moveTo 会被浏览器忽略，无副作用。
+  (function centerWindow(){
+    try{
+      const w = window.outerWidth  || 460;
+      const h = window.outerHeight || 700;
+      const x = Math.max(0, Math.round((screen.availWidth  - w) / 2) + (screen.availLeft || 0));
+      const y = Math.max(0, Math.round((screen.availHeight - h) / 2) + (screen.availTop  || 0));
+      window.moveTo(x, y);
+    }catch{}
+  })();
+
   refresh(); loadLog();
   setInterval(() => { if (!busy) refresh(); }, 3000);
 </script></body></html>`;
 
 // ------------------------------------------------------------------ 服务
 
+/** 去掉终端颜色/控制序列——它们在网页里会显示成 ESC[36m 这类乱码。 */
+function stripAnsi(text) {
+    // eslint-disable-next-line no-control-regex
+    return text.replace(/\u001b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\r/g, '');
+}
+
+/**
+ * 解码日志。
+ *
+ * 中文 Windows 上部分工具按系统码页（GBK）写 stdout，直接按 UTF-8 读会得到
+ * "锟斤拷" 那类乱码。这里先按 UTF-8 解，若出现替换字符（U+FFFD）说明猜错了，
+ * 再用 GBK 重解一次。Node 22 自带完整 ICU，支持 gbk。
+ */
+function decodeLog(buffer) {
+    const utf8 = new TextDecoder('utf-8').decode(buffer);
+    if (!utf8.includes('\uFFFD')) return utf8;
+    try {
+        return new TextDecoder('gbk').decode(buffer);
+    } catch {
+        return utf8; // 没有 GBK 支持就退回 UTF-8，至少不崩
+    }
+}
+
 function tailLog(lines = 200) {
     if (!fs.existsSync(LOG_FILE)) return '还没有日志。点「打开画布」启动服务后这里会有输出。';
-    const text = fs.readFileSync(LOG_FILE, 'utf8').split('\n');
-    return text.slice(-lines).join('\n').trim() || '(日志为空)';
+    const text = stripAnsi(decodeLog(fs.readFileSync(LOG_FILE)));
+    return text.split('\n').slice(-lines).join('\n').trim() || '(日志为空)';
 }
 
 /** 把 console 输出临时收进日志文件，避免复用的函数往看不见的 stdout 打字。 */
@@ -240,18 +277,59 @@ function findChrome() {
     return candidates.find(p => p && fs.existsSync(p)) || null;
 }
 
-server.listen(PANEL_PORT, '127.0.0.1', () => {
-    const panelUrl = `http://127.0.0.1:${PANEL_PORT}`;
+/** 端口被占时：先判断是不是"面板已经开着"，是就直接复用，否则换个端口。 */
+async function listenWithFallback(startPort, maxTries = 10) {
+    for (let port = startPort; port < startPort + maxTries; port += 1) {
+        const ok = await new Promise(resolve => {
+            server.once('error', err => resolve(err.code === 'EADDRINUSE' ? false : Promise.reject(err)));
+            server.once('listening', () => resolve(true));
+            server.listen(port, '127.0.0.1');
+        });
+        if (ok) return port;
+
+        // 占用者是不是我们自己之前开的面板？是就直接开它，不重复起服务。
+        // 注意：不能只看 HTTP 200 —— 任何一个占用该端口的服务都可能返回 200，
+        // 那样会把无关服务误认成面板（实测踩过）。必须校验响应体确实是
+        // 本项目的面板：JSON 且 root 指向同一个项目目录。
+        try {
+            const res = await fetch(`http://127.0.0.1:${port}/api/status`, {
+                signal: AbortSignal.timeout(1200)
+            });
+            const body = res.ok ? await res.json().catch(() => null) : null;
+            if (body && body.root === ROOT) {
+                openPanel(`http://127.0.0.1:${port}`);
+                console.log(`面板已在运行，直接打开：http://127.0.0.1:${port}`);
+                process.exit(0);
+            }
+        } catch {
+            // 不是我们的服务，换下一个端口
+        }
+        server.removeAllListeners('error');
+        server.removeAllListeners('listening');
+    }
+    throw new Error(`端口 ${startPort}-${startPort + maxTries - 1} 都被占用，无法启动控制面板。`);
+}
+
+function openPanel(panelUrl) {
     const chrome = findChrome();
     if (chrome) {
-        spawn(chrome, [`--app=${panelUrl}`, '--window-size=460,660'], {
+        // 位置由页面加载后用 moveTo 居中（这里拿不到屏幕尺寸）。
+        spawn(chrome, [`--app=${panelUrl}`, '--window-size=460,700'], {
             detached: true, stdio: 'ignore', windowsHide: false
         }).unref();
     } else {
         // 没有 Chromium 系浏览器就退回默认浏览器（会带地址栏，但功能一致）。
         openExternal(panelUrl);
     }
+}
+
+listenWithFallback(PANEL_PORT).then(port => {
+    const panelUrl = `http://127.0.0.1:${port}`;
+    openPanel(panelUrl);
     console.log(`控制面板：${panelUrl}`);
+}).catch(error => {
+    console.error(error.message);
+    process.exit(1);
 });
 
 // 面板窗口关掉后进程还在，给一个兜底退出：无人访问 15 分钟自动退出。

@@ -97,8 +97,10 @@ export async function start() {
     // Windows 的 npm 是 npm.cmd；直接 spawn('npm') 会 ENOENT。
     // Windows：不能用 shell:true —— 那会弹出一个 cmd 黑框并且关不掉。
     // 改为显式调 cmd.exe /c 并配合 windowsHide，后端就完全静默地跑在后台。
+    // chcp 65001 让子进程按 UTF-8 输出。中文 Windows 默认码页是 936(GBK)，
+    // 不切的话日志里会混入 GBK 字节，面板按 UTF-8 读就是一片乱码。
     const [cmd, args] = IS_WIN
-        ? ['cmd.exe', ['/c', 'npm', 'run', 'dev']]
+        ? ['cmd.exe', ['/c', 'chcp', '65001', '>nul', '&&', 'npm', 'run', 'dev']]
         : ['npm', ['run', 'dev']];
     const child = spawn(cmd, args, {
         cwd: ROOT,

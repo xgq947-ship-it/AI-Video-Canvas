@@ -309,6 +309,30 @@ cd server/python && .venv/bin/python -m ops_cli --help && cd ../..
 
 **这一步必须用「有头」（能看见窗口的）浏览器，因为要手动输入账号密码。**
 
+### 12.0 先确认代码找到的是哪个浏览器 ⚠️ 别跳过
+
+```bash
+cd server/python
+.venv/bin/python -c "import sys; sys.path.insert(0,'sessionhub'); from scene import chrome_cdp as c; print('浏览器路径:', c.CHROME_BIN); print('文件存在:', c.CHROME_BIN.exists()); print('配置目录:', c.PROFILE_DIR)"
+cd ../..
+```
+
+**期望输出**：
+```
+浏览器路径: /Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta
+文件存在: True
+配置目录: /Users/你的用户名/.sessionhub/chrome-9222-beta
+```
+
+**`文件存在: False` 就不要继续**——现在跑必然失败。
+回步骤 10 装 Chrome Beta，或用 `SESSIONHUB_CHROME_APP` 指向你实际的 Chrome。
+
+> 与 Windows 不同：macOS 上代码**只找 Chrome Beta 一个路径**，不会回退到普通 Chrome。
+>
+> **把打印出的两条路径记下来**，下面启动命令要用。
+
+### 12.1 启动浏览器
+
 先确认端口没被占用：
 ```bash
 lsof -iTCP:9222 -sTCP:LISTEN -P

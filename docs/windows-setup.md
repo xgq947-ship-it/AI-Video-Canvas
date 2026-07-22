@@ -225,19 +225,74 @@ py -3.12 --version
 
 ---
 
-## 步骤 9 — 安装 Chrome Beta（推荐）
+## 步骤 9 — 安装 Chrome Beta
 
-轨道 B 需要一个 Chrome 来做页面自动化。**推荐专门装一个 Chrome Beta 来干这事。**
+轨道 B 需要一个浏览器来做页面自动化。
+
+> ⚠️ **Chrome Beta 是需要单独安装的，Windows 不自带，装了普通 Chrome 也不会有它。**
+> 它和你日常用的 Chrome 是两个独立的程序，可以共存，互不影响。
+
+### 9.1 安装
+
+**方式一：winget（优先试这个）**
 
 ```powershell
 winget install --id Google.Chrome.Beta -e
 ```
 
-**验收**
+如果提示**找不到这个包**，先搜一下确认准确的 ID：
+
+```powershell
+winget search "Chrome Beta"
+```
+
+然后用搜出来的 ID 重新装（形如 `winget install --id <搜到的ID> -e`）。
+
+**方式二：手动下载（winget 不行就用这个）**
+
+1. 打开 https://www.google.com/chrome/beta/
+2. 下载安装包，双击安装，一路默认即可
+3. **安装完不要打开它**，也不要设成默认浏览器
+
+### 9.2 验收 —— 确认装到哪了
+
 ```powershell
 Test-Path "C:\Program Files\Google\Chrome Beta\Application\chrome.exe"
 ```
-返回 `True` 即可。
+
+返回 `True` 即通过，**可以进入下一步**。
+
+返回 `False` 的话，它可能装到了用户目录下（Chrome 有时会这样），
+用这条命令把真实路径找出来：
+
+```powershell
+Get-ChildItem -Path "$env:ProgramFiles","${env:ProgramFiles(x86)}","$env:LOCALAPPDATA" `
+  -Filter chrome.exe -Recurse -ErrorAction SilentlyContinue |
+  Select-Object -ExpandProperty FullName
+```
+
+把输出里**带 `Chrome Beta` 字样**的那一条记下来，下一小节要用。
+
+### 9.3 配置 —— 只有装在非标准位置才需要做
+
+代码会自动探测这三个位置，**装在其中任意一个就不用配置，跳过本节**：
+
+- `%ProgramFiles%\Google\Chrome Beta\Application\chrome.exe`
+- `%ProgramFiles(x86)%\Google\Chrome Beta\Application\chrome.exe`
+- `%LOCALAPPDATA%\Google\Chrome Beta\Application\chrome.exe`
+
+只有当 9.2 找出来的路径**不在上面三个之列**时，才需要手动指定。
+编辑项目根目录的 `.env`，加一行：
+
+```
+SESSIONHUB_CHROME_APP=C:\你在9.2找到的实际路径\chrome.exe
+```
+
+> 注意：**路径不要加引号**，即使里面有空格也不要加。
+> 这是 `.env` 文件的写法，和 PowerShell 命令行的规则不一样。
+
+配完这一步还**无法立刻验证**（需要先装 Python 运行时）。
+真正的确认在**步骤 11.0**，那里会打印出代码最终选中的浏览器路径。
 
 ### 为什么专门装 Beta，而不是用你日常的 Chrome
 
@@ -304,6 +359,37 @@ cd ..\..
 
 **这一步必须用「有头」（能看见窗口的）浏览器，因为要手动输入账号密码。**
 
+### 11.0 先确认代码找到的是哪个浏览器 ⚠️ 别跳过
+
+这条命令会打印出代码**最终选中**的浏览器——步骤 9 的安装和配置到底生效没有，
+看这里最准：
+
+```powershell
+cd server\python
+.venv\Scripts\python.exe -c "import sys; sys.path.insert(0,'sessionhub'); from scene import chrome_cdp as c; print('浏览器路径:', c.CHROME_BIN); print('文件存在:', c.CHROME_BIN.exists()); print('配置目录:', c.PROFILE_DIR)"
+cd ..\..
+```
+
+**期望输出**（三条都要对）：
+
+```
+浏览器路径: C:\Program Files\Google\Chrome Beta\Application\chrome.exe
+文件存在: True
+配置目录: C:\Users\你的用户名\.sessionhub\chrome-9222
+```
+
+判读：
+
+| 看到的情况 | 说明 | 怎么办 |
+|---|---|---|
+| 路径含 `Chrome Beta`、存在 True | ✅ 正常 | 继续下一步 |
+| 路径是普通 `Chrome`、存在 True | Beta 没装成，回退了 | 能用，但有误关风险。想修就回步骤 9 |
+| **存在 False** | **路径不对，现在跑必失败** | 回步骤 9.2 找真实路径，按 9.3 配 `SESSIONHUB_CHROME_APP` |
+
+> **把这里打印出的「浏览器路径」记下来**，下面 11.1 启动命令要用它。
+
+### 11.1 启动浏览器
+
 先确保没有旧实例占用端口：
 ```powershell
 netstat -ano | findstr :9222
@@ -311,7 +397,8 @@ netstat -ano | findstr :9222
 有输出的话记下 PID，用 `taskkill /PID <PID> /T /F` 结束。
 
 然后启动：
-装了 Chrome Beta 的话（推荐）：
+用 **11.0 打印出来的那条「浏览器路径」**启动（下面按装了 Beta 的默认位置写）：
+
 ```powershell
 & "C:\Program Files\Google\Chrome Beta\Application\chrome.exe" `
   --remote-debugging-port=9222 `
@@ -320,10 +407,11 @@ netstat -ano | findstr :9222
   about:blank
 ```
 
-只装了普通 Chrome 的话，把上面第一行换成：
-```powershell
-& "C:\Program Files\Google\Chrome\Application\chrome.exe" `
-```
+> 如果 11.0 打印的路径不是这个，**把第一行换成你实际的那条**。
+> 这里的路径**要用引号包起来**（PowerShell 的规则，和 `.env` 里相反）。
+>
+> `--user-data-dir` 必须和 11.0 打印的「配置目录」**完全一致**，
+> 否则你登录的是一个配置，自动化读的是另一个，会一直提示未登录。
 
 会弹出一个**全新的、空白的浏览器窗口**（不是你日常那个）。在这个窗口里：
 

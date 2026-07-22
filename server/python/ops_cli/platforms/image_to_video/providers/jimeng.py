@@ -67,7 +67,27 @@ FIELD_COUNT = "选择生成数量"
 
 # 页面明确判负的文案；命中即不再空等到超时。
 FAILURE_MARKERS = ("生成失败", "审核不通过", "内容不合规", "内容风险")
+# 素材/内容被审核拦下：与上面的「生成失败」分开，因为补救动作完全不同——
+# 生成失败改提示词就行，被审核拦下必须换素材，改提示词再多次也没用。
+# 实测即梦的原话是「你上传的图片不符合平台规则，请修改后重试」，
+# 上面 4 个 marker 一个都匹配不上，于是等待循环会一直空转到超时/页面关闭。
+REJECTION_MARKERS = (
+    "不符合平台规则",
+    "不符合社区规范",
+    "不符合相关规范",
+    "违反平台规则",
+    "涉嫌违规",
+    "含有违规内容",
+)
 CREDITS_MARKERS = ("积分不足", "余额不足", "积分已用完")
+# 页面/浏览器被关闭是**不可恢复**的，不能当成 DOM 读取抖动去重试 5 次——
+# 那样只会把真实原因埋掉，最后报一个「连续 5 次读取失败」的无用错误。
+FATAL_PAGE_MARKERS = (
+    "Target page, context or browser has been closed",
+    "Target closed",
+    "Browser has been closed",
+    "Execution context was destroyed",
+)
 # 生成中的占位卡片里也挂着 <video>（loading 动画是一个真实的静态 mp4），
 # 不排掉的话等待循环会把它当成结果、秒「成功」并下载一段动画。真结果走 VOD 域名。
 IGNORED_VIDEO_URL_PATTERNS = ("vlabstatic.com", "/static/", "loading", "placeholder")
@@ -622,6 +642,18 @@ def _result_area_text(page: Any) -> str:
     return page.locator("body").inner_text(timeout=5000)
 
 
+def _matched_line(page_text: str, marker: str) -> str:
+    """取出命中 marker 的那一整行，把即梦的原话带回给用户。
+
+    只回关键词（如「不符合平台规则」）会丢掉上下文；带上整行用户才知道
+    是图片被拒还是提示词被拒。
+    """
+    for line in page_text.splitlines():
+        if marker in line:
+            return line.strip()
+    return ""
+
+
 def _queue_hint(page_text: str) -> str:
     """从页面里摘出排队提示行，用于超时报错时给出可执行的下一步。"""
     if not all(marker in page_text for marker in QUEUE_MARKERS):
@@ -648,6 +680,19 @@ def _wait_for_videos(
             for marker in CREDITS_MARKERS:
                 if marker in page_text:
                     raise JimengError("JIMENG_CREDITS_INSUFFICIENT", f"即梦积分不足（页面提示：{marker}）。")
+            for marker in REJECTION_MARKERS:
+                if marker in page_text:
+                    raise JimengError(
+                        "JIMENG_CONTENT_REJECTED",
+                        f"即梦拒绝了本次素材/内容（页面提示：{_matched_line(page_text, marker) or marker}）。",
+                        # 同一张素材重试多少次都会被拦，重试无意义。
+                        retryable=False,
+                        recovery_hint=(
+                            "这是即梦的内容审核结果，不是程序错误。"
+                            "常见原因是参考图含知名 IP 形象、真人肖像或敏感画面，"
+                            "请更换参考图后重试；只改提示词通常无效。"
+                        ),
+                    )
             for marker in FAILURE_MARKERS:
                 if marker in page_text:
                     raise JimengError(
@@ -665,6 +710,18 @@ def _wait_for_videos(
         except JimengError:
             raise
         except Exception as exc:
+            # 页面/浏览器已关闭是不可恢复的：重试只会拖满 5 轮，然后报一个
+            # 「连续 5 次读取失败」把真正的原因埋掉。这里直接快速失败并说人话。
+            if any(marker in str(exc) for marker in FATAL_PAGE_MARKERS):
+                raise JimengError(
+                    "BROWSER_CLOSED",
+                    "等待生成结果期间，9222 浏览器或即梦标签页被关闭了。",
+                    retryable=False,
+                    recovery_hint=(
+                        "任务可能已提交到即梦，请先到即梦历史会话里确认结果，避免重复生成扣积分；"
+                        "重试前请保持 9222 浏览器和即梦标签页开着。"
+                    ),
+                ) from exc
             # 单次 DOM 读取抖动不应中断长任务（中断会导致重复提交、重复扣积分）。
             consecutive_read_errors += 1
             if consecutive_read_errors >= MAX_CONSECUTIVE_PAGE_READ_ERRORS:

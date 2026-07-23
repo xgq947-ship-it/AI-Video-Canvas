@@ -10,6 +10,7 @@ import { resolveClaudeBin, resolveCodexBin } from '../server/services/cliPaths.j
 const scriptFile = fileURLToPath(import.meta.url);
 const defaultProjectRoot = path.resolve(path.dirname(scriptFile), '..');
 export const BUNDLED_SKILL_NAME = 'twitcanva-codex-images';
+export const AI_CLI_PACKAGES = ['@openai/codex@^0.145.0', '@anthropic-ai/claude-code@^2.1.218'];
 
 function log(status, message) {
     process.stdout.write(`${status} ${message}\n`);
@@ -52,12 +53,12 @@ export function probeCli(command, args, { timeout = 15000 } = {}) {
     };
 }
 
-function codexAuthenticated(command) {
-    return probeCli(command, ['login', 'status']).available;
+function codexAuthenticated(command, probe = probeCli) {
+    return probe(command, ['login', 'status']).available;
 }
 
-function claudeAuthenticated(command) {
-    const result = probeCli(command, ['auth', 'status']);
+function claudeAuthenticated(command, probe = probeCli) {
+    const result = probe(command, ['auth', 'status']);
     if (!result.available) return false;
     try {
         return JSON.parse(result.stdout).loggedIn === true;
@@ -73,41 +74,76 @@ function runRequired(command, args, cwd) {
     }
 }
 
+export function buildDependencyInstallArgs() {
+    return ['install'];
+}
+
+export function buildAiCliInstallArgs(projectRoot) {
+    return [
+        'install',
+        '--prefix', path.join(projectRoot, '.local-ai-cli'),
+        '--no-save',
+        '--package-lock=false',
+        ...AI_CLI_PACKAGES
+    ];
+}
+
 export function runSetup({
     projectRoot = defaultProjectRoot,
     codexHome,
     installDependencies = true,
+    installAiCli = false,
     checkOnly = false,
-    withBrowserModels = false
+    withBrowserModels = false,
+    resolveCodex = resolveCodexBin,
+    resolveClaude = resolveClaudeBin,
+    probe = probeCli
 } = {}) {
     const nodeMajor = Number(process.versions.node.split('.')[0]);
     if (nodeMajor < 22) throw new Error(`需要 Node.js 22 或更高版本，当前为 ${process.version}`);
 
     log('→', `项目目录：${projectRoot}`);
     if (installDependencies && !checkOnly) {
-        log('→', '安装项目依赖及内置 Codex / Claude CLI…');
-        runRequired(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install'], projectRoot);
+        log('→', '安装项目基础依赖…');
+        runRequired(
+            process.platform === 'win32' ? 'npm.cmd' : 'npm',
+            buildDependencyInstallArgs(),
+            projectRoot
+        );
+    }
+
+    if (installAiCli && !checkOnly) {
+        log('→', '安装可选 Codex / Claude CLI 到项目本机工具目录…');
+        runRequired(
+            process.platform === 'win32' ? 'npm.cmd' : 'npm',
+            buildAiCliInstallArgs(projectRoot),
+            projectRoot
+        );
     }
 
     if (!checkOnly) {
         const env = ensureLocalEnv(projectRoot);
         log(env.created ? '✓' : '·', env.created ? '已从 .env.example 创建本机 .env' : '保留已有 .env');
 
-        const skillTarget = installBundledCodexSkill(projectRoot, codexHome);
-        log('✓', `已安装项目 Skill：${skillTarget}`);
     }
 
-    const codexBin = resolveCodexBin({ projectRoot });
-    const claudeBin = resolveClaudeBin({ projectRoot });
-    const codex = probeCli(codexBin, ['--version']);
-    const claude = probeCli(claudeBin, ['--version']);
-    log(codex.available ? '✓' : '!', codex.available ? `Codex CLI 可用：${codexBin}` : 'Codex CLI 不可用');
-    log(claude.available ? '✓' : '!', claude.available ? `Claude CLI 可用：${claudeBin}` : 'Claude CLI 不可用');
+    const codexBin = resolveCodex({ projectRoot });
+    const claudeBin = resolveClaude({ projectRoot });
+    const codex = probe(codexBin, ['--version']);
+    const claude = probe(claudeBin, ['--version']);
+    log(codex.available ? '✓' : '·', codex.available ? `Codex CLI 可用：${codexBin}` : '未检测到 Codex CLI，已跳过');
+    log(claude.available ? '✓' : '·', claude.available ? `Claude CLI 可用：${claudeBin}` : '未检测到 Claude CLI，已跳过');
 
-    const codexLoggedIn = codex.available && codexAuthenticated(codexBin);
-    const claudeLoggedIn = claude.available && claudeAuthenticated(claudeBin);
-    log(codexLoggedIn ? '✓' : '!', codexLoggedIn ? 'Codex 已登录' : 'Codex 尚未登录');
-    log(claudeLoggedIn ? '✓' : '!', claudeLoggedIn ? 'Claude 已登录' : 'Claude 尚未登录');
+    const codexLoggedIn = codex.available && codexAuthenticated(codexBin, probe);
+    const claudeLoggedIn = claude.available && claudeAuthenticated(claudeBin, probe);
+    if (codex.available) log(codexLoggedIn ? '✓' : '!', codexLoggedIn ? 'Codex 已登录' : 'Codex 尚未登录');
+    if (claude.available) log(claudeLoggedIn ? '✓' : '!', claudeLoggedIn ? 'Claude 已登录' : 'Claude 尚未登录');
+
+    let skillTarget = '';
+    if (!checkOnly && codex.available) {
+        skillTarget = installBundledCodexSkill(projectRoot, codexHome);
+        log('✓', `已安装项目 Skill：${skillTarget}`);
+    }
 
     if (!checkOnly) {
         const provider = codex.available ? 'codex-cli' : (claude.available ? 'claude-cli' : 'deepseek');
@@ -123,9 +159,10 @@ export function runSetup({
     process.stdout.write('\n');
     if (!codexLoggedIn && codex.available) log('下一步', '运行 `npm exec -- codex login`，用对方自己的 ChatGPT 账号登录');
     if (!claudeLoggedIn && claude.available) log('可选', '运行 `npm exec -- claude`，用对方自己的 Claude 账号登录');
-    log('完成', codexLoggedIn ? '初始化完成，可以运行 `npm run dev`' : '本地文件初始化完成；完成 Codex 登录后运行 `npm run dev`');
+    if (!codex.available && !claude.available) log('提示', 'AI CLI 为可选能力；需要时运行 `npm run setup:ai-cli`');
+    log('完成', '初始化完成，可以运行 `npm run dev`');
 
-    return { codexBin, claudeBin, codexAvailable: codex.available, claudeAvailable: claude.available, codexLoggedIn, claudeLoggedIn };
+    return { codexBin, claudeBin, codexAvailable: codex.available, claudeAvailable: claude.available, codexLoggedIn, claudeLoggedIn, skillTarget };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === scriptFile) {
@@ -133,6 +170,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === scriptFile) {
     try {
         runSetup({
             installDependencies: !args.has('--skip-dependencies'),
+            installAiCli: args.has('--with-ai-cli'),
             checkOnly: args.has('--check'),
             withBrowserModels: args.has('--with-browser-models')
         });

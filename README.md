@@ -39,14 +39,19 @@ A modern, AI-powered canvas application for generating and manipulating images a
 
 ```bash
 git clone <仓库地址> && cd AI-Video-Canvas
-npm run setup                    # 一键安装依赖、Codex/Claude CLI、项目 Skill 和本机配置
-# 首次使用 Codex 时按提示登录自己的 ChatGPT 账号
+npm run setup                    # 安装基础依赖和本机配置；没有 AI CLI 时自动跳过
 npm run dev
 ```
 
-初始化不会复制任何人的账号、Cookie、API Key 或素材库，也不会覆盖已有 `.env`。Codex 和
-Claude CLI 已作为项目可选依赖随 `npm install` 安装；`twitcanva-codex-images` Skill 会自动
-安装到当前用户的 Codex 目录。之后可运行 `npm run setup:check` 检查本机登录与依赖状态。
+初始化不会复制任何人的账号、Cookie、API Key 或素材库，也不会覆盖已有 `.env`。如果电脑
+没有 Codex/Claude，初始化会直接跳过，画布和其他模型仍可正常使用。需要这两套能力时再运行：
+
+```bash
+npm run setup:ai-cli
+```
+
+检测到 Codex 后，`twitcanva-codex-images` Skill 才会安装到当前用户的 Codex 目录。之后可
+运行 `npm run setup:check` 检查本机登录与依赖状态。
 
 如需同时配置 Google Flow / 即梦浏览器自动化环境：
 

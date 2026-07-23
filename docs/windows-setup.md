@@ -189,13 +189,13 @@ dir
 npm run setup
 ```
 
-这一步会安装项目依赖、Windows 版 Codex/Claude CLI、项目 Codex 生图 Skill，并创建
-本机 `.env`。首次使用 Codex 时，按提示运行 `npm exec -- codex login`，用自己的 ChatGPT
-账号登录。账号和密钥不会写入 Git。安装会下载 Remotion 的 Chromium，
+这一步会安装基础依赖并创建本机 `.env`。如果电脑没有 Codex/Claude，初始化会显示
+“已跳过”并正常完成，不影响画布、API 模型或本地渲染。安装会下载 Remotion 的 Chromium，
 **耗时较长（5–15 分钟）属于正常**，不要中断。
 
-Claude CLI 也会随项目安装，但属于可选后端。需要使用时运行 `npm exec -- claude`，按提示
-登录自己的 Claude 账号；只使用 Codex 时可以不登录 Claude。
+需要 Codex/Claude 时再执行 `npm run setup:ai-cli` 安装可选 CLI。随后按提示运行
+`npm exec -- codex login` 或 `npm exec -- claude`，使用各自账号登录。账号和密钥不会
+写入 Git。
 
 **验收 CLI 与 Skill 初始化状态**
 
@@ -203,9 +203,9 @@ Claude CLI 也会随项目安装，但属于可选后端。需要使用时运行
 npm run setup:check
 ```
 
-至少应看到 `Codex CLI 可用`。图片反推和 Codex 自动生图要求 Codex 已登录；Claude 当前
-仅用于文字提示词优化。项目 Skill 位于仓库的 `integrations\skills\`，初始化时复制到当前
-用户的 Codex 目录，因此换电脑后重新运行 `npm run setup` 即可。
+没有安装 CLI 时看到“已跳过”即为正常。图片反推和 Codex 自动生图要求 Codex 已登录；
+Claude 当前仅用于文字提示词优化。项目 Skill 位于仓库的 `integrations\skills\`，仅在
+检测到 Codex 后复制到当前用户的 Codex 目录。
 
 > **网络慢或反复失败**：换成国内镜像后重试
 > ```powershell

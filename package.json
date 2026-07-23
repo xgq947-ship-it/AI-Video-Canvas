@@ -9,6 +9,7 @@
   },
   "scripts": {
     "setup": "node scripts/setup-project.mjs",
+    "setup:ai-cli": "node scripts/setup-project.mjs --with-ai-cli",
     "setup:check": "node scripts/setup-project.mjs --check --skip-dependencies",
     "dev": "concurrently --kill-others-on-fail \"npm run server\" \"vite --strictPort\"",
     "server": "node server/index.js",
@@ -51,9 +52,5 @@
     "express": "^5.2.1",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
-  },
-  "optionalDependencies": {
-    "@anthropic-ai/claude-code": "^2.1.218",
-    "@openai/codex": "^0.145.0"
   }
 }

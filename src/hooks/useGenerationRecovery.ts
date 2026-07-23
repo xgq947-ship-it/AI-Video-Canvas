@@ -6,9 +6,9 @@
  */
 
 import { useEffect, useCallback, useRef } from 'react';
-import { NodeData, NodeStatus } from '../types';
+import { NodeData, NodeStatus, NodeType } from '../types';
 import { extractVideoLastFrame } from '../utils/videoHelpers';
-import { getCodexImageJob, getProductSceneJob, type ProductSceneJob } from '../services/generationService';
+import { getCodexImageJob, getLatestProductSceneJob, getProductSceneJob, type ProductSceneJob } from '../services/generationService';
 import { isGenerationRecoveryExpired } from '../utils/generationRecovery.js';
 
 interface UseGenerationRecoveryOptions {
@@ -160,6 +160,9 @@ export const useGenerationRecovery = ({
                     productSceneStageLabel: job.stageLabel,
                     productSceneRecognitionModel: `${job.recognitionProvider} · ${job.recognitionModel}`,
                     sceneAnalysis: job.sceneAnalysis,
+                    poseAnalysis: job.poseAnalysis,
+                    placementAnalysis: job.placementAnalysis,
+                    overlayAnalysis: job.overlayAnalysis,
                     productAnalysis: job.productAnalysis,
                     errorMessage: job.error || '产品场景替换任务失败',
                     generationStartTime: undefined,
@@ -178,6 +181,9 @@ export const useGenerationRecovery = ({
                     productSceneRecognitionModel: `${job.recognitionProvider} · ${job.recognitionModel}`,
                     productSceneResultNodeId: job.resultNodeId,
                     sceneAnalysis: job.sceneAnalysis,
+                    poseAnalysis: job.poseAnalysis,
+                    placementAnalysis: job.placementAnalysis,
+                    overlayAnalysis: job.overlayAnalysis,
                     productAnalysis: job.productAnalysis,
                     errorMessage: undefined,
                     generationStartTime: undefined,
@@ -199,12 +205,73 @@ export const useGenerationRecovery = ({
                 productSceneStageLabel: job.stageLabel,
                 productSceneRecognitionModel: `${job.recognitionProvider} · ${job.recognitionModel}`,
                 sceneAnalysis: job.sceneAnalysis,
+                poseAnalysis: job.poseAnalysis,
+                placementAnalysis: job.placementAnalysis,
+                overlayAnalysis: job.overlayAnalysis,
                 productAnalysis: job.productAnalysis,
                 prompt: job.prompt || node.prompt,
                 errorMessage: undefined,
             });
         } catch (error) {
             console.error(`[Product Scene] Error checking job ${jobId}:`, error);
+        }
+    }, [onProductSceneCompleted, updateNode, workflowId]);
+
+    const reconcileLatestProductSceneJob = useCallback(async (nodeId: string) => {
+        if (!workflowId) return;
+        try {
+            const latest = await getLatestProductSceneJob(nodeId, workflowId);
+            const node = nodesRef.current.find(item => item.id === nodeId);
+            if (!latest || !node) return;
+            const hasResultNode = nodesRef.current.some(item =>
+                item.id === latest.resultNodeId || item.productSceneSourceJobId === latest.id
+            );
+            if (latest.id === node.productSceneJobId && (latest.status !== 'completed' || hasResultNode)) return;
+
+            const commonUpdates: Partial<NodeData> = {
+                productSceneJobId: latest.id,
+                productSceneJobStatus: latest.status,
+                productSceneRecognitionModel: `${latest.recognitionProvider} · ${latest.recognitionModel}`,
+                sceneAnalysis: latest.sceneAnalysis,
+                poseAnalysis: latest.poseAnalysis,
+                placementAnalysis: latest.placementAnalysis,
+                overlayAnalysis: latest.overlayAnalysis,
+                productAnalysis: latest.productAnalysis,
+                prompt: latest.prompt || node.prompt,
+            };
+            if (latest.status === 'completed' && latest.resultUrl) {
+                onProductSceneCompleted?.(node, latest);
+                updateNode(nodeId, {
+                    ...commonUpdates,
+                    status: NodeStatus.SUCCESS,
+                    productSceneStage: undefined,
+                    productSceneStageLabel: latest.stageLabel,
+                    productSceneResultNodeId: latest.resultNodeId,
+                    generationStartTime: undefined,
+                    errorMessage: undefined,
+                });
+                return;
+            }
+            if (latest.status === 'failed') {
+                updateNode(nodeId, {
+                    ...commonUpdates,
+                    status: NodeStatus.ERROR,
+                    productSceneStage: undefined,
+                    productSceneStageLabel: latest.stageLabel,
+                    generationStartTime: undefined,
+                    errorMessage: latest.error || '产品场景替换任务失败',
+                });
+                return;
+            }
+            updateNode(nodeId, {
+                ...commonUpdates,
+                status: NodeStatus.LOADING,
+                productSceneStage: latest.stage === 'generating' ? 'generating' : 'analyzing',
+                productSceneStageLabel: latest.stageLabel,
+                errorMessage: undefined,
+            });
+        } catch (error) {
+            console.error(`[Product Scene] Error recovering latest job for node ${nodeId}:`, error);
         }
     }, [onProductSceneCompleted, updateNode, workflowId]);
 
@@ -223,6 +290,16 @@ export const useGenerationRecovery = ({
         .filter(n => n.status === NodeStatus.LOADING && n.productSceneJobId)
         .map(n => `${n.id}:${n.productSceneJobId}`)
         .join(',');
+
+    const productSceneNodeIds = nodes
+        .filter(node => node.type === NodeType.PRODUCT_SCENE_REPLACE)
+        .map(node => node.id)
+        .join(',');
+
+    useEffect(() => {
+        if (!productSceneNodeIds) return;
+        productSceneNodeIds.split(',').forEach(nodeId => reconcileLatestProductSceneJob(nodeId));
+    }, [productSceneNodeIds, reconcileLatestProductSceneJob]);
 
     useEffect(() => {
         if (!loadingNodeIds) return;

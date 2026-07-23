@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createProductSceneJob, getProductSceneJob } from '../server/services/productSceneJobs.js';
+import { createProductSceneJob, getLatestProductSceneJob, getProductSceneJob } from '../server/services/productSceneJobs.js';
 
 const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
@@ -39,7 +39,6 @@ const payload = {
   strictSceneComposition: true,
   imageModel: 'google-flow-nano-banana-pro',
   aspectRatio: '3:4',
-  resolution: 'Auto',
 };
 
 test('产品场景任务一次识别两张图、持久化阶段并输出独立图片素材', async t => {
@@ -53,7 +52,13 @@ test('产品场景任务一次识别两张图、持久化阶段并输出独立�
     recognitionModel: 'gpt-5.6-sol',
     runRecognition: async request => {
       recognitionRequest = request;
-      return JSON.stringify({ sceneSpec: '人物手持产品的室内场景', productSpec: '白色圆形揉腹仪与灰色绑带' });
+      return JSON.stringify({
+        sceneSpec: '人物手持产品的室内场景',
+        poseSpec: '人物正视镜头，双手在胸前保持原坐标抓握产品',
+        overlaySpec: '左下角「618优惠」促销贴，占宽 5%-45%；右侧点赞／评论／分享图标与数字。',
+        placementSpec: '产品中心位于画面宽 48%、高 56%，保持胸前锚点',
+        productSpec: '白色圆形揉腹仪与灰色绑带',
+      });
     },
     generateImage: async request => {
       generationRequest = request;
@@ -69,6 +74,12 @@ test('产品场景任务一次识别两张图、持久化阶段并输出独立�
   assert.equal(recognitionRequest.imageDataUrls.length, 2);
   assert.deepEqual(generationRequest.referenceImageInputs, [PIXEL, PIXEL]);
   assert.match(completed.prompt, /产品类别：揉腹仪/);
+  assert.match(completed.prompt, /禁止把产品从胸前移到腰腹/);
+  assert.match(completed.prompt, /产品中心位于画面宽 48%/);
+  // 识别到的叠加层要原样进入生图提示词，否则促销贴、社交图标会被当成背景保留下来。
+  assert.match(recognitionRequest.systemInstruction, /overlaySpec 规则/);
+  assert.equal(completed.overlayAnalysis, '左下角「618优惠」促销贴，占宽 5%-45%；右侧点赞／评论／分享图标与数字。');
+  assert.match(completed.prompt, /必须清除的叠加层清单：左下角「618优惠」促销贴/);
   assert.match(completed.resultUrl, /\/images\/img_/);
   assert.ok(fs.existsSync(path.join(env.dirs.projectsDir, '测试项目_workflow', 'images', `${completed.resultNodeId}.json`)));
   assert.ok(fs.existsSync(path.join(env.dirs.projectsDir, '测试项目_workflow', '.jobs', 'product-scene', `${completed.id}.json`)));
@@ -84,7 +95,13 @@ test('Google Flow 失败后重试复用已完成的 Codex 分析', async t => {
     libraryDir: env.root,
     runRecognition: async () => {
       recognitionCalls += 1;
-      return JSON.stringify({ sceneSpec: '卧室场景', productSpec: '白色揉腹仪' });
+      return JSON.stringify({
+        sceneSpec: '卧室场景',
+        poseSpec: '人物姿势固定',
+        overlaySpec: '无',
+        placementSpec: '产品位置固定',
+        productSpec: '白色揉腹仪',
+      });
     },
     generateImage: async () => {
       generationCalls += 1;
@@ -103,4 +120,41 @@ test('Google Flow 失败后重试复用已完成的 Codex 分析', async t => {
   assert.equal(completed.status, 'completed');
   assert.equal(recognitionCalls, 1);
   assert.equal(generationCalls, 2);
+});
+
+test('客户端预分配任务 ID 可幂等创建，最新任务可用于页面恢复', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let recognitionCalls = 0;
+  let generationCalls = 0;
+  const context = {
+    dirs: env.dirs,
+    libraryDir: env.root,
+    runRecognition: async () => {
+      recognitionCalls += 1;
+      return JSON.stringify({
+        sceneSpec: '固定场景',
+        poseSpec: '固定人物姿势',
+        overlaySpec: '无',
+        placementSpec: '固定产品位置',
+        productSpec: '我方产品',
+      });
+    },
+    generateImage: async () => {
+      generationCalls += 1;
+      return { buffer: Buffer.from('idempotent-result'), extension: 'png' };
+    },
+  };
+  const jobId = '9ee207c9-c187-4e49-95c7-c0048c363a20';
+  const created = createProductSceneJob({ ...payload, jobId }, context);
+  const completed = await waitForTerminalJob(created.id, context);
+  const repeated = createProductSceneJob({ ...payload, jobId }, context);
+  const latest = getLatestProductSceneJob(payload.nodeId, payload.workflowId, context);
+
+  assert.equal(completed.id, jobId);
+  assert.equal(repeated.id, jobId);
+  assert.equal(latest?.id, jobId);
+  assert.equal(latest?.status, 'completed');
+  assert.equal(recognitionCalls, 1);
+  assert.equal(generationCalls, 1);
 });

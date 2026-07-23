@@ -1327,6 +1327,7 @@ export default function App() {
 
   // Track state changes for undo/redo (only after drag ends, not during)
   const isApplyingHistory = React.useRef(false);
+  const isPushingLocalHistory = React.useRef(false);
 
   useEffect(() => {
     // Don't push to history if we're currently applying history (undo/redo)
@@ -1341,12 +1342,22 @@ export default function App() {
     }
 
     // Push to history when nodes or groups change
+    // 标记本次 historyState 变化来自当前画布，避免下面的同步 effect 在
+    // pushHistory 生效前用旧 present 覆盖异步生成刚新增的结果节点。
+    isPushingLocalHistory.current = true;
     pushHistory({ nodes, groups });
   }, [nodes, groups, isDragging]);
 
   // Apply history state when undo/redo is triggered
   // IMPORTANT: Don't revert nodes if any node is in LOADING status (generation in progress)
   useEffect(() => {
+    if (isPushingLocalHistory.current) {
+      if (historyState.nodes === nodes && historyState.groups === groups) {
+        isPushingLocalHistory.current = false;
+      }
+      return;
+    }
+
     // Skip if any node is currently generating - don't interrupt the loading state
     const hasLoadingNode = nodes.some(n => n.status === NodeStatus.LOADING);
     if (hasLoadingNode) {

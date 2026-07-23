@@ -117,8 +117,14 @@ export const useGeneration = ({ nodes, updateNode, workflowId }: UseGenerationPr
             explicitReferenceLabels.size === 0 || selectedReferenceIds.has(parentId);
         if (!combinedPrompt && node.type !== NodeType.PRODUCT_SCENE_REPLACE) return;
 
+        // 先在前端固定任务 ID。即使创建请求返回前页面刷新，恢复逻辑也能按同一 ID 找回任务。
+        const requestedProductSceneJobId = node.type === NodeType.PRODUCT_SCENE_REPLACE
+            ? crypto.randomUUID()
+            : undefined;
+
         updateNode(id, {
             status: NodeStatus.LOADING,
+            productSceneJobId: requestedProductSceneJobId,
             productSceneStage: node.type === NodeType.PRODUCT_SCENE_REPLACE ? 'analyzing' : undefined,
             productSceneJobStatus: node.type === NodeType.PRODUCT_SCENE_REPLACE ? 'pending' : undefined,
             productSceneStageLabel: node.type === NodeType.PRODUCT_SCENE_REPLACE ? '正在创建任务' : undefined,
@@ -145,6 +151,7 @@ export const useGeneration = ({ nodes, updateNode, workflowId }: UseGenerationPr
                     inferProductSceneAspectRatio(sceneNode.resultAspectRatio || sceneNode.aspectRatio, '1:1')
                 );
                 const job = await createProductSceneJob({
+                    jobId: requestedProductSceneJobId,
                     workflowId,
                     nodeId: id,
                     retryJobId: node.productSceneJobStatus === 'failed' ? node.productSceneJobId : undefined,
@@ -156,7 +163,6 @@ export const useGeneration = ({ nodes, updateNode, workflowId }: UseGenerationPr
                     strictSceneComposition: node.strictSceneComposition !== false,
                     imageModel: node.imageModel || 'google-flow-nano-banana-pro',
                     aspectRatio: productAspectRatio,
-                    resolution: node.resolution,
                 });
                 updateNode(id, {
                     status: NodeStatus.LOADING,

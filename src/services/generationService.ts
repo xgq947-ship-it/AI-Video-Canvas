@@ -89,12 +89,18 @@ export interface ProductSceneJob {
   aspectRatio: string;
   prompt?: string;
   sceneAnalysis?: string;
+  poseAnalysis?: string;
+  placementAnalysis?: string;
+  overlayAnalysis?: string;
   productAnalysis?: string;
   resultUrl?: string;
   error?: string;
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export interface CreateProductSceneJobParams {
+  jobId?: string;
   workflowId: string;
   nodeId: string;
   retryJobId?: string;
@@ -106,7 +112,6 @@ export interface CreateProductSceneJobParams {
   strictSceneComposition: boolean;
   imageModel: string;
   aspectRatio: string;
-  resolution: string;
 }
 
 export const createProductSceneJob = async (params: CreateProductSceneJobParams): Promise<ProductSceneJob> => {
@@ -124,6 +129,14 @@ export const getProductSceneJob = async (jobId: string, workflowId: string): Pro
   const response = await fetch(`/api/product-scene-jobs/${encodeURIComponent(jobId)}?workflowId=${encodeURIComponent(workflowId)}`, { cache: 'no-store' });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || '无法读取产品场景替换任务');
+  return data;
+};
+
+export const getLatestProductSceneJob = async (nodeId: string, workflowId: string): Promise<ProductSceneJob | null> => {
+  const response = await fetch(`/api/product-scene-jobs/latest?workflowId=${encodeURIComponent(workflowId)}&nodeId=${encodeURIComponent(nodeId)}`);
+  if (response.status === 404) return null;
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || '无法读取最新产品场景替换任务');
   return data;
 };
 

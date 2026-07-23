@@ -6,8 +6,11 @@ import { getPromptOptimizerProvider } from './promptOptimizerProviders.js';
 import { resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
 import { resolveProjectMediaTarget } from '../utils/projectAssets.js';
 import {
+  buildOverlayAnalysisInstruction,
   buildProductAnalysisInstruction,
   buildProductScenePrompt,
+  buildPlacementAnalysisInstruction,
+  buildPoseAnalysisInstruction,
   buildSceneAnalysisInstruction,
   inferProductSceneAspectRatio,
   validateProductDimensions,
@@ -52,15 +55,25 @@ const parseStructuredAnalysis = text => {
   const parsed = JSON.parse(fenced.slice(firstBrace, lastBrace + 1));
   const sceneAnalysis = String(parsed.sceneSpec || '').trim();
   const productAnalysis = String(parsed.productSpec || '').trim();
-  if (!sceneAnalysis || !productAnalysis) throw new Error('Codex 识图结果缺少 sceneSpec 或 productSpec');
-  return { sceneAnalysis, productAnalysis };
+  const poseAnalysis = String(parsed.poseSpec || '').trim();
+  const placementAnalysis = String(parsed.placementSpec || '').trim();
+  // 场景本来就干净时没有叠加层，overlaySpec 允许为空；统一落成「无」，
+  // 这样既能和「还没识别过」区分开，也不会让干净图直接报错。
+  const overlayAnalysis = String(parsed.overlaySpec || '').trim() || '无';
+  if (!sceneAnalysis || !poseAnalysis || !placementAnalysis || !productAnalysis) {
+    throw new Error('Codex 识图结果缺少 sceneSpec、poseSpec、placementSpec 或 productSpec');
+  }
+  return { sceneAnalysis, poseAnalysis, placementAnalysis, productAnalysis, overlayAnalysis };
 };
 
 const buildCombinedRecognitionInstruction = job => [
   '你是商业产品场景替换分析器。本次附带两张图片，顺序固定：图片1是竞品场景图，图片2是我方产品标准图，禁止交换职责。',
   '请一次完成两张图的结构化分析，只输出一个合法 JSON 对象，不要 Markdown、解释或额外文字。',
-  'JSON 格式必须为：{"sceneSpec":"...","productSpec":"..."}',
+  'JSON 格式必须为：{"sceneSpec":"...","poseSpec":"...","placementSpec":"...","overlaySpec":"...","productSpec":"..."}',
   `sceneSpec 规则：${buildSceneAnalysisInstruction()}`,
+  `poseSpec 规则：${buildPoseAnalysisInstruction()}`,
+  `placementSpec 规则：${buildPlacementAnalysisInstruction()}`,
+  `overlaySpec 规则：${buildOverlayAnalysisInstruction()}`,
   `productSpec 规则：${buildProductAnalysisInstruction({
     preserveProductMarkings: job.preserveProductMarkings,
     productCategory: job.productCategory,
@@ -88,7 +101,7 @@ async function executeJob(job, context) {
     if (completeFromExistingMetadata(job, dirs)) return;
 
     job.status = 'processing';
-    if (!job.sceneAnalysis || !job.productAnalysis) {
+    if (!job.sceneAnalysis || !job.poseAnalysis || !job.placementAnalysis || !job.overlayAnalysis || !job.productAnalysis) {
       job.stage = 'analyzing';
       job.stageLabel = 'Codex 正在识别两张图片';
       writeJob(job, dirs);
@@ -120,7 +133,10 @@ async function executeJob(job, context) {
     job.stageLabel = 'Google Flow 正在生成图片';
     job.prompt = buildProductScenePrompt({
       sceneAnalysis: job.sceneAnalysis,
+      poseAnalysis: job.poseAnalysis,
+      placementAnalysis: job.placementAnalysis,
       productAnalysis: job.productAnalysis,
+      overlayAnalysis: job.overlayAnalysis,
       dimensions: job.dimensions,
       preserveProductMarkings: job.preserveProductMarkings,
       strictSceneComposition: job.strictSceneComposition,
@@ -186,12 +202,26 @@ export function createProductSceneJob(payload, context) {
     throw new Error('请选择有效的按摩器材产品类别');
   }
 
+  const requestedJobId = String(payload.jobId || '').trim();
+  if (requestedJobId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestedJobId)) {
+    throw new Error('产品场景任务 ID 格式无效');
+  }
+  if (requestedJobId) {
+    const existing = readJob(requestedJobId, payload.workflowId, context.dirs);
+    if (existing) {
+      if ((existing.status === 'pending' || existing.status === 'processing') && !activeJobs.has(existing.id)) {
+        void executeJob(existing, context);
+      }
+      return existing;
+    }
+  }
+
   const previous = payload.retryJobId
     ? readJob(payload.retryJobId, payload.workflowId, context.dirs)
     : null;
   const now = new Date().toISOString();
   const job = {
-    id: crypto.randomUUID(),
+    id: requestedJobId || crypto.randomUUID(),
     workflowId: payload.workflowId,
     nodeId: payload.nodeId,
     resultNodeId: crypto.randomUUID(),
@@ -206,11 +236,17 @@ export function createProductSceneJob(payload, context) {
     strictSceneComposition: payload.strictSceneComposition !== false,
     imageModel: payload.imageModel,
     aspectRatio: inferProductSceneAspectRatio(payload.aspectRatio, '1:1'),
-    resolution: payload.resolution || 'Auto',
     recognitionProvider: 'codex-cli',
     recognitionModel: context.recognitionModel || 'gpt-5.6-sol',
-    ...(previous?.sceneAnalysis && previous?.productAnalysis
-      ? { sceneAnalysis: previous.sceneAnalysis, productAnalysis: previous.productAnalysis }
+    ...(previous?.sceneAnalysis && previous?.poseAnalysis && previous?.placementAnalysis
+      && previous?.overlayAnalysis && previous?.productAnalysis
+      ? {
+          sceneAnalysis: previous.sceneAnalysis,
+          poseAnalysis: previous.poseAnalysis,
+          placementAnalysis: previous.placementAnalysis,
+          overlayAnalysis: previous.overlayAnalysis,
+          productAnalysis: previous.productAnalysis,
+        }
       : {}),
     createdAt: now,
     updatedAt: now,
@@ -218,6 +254,26 @@ export function createProductSceneJob(payload, context) {
   writeJob(job, context.dirs);
   void executeJob(job, context);
   return job;
+}
+
+export function getLatestProductSceneJob(nodeId, workflowId, context) {
+  if (!nodeId || !workflowId) return null;
+  const { jobsDir } = getJobStorage(workflowId, context.dirs);
+  const latest = fs.readdirSync(jobsDir)
+    .filter(name => name.endsWith('.json'))
+    .map(name => {
+      try {
+        return JSON.parse(fs.readFileSync(path.join(jobsDir, name), 'utf8'));
+      } catch {
+        return null;
+      }
+    })
+    .filter(job => job?.workflowId === workflowId && job?.nodeId === nodeId)
+    .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))[0] || null;
+  if (latest && (latest.status === 'pending' || latest.status === 'processing') && !activeJobs.has(latest.id)) {
+    void executeJob(latest, context);
+  }
+  return latest;
 }
 
 export function getProductSceneJob(jobId, workflowId, context) {

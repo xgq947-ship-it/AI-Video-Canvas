@@ -148,6 +148,9 @@ export interface NodeData {
   preserveProductMarkings?: boolean;
   strictSceneComposition?: boolean;
   sceneAnalysis?: string;
+  poseAnalysis?: string;
+  placementAnalysis?: string;
+  overlayAnalysis?: string;
   productAnalysis?: string;
   productSceneStage?: 'analyzing' | 'generating';
   productSceneJobId?: string;

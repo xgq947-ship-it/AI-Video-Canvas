@@ -16,7 +16,7 @@ import { generateGoogleFlowWorkflowImage, GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID, i
 import { generateOpenAIImage } from '../services/openai.js';
 import { resolveAudioToBase64, resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
 import { resolveProjectMediaTarget } from '../utils/projectAssets.js';
-import { createProductSceneJob, getProductSceneJob } from '../services/productSceneJobs.js';
+import { createProductSceneJob, getLatestProductSceneJob, getProductSceneJob } from '../services/productSceneJobs.js';
 
 const router = express.Router();
 
@@ -37,6 +37,19 @@ router.post('/product-scene-jobs', (req, res) => {
         return res.status(202).json(job);
     } catch (error) {
         return res.status(400).json({ error: error.message || '无法创建产品场景替换任务' });
+    }
+});
+
+router.get('/product-scene-jobs/latest', (req, res) => {
+    try {
+        const workflowId = String(req.query.workflowId || '');
+        const nodeId = String(req.query.nodeId || '');
+        if (!workflowId || !nodeId) return res.status(400).json({ error: '缺少 workflowId 或 nodeId' });
+        const job = getLatestProductSceneJob(nodeId, workflowId, productSceneContext(req.app.locals));
+        if (!job) return res.status(404).json({ error: '该节点尚无产品场景替换任务' });
+        return res.json(job);
+    } catch (error) {
+        return res.status(500).json({ error: error.message || '读取最新产品场景替换任务失败' });
     }
 });
 

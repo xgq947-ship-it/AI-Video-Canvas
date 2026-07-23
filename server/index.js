@@ -1129,6 +1129,52 @@ app.post('/api/gemini/describe-image', async (req, res) => {
     }
 });
 
+// Reverse an image into a generation prompt through the prompt backend selected
+// in Settings. Codex CLI accepts the current node image directly and needs no
+// additional API key.
+app.post('/api/prompt/describe-image', async (req, res) => {
+    try {
+        const { imageUrl, prompt } = req.body;
+        if (!imageUrl) return res.status(400).json({ error: '当前节点没有可分析的图片' });
+        if (!prompt) return res.status(400).json({ error: '缺少图片提示词生成指令' });
+
+        const imageDataUrl = resolveImageToBase64(imageUrl);
+        if (!imageDataUrl?.startsWith('data:image/')) {
+            return res.status(400).json({ error: '无法读取当前节点图片，请确认项目素材文件仍然存在' });
+        }
+
+        const providerId = req.app.locals.PROMPT_OPTIMIZER_PROVIDER || 'deepseek';
+        const provider = getPromptOptimizerProvider(providerId);
+        if (!provider) return res.status(400).json({ error: `未知的提示词后端：${providerId}` });
+        if (!provider.supportsImage) {
+            return res.status(400).json({ error: `${provider.label} 不支持识图，请在设置中选择 Codex CLI（本机）` });
+        }
+
+        const model = req.app.locals.PROMPT_OPTIMIZER_MODEL || provider.defaultModel;
+        let text;
+        try {
+            text = await provider.run({
+                systemInstruction: prompt,
+                userPrompt: '请严格按照上述规则分析随请求附带的当前节点图片。',
+                imageDataUrl,
+                model,
+                effort: provider.defaultEffort || '',
+                temperature: 0.2,
+                maxTokens: 2500
+            });
+        } catch (upstreamError) {
+            return res.status(upstreamError.status || 502).json({ error: upstreamError.message });
+        }
+
+        const description = String(text || '').trim();
+        if (!description) return res.status(500).json({ error: '图片提示词生成结果为空' });
+        return res.json({ description, provider: providerId, model });
+    } catch (error) {
+        console.error('Reverse image prompt error:', error);
+        return res.status(500).json({ error: error.message });
+    }
+});
+
 // Optimize image/video prompts through extensible shared profiles + pluggable LLM backends.
 // System instruction is model-agnostic (shared/promptOptimizationProfiles.js); the backend is
 // chosen by PROMPT_OPTIMIZER_PROVIDER (default DeepSeek). Adding Claude / Codex = register a

@@ -2,8 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import { failCodexImageJob, listCodexImageJobs } from './codexImageJobs.js';
+import { resolveCodexBin } from './cliPaths.js';
 
-const DEFAULT_CODEX_PATH = '/Applications/ChatGPT.app/Contents/Resources/codex';
 const ACTIVE_STATUSES = new Set(['pending', 'processing']);
 const LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_LOG_FILES = 10;
@@ -32,14 +32,12 @@ export function pruneCodexAutomationLogs(
 }
 
 export function buildCodexAutomationCommand(projectRoot, codexPath) {
-    const command = codexPath
-        || process.env.CODEX_CLI_PATH
-        || (fs.existsSync(DEFAULT_CODEX_PATH) ? DEFAULT_CODEX_PATH : 'codex');
+    const command = resolveCodexBin({ projectRoot, configuredPath: codexPath });
     const prompt = [
         '使用 twitcanva-codex-images skill，自动处理当前 Evan 项目中的全部图片生成任务。',
         '先恢复 processing 任务，再按创建时间处理 pending 任务，直到连续两次检查队列都为空。',
         '必须使用当前 ChatGPT 登录包含的内置 image_gen 能力，不调用 OpenAI API，也不要索要 API Key。',
-        '严格只操作 library/codex-image-jobs 和 library/images，不修改项目源代码，不等待用户输入。'
+        '严格只操作 library/codex-image-jobs、library/projects 下当前项目素材目录及兼容的 library/images，不修改项目源代码，不等待用户输入。'
     ].join('\n');
 
     return {

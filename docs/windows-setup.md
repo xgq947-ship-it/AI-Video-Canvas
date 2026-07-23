@@ -48,7 +48,7 @@ GitHub、Google、npm、PyPI 在国内网络下经常**下载慢、中断、或�
 | 情况 | 处理 |
 |---|---|
 | 下载中断/超时 | **直接重试**，多试几次往往就通了。不要改配置 |
-| `npm install` 卡住或失败 | 换淘宝镜像：`npm config set registry https://registry.npmmirror.com` |
+| `npm run setup` 卡住或失败 | 换淘宝镜像：`npm config set registry https://registry.npmmirror.com` 后重试 |
 | `pip install` 超时 | 加清华镜像参数，见步骤 10 的排错 |
 | GitHub clone 失败 | 重试；仍不行让用户开代理，或改用 SSH 方式 |
 | 官网下载页打不开 | 需要代理。这一步没有替代方案，必须能访问 |
@@ -186,15 +186,31 @@ dir
 ## 步骤 5 — 安装 Node 依赖
 
 ```powershell
-npm install
+npm run setup
 ```
 
-这一步会下载 Remotion 的 Chromium，**耗时较长（5–15 分钟）属于正常**，不要中断。
+这一步会安装项目依赖、Windows 版 Codex/Claude CLI、项目 Codex 生图 Skill，并创建
+本机 `.env`。首次使用 Codex 时，按提示运行 `npm exec -- codex login`，用自己的 ChatGPT
+账号登录。账号和密钥不会写入 Git。安装会下载 Remotion 的 Chromium，
+**耗时较长（5–15 分钟）属于正常**，不要中断。
+
+Claude CLI 也会随项目安装，但属于可选后端。需要使用时运行 `npm exec -- claude`，按提示
+登录自己的 Claude 账号；只使用 Codex 时可以不登录 Claude。
+
+**验收 CLI 与 Skill 初始化状态**
+
+```powershell
+npm run setup:check
+```
+
+至少应看到 `Codex CLI 可用`。图片反推和 Codex 自动生图要求 Codex 已登录；Claude 当前
+仅用于文字提示词优化。项目 Skill 位于仓库的 `integrations\skills\`，初始化时复制到当前
+用户的 Codex 目录，因此换电脑后重新运行 `npm run setup` 即可。
 
 > **网络慢或反复失败**：换成国内镜像后重试
 > ```powershell
 > npm config set registry https://registry.npmmirror.com
-> npm install
+> npm run setup
 > ```
 
 **验收**
@@ -221,18 +237,18 @@ npm test
 
 **排错**
 - 报 `EPERM` / 权限错误 → 用管理员身份打开 PowerShell 重试
-- 卡在 sharp / node-gyp → 先 `npm cache clean --force` 再 `npm install`
+- 卡在 sharp / node-gyp → 先 `npm cache clean --force` 再运行 `npm run setup`
 
 ---
 
 ## 步骤 6 — 配置密钥
 
 ```powershell
-copy .env.example .env
 notepad .env
 ```
 
-在打开的记事本里填入密钥。**至少填一个**才能生成，全空也能启动（只是不能生成）。
+初始化已经创建 `.env`，在打开的记事本里按需填入密钥。使用 Codex 自动生图和图片反推
+不需要 API Key；使用其他 API 模型时再填写对应密钥。
 
 推荐先只填这两个，够跑通验证：
 
@@ -324,7 +340,7 @@ launcher-windows\Evan工作台.bat     ← 排错时才用（命令行，能看�
 - **服务在后台独立运行**：关掉这个面板不会停止服务。想停就点「停止服务」。
 - **日志直接显示在面板下方**，不用再去翻文件。
   （文件仍在 `logs\dev-server.log`。）
-- **首次使用前必须先 `npm install`**，否则 `.vbs` 会弹窗提示。
+- **首次使用前必须先运行 `npm run setup`**，否则 `.vbs` 会弹窗提示。
 
 ### 面板是怎么实现的
 
@@ -355,7 +371,7 @@ npm run launcher open       # 打开画布（必要时先启动）
 | 面板日志显示成乱码 | **已修复**，先 `git pull origin main`。原因是 GBK/UTF-8 混编，现在会自动识别并补了 UTF-8 输出设置 |
 | 提示端口 5199 被占用 | **已修复**。现在会自动顺延到 5200/5201…；若占用者就是已开着的面板，会直接复用那个窗口 |
 | 弹窗「找不到 package.json」 | 文件被复制到别处了。删掉，回项目里用「发送到 → 桌面快捷方式」 |
-| 弹窗「还没有安装依赖」 | 先在项目目录跑一次 `npm install` |
+| 弹窗「还没有安装依赖」 | 先在项目目录运行一次 `npm run setup` |
 | 面板打开了但状态一直「未运行」 | 点「打开画布」拉起服务；仍失败就看面板下方日志 |
 | 点「打开画布」转圈 60 秒后失败 | 看面板下方日志，多半是端口被占或 `.env` 有语法错误 |
 | 面板带着地址栏（像普通网页） | 没找到 Chrome，退回默认浏览器了。功能一样，装了 Chrome 就会变成无边框窗口 |
@@ -709,7 +725,7 @@ Windows 适配尚未在真机验证过，**遇到报错是预期内的**。请�
 Mac 那边修复推送后，你这样更新：
 ```powershell
 git pull origin main
-npm install
+npm run setup
 npm test
 ```
 如果改动涉及 Python 侧，再跑一次 `npm run setup:browser-models`。

@@ -39,10 +39,19 @@ A modern, AI-powered canvas application for generating and manipulating images a
 
 ```bash
 git clone <仓库地址> && cd AI-Video-Canvas
-npm install                      # 安装依赖（含 Remotion 渲染引擎）
-cp .env.example .env             # Windows: copy .env.example .env
-# 编辑 .env 填入你自己的密钥（都可留空，见下表）
+npm run setup                    # 一键安装依赖、Codex/Claude CLI、项目 Skill 和本机配置
+# 首次使用 Codex 时按提示登录自己的 ChatGPT 账号
 npm run dev
+```
+
+初始化不会复制任何人的账号、Cookie、API Key 或素材库，也不会覆盖已有 `.env`。Codex 和
+Claude CLI 已作为项目可选依赖随 `npm install` 安装；`twitcanva-codex-images` Skill 会自动
+安装到当前用户的 Codex 目录。之后可运行 `npm run setup:check` 检查本机登录与依赖状态。
+
+如需同时配置 Google Flow / 即梦浏览器自动化环境：
+
+```bash
+npm run setup -- --with-browser-models
 ```
 
 可用：Gemini、OpenAI、**Seedance 2.0 (ARK)**、DeepSeek 提示词优化，

@@ -7,7 +7,7 @@
  * 由 app.locals.PROMPT_OPTIMIZER_PROVIDER 选择后端（默认 deepseek），PROMPT_OPTIMIZER_MODEL 可覆盖模型。
  * 后端选择既可用环境变量，也可在“配置”弹窗的下拉里选（存到 library/config/optimizer.json）。
  * 新增后端 = 在下面注册表里加一条，路由与提示词模板都不用动。每个后端实现同一接口：
- *   async run({ systemInstruction, userPrompt, apiKey, model, temperature, maxTokens }) => string
+ *   async run({ systemInstruction, userPrompt, apiKey, model, temperature, maxTokens, imageDataUrl }) => string
  * 失败时抛出带 status 的 Error，供路由决定 HTTP 状态码。
  *
  * 后端分两类：
@@ -16,21 +16,14 @@
  */
 
 import { execFile } from 'child_process';
-import fsSync from 'fs';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
+import { resolveClaudeBin, resolveCodexBin } from './cliPaths.js';
 
 const CLI_TIMEOUT_MS = 180000;
 // 与 codexImageAutomation.js 一致：优先 ChatGPT.app 内置 codex，未安装再退回 PATH 里的 codex。
-const DEFAULT_CODEX_PATH = '/Applications/ChatGPT.app/Contents/Resources/codex';
-
-function resolveCodexBin() {
-    return process.env.CODEX_CLI_PATH
-        || (fsSync.existsSync(DEFAULT_CODEX_PATH) ? DEFAULT_CODEX_PATH : 'codex');
-}
-
 function upstreamError(message, httpStatus) {
     const error = new Error(message);
     error.status = httpStatus >= 500 ? 502 : httpStatus;
@@ -111,7 +104,7 @@ function runCli(bin, args, label) {
 // 不传 --dangerously-skip-permissions 时，print 模式下任何工具调用都无法被批准，因而不会读写项目文件，
 // 本调用是纯文本改写。默认从 PATH 找 claude，可用 CLAUDE_CLI_PATH 指定绝对路径。
 async function runClaudeCli({ systemInstruction, userPrompt, model, effort }) {
-    const bin = process.env.CLAUDE_CLI_PATH || 'claude';
+    const bin = resolveClaudeBin();
     const args = [
         '-p', userPrompt,
         '--system-prompt', systemInstruction,
@@ -126,10 +119,11 @@ async function runClaudeCli({ systemInstruction, userPrompt, model, effort }) {
 // Codex 没有独立的系统提示词参数，故把系统指令与待优化内容合并为单条 prompt。
 // read-only 沙箱 + 临时目录，纯文本改写不会触碰项目；--output-last-message 把最终答复单独写到文件，
 // 避免解析夹杂 agent 日志的 stdout。默认走 ChatGPT.app 内置 codex，可用 CODEX_CLI_PATH 指定绝对路径。
-async function runCodexCli({ systemInstruction, userPrompt, model, effort }) {
+async function runCodexCli({ systemInstruction, userPrompt, model, effort, imageDataUrl }) {
     const bin = resolveCodexBin();
     const combined = `${systemInstruction}\n\n【待优化内容】\n${userPrompt}`;
     const outFile = path.join(os.tmpdir(), `codex-optimize-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.txt`);
+    let imageFile = '';
     const args = [
         'exec',
         '--sandbox', 'read-only',
@@ -139,7 +133,18 @@ async function runCodexCli({ systemInstruction, userPrompt, model, effort }) {
     ];
     if (model) args.push('--model', model);
     if (effort) args.push('-c', `model_reasoning_effort=${effort}`); // low / medium / high
+    // `--image` accepts a variable number of values, so the positional prompt
+    // must appear before it or Codex will consume the prompt as another filename.
     args.push(combined);
+
+    if (imageDataUrl) {
+        const match = imageDataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/s);
+        if (!match) throw upstreamError('Codex CLI 收到不支持的图片格式', 400);
+        const extension = match[1] === 'image/jpeg' ? 'jpg' : match[1].split('/')[1];
+        imageFile = path.join(os.tmpdir(), `codex-prompt-image-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${extension}`);
+        await fs.writeFile(imageFile, Buffer.from(match[2], 'base64'), { mode: 0o600 });
+        args.push('--image', imageFile);
+    }
 
     try {
         const stdout = await runCli(bin, args, 'Codex CLI');
@@ -148,6 +153,7 @@ async function runCodexCli({ systemInstruction, userPrompt, model, effort }) {
         return (fileText || stdout).trim();
     } finally {
         fs.unlink(outFile).catch(() => {});
+        if (imageFile) fs.unlink(imageFile).catch(() => {});
     }
 }
 
@@ -158,6 +164,7 @@ async function runCodexCli({ systemInstruction, userPrompt, model, effort }) {
 export const PROMPT_OPTIMIZER_PROVIDERS = {
     deepseek: {
         label: 'DeepSeek（云端 API）',
+        supportsImage: false,
         apiKeyField: 'DEEPSEEK_API_KEY',
         defaultModel: 'deepseek-v4-pro',
         defaultEffort: '',          // v4 走 thinking:disabled，不用推理档位
@@ -165,6 +172,7 @@ export const PROMPT_OPTIMIZER_PROVIDERS = {
     },
     'claude-cli': {
         label: 'Claude CLI（本机）',
+        supportsImage: false,
         apiKeyField: null,             // 走本机已登录的 CLI，无需密钥
         defaultModel: 'claude-sonnet-5',
         defaultEffort: 'high',         // --effort 档位：low/medium/high/xhigh/max
@@ -172,6 +180,7 @@ export const PROMPT_OPTIMIZER_PROVIDERS = {
     },
     'codex-cli': {
         label: 'Codex CLI（本机）',
+        supportsImage: true,
         apiKeyField: null,
         defaultModel: 'gpt-5.6-sol',
         defaultEffort: 'medium',       // model_reasoning_effort：low/medium/high
@@ -190,6 +199,7 @@ export function listPromptOptimizerProviders() {
         label: provider.label,
         apiKeyField: provider.apiKeyField,
         defaultModel: provider.defaultModel,
-        defaultEffort: provider.defaultEffort || ''
+        defaultEffort: provider.defaultEffort || '',
+        supportsImage: Boolean(provider.supportsImage)
     }));
 }

@@ -525,7 +525,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
         setShowImagePromptMenu(false);
 
         try {
-            const response = await fetch('/api/gemini/describe-image', {
+            const response = await fetch('/api/prompt/describe-image', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

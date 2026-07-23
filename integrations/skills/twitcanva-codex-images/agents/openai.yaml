@@ -1,0 +1,4 @@
+interface:
+  display_name: "AI漫剧图片生成"
+  short_description: "Process Evan canvas queues with Codex image generation"
+  default_prompt: "处理当前 Evan 项目中等待中的 Codex 图片生成任务"

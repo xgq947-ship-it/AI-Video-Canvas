@@ -42,11 +42,13 @@ export function resolveImageToBase64(input) {
     if (filePath.startsWith('/library/')) {
         try {
             // Strip query string (e.g., ?t=1234567890) used for cache-busting
-            const pathWithoutQuery = filePath.split('?')[0];
+            const pathWithoutQuery = filePath.split('?')[0].split('#')[0];
 
             // Get the library directory from environment or default
             const libraryDir = path.resolve(process.env.LIBRARY_DIR || path.join(process.cwd(), 'library'));
-            const relativePath = pathWithoutQuery.replace('/library/', '');
+            // Workflow URLs encode Chinese project/folder names for the browser.
+            // Decode them before resolving the corresponding local filesystem path.
+            const relativePath = decodeURIComponent(pathWithoutQuery.replace(/^\/library\//, ''));
             const absolutePath = path.resolve(libraryDir, relativePath);
 
             if (absolutePath !== libraryDir && !absolutePath.startsWith(`${libraryDir}${path.sep}`)) {

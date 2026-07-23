@@ -13,7 +13,7 @@ import { CanvasNode } from './components/canvas/CanvasNode';
 import { ConnectionsLayer } from './components/canvas/ConnectionsLayer';
 import { ContextMenu } from './components/ContextMenu';
 import { ContextMenuState, NodeData, NodeStatus, NodeType } from './types';
-import { generateImage, generateVideo } from './services/generationService';
+import { generateImage, generateVideo, type ProductSceneJob } from './services/generationService';
 import { useCanvasNavigation } from './hooks/useCanvasNavigation';
 import { useNodeManagement } from './hooks/useNodeManagement';
 import { useConnectionDragging } from './hooks/useConnectionDragging';
@@ -59,6 +59,7 @@ import { MapPinned } from 'lucide-react';
 import { CanvasMinimap } from './components/canvas/CanvasMinimap';
 import { CanvasZoomControl } from './components/canvas/CanvasZoomControl';
 import { collectNodeReferences } from './utils/nodeReferences.js';
+import { upsertProductSceneResultNode } from './utils/productSceneResult.js';
 
 // ============================================================================
 // MAIN COMPONENT
@@ -618,6 +619,7 @@ export default function App() {
     const generatableTypes = new Set([
       NodeType.IMAGE,
       NodeType.IMAGE_EDITOR,
+      NodeType.PRODUCT_SCENE_REPLACE,
       NodeType.VIDEO
     ]);
     const selected = nodes.filter(node =>
@@ -733,11 +735,17 @@ export default function App() {
     interval: 60000 // Save every 60 seconds
   });
 
+  const handleProductSceneCompleted = React.useCallback((sourceNode: NodeData, job: ProductSceneJob) => {
+    if (!job.resultUrl) return;
+    setNodes(previous => upsertProductSceneResultNode(previous, sourceNode, job));
+  }, [setNodes]);
+
   // Generation Recovery Management
   useGenerationRecovery({
     nodes,
     updateNode,
-    workflowId
+    workflowId,
+    onProductSceneCompleted: handleProductSceneCompleted,
   });
 
   // Video Frame Extraction (auto-extract lastFrame for videos missing thumbnails)
@@ -1944,6 +1952,7 @@ export default function App() {
           newNodes.forEach(async (node) => {
             try {
               const resultUrl = await generateImage({
+                workflowId: workflowId || '',
                 prompt: node.prompt || '',
                 imageBase64: imageBase64,
                 imageModel: imageModel,

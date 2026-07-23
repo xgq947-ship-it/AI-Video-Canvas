@@ -12,6 +12,7 @@ export const NODE = {
   AUDIO: 'Audio',
   IMAGE_EDITOR: 'Image Editor',
   VIDEO_EDITOR: 'Video Editor',
+  PRODUCT_SCENE_REPLACE: 'Product Scene Replace',
   SFX: 'SFX',
   BGM: 'BGM',
   SUBTITLE: 'Subtitle',
@@ -60,9 +61,15 @@ export const isValidNodeConnection = (parentType, childType) => {
   // 非 TEXT 来源不能连向音轨 / 字幕
   if (AUDIO_KINDS.includes(childType) || childType === NODE.SUBTITLE) return false;
 
+  // 产品场景替换只接收图片类输入；输出仍可进入后续图片/视频链路。
+  if (childType === NODE.PRODUCT_SCENE_REPLACE) {
+    return parentType === NODE.IMAGE || parentType === NODE.IMAGE_EDITOR;
+  }
+
   if (parentType === NODE.VIDEO) return childType === NODE.VIDEO || childType === NODE.VIDEO_EDITOR;
   if (parentType === NODE.IMAGE) return childType === NODE.IMAGE || childType === NODE.VIDEO || childType === NODE.IMAGE_EDITOR;
   if (parentType === NODE.IMAGE_EDITOR) return childType === NODE.IMAGE || childType === NODE.VIDEO || childType === NODE.IMAGE_EDITOR;
+  if (parentType === NODE.PRODUCT_SCENE_REPLACE) return childType === NODE.IMAGE || childType === NODE.VIDEO || childType === NODE.IMAGE_EDITOR;
   if (parentType === NODE.VIDEO_EDITOR) return childType === NODE.VIDEO;
 
   return true;

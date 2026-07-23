@@ -8,6 +8,7 @@ export enum NodeType {
   VIDEO_EDITOR = 'Video Editor',
   STORYBOARD = 'Storyboard Manager',
   CAMERA_ANGLE = 'Camera Angle',
+  PRODUCT_SCENE_REPLACE = 'Product Scene Replace',
   // Local open-source model nodes
   // AI 漫剧 0-1 生产节点（取值需与 shared/manifest.js 的 MANGA_NODE_TYPES 一致）
   SFX = 'SFX',            // 音效
@@ -132,6 +133,29 @@ export interface NodeData {
   assetId?: string;
   assetName?: string;
   assetDescription?: string;
+
+  // 产品场景替换节点：两张参考图分别承担场景与产品外观职责。
+  sceneReferenceId?: string;
+  sceneAspectReferenceId?: string;
+  productReferenceId?: string;
+  productCategory?: string;
+  productDimensions?: {
+    length: number;
+    width: number;
+    height: number;
+    unit: 'mm' | 'cm';
+  };
+  preserveProductMarkings?: boolean;
+  strictSceneComposition?: boolean;
+  sceneAnalysis?: string;
+  productAnalysis?: string;
+  productSceneStage?: 'analyzing' | 'generating';
+  productSceneJobId?: string;
+  productSceneJobStatus?: 'pending' | 'processing' | 'completed' | 'failed';
+  productSceneStageLabel?: string;
+  productSceneRecognitionModel?: string;
+  productSceneResultNodeId?: string;
+  productSceneSourceJobId?: string; // 普通图片结果节点用于防止恢复时重复创建
 
   // ==========================================================================
   // AI 漫剧生产节点字段（配音/音效/BGM/字幕/成片）

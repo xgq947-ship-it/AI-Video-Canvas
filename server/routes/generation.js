@@ -16,8 +16,41 @@ import { generateGoogleFlowWorkflowImage, GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID, i
 import { generateOpenAIImage } from '../services/openai.js';
 import { resolveAudioToBase64, resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
 import { resolveProjectMediaTarget } from '../utils/projectAssets.js';
+import { createProductSceneJob, getProductSceneJob } from '../services/productSceneJobs.js';
 
 const router = express.Router();
+
+const productSceneContext = appLocals => ({
+    dirs: {
+        workflowsDir: appLocals.WORKFLOWS_DIR,
+        projectsDir: appLocals.PROJECTS_DIR
+    },
+    libraryDir: appLocals.LIBRARY_DIR,
+    recognitionModel: appLocals.PROMPT_OPTIMIZER_PROVIDER === 'codex-cli'
+        ? (appLocals.PROMPT_OPTIMIZER_MODEL || 'gpt-5.6-sol')
+        : 'gpt-5.6-sol'
+});
+
+router.post('/product-scene-jobs', (req, res) => {
+    try {
+        const job = createProductSceneJob(req.body || {}, productSceneContext(req.app.locals));
+        return res.status(202).json(job);
+    } catch (error) {
+        return res.status(400).json({ error: error.message || '无法创建产品场景替换任务' });
+    }
+});
+
+router.get('/product-scene-jobs/:jobId', (req, res) => {
+    try {
+        const workflowId = String(req.query.workflowId || '');
+        if (!workflowId) return res.status(400).json({ error: '缺少 workflowId' });
+        const job = getProductSceneJob(req.params.jobId, workflowId, productSceneContext(req.app.locals));
+        if (!job) return res.status(404).json({ error: '产品场景替换任务不存在' });
+        return res.json(job);
+    } catch (error) {
+        return res.status(500).json({ error: error.message || '读取产品场景替换任务失败' });
+    }
+});
 
 // ============================================================================
 // IMAGE GENERATION

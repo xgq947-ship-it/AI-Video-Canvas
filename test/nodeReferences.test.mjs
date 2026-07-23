@@ -23,6 +23,16 @@ test('连接素材按类型独立编号并保留连线顺序', () => {
   assert.equal(refs[1].previewUrl, '/v1-last.png');
 });
 
+test('产品场景替换的控制节点不参与参考编号（成图在它的子图片节点上）', () => {
+  const chain = [
+    { id: 'p1', type: 'Product Scene Replace' },
+    { id: 'i9', type: 'Image', resultUrl: '/i9.png' },
+  ];
+  const refs = collectNodeReferences(['p1', 'i9'], chain);
+  assert.deepEqual(refs.map(ref => ref.label), ['参考图1']);
+  assert.deepEqual(refs.map(ref => ref.id), ['i9']);
+});
+
 test('@ 参考标签支持标准名和常用简写', () => {
   const refs = collectNodeReferences(['i1', 'v1', 'a1'], nodes);
   assert.deepEqual(

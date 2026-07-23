@@ -57,6 +57,7 @@ export const getNodeWidth = (node: NodeData, parentNode?: NodeData): number => {
     if (node.type === NodeType.VIDEO) return 385;
     // Camera Angle nodes have fixed width
     if (node.type === NodeType.CAMERA_ANGLE) return 340;
+    if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 460;
     // Image and other nodes
     return 365;
 };
@@ -123,6 +124,9 @@ export const getNodeHeight = (node: NodeData, parentNode?: NodeData): number => 
         // Loading/empty state: minHeight 340px (see CanvasNode.tsx Camera Angle section)
         return 340;
     }
+
+    // 控制节点固定高度：成图落在它自动创建的子 Image 节点上，自身不展示结果。
+    if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 520;
 
     // Parse aspect ratio to calculate content height for Image/Video nodes
     let aspectRatio: number;

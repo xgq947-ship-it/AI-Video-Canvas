@@ -11,6 +11,10 @@ import {
     Upload,
     X,
 } from 'lucide-react';
+import {
+    MASSAGE_EQUIPMENT_CATEGORY,
+    MASSAGE_EQUIPMENT_SECTIONS,
+} from '../../shared/massageEquipmentCategories.js';
 
 export interface LibraryAsset {
     id: string;
@@ -38,7 +42,7 @@ interface AssetLibraryPanelProps {
     previewAsset?: { name: string; url: string; type: 'image' | 'video' } | null;
 }
 
-const MASSAGE_CATEGORY = 'Massage Equipment';
+const MASSAGE_CATEGORY = MASSAGE_EQUIPMENT_CATEGORY;
 const TOP_CATEGORIES = [
     { value: 'All', label: '全部' },
     { value: 'Character', label: '角色' },
@@ -47,14 +51,9 @@ const TOP_CATEGORIES = [
     { value: MASSAGE_CATEGORY, label: '按摩器材' },
 ] as const;
 
-const MASSAGE_SECTIONS = [
-    { title: '足部腿部', items: ['足浴盆', '足疗机', '膝盖按摩器'] },
-    { title: '头眼颈肩', items: ['护眼仪', '按摩枕', '按摩披肩', '护颈仪', '头部按摩器'] },
-    { title: '腰腹坐卧', items: ['按摩靠垫', '按摩椅', '按摩床垫', '腰腹按摩器', '揉腹仪', '按摩座垫'] },
-    { title: '手持理疗', items: ['筋膜枪', '按摩棒', '刮痧仪', '手部按摩器'] },
-] as const;
+const MASSAGE_SECTIONS = MASSAGE_EQUIPMENT_SECTIONS;
 
-const VISIBLE_CATEGORIES = new Set(TOP_CATEGORIES.filter(category => category.value !== 'All').map(category => category.value));
+const VISIBLE_CATEGORIES = new Set<string>(TOP_CATEGORIES.filter(category => category.value !== 'All').map(category => category.value));
 const MEDIA_FILE_RE = /\.(png|jpe?g|webp|gif|avif|bmp|mp4|mov|webm|m4v)$/i;
 const ACCEPTED_MEDIA = 'image/png,image/jpeg,image/webp,image/gif,image/avif,image/bmp,video/mp4,video/quicktime,video/webm,video/x-m4v';
 

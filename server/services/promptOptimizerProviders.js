@@ -119,11 +119,11 @@ async function runClaudeCli({ systemInstruction, userPrompt, model, effort }) {
 // Codex 没有独立的系统提示词参数，故把系统指令与待优化内容合并为单条 prompt。
 // read-only 沙箱 + 临时目录，纯文本改写不会触碰项目；--output-last-message 把最终答复单独写到文件，
 // 避免解析夹杂 agent 日志的 stdout。默认走 ChatGPT.app 内置 codex，可用 CODEX_CLI_PATH 指定绝对路径。
-async function runCodexCli({ systemInstruction, userPrompt, model, effort, imageDataUrl }) {
+async function runCodexCli({ systemInstruction, userPrompt, model, effort, imageDataUrl, imageDataUrls }) {
     const bin = resolveCodexBin();
     const combined = `${systemInstruction}\n\n【待优化内容】\n${userPrompt}`;
     const outFile = path.join(os.tmpdir(), `codex-optimize-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.txt`);
-    let imageFile = '';
+    const imageFiles = [];
     const args = [
         'exec',
         '--sandbox', 'read-only',
@@ -137,13 +137,17 @@ async function runCodexCli({ systemInstruction, userPrompt, model, effort, image
     // must appear before it or Codex will consume the prompt as another filename.
     args.push(combined);
 
-    if (imageDataUrl) {
-        const match = imageDataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/s);
+    const requestedImages = (Array.isArray(imageDataUrls) ? imageDataUrls : [imageDataUrl]).filter(Boolean);
+    for (const dataUrl of requestedImages) {
+        const match = dataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/s);
         if (!match) throw upstreamError('Codex CLI 收到不支持的图片格式', 400);
         const extension = match[1] === 'image/jpeg' ? 'jpg' : match[1].split('/')[1];
-        imageFile = path.join(os.tmpdir(), `codex-prompt-image-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${extension}`);
+        const imageFile = path.join(os.tmpdir(), `codex-prompt-image-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${extension}`);
         await fs.writeFile(imageFile, Buffer.from(match[2], 'base64'), { mode: 0o600 });
-        args.push('--image', imageFile);
+        imageFiles.push(imageFile);
+    }
+    if (imageFiles.length > 0) {
+        args.push('--image', ...imageFiles);
     }
 
     try {
@@ -153,7 +157,7 @@ async function runCodexCli({ systemInstruction, userPrompt, model, effort, image
         return (fileText || stdout).trim();
     } finally {
         fs.unlink(outFile).catch(() => {});
-        if (imageFile) fs.unlink(imageFile).catch(() => {});
+        imageFiles.forEach(imageFile => fs.unlink(imageFile).catch(() => {}));
     }
 }
 

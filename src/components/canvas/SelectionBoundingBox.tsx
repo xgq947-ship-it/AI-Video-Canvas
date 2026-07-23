@@ -66,6 +66,7 @@ const getNodeWidth = (node: NodeData, allNodes?: NodeData[]): number => {
     }
 
     if (node.type === NodeType.VIDEO) return 385;
+    if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 460;
     return 365;
 };
 
@@ -76,6 +77,8 @@ const getNodeWidth = (node: NodeData, allNodes?: NodeData[]): number => {
  * @param allNodes - All nodes in the selection (to find parent for Editor nodes)
  */
 const getNodeHeight = (node: NodeData, allNodes?: NodeData[]): number => {
+    // 控制节点固定高度：成图落在它自动创建的子 Image 节点上，自身不展示结果。
+    if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 520;
     const baseWidth = getNodeWidth(node, allNodes);
 
     // Handle Image Editor nodes

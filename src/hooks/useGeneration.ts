@@ -6,7 +6,7 @@
  */
 
 import { NodeData, NodeType, NodeStatus } from '../types';
-import { generateImage, generateVideo, queueCodexImage } from '../services/generationService';
+import { createProductSceneJob, generateImage, generateVideo, queueCodexImage } from '../services/generationService';
 import { extractVideoLastFrame } from '../utils/videoHelpers';
 import { minimumReferenceImages, shouldUseReferenceImages } from '../utils/videoModelCapabilities.js';
 import {
@@ -14,6 +14,7 @@ import {
     extractReferenceLabels,
     selectPromptReferences,
 } from '../utils/nodeReferences.js';
+import { inferProductSceneAspectRatio, validateProductDimensions } from '../../shared/productSceneReplacement.js';
 
 interface UseGenerationProps {
     nodes: NodeData[];
@@ -114,10 +115,13 @@ export const useGeneration = ({ nodes, updateNode, workflowId }: UseGenerationPr
         const selectedReferenceIds = new Set(selectedReferences.map(reference => reference.id));
         const shouldUseReferenceParent = (parentId: string) =>
             explicitReferenceLabels.size === 0 || selectedReferenceIds.has(parentId);
-        if (!combinedPrompt) return;
+        if (!combinedPrompt && node.type !== NodeType.PRODUCT_SCENE_REPLACE) return;
 
         updateNode(id, {
             status: NodeStatus.LOADING,
+            productSceneStage: node.type === NodeType.PRODUCT_SCENE_REPLACE ? 'analyzing' : undefined,
+            productSceneJobStatus: node.type === NodeType.PRODUCT_SCENE_REPLACE ? 'pending' : undefined,
+            productSceneStageLabel: node.type === NodeType.PRODUCT_SCENE_REPLACE ? '正在创建任务' : undefined,
             generationStartTime: Date.now(),
             codexJobId: undefined,
             codexJobStatus: undefined,
@@ -125,7 +129,48 @@ export const useGeneration = ({ nodes, updateNode, workflowId }: UseGenerationPr
         });
 
         try {
-            if (node.type === NodeType.IMAGE || node.type === NodeType.IMAGE_EDITOR) {
+            if (node.type === NodeType.PRODUCT_SCENE_REPLACE) {
+                const dimensions = node.productDimensions;
+                const dimensionError = validateProductDimensions(dimensions);
+                if (dimensionError) throw new Error(dimensionError);
+
+                const sceneNode = nodes.find(parent => parent.id === node.sceneReferenceId);
+                const productNode = nodes.find(parent => parent.id === node.productReferenceId);
+                const sceneUrl = sceneNode?.resultUrl || sceneNode?.editorBackgroundUrl;
+                const productUrl = productNode?.resultUrl || productNode?.editorBackgroundUrl;
+                if (!sceneUrl || !productUrl) throw new Error('请连接并指定“场景参考”和“我方产品”两张图片');
+                if (sceneNode?.id === productNode?.id) throw new Error('场景参考与我方产品不能使用同一张图片');
+                const productAspectRatio = inferProductSceneAspectRatio(
+                    node.aspectRatio,
+                    inferProductSceneAspectRatio(sceneNode.resultAspectRatio || sceneNode.aspectRatio, '1:1')
+                );
+                const job = await createProductSceneJob({
+                    workflowId,
+                    nodeId: id,
+                    retryJobId: node.productSceneJobStatus === 'failed' ? node.productSceneJobId : undefined,
+                    sceneImage: sceneUrl,
+                    productImage: productUrl,
+                    dimensions: dimensions!,
+                    productCategory: node.productCategory,
+                    preserveProductMarkings: node.preserveProductMarkings !== false,
+                    strictSceneComposition: node.strictSceneComposition !== false,
+                    imageModel: node.imageModel || 'google-flow-nano-banana-pro',
+                    aspectRatio: productAspectRatio,
+                    resolution: node.resolution,
+                });
+                updateNode(id, {
+                    status: NodeStatus.LOADING,
+                    aspectRatio: productAspectRatio,
+                    productSceneJobId: job.id,
+                    productSceneJobStatus: job.status,
+                    productSceneStage: job.stage === 'generating' ? 'generating' : 'analyzing',
+                    productSceneStageLabel: job.stageLabel,
+                    productSceneRecognitionModel: `${job.recognitionProvider} · ${job.recognitionModel}`,
+                    generationStartTime: Date.now(),
+                    errorMessage: undefined,
+                });
+                return;
+            } else if (node.type === NodeType.IMAGE || node.type === NodeType.IMAGE_EDITOR) {
                 // Collect ALL parent images for multi-input generation
                 const imageBase64s: string[] = [];
 
@@ -257,6 +302,8 @@ export const useGeneration = ({ nodes, updateNode, workflowId }: UseGenerationPr
                 const imageParentIds = node.parentIds?.filter(pid => {
                     if (!shouldUseReferenceParent(pid)) return false;
                     const parent = nodes.find(n => n.id === pid);
+                    // 产品场景替换的控制节点没有 resultUrl，成图在它的子 Image 节点上，
+                    // 计入这里会让「图片 + 控制节点」被误判成首尾帧插值且尾帧为空。
                     return parent && [NodeType.IMAGE, NodeType.IMAGE_EDITOR, NodeType.VIDEO, NodeType.VIDEO_EDITOR].includes(parent.type);
                 }) || [];
 
@@ -402,6 +449,9 @@ export const useGeneration = ({ nodes, updateNode, workflowId }: UseGenerationPr
             updateNode(id, {
                 status: node.resultUrl ? NodeStatus.SUCCESS : NodeStatus.ERROR,
                 errorMessage,
+                productSceneStage: undefined,
+                productSceneJobStatus: node.type === NodeType.PRODUCT_SCENE_REPLACE ? 'failed' : undefined,
+                productSceneStageLabel: node.type === NodeType.PRODUCT_SCENE_REPLACE ? '任务创建失败' : undefined,
                 codexJobId: undefined,
                 codexJobStatus: undefined
                 // generationStartTime 不清空：App.tsx 的 waitForNodeResult 靠它跟 before 快照对比

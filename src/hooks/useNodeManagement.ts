@@ -55,6 +55,15 @@ export const useNodeManagement = () => {
             parentIds: parentId ? [parentId] : []
         };
 
+        if (type === NodeType.PRODUCT_SCENE_REPLACE) {
+            newNode.title = '产品场景替换';
+            newNode.imageModel = 'google-flow-nano-banana-pro';
+            newNode.aspectRatio = '1:1';
+            newNode.productDimensions = { length: 0, width: 0, height: 0, unit: 'cm' };
+            newNode.preserveProductMarkings = true;
+            newNode.strictSceneComposition = true;
+        }
+
         setNodes(prev => [...prev, newNode]);
         setSelectedNodeIds([newNode.id]);
 
@@ -155,6 +164,15 @@ export const useNodeManagement = () => {
                     // Update source to add new node as parent
                     const existingParentIds = sourceNode.parentIds || [];
                     updateNode(contextMenu.sourceNodeId, { parentIds: [...existingParentIds, newNodeId] });
+                }
+
+                if (type === NodeType.PRODUCT_SCENE_REPLACE) {
+                    newNode.title = '产品场景替换';
+                    newNode.imageModel = 'google-flow-nano-banana-pro';
+                    newNode.aspectRatio = '1:1';
+                    newNode.productDimensions = { length: 0, width: 0, height: 0, unit: 'cm' };
+                    newNode.preserveProductMarkings = true;
+                    newNode.strictSceneComposition = true;
                 }
 
                 setNodes(prev => [...prev, newNode]);

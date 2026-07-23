@@ -15,6 +15,7 @@ import { NodeControls } from './NodeControls';
 import { ChangeAnglePanel } from './ChangeAnglePanel';
 import { NodeHoverToolbar, NodeHoverToolbarAction } from './NodeHoverToolbar';
 import type { NodeReference } from '../../utils/nodeReferences.js';
+import { ProductSceneReplaceNode } from './ProductSceneReplaceNode';
 
 interface CanvasNodeProps {
   workflowId?: string;
@@ -61,6 +62,7 @@ const NODE_TYPE_LABELS: Record<NodeType, string> = {
   [NodeType.VIDEO_EDITOR]: '视频编辑器',
   [NodeType.STORYBOARD]: '分镜管理',
   [NodeType.CAMERA_ANGLE]: '镜头角度',
+  [NodeType.PRODUCT_SCENE_REPLACE]: '产品场景替换',
   [NodeType.SFX]: '音效',
   [NodeType.BGM]: '背景音乐',
   [NodeType.SUBTITLE]: '字幕',
@@ -236,6 +238,23 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
   // ============================================================================
   // RENDER
   // ============================================================================
+
+  // 产品场景替换使用独立的双图角色与尺寸参数界面。
+  if (data.type === NodeType.PRODUCT_SCENE_REPLACE) {
+    return (
+      <ProductSceneReplaceNode
+        data={data}
+        allNodes={allNodes || []}
+        selected={selected}
+        canvasTheme={canvasTheme}
+        onUpdate={onUpdate}
+        onGenerate={onGenerate}
+        onNodePointerDown={onNodePointerDown}
+        onContextMenu={onContextMenu}
+        onConnectorDown={onConnectorDown}
+      />
+    );
+  }
 
   // Special rendering for Image Editor node
   if (data.type === NodeType.IMAGE_EDITOR) {

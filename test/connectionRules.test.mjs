@@ -45,3 +45,12 @@ test('保留原有图片/视频链式规则（无回归）', () => {
   assert.equal(isValidNodeConnection(NODE.VIDEO_EDITOR, NODE.VIDEO), true);
   assert.equal(isValidNodeConnection(NODE.IMAGE, NODE.TEXT), false);
 });
+
+test('产品场景替换只接收图片输入，输出可继续生成图片或视频', () => {
+  assert.equal(isValidNodeConnection(NODE.IMAGE, NODE.PRODUCT_SCENE_REPLACE), true);
+  assert.equal(isValidNodeConnection(NODE.IMAGE_EDITOR, NODE.PRODUCT_SCENE_REPLACE), true);
+  assert.equal(isValidNodeConnection(NODE.TEXT, NODE.PRODUCT_SCENE_REPLACE), false);
+  assert.equal(isValidNodeConnection(NODE.VIDEO, NODE.PRODUCT_SCENE_REPLACE), false);
+  assert.equal(isValidNodeConnection(NODE.PRODUCT_SCENE_REPLACE, NODE.IMAGE), true);
+  assert.equal(isValidNodeConnection(NODE.PRODUCT_SCENE_REPLACE, NODE.VIDEO), true);
+});

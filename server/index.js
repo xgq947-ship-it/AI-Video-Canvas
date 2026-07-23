@@ -42,6 +42,7 @@ import { getPromptOptimizerProvider } from './services/promptOptimizerProviders.
 import { applyOptimizerPreferenceToApp, loadOptimizerPreference } from './services/optimizerPreference.js';
 import { BROWSER_MODELS_SETUP_HINT, isBrowserModelsReady } from './services/opsCliRunner.js';
 import { resolveImageToBase64 } from './utils/imageHelpers.js';
+import { MASSAGE_EQUIPMENT_NAMES } from '../shared/massageEquipmentCategories.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -58,11 +59,7 @@ const AUDIO_DIR = path.join(LIBRARY_DIR, 'audio');
 const PROJECTS_DIR = path.join(LIBRARY_DIR, 'projects');
 const LIBRARY_ASSETS_DIR = path.join(LIBRARY_DIR, 'assets');
 const CODEX_IMAGE_JOBS_DIR = path.join(LIBRARY_DIR, 'codex-image-jobs');
-const MASSAGE_EQUIPMENT_SUBCATEGORY_NAMES = [
-    '足浴盆', '护眼仪', '筋膜枪', '按摩枕', '按摩披肩', '足疗机',
-    '按摩靠垫', '按摩椅', '按摩床垫', '膝盖按摩器', '护颈仪', '头部按摩器',
-    '腰腹按摩器', '按摩棒', '刮痧仪', '手部按摩器', '揉腹仪', '按摩座垫'
-];
+const MASSAGE_EQUIPMENT_SUBCATEGORY_NAMES = MASSAGE_EQUIPMENT_NAMES;
 
 [LIBRARY_DIR, WORKFLOWS_DIR, IMAGES_DIR, VIDEOS_DIR, AUDIO_DIR, PROJECTS_DIR, LIBRARY_ASSETS_DIR, CODEX_IMAGE_JOBS_DIR].forEach(dir => {
     if (!fs.existsSync(dir)) {

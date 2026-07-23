@@ -8,19 +8,21 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { NodeData, NodeStatus } from '../types';
 import { extractVideoLastFrame } from '../utils/videoHelpers';
-import { getCodexImageJob } from '../services/generationService';
+import { getCodexImageJob, getProductSceneJob, type ProductSceneJob } from '../services/generationService';
 import { isGenerationRecoveryExpired } from '../utils/generationRecovery.js';
 
 interface UseGenerationRecoveryOptions {
     nodes: NodeData[];
     updateNode: (id: string, updates: Partial<NodeData>) => void;
     workflowId?: string | null;
+    onProductSceneCompleted?: (sourceNode: NodeData, job: ProductSceneJob) => void;
 }
 
 export const useGenerationRecovery = ({
     nodes,
     updateNode,
-    workflowId
+    workflowId,
+    onProductSceneCompleted,
 }: UseGenerationRecoveryOptions) => {
     // Use a ref to access current nodes without causing re-renders
     const nodesRef = useRef<NodeData[]>(nodes);
@@ -33,7 +35,8 @@ export const useGenerationRecovery = ({
                 updateNode(nodeId, {
                     status: currentNode.resultUrl ? NodeStatus.SUCCESS : NodeStatus.ERROR,
                     errorMessage: '生成任务已中断或超时，请重新生成。',
-                    generationStartTime: undefined
+                    generationStartTime: undefined,
+                    productSceneStage: undefined
                 });
                 return;
             }
@@ -63,7 +66,8 @@ export const useGenerationRecovery = ({
                         status: NodeStatus.SUCCESS,
                         resultUrl: data.resultUrl,
                         errorMessage: undefined,
-                        generationStartTime: undefined // Clear the timestamp after successful recovery
+                        generationStartTime: undefined, // Clear the timestamp after successful recovery
+                        productSceneStage: undefined
                     };
 
                     // If it's a video, extract the last frame for chaining
@@ -104,7 +108,8 @@ export const useGenerationRecovery = ({
                     status: node.resultUrl ? NodeStatus.SUCCESS : NodeStatus.ERROR,
                     codexJobStatus: 'failed',
                     errorMessage: job.error || 'Codex image generation failed',
-                    generationStartTime: undefined
+                    generationStartTime: undefined,
+                    productSceneStage: undefined
                 });
                 return;
             }
@@ -131,7 +136,8 @@ export const useGenerationRecovery = ({
                     codexJobStatus: 'completed',
                     imageVersions,
                     errorMessage: undefined,
-                    generationStartTime: undefined
+                    generationStartTime: undefined,
+                    productSceneStage: undefined
                 });
             }
         } catch (error) {
@@ -139,15 +145,83 @@ export const useGenerationRecovery = ({
         }
     }, [updateNode]);
 
+    const checkProductSceneStatus = useCallback(async (nodeId: string, jobId: string) => {
+        if (!workflowId) return;
+        try {
+            const job = await getProductSceneJob(jobId, workflowId);
+            const node = nodesRef.current.find(item => item.id === nodeId);
+            if (!node || node.productSceneJobId !== jobId) return;
+
+            if (job.status === 'failed') {
+                updateNode(nodeId, {
+                    status: NodeStatus.ERROR,
+                    productSceneJobStatus: 'failed',
+                    productSceneStage: undefined,
+                    productSceneStageLabel: job.stageLabel,
+                    productSceneRecognitionModel: `${job.recognitionProvider} · ${job.recognitionModel}`,
+                    sceneAnalysis: job.sceneAnalysis,
+                    productAnalysis: job.productAnalysis,
+                    errorMessage: job.error || '产品场景替换任务失败',
+                    generationStartTime: undefined,
+                });
+                return;
+            }
+
+            if (job.status === 'completed' && job.resultUrl) {
+                onProductSceneCompleted?.(node, job);
+                updateNode(nodeId, {
+                    status: NodeStatus.SUCCESS,
+                    prompt: job.prompt || node.prompt,
+                    productSceneJobStatus: 'completed',
+                    productSceneStage: undefined,
+                    productSceneStageLabel: job.stageLabel,
+                    productSceneRecognitionModel: `${job.recognitionProvider} · ${job.recognitionModel}`,
+                    productSceneResultNodeId: job.resultNodeId,
+                    sceneAnalysis: job.sceneAnalysis,
+                    productAnalysis: job.productAnalysis,
+                    errorMessage: undefined,
+                    generationStartTime: undefined,
+                });
+                return;
+            }
+
+            // 轮询是 1.5s 一次且任务可能跑好几分钟：阶段没变就不要写节点，
+            // 否则整块画布每 1.5s 重渲染一次，并把项目一直标记成待自动保存。
+            const nextStage = job.stage === 'generating' ? 'generating' : 'analyzing';
+            const stageUnchanged = node.productSceneJobStatus === job.status &&
+                node.productSceneStage === nextStage &&
+                node.productSceneStageLabel === job.stageLabel;
+            if (stageUnchanged) return;
+
+            updateNode(nodeId, {
+                productSceneJobStatus: job.status,
+                productSceneStage: nextStage,
+                productSceneStageLabel: job.stageLabel,
+                productSceneRecognitionModel: `${job.recognitionProvider} · ${job.recognitionModel}`,
+                sceneAnalysis: job.sceneAnalysis,
+                productAnalysis: job.productAnalysis,
+                prompt: job.prompt || node.prompt,
+                errorMessage: undefined,
+            });
+        } catch (error) {
+            console.error(`[Product Scene] Error checking job ${jobId}:`, error);
+        }
+    }, [onProductSceneCompleted, updateNode, workflowId]);
+
     // Track loading node IDs for stable dependency
     const loadingNodeIds = nodes
-        .filter(n => n.status === NodeStatus.LOADING && !n.codexJobId)
+        .filter(n => n.status === NodeStatus.LOADING && !n.codexJobId && !n.productSceneJobId)
         .map(n => n.id)
         .join(',');
 
     const codexLoadingJobs = nodes
         .filter(n => n.status === NodeStatus.LOADING && n.codexJobId)
         .map(n => `${n.id}:${n.codexJobId}`)
+        .join(',');
+
+    const productSceneLoadingJobs = nodes
+        .filter(n => n.status === NodeStatus.LOADING && n.productSceneJobId)
+        .map(n => `${n.id}:${n.productSceneJobId}`)
         .join(',');
 
     useEffect(() => {
@@ -180,4 +254,16 @@ export const useGenerationRecovery = ({
         const interval = setInterval(checkAll, 1500);
         return () => clearInterval(interval);
     }, [codexLoadingJobs, checkCodexStatus]);
+
+    useEffect(() => {
+        if (!productSceneLoadingJobs) return;
+        const jobs = productSceneLoadingJobs.split(',').map(value => {
+            const separator = value.indexOf(':');
+            return { nodeId: value.slice(0, separator), jobId: value.slice(separator + 1) };
+        });
+        const checkAll = () => jobs.forEach(job => checkProductSceneStatus(job.nodeId, job.jobId));
+        checkAll();
+        const interval = setInterval(checkAll, 1500);
+        return () => clearInterval(interval);
+    }, [checkProductSceneStatus, productSceneLoadingJobs]);
 };

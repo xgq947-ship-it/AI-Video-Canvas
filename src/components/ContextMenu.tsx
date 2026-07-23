@@ -340,6 +340,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
           <AddNodeMenuItem icon={<Type size={19} />} label="文本" onClick={() => onSelectType(NodeType.TEXT)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<ImageIcon size={19} />} label="图片" onClick={() => onSelectType(NodeType.IMAGE)} canvasTheme={canvasTheme} />
+          <AddNodeMenuItem icon={<Layers size={19} />} label="产品场景替换" badge="NEW" badgeTone="cyan" onClick={() => onSelectType(NodeType.PRODUCT_SCENE_REPLACE)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<Video size={19} />} label="视频" onClick={() => onSelectType(NodeType.VIDEO)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<Scissors size={19} />} label="视频合成" badge="Beta" onClick={() => onSelectType(NodeType.VIDEO_EDITOR)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem
@@ -432,6 +433,12 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           label="图片 / 关键帧"
           active={false}
           onClick={() => onSelectType(NodeType.IMAGE)}
+          canvasTheme={canvasTheme}
+        />
+        <MenuItem
+          icon={<Layers size={18} />}
+          label="产品场景替换"
+          onClick={() => onSelectType(NodeType.PRODUCT_SCENE_REPLACE)}
           canvasTheme={canvasTheme}
         />
         <MenuItem

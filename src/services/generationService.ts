@@ -75,6 +75,58 @@ export interface QueueCodexImageParams {
   referenceImages?: string[];
 }
 
+export interface ProductSceneJob {
+  id: string;
+  workflowId: string;
+  nodeId: string;
+  resultNodeId: string;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  stage: 'queued' | 'analyzing' | 'generating' | 'completed' | 'failed';
+  stageLabel: string;
+  recognitionProvider: 'codex-cli';
+  recognitionModel: string;
+  imageModel: string;
+  aspectRatio: string;
+  prompt?: string;
+  sceneAnalysis?: string;
+  productAnalysis?: string;
+  resultUrl?: string;
+  error?: string;
+}
+
+export interface CreateProductSceneJobParams {
+  workflowId: string;
+  nodeId: string;
+  retryJobId?: string;
+  sceneImage: string;
+  productImage: string;
+  dimensions: { length: number; width: number; height: number; unit: 'mm' | 'cm' };
+  productCategory?: string;
+  preserveProductMarkings: boolean;
+  strictSceneComposition: boolean;
+  imageModel: string;
+  aspectRatio: string;
+  resolution: string;
+}
+
+export const createProductSceneJob = async (params: CreateProductSceneJobParams): Promise<ProductSceneJob> => {
+  const response = await fetch('/api/product-scene-jobs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || '无法创建产品场景替换任务');
+  return data;
+};
+
+export const getProductSceneJob = async (jobId: string, workflowId: string): Promise<ProductSceneJob> => {
+  const response = await fetch(`/api/product-scene-jobs/${encodeURIComponent(jobId)}?workflowId=${encodeURIComponent(workflowId)}`, { cache: 'no-store' });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || '无法读取产品场景替换任务');
+  return data;
+};
+
 export const queueCodexImage = async (params: QueueCodexImageParams): Promise<CodexImageJob> => {
   const response = await fetch('/api/codex-image-jobs', {
     method: 'POST',

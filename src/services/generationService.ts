@@ -89,9 +89,8 @@ export interface ProductSceneJob {
   aspectRatio: string;
   prompt?: string;
   sceneAnalysis?: string;
-  poseAnalysis?: string;
-  placementAnalysis?: string;
-  overlayAnalysis?: string;
+  personaAnalysis?: string;
+  compositionAnalysis?: string;
   productAnalysis?: string;
   resultUrl?: string;
   error?: string;
@@ -109,7 +108,7 @@ export interface CreateProductSceneJobParams {
   dimensions: { length: number; width: number; height: number; unit: 'mm' | 'cm' };
   productCategory?: string;
   preserveProductMarkings: boolean;
-  strictSceneComposition: boolean;
+  personaBrief?: string;
   imageModel: string;
   aspectRatio: string;
 }

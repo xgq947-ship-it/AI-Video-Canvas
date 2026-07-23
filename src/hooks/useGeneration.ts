@@ -160,7 +160,7 @@ export const useGeneration = ({ nodes, updateNode, workflowId }: UseGenerationPr
                     dimensions: dimensions!,
                     productCategory: node.productCategory,
                     preserveProductMarkings: node.preserveProductMarkings !== false,
-                    strictSceneComposition: node.strictSceneComposition !== false,
+                    personaBrief: node.personaBrief,
                     imageModel: node.imageModel || 'google-flow-nano-banana-pro',
                     aspectRatio: productAspectRatio,
                 });

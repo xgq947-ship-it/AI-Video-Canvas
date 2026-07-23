@@ -6,11 +6,10 @@ import { getPromptOptimizerProvider } from './promptOptimizerProviders.js';
 import { resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
 import { resolveProjectMediaTarget } from '../utils/projectAssets.js';
 import {
-  buildOverlayAnalysisInstruction,
+  buildCompositionAnalysisInstruction,
+  buildPersonaAnalysisInstruction,
   buildProductAnalysisInstruction,
   buildProductScenePrompt,
-  buildPlacementAnalysisInstruction,
-  buildPoseAnalysisInstruction,
   buildSceneAnalysisInstruction,
   inferProductSceneAspectRatio,
   validateProductDimensions,
@@ -55,25 +54,21 @@ const parseStructuredAnalysis = text => {
   const parsed = JSON.parse(fenced.slice(firstBrace, lastBrace + 1));
   const sceneAnalysis = String(parsed.sceneSpec || '').trim();
   const productAnalysis = String(parsed.productSpec || '').trim();
-  const poseAnalysis = String(parsed.poseSpec || '').trim();
-  const placementAnalysis = String(parsed.placementSpec || '').trim();
-  // 场景本来就干净时没有叠加层，overlaySpec 允许为空；统一落成「无」，
-  // 这样既能和「还没识别过」区分开，也不会让干净图直接报错。
-  const overlayAnalysis = String(parsed.overlaySpec || '').trim() || '无';
-  if (!sceneAnalysis || !poseAnalysis || !placementAnalysis || !productAnalysis) {
-    throw new Error('Codex 识图结果缺少 sceneSpec、poseSpec、placementSpec 或 productSpec');
+  const personaAnalysis = String(parsed.personaSpec || '').trim();
+  const compositionAnalysis = String(parsed.compositionSpec || '').trim();
+  if (!sceneAnalysis || !personaAnalysis || !compositionAnalysis || !productAnalysis) {
+    throw new Error('Codex 识图结果缺少 sceneSpec、personaSpec、compositionSpec 或 productSpec');
   }
-  return { sceneAnalysis, poseAnalysis, placementAnalysis, productAnalysis, overlayAnalysis };
+  return { sceneAnalysis, personaAnalysis, compositionAnalysis, productAnalysis };
 };
 
 const buildCombinedRecognitionInstruction = job => [
   '你是商业产品场景替换分析器。本次附带两张图片，顺序固定：图片1是竞品场景图，图片2是我方产品标准图，禁止交换职责。',
   '请一次完成两张图的结构化分析，只输出一个合法 JSON 对象，不要 Markdown、解释或额外文字。',
-  'JSON 格式必须为：{"sceneSpec":"...","poseSpec":"...","placementSpec":"...","overlaySpec":"...","productSpec":"..."}',
+  'JSON 格式必须为：{"sceneSpec":"...","personaSpec":"...","compositionSpec":"...","productSpec":"..."}',
   `sceneSpec 规则：${buildSceneAnalysisInstruction()}`,
-  `poseSpec 规则：${buildPoseAnalysisInstruction()}`,
-  `placementSpec 规则：${buildPlacementAnalysisInstruction()}`,
-  `overlaySpec 规则：${buildOverlayAnalysisInstruction()}`,
+  `personaSpec 规则：${buildPersonaAnalysisInstruction()}`,
+  `compositionSpec 规则：${buildCompositionAnalysisInstruction()}`,
   `productSpec 规则：${buildProductAnalysisInstruction({
     preserveProductMarkings: job.preserveProductMarkings,
     productCategory: job.productCategory,
@@ -101,7 +96,7 @@ async function executeJob(job, context) {
     if (completeFromExistingMetadata(job, dirs)) return;
 
     job.status = 'processing';
-    if (!job.sceneAnalysis || !job.poseAnalysis || !job.placementAnalysis || !job.overlayAnalysis || !job.productAnalysis) {
+    if (!job.sceneAnalysis || !job.personaAnalysis || !job.compositionAnalysis || !job.productAnalysis) {
       job.stage = 'analyzing';
       job.stageLabel = 'Codex 正在识别两张图片';
       writeJob(job, dirs);
@@ -133,13 +128,12 @@ async function executeJob(job, context) {
     job.stageLabel = 'Google Flow 正在生成图片';
     job.prompt = buildProductScenePrompt({
       sceneAnalysis: job.sceneAnalysis,
-      poseAnalysis: job.poseAnalysis,
-      placementAnalysis: job.placementAnalysis,
+      personaAnalysis: job.personaAnalysis,
+      compositionAnalysis: job.compositionAnalysis,
       productAnalysis: job.productAnalysis,
-      overlayAnalysis: job.overlayAnalysis,
+      personaBrief: job.personaBrief,
       dimensions: job.dimensions,
       preserveProductMarkings: job.preserveProductMarkings,
-      strictSceneComposition: job.strictSceneComposition,
       productCategory: job.productCategory,
     });
     writeJob(job, dirs);
@@ -147,7 +141,9 @@ async function executeJob(job, context) {
     const generationRequest = {
       prompt: job.prompt,
       aspectRatio: job.aspectRatio,
-      referenceImageInputs: [job.sceneImage, job.productImage],
+      // 竞品场景图刻意不进生图模型：只要它作为参考图出现，模型就会复刻原视频里
+      // 那个人的脸。场景与人物全部由提示词重建，参考图只留我方产品用于锁外观。
+      referenceImageInputs: [job.productImage],
       libraryDir,
       timeoutMinutes: 10,
       modelId: job.imageModel,
@@ -233,18 +229,17 @@ export function createProductSceneJob(payload, context) {
     dimensions: payload.dimensions,
     productCategory: payload.productCategory || '',
     preserveProductMarkings: payload.preserveProductMarkings !== false,
-    strictSceneComposition: payload.strictSceneComposition !== false,
+    personaBrief: String(payload.personaBrief || '').trim(),
     imageModel: payload.imageModel,
     aspectRatio: inferProductSceneAspectRatio(payload.aspectRatio, '1:1'),
     recognitionProvider: 'codex-cli',
     recognitionModel: context.recognitionModel || 'gpt-5.6-sol',
-    ...(previous?.sceneAnalysis && previous?.poseAnalysis && previous?.placementAnalysis
-      && previous?.overlayAnalysis && previous?.productAnalysis
+    ...(previous?.sceneAnalysis && previous?.personaAnalysis
+      && previous?.compositionAnalysis && previous?.productAnalysis
       ? {
           sceneAnalysis: previous.sceneAnalysis,
-          poseAnalysis: previous.poseAnalysis,
-          placementAnalysis: previous.placementAnalysis,
-          overlayAnalysis: previous.overlayAnalysis,
+          personaAnalysis: previous.personaAnalysis,
+          compositionAnalysis: previous.compositionAnalysis,
           productAnalysis: previous.productAnalysis,
         }
       : {}),

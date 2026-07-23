@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Image as ImageIcon, Loader2, PackageCheck, Ruler, Tags, WandSparkles } from 'lucide-react';
+import { Box, Image as ImageIcon, Loader2, PackageCheck, Ruler, Tags, UserRound, WandSparkles } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { NodeConnectors } from './NodeConnectors';
 import {
@@ -131,7 +131,7 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
       <div className={`w-[460px] overflow-hidden rounded-2xl border shadow-2xl transition-all duration-200 ${isDark ? 'border-neutral-700 bg-[#101010]' : 'border-neutral-200 bg-white'} ${selected ? 'border-cyan-500 ring-1 ring-cyan-500/30' : ''}`}>
         <div className={`flex items-center justify-between border-b px-4 py-3 ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}>
           <div className="flex items-center gap-2 font-semibold"><WandSparkles size={17} className="text-cyan-400" />产品场景替换</div>
-          <span className="text-[11px] text-neutral-500">两图 + 真实尺寸</span>
+          <span className="text-[11px] text-neutral-500">场景反推 · 全新人物</span>
         </div>
 
         <div className="space-y-3 p-3" onPointerDown={event => event.stopPropagation()}>
@@ -188,8 +188,21 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <label className="flex items-center gap-2"><input type="checkbox" checked={data.strictSceneComposition !== false} onChange={event => onUpdate(data.id, { strictSceneComposition: event.target.checked })} />严格保持原图构图</label>
+          <label className={`block rounded-xl border p-3 ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-200 bg-neutral-50'}`}>
+            <span className="mb-2 flex items-center gap-1.5 text-xs font-semibold">
+              <UserRound size={14} className="text-rose-400" />人物设定
+              <span className="font-normal text-neutral-500">（可选，留空则参考场景图的人物类型）</span>
+            </span>
+            <input
+              type="text"
+              value={data.personaBrief || ''}
+              onChange={event => onUpdate(data.id, { personaBrief: event.target.value })}
+              placeholder="例：30 岁左右女性，短发，浅色家居服"
+              className={`w-full rounded-lg border px-2.5 py-2 text-sm outline-none focus:border-cyan-500 ${isDark ? 'border-neutral-700 bg-[#242424] text-neutral-200' : 'border-neutral-300 bg-white text-neutral-800'}`}
+            />
+          </label>
+
+          <div className="flex items-center gap-2 text-xs">
             <label className="flex items-center gap-2"><input type="checkbox" checked={data.preserveProductMarkings !== false} onChange={event => onUpdate(data.id, { preserveProductMarkings: event.target.checked })} />保留产品 Logo／文字</label>
           </div>
 

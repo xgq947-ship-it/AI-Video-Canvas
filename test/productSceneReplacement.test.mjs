@@ -1,15 +1,22 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildCompositionAnalysisInstruction,
+  buildPersonaAnalysisInstruction,
   buildProductAnalysisInstruction,
   buildProductScenePrompt,
-  buildPlacementAnalysisInstruction,
-  buildOverlayAnalysisInstruction,
-  buildPoseAnalysisInstruction,
   buildSceneAnalysisInstruction,
   inferProductSceneAspectRatio,
   validateProductDimensions,
 } from '../shared/productSceneReplacement.js';
+
+const base = {
+  sceneAnalysis: '室内暖色客厅，平视机位，柔和侧光',
+  personaAnalysis: '25-30 岁女性，中长发，浅灰家居服',
+  compositionAnalysis: '半身入画，产品贴在腹部由双手扶住，占画面约三成',
+  productAnalysis: '白色圆形揉腹仪，灰色织物绑带',
+  dimensions: { length: 22.5, width: 20, height: 13.7, unit: 'cm' },
+};
 
 test('产品场景节点把场景图片比例归一化为 Google Flow 支持的画幅', () => {
   assert.equal(inferProductSceneAspectRatio('1080/1920'), '9:16');
@@ -24,12 +31,33 @@ test('尺寸必须完整、大于零且单位有效', () => {
   assert.equal(validateProductDimensions({ length: 30, width: 20, height: 12, unit: 'cm' }), '');
 });
 
-test('场景分析排除竞品外观，并把叠加层交给 overlaySpec', () => {
+test('场景分析要求信息自足，且不描述人物、竞品与叠加层', () => {
   const instruction = buildSceneAnalysisInstruction();
-  assert.match(instruction, /不要描述竞品/);
-  assert.match(instruction, /只描述真实拍摄内容/);
-  assert.match(instruction, /由 overlaySpec 单独记录/);
-  assert.match(instruction, /待替换区域/);
+  assert.match(instruction, /从零重建/);
+  assert.match(instruction, /成图完全依赖你的文字/);
+  assert.match(instruction, /不要描述画面里的人物/);
+  assert.match(instruction, /不要描述竞品的品牌、外观/);
+  assert.match(instruction, /促销贴、字幕、水印、社交按钮图标一律当作不存在|后期叠加的标题/);
+});
+
+// 这条是整套方案能否「换人」的关键：人物描述一旦带上可指认的五官细节，
+// 生成结果就会收敛回原视频里那个人，等于白改。
+test('人物分析只输出通用特征，明确挡掉可指认到本人的信息', () => {
+  const instruction = buildPersonaAnalysisInstruction();
+  assert.match(instruction, /可以换成另一个人来演/);
+  assert.match(instruction, /大致年龄段、性别、体型胖瘦、发长与发型风格/);
+  assert.match(instruction, /严禁描述任何能指认到具体某个人的信息/);
+  assert.match(instruction, /脸型轮廓、五官形状与比例/);
+  assert.match(instruction, /痣、疤痕、纹身/);
+  assert.match(instruction, /就直接省略，不要勉强概括/);
+});
+
+test('构图分析按功能描述持握方式，避免照抄竞品轮廓', () => {
+  const instruction = buildCompositionAnalysisInstruction();
+  assert.match(instruction, /持握或摆放方式必须按「功能」描述/);
+  assert.match(instruction, /不要按竞品的外形轮廓描述抓握手势/);
+  assert.match(instruction, /新产品的形状可能完全不同/);
+  assert.match(instruction, /不要描述人物的长相与服装/);
 });
 
 test('产品分析可独立控制是否保留我方产品标识', () => {
@@ -37,112 +65,50 @@ test('产品分析可独立控制是否保留我方产品标识', () => {
   assert.match(buildProductAnalysisInstruction({ preserveProductMarkings: false }), /忽略产品上的 Logo/);
 });
 
-test('人物姿势与产品位置使用独立几何锁定规格', () => {
-  assert.match(buildPoseAnalysisInstruction(), /肩、肘、腕、手掌和手指/);
-  assert.match(buildPoseAnalysisInstruction(), /不得把手持改成佩戴/);
-  assert.match(buildPlacementAnalysisInstruction(), /画面宽高百分比/);
-  assert.match(buildPlacementAnalysisInstruction(), /禁止移到腰腹/);
+test('提示词是从零生成指令，不是对参考图做编辑', () => {
+  const prompt = buildProductScenePrompt(base);
+  assert.match(prompt, /生成一张全新的写实商业产品场景图/);
+  assert.match(prompt, /这是从零创作，不是对任何图片做编辑或局部修改/);
+  assert.match(prompt, /唯一的参考图是我方产品图/);
+  // 旧版那套「局部编辑参考图1 + 锁定原人物坐标」的措辞必须彻底消失，
+  // 只要它还在，模型就会去复刻竞品图里的人。
+  assert.doesNotMatch(prompt, /参考图1/);
+  assert.doesNotMatch(prompt, /局部编辑/);
+  assert.doesNotMatch(prompt, /保持原坐标/);
 });
 
-test('指定按摩器材类别只用于理解产品，不覆盖参考图姿势与位置', () => {
-  const analysis = buildProductAnalysisInstruction({ productCategory: '足浴盆' });
-  assert.match(analysis, /产品类别为“足浴盆”/);
-  assert.match(analysis, /不要把常见佩戴或使用方式/);
-
-  const prompt = buildProductScenePrompt({
-    sceneAnalysis: '浴室地面场景',
-    poseAnalysis: '人物双手保持原坐标',
-    placementAnalysis: '产品中心位于画面中央',
-    productAnalysis: '白色足浴盆',
-    dimensions: { length: 45, width: 38, height: 25, unit: 'cm' },
-    productCategory: '足浴盆',
-  });
-  assert.match(prompt, /产品类别：足浴盆/);
-  assert.match(prompt, /禁止依据该类别的常见用法改变参考图1/);
+test('提示词点名要求全新虚构人物且画面无任何文字', () => {
+  const prompt = buildProductScenePrompt(base);
+  assert.match(prompt, /人物必须是全新虚构人物/);
+  assert.match(prompt, /不得与任何真实人物、公众人物、网红或已有影像素材中的人物相似/);
+  assert.match(prompt, /不得出现任何文字、字幕、标题、促销贴、价格标签、水印、角标、社交按钮图标、数字或 UI 元素/);
 });
 
-test('最终提示词固定两张参考图职责并写入真实尺寸', () => {
-  const prompt = buildProductScenePrompt({
-    sceneAnalysis: '暖色卧室，侧逆光，产品位于床面中央。',
-    poseAnalysis: '双手关键点保持原坐标。',
-    placementAnalysis: '产品中心点位于画面宽 50%、高 60%。',
-    productAnalysis: '米白色长方形按摩枕，圆角织物表面。',
-    dimensions: { length: 42, width: 25, height: 13, unit: 'cm' },
-    preserveProductMarkings: true,
-    strictSceneComposition: true,
-  });
-  assert.match(prompt, /参考图1分成两层/);
-  assert.match(prompt, /参考图2仅用于我方产品外观/);
-  assert.match(prompt, /长 42厘米 × 宽 25厘米 × 高 13厘米/);
-  assert.match(prompt, /最高优先级二（清除叠加层）/);
-  assert.match(prompt, /局部编辑/);
-  assert.match(prompt, /禁止改变人物姿势/);
-  assert.match(prompt, /产品位置锁定/);
+test('四段识图结果与真实尺寸都写进提示词，尺寸以人体比例为参照', () => {
+  const prompt = buildProductScenePrompt({ ...base, productCategory: '揉腹仪' });
+  assert.match(prompt, /环境：室内暖色客厅/);
+  assert.match(prompt, /人物：25-30 岁女性/);
+  assert.match(prompt, /构图与姿势：半身入画/);
+  assert.match(prompt, /严格按上述构图组织画面/);
+  // 识图文本自带句号，拼接时不能再补一个，否则提示词里会出现「。。」
+  assert.doesNotMatch(prompt, /。。/);
+  assert.match(prompt, /产品：白色圆形揉腹仪/);
+  assert.match(prompt, /长 22.5厘米 × 宽 20厘米 × 高 13.7厘米/);
+  assert.match(prompt, /以人体比例为参照换算画面占比/);
+  assert.match(prompt, /产品类别：揉腹仪/);
 });
 
-test('清除叠加层与锁定实拍构图是两条同级要求，松散构图下也照样下发', () => {
-  const base = {
-    sceneAnalysis: '直播间场景',
-    poseAnalysis: '双手保持原坐标',
-    placementAnalysis: '产品位于胸前',
-    productAnalysis: '白色揉腹仪',
-    dimensions: { length: 22.5, width: 20, height: 13.7, unit: 'cm' },
-  };
-
-  for (const strictSceneComposition of [true, false]) {
-    const prompt = buildProductScenePrompt({ ...base, strictSceneComposition });
-    assert.match(prompt, /最高优先级一/);
-    assert.match(prompt, /最高优先级二（清除叠加层）/);
-    // 社交按钮、促销贴这类「牛皮癣」不含文字，必须被单独点名，否则模型会当成背景保留。
-    assert.match(prompt, /社交按钮图标及其数字/);
-    assert.match(prompt, /促销价格贴/);
-    assert.match(prompt, /评价与销量徽标/);
-    // 锁定实拍层的措辞不能反过来禁止清除叠加层。
-    assert.match(prompt, /不受“保持原图不变”类要求的约束/);
-    assert.match(prompt, /清除叠加层后补全的区域除外/);
-    assert.doesNotMatch(prompt, /禁止新增肢体或改变背景。$/);
+test('人物设定为空时不占行，填了则声明覆盖识图结果', () => {
+  for (const personaBrief of ['', '   ', undefined]) {
+    const prompt = buildProductScenePrompt({ ...base, personaBrief });
+    assert.doesNotMatch(prompt, /人物设定以此为准/);
+    assert.doesNotMatch(prompt, /\n\n/);
   }
+
+  const steered = buildProductScenePrompt({ ...base, personaBrief: '30 岁左右女性，短发' });
+  assert.match(steered, /人物设定以此为准（与上一条冲突时优先采用本条，未提及的部分沿用上一条）：30 岁左右女性，短发/);
 });
 
-test('识别到的叠加层清单会写进提示词，没有叠加层时不产生空行', () => {
-  const base = {
-    sceneAnalysis: '干净影棚',
-    poseAnalysis: '双手保持原坐标',
-    placementAnalysis: '产品位于画面中央',
-    productAnalysis: '白色揉腹仪',
-    dimensions: { length: 22.5, width: 20, height: 13.7, unit: 'cm' },
-  };
-
-  const withOverlay = buildProductScenePrompt({
-    ...base,
-    overlayAnalysis: '左下角「618优惠」促销贴，占宽 5%-45%、高 60%-70%，遮住沙发扶手。',
-  });
-  assert.match(withOverlay, /必须清除的叠加层清单：左下角「618优惠」促销贴/);
-
-  for (const overlayAnalysis of ['无', '', undefined]) {
-    const clean = buildProductScenePrompt({ ...base, overlayAnalysis });
-    assert.doesNotMatch(clean, /必须清除的叠加层清单/);
-    assert.doesNotMatch(clean, /\n\n/);
-  }
-});
-
-test('提示词明确要求最高清晰度，且补全区域不能比别处糊', () => {
-  const prompt = buildProductScenePrompt({
-    sceneAnalysis: '直播间场景',
-    poseAnalysis: '双手保持原坐标',
-    placementAnalysis: '产品位于胸前',
-    productAnalysis: '白色揉腹仪',
-    dimensions: { length: 22.5, width: 20, height: 13.7, unit: 'cm' },
-  });
-  assert.match(prompt, /输出质量：按最高清晰度呈现/);
-  assert.match(prompt, /不得出现模糊、涂抹、噪点、过度锐化或压缩伪影/);
-  assert.match(prompt, /补全区域的清晰度要与画面其余部分一致/);
-});
-
-test('叠加层识别指令按「是否后期加上去」判定，并放过实物文字', () => {
-  const instruction = buildOverlayAnalysisInstruction();
-  assert.match(instruction, /不是「是否为文字」/);
-  assert.match(instruction, /社交按钮图标即使不含文字也必须列出/);
-  assert.match(instruction, /产品机身标识、包装印刷/);
-  assert.match(instruction, /只输出「无」/);
+test('尺寸非法时构建提示词直接抛错', () => {
+  assert.throws(() => buildProductScenePrompt({ ...base, dimensions: { length: 0, width: 20, height: 13, unit: 'cm' } }), /长、宽、高/);
 });

@@ -146,11 +146,10 @@ export interface NodeData {
     unit: 'mm' | 'cm';
   };
   preserveProductMarkings?: boolean;
-  strictSceneComposition?: boolean;
+  personaBrief?: string;
   sceneAnalysis?: string;
-  poseAnalysis?: string;
-  placementAnalysis?: string;
-  overlayAnalysis?: string;
+  personaAnalysis?: string;
+  compositionAnalysis?: string;
   productAnalysis?: string;
   productSceneStage?: 'analyzing' | 'generating';
   productSceneJobId?: string;

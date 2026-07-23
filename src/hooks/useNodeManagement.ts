@@ -61,7 +61,6 @@ export const useNodeManagement = () => {
             newNode.aspectRatio = '1:1';
             newNode.productDimensions = { length: 0, width: 0, height: 0, unit: 'cm' };
             newNode.preserveProductMarkings = true;
-            newNode.strictSceneComposition = true;
         }
 
         setNodes(prev => [...prev, newNode]);
@@ -172,7 +171,6 @@ export const useNodeManagement = () => {
                     newNode.aspectRatio = '1:1';
                     newNode.productDimensions = { length: 0, width: 0, height: 0, unit: 'cm' };
                     newNode.preserveProductMarkings = true;
-                    newNode.strictSceneComposition = true;
                 }
 
                 setNodes(prev => [...prev, newNode]);

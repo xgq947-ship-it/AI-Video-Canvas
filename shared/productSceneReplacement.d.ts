@@ -9,18 +9,16 @@ export function inferProductSceneAspectRatio(value?: string, fallback?: string):
 
 export function validateProductDimensions(dimensions?: Partial<ProductDimensions>): string;
 export function buildSceneAnalysisInstruction(): string;
-export function buildPoseAnalysisInstruction(): string;
-export function buildPlacementAnalysisInstruction(): string;
-export function buildOverlayAnalysisInstruction(): string;
+export function buildPersonaAnalysisInstruction(): string;
+export function buildCompositionAnalysisInstruction(): string;
 export function buildProductAnalysisInstruction(options?: { preserveProductMarkings?: boolean; productCategory?: string }): string;
 export function buildProductScenePrompt(options: {
   sceneAnalysis: string;
-  poseAnalysis: string;
-  placementAnalysis: string;
+  personaAnalysis: string;
+  compositionAnalysis: string;
   productAnalysis: string;
-  overlayAnalysis?: string;
+  personaBrief?: string;
   dimensions: ProductDimensions;
   preserveProductMarkings?: boolean;
-  strictSceneComposition?: boolean;
   productCategory?: string;
 }): string;

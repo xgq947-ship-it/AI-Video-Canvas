@@ -58,6 +58,9 @@ export const NodeContent: React.FC<NodeContentProps> = ({
 
     const isImageType = data.type === NodeType.IMAGE;
     const isVideoType = data.type === NodeType.VIDEO;
+    const displayedResultUrl = data.resultUrl && data.productSceneSourceJobId
+        ? `${data.resultUrl}${data.resultUrl.includes('?') ? '&' : '?'}job=${encodeURIComponent(data.productSceneSourceJobId)}`
+        : data.resultUrl;
 
     // Sync local state ONLY when data.prompt changes externally (not from our own update)
     useEffect(() => {
@@ -123,7 +126,8 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                         <video src={data.resultUrl} controls loop preload="metadata" className="w-full h-full object-cover" />
                     ) : (
                         <LazyImage
-                            src={data.resultUrl}
+                            key={displayedResultUrl}
+                            src={displayedResultUrl || data.resultUrl!}
                             alt="Generated"
                             className="w-full h-full pointer-events-none"
                             rootMargin="1200px"

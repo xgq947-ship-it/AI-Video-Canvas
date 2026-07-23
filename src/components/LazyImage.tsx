@@ -32,6 +32,13 @@ export const LazyImage: React.FC<LazyImageProps> = ({
     const [hasError, setHasError] = useState(false);
     const imgRef = useRef<HTMLDivElement>(null);
 
+    // 节点异步生成完成后 src 会原地更新。重置上一张图的加载/错误状态，
+    // 否则 React 复用组件时可能继续显示旧图或旧错误占位。
+    useEffect(() => {
+        setIsLoaded(false);
+        setHasError(false);
+    }, [src]);
+
     // Set up Intersection Observer
     useEffect(() => {
         const observer = new IntersectionObserver(
@@ -85,6 +92,7 @@ export const LazyImage: React.FC<LazyImageProps> = ({
             {/* Actual image - only rendered when in view */}
             {isInView && !hasError && (
                 <img
+                    key={src}
                     src={src}
                     alt={alt}
                     decoding="async"

@@ -5,8 +5,8 @@
  * Contains batch count controls and generate button.
  */
 
-import React, { useRef, useEffect } from 'react';
-import { ChevronDown, Check, Banana, Image as ImageIcon, Crop, Monitor, Sparkles } from 'lucide-react';
+import React, { useRef, useEffect, useState } from 'react';
+import { ChevronDown, Check, Banana, Image as ImageIcon, Images, Crop, Monitor, Sparkles } from 'lucide-react';
 import { ImageModel, IMAGE_MODELS } from './imageEditor.types';
 import { useBrowserModels } from '../../../hooks/useBrowserModels';
 
@@ -70,8 +70,10 @@ export const PromptBar: React.FC<PromptBarProps> = ({
     const modelDropdownRef = useRef<HTMLDivElement>(null);
     const aspectDropdownRef = useRef<HTMLDivElement>(null);
     const resolutionDropdownRef = useRef<HTMLDivElement>(null);
+    const batchDropdownRef = useRef<HTMLDivElement>(null);
+    const [showBatchDropdown, setShowBatchDropdown] = useState(false);
 
-    // Google Flow 依赖本机浏览器自动化运行时，未配置时置灰。
+    // Google Flow / 即梦依赖本机浏览器自动化运行时，未配置时置灰。
     const { browserModelsHint, isModelUnavailable } = useBrowserModels();
 
     // --- Derived State ---
@@ -93,6 +95,9 @@ export const PromptBar: React.FC<PromptBarProps> = ({
             }
             if (resolutionDropdownRef.current && !resolutionDropdownRef.current.contains(event.target as Node)) {
                 setShowResolutionDropdown(false);
+            }
+            if (batchDropdownRef.current && !batchDropdownRef.current.contains(event.target as Node)) {
+                setShowBatchDropdown(false);
             }
         };
         document.addEventListener('mousedown', handleClickOutside);
@@ -143,7 +148,7 @@ export const PromptBar: React.FC<PromptBarProps> = ({
                         )}
                         {availableModels.filter(m => m.provider === 'workflow').length > 0 && (
                             <>
-                                <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f] border-t border-neutral-700">Google Flow</div>
+                                <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f] border-t border-neutral-700">内置浏览器（Google Flow / 即梦）</div>
                                 {availableModels.filter(m => m.provider === 'workflow').map(model => {
                                     const isUnavailable = isModelUnavailable(model.id);
                                     return (
@@ -239,18 +244,47 @@ export const PromptBar: React.FC<PromptBarProps> = ({
                 </div>
 
                 {/* Batch Count */}
-                <div className="flex items-center bg-neutral-700/50 rounded-md px-2 py-1.5 gap-1 text-[11px] text-neutral-300 font-medium border border-neutral-600">
+                <div className="relative" ref={batchDropdownRef}>
                     <button
-                        className="hover:text-white disabled:opacity-50"
-                        onClick={() => setBatchCount(Math.max(1, batchCount - 1))}
-                        disabled={batchCount <= 1}
-                    >‹</button>
-                    <span className="w-3 text-center">{batchCount}</span>
-                    <button
-                        className="hover:text-white disabled:opacity-50"
-                        onClick={() => setBatchCount(Math.min(4, batchCount + 1))}
-                        disabled={batchCount >= 4}
-                    >›</button>
+                        type="button"
+                        onClick={() => setShowBatchDropdown(!showBatchDropdown)}
+                        className="flex items-center gap-1 text-[11px] font-medium bg-neutral-700/50 hover:bg-neutral-600 border border-neutral-600 text-white px-2 py-1.5 rounded-md transition-colors"
+                        title="选择单次生成的图片数量"
+                    >
+                        <Images size={10} className="text-cyan-400" />
+                        <span>{batchCount} 张</span>
+                        <ChevronDown size={10} className="opacity-50" />
+                    </button>
+
+                    {showBatchDropdown && (
+                        <div className="absolute bottom-full mb-2 right-0 w-32 bg-[#252525] border border-neutral-700 rounded-lg shadow-xl overflow-hidden z-50">
+                            <div className="px-3 py-2 bg-[#1f1f1f]">
+                                <div className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">
+                                    生成数量
+                                </div>
+                                <div className="mt-0.5 text-[9px] text-neutral-600">
+                                    单次最多生成 4 张
+                                </div>
+                            </div>
+                            {[1, 2, 3, 4].map(count => (
+                                <button
+                                    key={count}
+                                    type="button"
+                                    onClick={() => {
+                                        setBatchCount(count);
+                                        setShowBatchDropdown(false);
+                                    }}
+                                    className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${batchCount === count
+                                        ? 'text-cyan-400'
+                                        : 'text-neutral-300'
+                                        }`}
+                                >
+                                    <span>{count} 张</span>
+                                    {batchCount === count && <Check size={12} />}
+                                </button>
+                            ))}
+                        </div>
+                    )}
                 </div>
 
                 {/* Generate Button */}

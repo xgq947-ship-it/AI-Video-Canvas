@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, KeyRound, Loader2, Plus, Save, Settings } from 'lucide-react';
+import { ChevronDown, Globe2, KeyRound, Loader2, Plus, Save, Settings } from 'lucide-react';
 import { ApiKeySettingsModal } from './modals/ApiKeySettingsModal';
 
 interface TopBarProps {
@@ -50,6 +50,8 @@ export const TopBar: React.FC<TopBarProps> = ({
     const [isSaving, setIsSaving] = useState(false);
     const [showSettingsMenu, setShowSettingsMenu] = useState(false);
     const [showApiSettings, setShowApiSettings] = useState(false);
+    const [isOpeningBrowser, setIsOpeningBrowser] = useState(false);
+    const [browserOpenError, setBrowserOpenError] = useState<string | null>(null);
     const settingsMenuRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -112,6 +114,22 @@ export const TopBar: React.FC<TopBarProps> = ({
     const handleDiscardAndNew = () => {
         setShowNewConfirm(false);
         onNew();
+    };
+
+    const handleOpenBuiltInBrowser = async () => {
+        if (isOpeningBrowser) return;
+        setIsOpeningBrowser(true);
+        setBrowserOpenError(null);
+        try {
+            const response = await fetch('/api/browser/open', { method: 'POST' });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || '内置浏览器打开失败');
+            setShowSettingsMenu(false);
+        } catch (error) {
+            setBrowserOpenError(error instanceof Error ? error.message : '内置浏览器打开失败');
+        } finally {
+            setIsOpeningBrowser(false);
+        }
     };
 
     return (
@@ -207,6 +225,24 @@ export const TopBar: React.FC<TopBarProps> = ({
                                         <span className="mt-0.5 block text-[10px] text-neutral-500">管理当前工作台服务</span>
                                     </span>
                                 </button>
+                                <button
+                                    onClick={handleOpenBuiltInBrowser}
+                                    disabled={isOpeningBrowser}
+                                    className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors disabled:cursor-wait disabled:opacity-60 ${canvasTheme === 'dark' ? 'text-neutral-200 hover:bg-neutral-700' : 'text-neutral-700 hover:bg-neutral-100'}`}
+                                >
+                                    {isOpeningBrowser
+                                        ? <Loader2 size={16} className="shrink-0 animate-spin text-cyan-400" />
+                                        : <Globe2 size={16} className="shrink-0 text-cyan-400" />}
+                                    <span>
+                                        <span className="block font-medium">打开内置浏览器</span>
+                                        <span className="mt-0.5 block text-[10px] text-neutral-500">查看即梦与 Google Flow 页面</span>
+                                    </span>
+                                </button>
+                                {browserOpenError && (
+                                    <div className="mx-2 mb-1 rounded-lg bg-red-500/10 px-2 py-1.5 text-[10px] leading-4 text-red-400">
+                                        {browserOpenError}
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>

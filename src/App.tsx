@@ -13,7 +13,12 @@ import { CanvasNode } from './components/canvas/CanvasNode';
 import { ConnectionsLayer } from './components/canvas/ConnectionsLayer';
 import { ContextMenu } from './components/ContextMenu';
 import { ContextMenuState, NodeData, NodeStatus, NodeType } from './types';
-import { generateImage, generateVideo, type ProductSceneJob } from './services/generationService';
+import {
+  generateImage,
+  generateImageBatch,
+  generateVideo,
+  type ProductSceneJob
+} from './services/generationService';
 import { useCanvasNavigation } from './hooks/useCanvasNavigation';
 import { useNodeManagement } from './hooks/useNodeManagement';
 import { useConnectionDragging } from './hooks/useConnectionDragging';
@@ -37,6 +42,7 @@ import { useAutoSave } from './hooks/useAutoSave';
 import { useGenerationRecovery } from './hooks/useGenerationRecovery';
 import { useVideoFrameExtraction } from './hooks/useVideoFrameExtraction';
 import { extractVideoLastFrame } from './utils/videoHelpers';
+import { createAdditionalImagePlacements } from './utils/imageBatchLayout';
 import { SelectionBoundingBox } from './components/canvas/SelectionBoundingBox';
 import { WorkflowPanel } from './components/WorkflowPanel';
 import { HistoryPanel } from './components/HistoryPanel';
@@ -227,6 +233,7 @@ export default function App() {
   const isInitialMount = React.useRef(true);
   const lastLoadingCountRef = React.useRef(0);
   const ignoreNextChange = React.useRef(false);
+  const canvasChangeVersionRef = React.useRef(0);
 
   // Workflow management
   const {
@@ -318,6 +325,7 @@ export default function App() {
       return;
     }
 
+    canvasChangeVersionRef.current += 1;
     setIsDirty(true);
 
     // Trigger immediate save if any node JUST entered LOADING state
@@ -331,8 +339,13 @@ export default function App() {
 
   // Update saved state after workflow save
   const handleSaveWithTracking = async () => {
+    const savingVersion = canvasChangeVersionRef.current;
     await handleSaveWorkflow();
-    setIsDirty(false);
+    // A loading snapshot can finish saving after generation has already
+    // produced new nodes. Do not mark those newer canvas changes as saved.
+    if (canvasChangeVersionRef.current === savingVersion) {
+      setIsDirty(false);
+    }
   };
 
   // Load workflow and update tracking
@@ -350,6 +363,7 @@ export default function App() {
   const { handleGenerate: handleGenerateNow } = useGeneration({
     nodes,
     updateNode,
+    addNodes: newNodes => setNodes(previous => [...previous, ...newNodes]),
     workflowId
   });
 
@@ -509,8 +523,8 @@ export default function App() {
     setIsCreateProjectModalOpen(true);
   }, []);
 
-  const handleCreateProject = React.useCallback(async (title: string) => {
-    const workflow = await handleCreateWorkflow(title);
+  const handleCreateProject = React.useCallback(async (title: string, locationId?: string | null) => {
+    const workflow = await handleCreateWorkflow(title, locationId);
     clearCanvas(workflow.title);
   }, [handleCreateWorkflow, clearCanvas]);
 
@@ -1908,21 +1922,103 @@ export default function App() {
         initialModel={nodes.find(n => n.id === editorModal.nodeId)?.imageModel || 'codex-imagegen'}
         initialAspectRatio={nodes.find(n => n.id === editorModal.nodeId)?.aspectRatio || 'Auto'}
         initialResolution={nodes.find(n => n.id === editorModal.nodeId)?.resolution || '1K'}
+        initialGenerationCount={nodes.find(n => n.id === editorModal.nodeId)?.imageGenerationCount || 1}
         initialElements={nodes.find(n => n.id === editorModal.nodeId)?.editorElements as any}
         initialCanvasData={nodes.find(n => n.id === editorModal.nodeId)?.editorCanvasData}
         initialCanvasSize={nodes.find(n => n.id === editorModal.nodeId)?.editorCanvasSize}
         initialBackgroundUrl={nodes.find(n => n.id === editorModal.nodeId)?.editorBackgroundUrl}
         onClose={handleCloseImageEditor}
-        onGenerate={async (sourceId, prompt, count) => {
+        onGenerate={async (sourceId, prompt, count, generationSettings) => {
           handleCloseImageEditor();
 
           const sourceNode = nodes.find(n => n.id === sourceId);
           if (!sourceNode) return;
 
-          // Get settings from source node (which were updated by the modal)
-          const imageModel = sourceNode.imageModel || 'codex-imagegen';
-          const aspectRatio = sourceNode.aspectRatio || 'Auto';
-          const resolution = sourceNode.resolution || '1K';
+          // Use the modal's current values directly. React may not have committed
+          // the preceding onUpdate yet when the generate callback starts.
+          const imageModel = generationSettings.imageModel;
+          const aspectRatio = generationSettings.aspectRatio;
+          const resolution = generationSettings.resolution;
+
+          // Flow / 即梦原生支持一次返回多张图。第一张回填当前节点，其余结果
+          // 在右侧水平创建独立节点，不设置 parentIds，因此不会出现连接线。
+          if (imageModel.startsWith('jimeng-image-') || imageModel.startsWith('google-flow-')) {
+            updateNode(sourceId, {
+              prompt,
+              imageModel,
+              aspectRatio,
+              resolution,
+              imageGenerationCount: Math.min(4, Math.max(1, count)),
+              status: NodeStatus.LOADING,
+              generationStartTime: Date.now(),
+              errorMessage: undefined
+            });
+
+            try {
+              let imageBase64: string | undefined;
+              if (editorModal.imageUrl) {
+                imageBase64 = await urlToBase64(editorModal.imageUrl);
+              }
+              const rawResultUrls = await generateImageBatch({
+                workflowId: workflowId || '',
+                prompt,
+                imageBase64,
+                imageModel,
+                aspectRatio,
+                resolution,
+                nodeId: sourceId,
+                count: Math.min(4, Math.max(1, count))
+              });
+              const generatedAt = Date.now();
+              const resultUrls = rawResultUrls.slice(0, 4).map(
+                (url, index) => `${url}${url.includes('?') ? '&' : '?'}t=${generatedAt}-${index}`
+              );
+
+              const additionalNodes: NodeData[] = createAdditionalImagePlacements(
+                sourceNode,
+                resultUrls
+              ).map((placement, index) => ({
+                id: crypto.randomUUID(),
+                type: NodeType.IMAGE,
+                title: `${imageModel.startsWith('google-flow-') ? 'Flow' : '即梦'}图片 ${index + 2}`,
+                x: placement.x,
+                y: placement.y,
+                prompt,
+                status: NodeStatus.SUCCESS,
+                resultUrl: placement.resultUrl,
+                model: sourceNode.model || 'Banana Pro',
+                imageModel,
+                imageGenerationCount: Math.min(4, Math.max(1, count)),
+                aspectRatio,
+                resolution,
+                parentIds: placement.parentIds
+              }));
+
+              // Commit the first result and all additional nodes atomically. This
+              // prevents a save between the two updates from persisting half a batch.
+              setNodes(previous => [
+                ...previous.map(node => node.id === sourceId ? {
+                  ...node,
+                  status: NodeStatus.SUCCESS,
+                  resultUrl: resultUrls[0],
+                  prompt,
+                  imageModel,
+                  aspectRatio,
+                  resolution,
+                  imageGenerationCount: Math.min(4, Math.max(1, count)),
+                  generationStartTime: undefined,
+                  errorMessage: undefined
+                } : node),
+                ...additionalNodes
+              ]);
+            } catch (error: any) {
+              updateNode(sourceId, {
+                status: NodeStatus.ERROR,
+                errorMessage: error.message
+              });
+            }
+            return;
+          }
 
           const startX = sourceNode.x + 360; // Source width + gap
           const startY = sourceNode.y;

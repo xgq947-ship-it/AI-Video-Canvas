@@ -6,10 +6,13 @@ import test from 'node:test';
 
 import {
     buildGoogleFlowImageWorkflowArgs,
+    GOOGLE_FLOW_IMAGE_MAX_COUNT,
     GOOGLE_FLOW_IMAGE_SUPPORTED_ASPECT_RATIOS,
     GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID,
     isGoogleFlowImageWorkflowModel,
+    loadBrowserImageResults,
     loadGoogleFlowImageResult,
+    normalizeGoogleFlowImageCount,
     resolveGoogleFlowImageModelName,
     resolveGoogleFlowReferenceImages
 } from '../server/services/googleFlowImageWorkflow.js';
@@ -20,13 +23,14 @@ test('Google Flow 文生图原样传递提示词和真实生成参数', () => {
         aspectRatio: '9:16',
         referenceImages: ['/tmp/ref-1.png', '/tmp/ref-2.webp'],
         outputDir: '/tmp/output',
-        timeoutMinutes: 10
+        timeoutMinutes: 10,
+        count: 4
     });
 
     assert.deepEqual(args, [
         '--prompt', '电影感上海夜景，暖色灯光',
         '--aspect-ratio', '9:16',
-        '--count', '1',
+        '--count', '4',
         '--model', 'Nano Banana 2',
         '--output-dir', '/tmp/output',
         '--timeout-minutes', '10',
@@ -34,6 +38,14 @@ test('Google Flow 文生图原样传递提示词和真实生成参数', () => {
         '--reference-image', '/tmp/ref-2.webp',
         '--execute'
     ]);
+});
+
+test('Google Flow 单次生图数量完整透传并限制为 1-4 张', () => {
+    assert.equal(GOOGLE_FLOW_IMAGE_MAX_COUNT, 4);
+    assert.equal(normalizeGoogleFlowImageCount(1), 1);
+    assert.equal(normalizeGoogleFlowImageCount('4'), 4);
+    assert.throws(() => normalizeGoogleFlowImageCount(0), /只支持 1-4/);
+    assert.throws(() => normalizeGoogleFlowImageCount(5), /只支持 1-4/);
 });
 
 test('Google Flow 文生图使用稳定模型 ID 与上游支持的画幅', () => {
@@ -124,6 +136,27 @@ test('图片结果直接从 ops_cli 原生的 images[].path 读取（无 image_p
         const result = await loadGoogleFlowImageResult({ images: [{ path: file, url: null }] });
         assert.equal(result.source, 'workflow-file');
         assert.equal(result.extension, 'png');
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('浏览器生图保留并读取全部图片结果', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ops-image-batch-shape-'));
+    const first = path.join(dir, 'first.png');
+    const second = path.join(dir, 'second.webp');
+    fs.writeFileSync(first, Buffer.from('first'));
+    fs.writeFileSync(second, Buffer.from('second'));
+    try {
+        const results = await loadBrowserImageResults({
+            images: [
+                { path: first, url: null },
+                { path: second, url: null }
+            ]
+        });
+        assert.equal(results.length, 2);
+        assert.deepEqual(results[0].buffer, Buffer.from('first'));
+        assert.equal(results[1].extension, 'webp');
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
     }

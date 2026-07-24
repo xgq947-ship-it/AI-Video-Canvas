@@ -3,8 +3,8 @@
  *
  * 探测「浏览器自动化模型」（Google Flow / 即梦）是否可用。
  *
- * 这类模型不走官方 API，而是驱动本机一个手动登录过的 Chrome（CDP 9222），
- * 需要先跑 `npm run setup:browser-models` 装好 server/python 运行时。
+ * 这类模型不走官方 API，而是驱动 Evan 内置、由用户登录的 Chromium。
+ * 源码开发需要先跑 `npm run setup:browser-models`，安装包已自带运行时。
  * 未安装时不应让用户点了才报错，而是直接在模型列表里置灰。
  *
  * 结果进程内缓存：能力在运行期不会变，多个下拉框共用一次请求。
@@ -29,6 +29,8 @@ const FALLBACK_MODELS = [
     'google-flow-nano-banana-pro',
     'google-flow-nano-banana-2',
     'google-flow-nano-banana-2-lite',
+    'jimeng-image-5-0-pro',
+    'jimeng-image-5-0-lite',
     'jimeng-seedance-2-0-mini',
     'jimeng-seedance-2-0-fast-standard',
     'jimeng-seedance-2-0-standard',

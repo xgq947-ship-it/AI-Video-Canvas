@@ -97,7 +97,7 @@ test('即梦与 Google Flow 共用本地 workflow 的恢复超时档位', () => 
     assert.notEqual(getGenerationRecoveryTimeoutMs('seedance-2-0'), GOOGLE_FLOW_RECOVERY_TIMEOUT_MS);
 });
 
-test('即梦与 Google Flow 共用同一个 9222 串行队列（不能各自排队）', async () => {
+test('即梦与 Google Flow 共用同一个内置浏览器串行队列', async () => {
     const queue = await import('../server/services/googleFlowWorkflowQueue.js');
     assert.equal(queue.enqueueBrowserWorkflow, queue.enqueueGoogleFlowWorkflow);
 });

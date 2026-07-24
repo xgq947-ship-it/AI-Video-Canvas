@@ -1,10 +1,10 @@
 """Google Flow 文生图 provider（text-to-image 能力，Image 模式）。
 
-通过可见的 9222 浏览器驱动 Google Flow 的 Image 生成 UI（默认模型 Nano Banana 2），
+通过 Evan 内置浏览器驱动 Google Flow 的 Image 生成 UI（默认模型 Nano Banana 2），
 不调用未公开 API，也不读取或持久化 Google 的 cookie / token / storage。浏览器生命周期、
 登录恢复、页面接管与结果等待逻辑复用 `ops_cli.platforms._google_flow_common`。
 
-选择器来自对 9222 实时页面的只读探查（scene learning）：设置面板内 role=tab 控件——
+选择器来自对 19222 实时页面的只读探查（scene learning）：设置面板内 role=tab 控件——
 模式 `image Image` / `play_circle Video`，比例 `crop_16_9 16:9` / `crop_landscape 4:3`
 / `crop_square 1:1` / `crop_portrait 3:4` / `crop_9_16 9:16`，张数 `1x` / `x2` / `x3` /
 `x4`；模型下拉 `🍌 <model>`；提示词框与 `arrow_forward Create` 与视频模式一致。
@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -147,7 +148,9 @@ def _open_settings_menu(page: Any) -> Any:
     settings = page.locator('button[aria-haspopup="menu"]').filter(has_text="crop_")
     _exact_count(settings, "PAGE_NAVIGATION_FAILED", "未找到生图设置按钮。")
     settings.click()
-    menu = page.get_by_role("menu").filter(has_text="crop_16_9")
+    menu = page.get_by_role("menu").filter(has_text=re.compile(r"16:9")).filter(
+        has_text=re.compile(r"1:1")
+    )
     _exact_count(menu, "PAGE_NAVIGATION_FAILED", "未找到生图设置菜单。")
     return menu
 
@@ -155,7 +158,9 @@ def _open_settings_menu(page: Any) -> Any:
 def _configure_image(page: Any, *, aspect_ratio: str, count: int, model: str) -> None:
     menu = _open_settings_menu(page)
 
-    image_tab = menu.get_by_role("tab", name="image Image", exact=True)
+    image_tab = menu.get_by_role("tab").filter(
+        has_text=re.compile(r"(^|\s)image(\s|$)", re.IGNORECASE)
+    )
     _exact_count(image_tab, "PAGE_NAVIGATION_FAILED", "未找到 Image 模式。")
     image_tab.click()
 
@@ -229,7 +234,7 @@ def _execute_generation(
                         page.wait_for_timeout(3000)
                     except (PlaywrightError, PlaywrightTimeoutError) as exc:
                         raise GoogleFlowError("PAGE_NAVIGATION_FAILED", f"打开 Google Flow 项目失败：{exc}", retryable=True) from exc
-                    _ensure_editor(page)
+                    project_url = _ensure_editor(page)
                     _clear_existing_prompt(page)
                     _configure_image(page, aspect_ratio=aspect_ratio, count=count, model=model)
                     if reference_paths:
@@ -241,7 +246,9 @@ def _execute_generation(
 
                     previous_urls = set(_image_urls(page))
                     previous_failure_count = _generation_failure_count(page)
-                    create = page.get_by_role("button", name="arrow_forward Create", exact=True)
+                    create = page.get_by_role("button").filter(
+                        has_text=re.compile(r"(^|\s)arrow_forward(\s|$)", re.IGNORECASE)
+                    )
                     _exact_count(create, "GENERATE_BUTTON_NOT_FOUND", "未找到生成按钮。")
                     if not create.is_enabled():
                         raise GoogleFlowError("GENERATE_BUTTON_NOT_FOUND", "生成按钮不可用，请检查提示词。")

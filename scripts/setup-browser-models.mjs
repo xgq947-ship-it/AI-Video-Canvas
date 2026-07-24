@@ -19,6 +19,7 @@ const IS_WINDOWS = process.platform === 'win32';
 const VENV_PYTHON = IS_WINDOWS
     ? path.join(PYTHON_ROOT, '.venv', 'Scripts', 'python.exe')
     : path.join(PYTHON_ROOT, '.venv', 'bin', 'python');
+const BROWSERS_DIR = path.join(PYTHON_ROOT, '.browsers');
 
 const MIN_PYTHON = [3, 11];
 
@@ -55,9 +56,13 @@ function findPython() {
     return null;
 }
 
-function run(cmd, args, label) {
+function run(cmd, args, label, options = {}) {
     log(`\n▶ ${label}`);
-    const result = spawnSync(cmd, args, { stdio: 'inherit', cwd: PYTHON_ROOT });
+    const result = spawnSync(cmd, args, {
+        stdio: 'inherit',
+        cwd: PYTHON_ROOT,
+        env: { ...process.env, ...options.env }
+    });
     if (result.error) fail(`${label} 失败：${result.error.message}`);
     if (result.status !== 0) fail(`${label} 失败（退出码 ${result.status}）`);
 }
@@ -87,6 +92,12 @@ if (fs.existsSync(VENV_PYTHON)) {
 
 run(VENV_PYTHON, ['-m', 'pip', 'install', '--quiet', '--upgrade', 'pip'], '升级 pip');
 run(VENV_PYTHON, ['-m', 'pip', 'install', '--quiet', '-r', 'requirements.txt'], '安装 Python 依赖');
+run(
+    VENV_PYTHON,
+    ['-m', 'playwright', 'install', '--no-shell', 'chromium'],
+    '下载与 Playwright 匹配的内置 Chromium',
+    { env: { PLAYWRIGHT_BROWSERS_PATH: BROWSERS_DIR } }
+);
 
 // 自检：确认 CLI 能正常加载两个能力
 log('\n▶ 自检 ops_cli');
@@ -103,21 +114,13 @@ log(`
 ✅ 环境安装完成
 ========================================================
 
-接下来还需要你手动做两件事（脚本无法代劳）：
-
-1) 启动专用的 9222 调试浏览器
-   在画布里首次使用 Flow / 即梦 时会自动拉起；
-   也可以手动运行：
-     ${IS_WINDOWS
-        ? '"%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222 --user-data-dir="%USERPROFILE%\\.sessionhub\\chrome-9222"'
-        : 'open -na "Google Chrome Beta" --args --remote-debugging-port=9222 --user-data-dir="$HOME/.sessionhub/chrome-9222-beta"'}
-
-2) 在那个浏览器里分别登录（用你自己的账号）
+内置 Chromium 已准备好，不再要求安装 Chrome Beta。
+首次使用或登录过期时，应用会打开这个专用浏览器。请分别登录：
    · 即梦        https://jimeng.jianying.com   —— 需要即梦 VIP 会员额度
    · Google Flow https://labs.google/fx/tools/flow —— 需要有 Flow 权限的 Google 账号
 
 ⚠️ 登录态只保存在你本机，不会也不能随项目分发。
-   如果 Chrome 装在非默认位置，可设置环境变量 SESSIONHUB_CHROME_APP 指向它。
+   应用更新不会覆盖专用浏览器的用户资料。
 
 不配置这一套也没关系：Gemini / OpenAI / Seedance(ARK)
 等官方 API 模型不依赖它，填好 .env 即可直接使用。

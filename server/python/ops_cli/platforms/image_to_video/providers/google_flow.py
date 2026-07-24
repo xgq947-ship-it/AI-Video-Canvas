@@ -1,6 +1,6 @@
 """Google Flow 首帧图生视频 provider（image-to-video 能力）。
 
-通过可见的 9222 浏览器驱动 Google Flow 页面 UI，不调用未公开 API，也不读取或持久化
+通过 Evan 内置浏览器驱动 Google Flow 页面 UI，不调用未公开 API，也不读取或持久化
 Google 的 cookie / token / storage。浏览器生命周期、登录恢复、页面接管与结果等待逻辑
 复用 `ops_cli.platforms._google_flow_common`。
 """
@@ -152,7 +152,7 @@ def _open_settings_menu(page: Any) -> Any:
     _exact_count(settings, "PAGE_NAVIGATION_FAILED", "未找到视频设置按钮。")
     settings.click()
 
-    menu = page.get_by_role("menu").filter(has_text="Generating will use")
+    menu = page.get_by_role("menu").filter(has_text=re.compile(r"16:9|9:16"))
     _exact_count(menu, "PAGE_NAVIGATION_FAILED", "未找到视频设置菜单。")
     return menu
 
@@ -160,18 +160,24 @@ def _open_settings_menu(page: Any) -> Any:
 def _configure_video(page: Any, *, duration: int, aspect_ratio: str, model: str, mode: str = MODE_FRAMES) -> None:
     menu = _open_settings_menu(page)
 
-    video_tab = menu.get_by_role("tab", name="play_circle Video", exact=True)
+    video_tab = menu.get_by_role("tab").filter(
+        has_text=re.compile(r"(^|\s)play_circle(\s|$)", re.IGNORECASE)
+    )
     _exact_count(video_tab, "PAGE_NAVIGATION_FAILED", "未找到 Video 模式。")
     video_tab.click()
 
     # 输入子模式：ingredients → chrome_extension Ingredients（多参考图，无 Start 槽位）；
     # 否则 crop_free Frames（首帧/首尾帧）。两个子模式的比例/时长/模型选项一致。
     if mode == MODE_INGREDIENTS:
-        ingredients_tab = menu.get_by_role("tab", name="chrome_extension Ingredients", exact=True)
+        ingredients_tab = menu.get_by_role("tab").filter(
+            has_text=re.compile(r"(^|\s)chrome_extension(\s|$)", re.IGNORECASE)
+        )
         _exact_count(ingredients_tab, "REFERENCE_IMAGE_ADD_FAILED", "未找到 Ingredients 多参考图模式。")
         ingredients_tab.click()
     else:
-        frames_tab = menu.get_by_role("tab", name="crop_free Frames", exact=True)
+        frames_tab = menu.get_by_role("tab").filter(
+            has_text=re.compile(r"(^|\s)crop_free(\s|$)", re.IGNORECASE)
+        )
         _exact_count(frames_tab, "FIRST_FRAME_UPLOAD_FAILED", "未找到 Frames 首尾帧模式。")
         frames_tab.click()
 
@@ -322,7 +328,7 @@ def _execute_generation(
                         page.wait_for_timeout(3000)
                     except (PlaywrightError, PlaywrightTimeoutError) as exc:
                         raise GoogleFlowError("PAGE_NAVIGATION_FAILED", f"打开 Google Flow 项目失败：{exc}", retryable=True) from exc
-                    _ensure_editor(page)
+                    project_url = _ensure_editor(page)
                     _configure_video(page, duration=duration, aspect_ratio=aspect_ratio, model=model, mode=mode)
                     prompt_box = page.locator('[role="textbox"][contenteditable="true"][data-slate-editor="true"]')
                     _exact_count(prompt_box, "PROMPT_INPUT_NOT_FOUND", "未找到提示词输入框。")
@@ -344,7 +350,9 @@ def _execute_generation(
 
                     previous_urls = set(_video_urls(page))
                     previous_failure_count = _generation_failure_count(page)
-                    create = page.get_by_role("button", name="arrow_forward Create", exact=True)
+                    create = page.get_by_role("button").filter(
+                        has_text=re.compile(r"(^|\s)arrow_forward(\s|$)", re.IGNORECASE)
+                    )
                     _exact_count(create, "GENERATE_BUTTON_NOT_FOUND", "未找到生成按钮。")
                     if not create.is_enabled():
                         raise GoogleFlowError("GENERATE_BUTTON_NOT_FOUND", "生成按钮不可用，请检查首帧和提示词。")

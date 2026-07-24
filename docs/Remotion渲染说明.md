@@ -64,8 +64,9 @@
 npm run render:e2e-test
 # 输出：library/renders/manga-e2e-test.mp4
 
-# ffprobe 验收
-ffprobe -v error -show_entries stream=codec_name,codec_type,width,height,r_frame_rate,sample_rate \
+# 使用项目内置 ffprobe 验收
+node_modules/ffmpeg-ffprobe-static/ffprobe -v error \
+  -show_entries stream=codec_name,codec_type,width,height,r_frame_rate,sample_rate \
   -show_entries format=duration -of default=noprint_wrappers=1 library/renders/manga-e2e-test.mp4
 ```
 
@@ -73,5 +74,5 @@ ffprobe -v error -show_entries stream=codec_name,codec_type,width,height,r_frame
 
 ## 首次渲染
 
-首次渲染会自动下载 Chrome Headless Shell（约 90MB，Remotron 渲染所需），仅一次。
-需要系统已安装 `ffmpeg` 与 `ffprobe`（母带与验收用）。
+源码开发先执行 `npm run setup:browser-models`；Remotion 会复用 Evan 内置 Chromium。
+FFmpeg 与 FFprobe 由项目依赖提供，不需要系统安装。

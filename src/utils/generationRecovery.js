@@ -6,7 +6,7 @@ export const DEFAULT_GENERATION_RECOVERY_TIMEOUT_MS = 30 * 60 * 1000;
 export const PRODUCT_SCENE_ANALYSIS_RECOVERY_TIMEOUT_MS = 4 * 60 * 1000;
 export const PRODUCT_SCENE_GENERATION_RECOVERY_TIMEOUT_MS = 13 * 60 * 1000;
 
-// 本地 9222 页面 workflow（Google Flow / 即梦）：进程侧 timeout 是 15+2 分钟，
+// 内置浏览器 workflow（Google Flow / 即梦）：进程侧 timeout 是 15+2 分钟，
 // 前端恢复窗口取 18 分钟与之对齐，避免节点比后端更早被判超时。
 export function getGenerationRecoveryTimeoutMs(nodeOrVideoModel) {
     if (nodeOrVideoModel && typeof nodeOrVideoModel === 'object' && nodeOrVideoModel.type === NODE.PRODUCT_SCENE_REPLACE) {

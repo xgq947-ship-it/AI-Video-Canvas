@@ -9,13 +9,14 @@ import path from 'path';
 import fs from 'fs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import { FFMPEG_PATH } from '../server/runtime/mediaTools.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, '..');
 
 const run = (args) =>
   new Promise((resolve, reject) => {
-    const p = spawn('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', ...args]);
+    const p = spawn(FFMPEG_PATH, ['-y', '-hide_banner', '-loglevel', 'error', ...args]);
     let err = '';
     p.stderr.on('data', (d) => (err += d.toString()));
     p.on('error', reject);

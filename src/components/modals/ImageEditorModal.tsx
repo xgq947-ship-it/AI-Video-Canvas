@@ -40,6 +40,7 @@ export const ImageEditorModal: React.FC<ImageEditorModalProps> = ({
     initialModel,
     initialAspectRatio,
     initialResolution,
+    initialGenerationCount,
     initialElements,
     initialCanvasData,
     initialBackgroundUrl,
@@ -49,7 +50,7 @@ export const ImageEditorModal: React.FC<ImageEditorModalProps> = ({
 }) => {
     // --- Prompt & Generation State ---
     const [prompt, setPrompt] = useState(initialPrompt || '');
-    const [batchCount, setBatchCount] = useState(4);
+    const [batchCount, setBatchCount] = useState(1);
     const [showModelDropdown, setShowModelDropdown] = useState(false);
     const [showAspectDropdown, setShowAspectDropdown] = useState(false);
     const [showResolutionDropdown, setShowResolutionDropdown] = useState(false);
@@ -292,13 +293,14 @@ export const ImageEditorModal: React.FC<ImageEditorModalProps> = ({
         setSelectedModel(initialModel || 'codex-imagegen');
         setSelectedAspectRatio(initialAspectRatio || 'Auto');
         setSelectedResolution(initialResolution || '1K');
+        setBatchCount(Math.min(4, Math.max(1, Number(initialGenerationCount) || 1)));
         // Use initialBackgroundUrl (clean image) if available, otherwise imageUrl (might be composite or input)
         setLocalImageUrl(initialBackgroundUrl || imageUrl);
         setElements(initialElements || []);
 
         hasInitializedRef.current = true;
         initializedNodeIdRef.current = nodeId;
-    }, [isOpen, nodeId, initialPrompt, initialModel, initialAspectRatio, initialResolution, imageUrl, initialElements]);
+    }, [isOpen, nodeId, initialPrompt, initialModel, initialAspectRatio, initialResolution, initialGenerationCount, imageUrl, initialElements]);
 
     // Restore brush canvas data from node when modal opens
     useEffect(() => {
@@ -413,20 +415,33 @@ export const ImageEditorModal: React.FC<ImageEditorModalProps> = ({
             prompt,
             imageModel: selectedModel,
             aspectRatio: selectedAspectRatio,
+            resolution: selectedResolution,
+            imageGenerationCount: batchCount
+        });
+        onGenerate(nodeId, prompt, batchCount, {
+            imageModel: selectedModel,
+            aspectRatio: selectedAspectRatio,
             resolution: selectedResolution
         });
-        onGenerate(nodeId, prompt, batchCount);
     };
 
     const handleModelChange = (modelId: string) => {
         setSelectedModel(modelId);
         const newModel = IMAGE_MODELS.find(m => m.id === modelId);
+        const updates: Record<string, string> = { imageModel: modelId };
 
         if (newModel?.aspectRatios && !newModel.aspectRatios.includes(selectedAspectRatio)) {
-            setSelectedAspectRatio('Auto');
+            const aspectRatio = newModel.aspectRatios[0] || '1:1';
+            setSelectedAspectRatio(aspectRatio);
+            updates.aspectRatio = aspectRatio;
+        }
+        if (newModel?.resolutions && !newModel.resolutions.includes(selectedResolution)) {
+            const resolution = newModel.resolutions[0] || '2K';
+            setSelectedResolution(resolution);
+            updates.resolution = resolution;
         }
 
-        onUpdate(nodeId, { imageModel: modelId });
+        onUpdate(nodeId, updates);
         setShowModelDropdown(false);
     };
 

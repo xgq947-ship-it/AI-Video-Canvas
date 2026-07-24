@@ -10,6 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import crypto from 'crypto';
+import { FFMPEG_PATH } from '../runtime/mediaTools.js';
 
 // ============================================================================
 // CONSTANTS
@@ -251,7 +252,7 @@ async function downloadVideo(videoUrl, destPath, fallbackUrl = null, retryCount 
  */
 async function isFFmpegAvailable() {
     return new Promise((resolve) => {
-        const proc = spawn('ffmpeg', ['-version'], { shell: true });
+        const proc = spawn(FFMPEG_PATH, ['-version']);
         proc.on('close', (code) => resolve(code === 0));
         proc.on('error', () => resolve(false));
     });
@@ -290,7 +291,7 @@ async function trimVideoFrames(inputPath, outputPath, duration) {
             outputPath                       // Output file
         ];
 
-        const proc = spawn('ffmpeg', args, { shell: true });
+        const proc = spawn(FFMPEG_PATH, args);
 
         let stderr = '';
         proc.stderr.on('data', (data) => {

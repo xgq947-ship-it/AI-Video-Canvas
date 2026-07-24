@@ -1,6 +1,8 @@
 // Load environment variables FIRST before any other imports
 import dotenv from 'dotenv';
-dotenv.config();
+// Desktop builds must not load an arbitrary .env from the process working
+// directory. Their settings live under the app's user-data directory.
+if (process.env.EVAN_DESKTOP !== '1') dotenv.config();
 
 import express from 'express';
 import cors from 'cors';
@@ -40,18 +42,25 @@ import {
 } from '../shared/promptOptimizationProfiles.js';
 import { getPromptOptimizerProvider } from './services/promptOptimizerProviders.js';
 import { applyOptimizerPreferenceToApp, loadOptimizerPreference } from './services/optimizerPreference.js';
-import { BROWSER_MODELS_SETUP_HINT, isBrowserModelsReady } from './services/opsCliRunner.js';
+import { BROWSER_MODELS_SETUP_HINT, isBrowserModelsReady, runOpsCli } from './services/opsCliRunner.js';
+import { browserSessionState } from './services/browserSessionState.js';
 import { resolveImageToBase64 } from './utils/imageHelpers.js';
 import { MASSAGE_EQUIPMENT_NAMES } from '../shared/massageEquipmentCategories.js';
+import { RUNTIME_PATHS } from './runtime/paths.js';
+import { FFMPEG_PATH } from './runtime/mediaTools.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
+const HOST = process.env.HOST || '127.0.0.1';
 
 // Ensure library directories exist
-const LIBRARY_DIR = path.join(__dirname, '..', 'library');
+const LIBRARY_DIR = RUNTIME_PATHS.libraryDir;
+// Transitional compatibility for helpers that still accept LIBRARY_DIR from
+// the environment. Desktop mode injects a user-writable path here.
+process.env.LIBRARY_DIR = LIBRARY_DIR;
 const WORKFLOWS_DIR = path.join(LIBRARY_DIR, 'workflows');
 const IMAGES_DIR = path.join(LIBRARY_DIR, 'images');
 const VIDEOS_DIR = path.join(LIBRARY_DIR, 'videos');
@@ -126,7 +135,7 @@ app.locals.WORKFLOWS_DIR = WORKFLOWS_DIR;
 app.locals.LIBRARY_DIR = LIBRARY_DIR;
 app.locals.CODEX_IMAGE_JOBS_DIR = CODEX_IMAGE_JOBS_DIR;
 app.locals.CODEX_IMAGE_AUTOMATION = createCodexImageAutomation({
-    projectRoot: path.join(__dirname, '..'),
+    projectRoot: RUNTIME_PATHS.resourcesDir,
     jobsDir: CODEX_IMAGE_JOBS_DIR
 });
 applyApiKeysToApp(app, process.env, API_KEY_OVERRIDES);
@@ -556,13 +565,12 @@ const projectAssetDirs = () => ({
 
 const writeProjectManifest = (workflow) => {
     if (!workflow?.projectDirName) return;
-    const manifestPath = path.join(PROJECTS_DIR, workflow.projectDirName, 'project.json');
-    fs.writeFileSync(manifestPath, JSON.stringify({
-        id: workflow.id,
-        title: workflow.title,
-        createdAt: workflow.createdAt,
-        updatedAt: workflow.updatedAt
-    }, null, 2));
+    const projectRoot = ensureProjectFolder(workflow, { projectsDir: PROJECTS_DIR });
+    const manifestPath = path.join(projectRoot, 'project.json');
+    // Keep a complete, human-visible project copy beside its media. The central
+    // workflow index remains the fast application index, while this file makes
+    // a user-selected project folder self-contained for backup and inspection.
+    fs.writeFileSync(manifestPath, JSON.stringify(workflow, null, 2));
 };
 
 const findWorkflowByTitle = (title, exceptId = null) => {
@@ -582,6 +590,9 @@ const findWorkflowByTitle = (title, exceptId = null) => {
 // from the legacy save endpoint so clicking "新建" reserves the name and folder
 // before any generation/upload can start.
 app.post('/api/projects', (req, res) => {
+    let workflow = null;
+    let customProjectCreated = false;
+    let workflowFilePath = null;
     try {
         const title = String(req.body?.title || '').trim();
         if (!title) return res.status(400).json({ error: '项目名称不能为空' });
@@ -590,11 +601,49 @@ app.post('/api/projects', (req, res) => {
         if (findWorkflowByTitle(title) || fs.existsSync(path.join(PROJECTS_DIR, dirName))) {
             return res.status(409).json({ error: '项目名称已存在，请换一个名称' });
         }
+
+        const requestedParent = String(req.body?.parentDirectory || '').trim();
+        let projectPath = null;
+        if (requestedParent) {
+            if (
+                !process.env.EVAN_DESKTOP_TOKEN
+                || req.get('X-Evan-Desktop-Token') !== process.env.EVAN_DESKTOP_TOKEN
+            ) {
+                return res.status(403).json({ error: '自定义项目路径必须通过桌面应用选择' });
+            }
+            if (!path.isAbsolute(requestedParent)) {
+                return res.status(400).json({ error: '项目存放位置必须是绝对路径' });
+            }
+
+            const parentDirectory = path.resolve(requestedParent);
+            let parentStat;
+            try {
+                parentStat = fs.statSync(parentDirectory);
+                fs.accessSync(parentDirectory, fs.constants.R_OK | fs.constants.W_OK);
+            } catch {
+                return res.status(400).json({ error: '所选文件夹不存在或没有写入权限' });
+            }
+            if (!parentStat.isDirectory()) {
+                return res.status(400).json({ error: '请选择文件夹作为项目存放位置' });
+            }
+
+            if (parentDirectory !== path.resolve(PROJECTS_DIR)) {
+                projectPath = path.join(parentDirectory, dirName);
+                try {
+                    fs.lstatSync(projectPath);
+                    return res.status(409).json({ error: `所选位置已存在同名文件夹：${dirName}` });
+                } catch (error) {
+                    if (error.code !== 'ENOENT') throw error;
+                }
+            }
+        }
+
         const now = new Date().toISOString();
-        const workflow = {
+        workflow = {
             id: crypto.randomUUID(),
             title,
             projectDirName: dirName,
+            ...(projectPath ? { projectPath, projectStorage: 'custom' } : {}),
             nodes: [],
             groups: [],
             viewport: { x: 0, y: 0, zoom: 1 },
@@ -602,11 +651,30 @@ app.post('/api/projects', (req, res) => {
             updatedAt: now
         };
         ensureProjectFolder(workflow, { projectsDir: PROJECTS_DIR }, { exactName: true });
-        fs.writeFileSync(path.join(WORKFLOWS_DIR, `${workflow.id}.json`), JSON.stringify(workflow, null, 2));
+        customProjectCreated = Boolean(workflow.projectPath);
+        workflowFilePath = path.join(WORKFLOWS_DIR, `${workflow.id}.json`);
+        fs.writeFileSync(workflowFilePath, JSON.stringify(workflow, null, 2));
         writeProjectManifest(workflow);
         res.status(201).json(workflow);
     } catch (error) {
         console.error('Create project error:', error);
+        if (workflowFilePath && fs.existsSync(workflowFilePath)) {
+            fs.rmSync(workflowFilePath, { force: true });
+        }
+        if (workflow?.projectPath) {
+            try {
+                deleteWorkflowAssetDirs(workflow, {
+                    imagesDir: IMAGES_DIR,
+                    videosDir: VIDEOS_DIR,
+                    projectsDir: PROJECTS_DIR
+                });
+                if (customProjectCreated && fs.existsSync(workflow.projectPath)) {
+                    fs.rmSync(workflow.projectPath, { recursive: true, force: true });
+                }
+            } catch (cleanupError) {
+                console.error('Create project cleanup error:', cleanupError);
+            }
+        }
         res.status(error.code === 'EEXIST' ? 409 : 500).json({ error: error.message });
     }
 });
@@ -651,9 +719,10 @@ app.get('/api/projects/:id/assets', (req, res) => {
         if (!fs.existsSync(workflowPath)) return res.status(404).json({ error: '项目不存在' });
         const workflow = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
         if (!workflow.projectDirName) return res.json([]);
+        const projectRoot = ensureProjectFolder(workflow, { projectsDir: PROJECTS_DIR });
         const result = [];
         for (const type of ['images', 'videos', 'audio']) {
-            const dir = path.join(PROJECTS_DIR, workflow.projectDirName, type);
+            const dir = path.join(projectRoot, type);
             if (!fs.existsSync(dir)) continue;
             const allowed = type === 'images'
                 ? /\.(png|jpe?g|webp|gif|avif)$/i
@@ -715,6 +784,10 @@ app.post('/api/workflows', async (req, res) => {
                 }
                 if (existingData.projectDirName) {
                     workflow.projectDirName = existingData.projectDirName;
+                    if (existingData.projectPath) {
+                        workflow.projectPath = existingData.projectPath;
+                        workflow.projectStorage = existingData.projectStorage || 'custom';
+                    }
                     if (existingData.title !== workflow.title) {
                         renameWorkflowAssetDirs(workflow, workflow.title, {
                             projectsDir: PROJECTS_DIR,
@@ -928,12 +1001,15 @@ app.get('/api/capabilities', (req, res) => {
         // 未安装时这些模型不可用，但其余官方 API 模型照常工作。
         browserModels: {
             ready: isBrowserModelsReady(),
+            sessions: browserSessionState.list(),
             models: [
                 'google-flow-omni-flash',
                 'google-flow-veo-3-1-lite',
                 'google-flow-nano-banana-pro',
                 'google-flow-nano-banana-2',
                 'google-flow-nano-banana-2-lite',
+                'jimeng-image-5-0-pro',
+                'jimeng-image-5-0-lite',
                 'jimeng-seedance-2-0-mini',
                 'jimeng-seedance-2-0-fast-standard',
                 'jimeng-seedance-2-0-standard',
@@ -945,6 +1021,50 @@ app.get('/api/capabilities', (req, res) => {
         },
         platform: process.platform
     });
+});
+
+app.post('/api/browser-sessions/:provider/reauthenticate', async (req, res) => {
+    const provider = String(req.params.provider || '');
+    if (!['google-flow', 'jimeng'].includes(provider)) {
+        return res.status(400).json({ error: '不支持的浏览器登录平台' });
+    }
+    try {
+        const { data } = await runOpsCli({
+            args: ['browser', 'login', '--provider', provider],
+            timeoutMs: 90_000,
+            label: `${provider} 登录`,
+            initialSessionState: 'reauthenticating',
+            successSessionState: 'reauthenticating'
+        });
+        res.json({
+            success: true,
+            provider,
+            session: browserSessionState.get(provider),
+            ...data
+        });
+    } catch (error) {
+        res.status(500).json({
+            error: error.message,
+            code: error.code || 'BROWSER_LOGIN_FAILED',
+            session: browserSessionState.get(provider)
+        });
+    }
+});
+
+app.post('/api/browser/open', async (_req, res) => {
+    try {
+        const { data } = await runOpsCli({
+            args: ['browser', 'open'],
+            timeoutMs: 30_000,
+            label: '打开内置浏览器'
+        });
+        res.json({ success: true, ...data });
+    } catch (error) {
+        res.status(500).json({
+            error: error.message,
+            code: error.code || 'BROWSER_OPEN_FAILED'
+        });
+    }
 });
 
 // 在系统文件管理器中打开该项目的素材目录（Finder / 资源管理器 / 桌面环境默认）
@@ -959,7 +1079,7 @@ app.post('/api/workflows/:id/reveal-assets', async (req, res) => {
             return res.status(404).json({ error: "该项目还没有生成任何素材" });
         }
         const dir = workflow.projectDirName
-            ? path.join(PROJECTS_DIR, workflow.projectDirName)
+            ? ensureProjectFolder(workflow, { projectsDir: PROJECTS_DIR })
             : path.join(IMAGES_DIR, workflow.assetsDirName);
         fs.mkdirSync(dir, { recursive: true });
         // 三平台各自的「打开目录」命令，写法与 server/routes/render.js 保持一致。
@@ -1018,6 +1138,7 @@ app.put('/api/workflows/:id/title', async (req, res) => {
             title: workflowData.title,
             assetsDirName: workflowData.assetsDirName || null,
             projectDirName: workflowData.projectDirName || null,
+            projectPath: workflowData.projectPath || null,
             nodes: workflowData.nodes || [],
             coverUrl: workflowData.coverUrl || null
         });
@@ -1045,7 +1166,9 @@ app.put('/api/workflows/:id/cover', async (req, res) => {
 
         const workflowData = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
         workflowData.coverUrl = coverUrl;
+        workflowData.updatedAt = new Date().toISOString();
         fs.writeFileSync(filePath, JSON.stringify(workflowData, null, 2));
+        writeProjectManifest(workflowData);
 
         res.json({ success: true, coverUrl });
     } catch (error) {
@@ -1526,7 +1649,7 @@ app.post('/api/tiktok/validate', async (req, res) => {
  */
 async function isFFmpegAvailable() {
     return new Promise((resolve) => {
-        const proc = spawn('ffmpeg', ['-version'], { shell: true });
+        const proc = spawn(FFMPEG_PATH, ['-version']);
         proc.on('close', (code) => resolve(code === 0));
         proc.on('error', () => resolve(false));
     });
@@ -1562,7 +1685,7 @@ async function trimVideoWithFFmpeg(inputPath, outputPath, startTime, endTime) {
 
         console.log(`[Video Trim] Running FFmpeg with args:`, args.join(' '));
 
-        const proc = spawn('ffmpeg', args, { shell: true });
+        const proc = spawn(FFMPEG_PATH, args);
 
         let stderr = '';
         proc.stderr.on('data', (data) => {
@@ -1602,7 +1725,7 @@ app.post('/api/trim-video', async (req, res) => {
         const ffmpegAvailable = await isFFmpegAvailable();
         if (!ffmpegAvailable) {
             return res.status(500).json({
-                error: 'FFmpeg is not installed. Video trimming requires FFmpeg to be installed on the server.'
+                error: 'Evan 内置 FFmpeg 不可用，请重新安装或重新执行 npm install。'
             });
         }
 
@@ -1670,13 +1793,16 @@ app.post('/api/trim-video', async (req, res) => {
     }
 });
 
-// Serve frontend in production
-if (process.env.NODE_ENV === 'production') {
-    const distPath = path.join(__dirname, '..', 'dist');
+// Desktop development also loads the already-built frontend from this backend.
+// Without EVAN_DESKTOP here, Electron receives Express's "Cannot GET /" page.
+if (process.env.NODE_ENV === 'production' || process.env.EVAN_DESKTOP === '1') {
+    const distPath = RUNTIME_PATHS.distDir;
     app.use(express.static(distPath));
 
     // Handle SPA routing: serve index.html for any unknown routes
-    app.get('*', (req, res) => {
+    // Express 5 / path-to-regexp 8 requires a named wildcard. The old '*'
+    // pattern throws during packaged production startup.
+    app.get('/{*splat}', (req, res) => {
         res.sendFile(path.join(distPath, 'index.html'));
     });
 }
@@ -1693,9 +1819,27 @@ try {
     console.warn(`[asset-scan] 扫描素材库失败：${e.message}`);
 }
 
-app.listen(PORT, () => {
-    console.log(`Backend server running on http://localhost:${PORT}`);
-    if (app.locals.CODEX_IMAGE_AUTOMATION.resumePending()) {
-        console.log('[Codex 自动生图] 已恢复未完成的图片任务');
-    }
-});
+export function startBackend({
+    port = PORT,
+    host = HOST,
+    onReady
+} = {}) {
+    const server = app.listen(port, host);
+    server.once('listening', () => {
+        const address = server.address();
+        const actualPort = typeof address === 'object' && address ? address.port : port;
+        console.log(`Backend server running on http://${host}:${actualPort}`);
+        if (app.locals.CODEX_IMAGE_AUTOMATION.resumePending()) {
+            console.log('[Codex 自动生图] 已恢复未完成的图片任务');
+        }
+        onReady?.({ host, port: actualPort, server });
+    });
+    return server;
+}
+
+export { app };
+
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
+if (invokedPath === __filename) {
+    startBackend();
+}

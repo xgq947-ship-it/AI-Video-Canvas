@@ -19,6 +19,7 @@ export const GOOGLE_FLOW_IMAGE_WORKFLOW_MODELS = {
     'google-flow-nano-banana-2-lite': 'Nano Banana 2 Lite'
 };
 export const GOOGLE_FLOW_IMAGE_SUPPORTED_ASPECT_RATIOS = ['16:9', '4:3', '1:1', '3:4', '9:16'];
+export const GOOGLE_FLOW_IMAGE_MAX_COUNT = 4;
 
 export function isGoogleFlowImageWorkflowModel(modelId) {
     return Object.prototype.hasOwnProperty.call(GOOGLE_FLOW_IMAGE_WORKFLOW_MODELS, modelId);
@@ -26,6 +27,14 @@ export function isGoogleFlowImageWorkflowModel(modelId) {
 
 export function resolveGoogleFlowImageModelName(modelId) {
     return GOOGLE_FLOW_IMAGE_WORKFLOW_MODELS[modelId] || 'Nano Banana 2';
+}
+
+export function normalizeGoogleFlowImageCount(value) {
+    const count = Number(value ?? 1);
+    if (!Number.isInteger(count) || count < 1 || count > GOOGLE_FLOW_IMAGE_MAX_COUNT) {
+        throw new Error(`Google Flow 图片生成数量只支持 1-${GOOGLE_FLOW_IMAGE_MAX_COUNT}`);
+    }
+    return count;
 }
 
 function inferImageExtension(value, contentType = '') {
@@ -39,7 +48,7 @@ function inferImageExtension(value, contentType = '') {
     return 'png';
 }
 
-function resolveLocalLibraryImage(input, libraryDir) {
+function resolveLocalLibraryImage(input, libraryDir, providerName) {
     if (!input || typeof input !== 'string') return null;
     let candidate = input;
     if (candidate.startsWith('http://') || candidate.startsWith('https://')) {
@@ -53,10 +62,10 @@ function resolveLocalLibraryImage(input, libraryDir) {
     const root = path.resolve(libraryDir || process.env.LIBRARY_DIR || path.join(process.cwd(), 'library'));
     const resolved = path.resolve(root, cleanPath.replace(/^\/library\//, ''));
     if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
-        throw new Error('Google Flow 参考图路径超出素材库范围');
+        throw new Error(`${providerName}参考图路径超出素材库范围`);
     }
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
-        throw new Error(`Google Flow 参考图文件不存在：${resolved}`);
+        throw new Error(`${providerName}参考图文件不存在：${resolved}`);
     }
     return resolved;
 }
@@ -70,15 +79,15 @@ function writeDataUrlImage(input, taskDir, index) {
     return target;
 }
 
-async function downloadRemoteImage(input, taskDir, index) {
+async function downloadRemoteImage(input, taskDir, index, providerName) {
     if (!/^https?:\/\//.test(String(input || ''))) return null;
     const url = new URL(input);
     if (['localhost', '127.0.0.1', '::1'].includes(url.hostname)) return null;
     const response = await fetch(url);
-    if (!response.ok) throw new Error(`Google Flow 参考图下载失败：HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`${providerName}参考图下载失败：HTTP ${response.status}`);
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.toLowerCase().startsWith('image/')) {
-        throw new Error('Google Flow 参考图下载结果不是图片');
+        throw new Error(`${providerName}参考图下载结果不是图片`);
     }
     const extension = inferImageExtension(url.pathname, contentType);
     const target = path.join(taskDir, `reference-${index + 1}.${extension}`);
@@ -86,10 +95,15 @@ async function downloadRemoteImage(input, taskDir, index) {
     return target;
 }
 
-export async function resolveGoogleFlowReferenceImages(inputs, libraryDir, taskDir) {
+export async function resolveBrowserReferenceImages(
+    inputs,
+    libraryDir,
+    taskDir,
+    { providerName = '浏览器生图' } = {}
+) {
     const references = [];
     for (const [index, input] of (inputs || []).entries()) {
-        const localPath = resolveLocalLibraryImage(input, libraryDir);
+        const localPath = resolveLocalLibraryImage(input, libraryDir, providerName);
         if (localPath) {
             references.push(localPath);
             continue;
@@ -99,19 +113,22 @@ export async function resolveGoogleFlowReferenceImages(inputs, libraryDir, taskD
             references.push(dataPath);
             continue;
         }
-        const remotePath = await downloadRemoteImage(input, taskDir, index);
+        const remotePath = await downloadRemoteImage(input, taskDir, index, providerName);
         if (remotePath) {
             references.push(remotePath);
             continue;
         }
-        throw new Error(`Google Flow 无法读取第 ${index + 1} 张参考图`);
+        throw new Error(`${providerName}无法读取第 ${index + 1} 张参考图`);
     }
     return references;
 }
 
-export async function loadGoogleFlowImageResult(outputs) {
-    const image = Array.isArray(outputs?.images) ? outputs.images[0] : null;
-    const imagePath = image?.path || (Array.isArray(outputs?.image_paths) ? outputs.image_paths[0] : null);
+export function resolveGoogleFlowReferenceImages(inputs, libraryDir, taskDir) {
+    return resolveBrowserReferenceImages(inputs, libraryDir, taskDir, { providerName: 'Google Flow' });
+}
+
+async function loadBrowserImageEntry(image, fallbackPath, providerName) {
+    const imagePath = image?.path || fallbackPath;
     if (imagePath) {
         const resolved = path.resolve(imagePath);
         if (fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
@@ -125,15 +142,39 @@ export async function loadGoogleFlowImageResult(outputs) {
 
     const imageUrl = image?.url;
     if (!imageUrl || !/^https?:\/\//.test(imageUrl)) {
-        throw new Error('Google Flow 文生图 workflow 完成，但没有可用的图片文件或下载地址');
+        throw new Error(`${providerName} workflow 完成，但没有可用的图片文件或下载地址`);
     }
     const response = await fetch(imageUrl);
-    if (!response.ok) throw new Error(`Google Flow 图片下载失败：HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`${providerName}图片下载失败：HTTP ${response.status}`);
     return {
         buffer: Buffer.from(await response.arrayBuffer()),
         extension: inferImageExtension(imageUrl, response.headers.get('content-type') || ''),
         source: 'workflow-url'
     };
+}
+
+export async function loadBrowserImageResults(outputs, { providerName = '浏览器生图' } = {}) {
+    const images = Array.isArray(outputs?.images) ? outputs.images : [];
+    const imagePaths = Array.isArray(outputs?.image_paths) ? outputs.image_paths : [];
+    const resultCount = Math.max(images.length, imagePaths.length);
+    if (resultCount === 0) {
+        throw new Error(`${providerName} workflow 完成，但没有返回图片结果`);
+    }
+
+    const results = [];
+    for (let index = 0; index < resultCount; index += 1) {
+        results.push(await loadBrowserImageEntry(images[index], imagePaths[index], providerName));
+    }
+    return results;
+}
+
+export async function loadBrowserImageResult(outputs, options = {}) {
+    const results = await loadBrowserImageResults(outputs, options);
+    return results[0];
+}
+
+export function loadGoogleFlowImageResult(outputs) {
+    return loadBrowserImageResult(outputs, { providerName: 'Google Flow 文生图' });
 }
 
 export function buildGoogleFlowImageWorkflowArgs({
@@ -142,12 +183,13 @@ export function buildGoogleFlowImageWorkflowArgs({
     referenceImages = [],
     outputDir,
     timeoutMinutes,
-    flowModel = 'Nano Banana 2'
+    flowModel = 'Nano Banana 2',
+    count = 1
 }) {
     const args = [
         '--prompt', String(prompt).trim(),
         '--aspect-ratio', aspectRatio,
-        '--count', '1',
+        '--count', String(normalizeGoogleFlowImageCount(count)),
         '--model', flowModel,
         '--output-dir', outputDir,
         '--timeout-minutes', String(timeoutMinutes)
@@ -165,12 +207,14 @@ async function executeGoogleFlowImageWorkflow({
     referenceImageInputs = [],
     libraryDir,
     timeoutMinutes = 10,
-    modelId
+    modelId,
+    count = 1
 }) {
     if (!String(prompt || '').trim()) throw new Error('Google Flow 图片提示词不能为空');
     if (!GOOGLE_FLOW_IMAGE_SUPPORTED_ASPECT_RATIOS.includes(aspectRatio)) {
         throw new Error('Google Flow 文生图画面比例只支持 16:9、4:3、1:1、3:4 或 9:16');
     }
+    const normalizedCount = normalizeGoogleFlowImageCount(count);
 
     const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-google-flow-image-'));
     try {
@@ -187,12 +231,22 @@ async function executeGoogleFlowImageWorkflow({
                     referenceImages,
                     outputDir,
                     timeoutMinutes,
-                    flowModel: resolveGoogleFlowImageModelName(modelId)
+                    flowModel: resolveGoogleFlowImageModelName(modelId),
+                    count: normalizedCount
                 })
             ]
         });
-        const result = await loadGoogleFlowImageResult(data);
-        return { ...result, runId };
+        const images = await loadBrowserImageResults(data, { providerName: 'Google Flow 文生图' });
+        // Keep the legacy first-image fields for product-scene jobs and other
+        // single-image callers while exposing the complete batch to the
+        // generation route.
+        return {
+            images,
+            buffer: images[0].buffer,
+            extension: images[0].extension,
+            source: images[0].source,
+            runId
+        };
     } finally {
         fs.rmSync(taskDir, { recursive: true, force: true });
     }

@@ -50,6 +50,12 @@ export interface HistoryState {
     imageUrl?: string; // Current image URL (for crop undo/redo)
 }
 
+export interface ImageGenerationSettings {
+    imageModel: string;
+    aspectRatio: string;
+    resolution: string;
+}
+
 /**
  * Props for the main ImageEditorModal component
  */
@@ -61,12 +67,18 @@ export interface ImageEditorModalProps {
     initialModel?: string;
     initialAspectRatio?: string;
     initialResolution?: string;
+    initialGenerationCount?: number;
     initialElements?: EditorElement[];
     initialCanvasData?: string;
     initialCanvasSize?: { width: number; height: number };
     initialBackgroundUrl?: string; // Original/clean image for editing
     onClose: () => void;
-    onGenerate: (id: string, prompt: string, count: number) => void;
+    onGenerate: (
+        id: string,
+        prompt: string,
+        count: number,
+        settings: ImageGenerationSettings
+    ) => void;
     onUpdate: (id: string, updates: any) => void;
 }
 
@@ -89,13 +101,15 @@ export interface ImageModel {
 
 /**
  * Available image generation models
- * Browser workflow models support reference images through Google Flow.
+ * Browser workflow models support reference images through Google Flow or 即梦.
  */
 export const IMAGE_MODELS: ImageModel[] = [
     { id: 'codex-imagegen', name: 'Codex 生图', provider: 'codex', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["Auto"], aspectRatios: ["Auto", "1:1", "9:16", "16:9", "3:4", "4:3", "3:2", "2:3", "5:4", "4:5", "21:9"] },
     { id: 'google-flow-nano-banana-pro', name: 'Google Flow · Nano Banana Pro', provider: 'workflow', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["自动"], aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"] },
     { id: 'google-flow-nano-banana-2', name: 'Google Flow · Nano Banana 2', provider: 'workflow', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["自动"], aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"] },
     { id: 'google-flow-nano-banana-2-lite', name: 'Google Flow · Nano Banana 2 Lite', provider: 'workflow', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["自动"], aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"] },
+    { id: 'jimeng-image-5-0-pro', name: '即梦 · 图片 5.0 Pro', provider: 'workflow', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["2K", "4K"], aspectRatios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"] },
+    { id: 'jimeng-image-5-0-lite', name: '即梦 · 图片 5.0 Lite', provider: 'workflow', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["2K", "4K"], aspectRatios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"] },
 ];
 
 /**

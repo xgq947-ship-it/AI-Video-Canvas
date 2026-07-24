@@ -29,18 +29,12 @@ dist-ssr
 #env
 .env
 
-# Local review and generated launcher artifacts
+# Local review artifacts
 .superpowers/
-launcher-native/.build/
-TwitCanva工作台.app/
-Evan工作台.app/
 
 
 # data
 library/
-
-# docs
-docs/cloud_migration_plan.md
 
 # Python virtual environment (local models)
 venv/
@@ -57,6 +51,12 @@ models/
 
 # 浏览器自动化 Python 运行时（由 npm run setup:browser-models 生成）
 server/python/.venv/
+# 与固定 Playwright 版本匹配的 Chromium，由 setup / 发布流水线下载后打包
+server/python/.browsers/
+desktop-runtime/
+release/
+# 桌面图标由 scripts/generate-desktop-icons.mjs 从品牌 PNG 生成
+build/
 server/python/logs/
 server/python/runtime/
 server/python/output/

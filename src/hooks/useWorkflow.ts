@@ -11,10 +11,13 @@ import { computeFitViewport } from '@/shared/canvasCoords.js';
 import { ZOOM_MIN } from '@/shared/zoom.js';
 import { getNodeHeight, getNodeWidth } from '../components/canvas/ConnectionsLayer';
 import { getCanvasRect } from '../utils/canvasRect';
+import { mergeServerNormalizedNodes } from '../utils/workflowSave.js';
 
 interface WorkflowData {
     id: string | null;
     title: string;
+    projectDirName?: string;
+    projectPath?: string;
     nodes: NodeData[];
     groups: NodeGroup[];
     viewport: Viewport;
@@ -56,50 +59,64 @@ export const useWorkflow = ({
     const [projectDirName, setProjectDirName] = useState<string | null>(null);
     const [isWorkflowPanelOpen, setIsWorkflowPanelOpen] = useState(false);
     const [workflowPanelY, setWorkflowPanelY] = useState(0);
+    const workflowIdRef = React.useRef<string | null>(workflowId);
+    const latestWorkflowRef = React.useRef({ nodes, groups, viewport, canvasTitle });
+    const saveQueueRef = React.useRef<Promise<void>>(Promise.resolve());
+    workflowIdRef.current = workflowId;
+    latestWorkflowRef.current = { nodes, groups, viewport, canvasTitle };
 
     /**
      * Save current workflow to server
      */
-    const handleSaveWorkflow = useCallback(async () => {
-        try {
+    const handleSaveWorkflow = useCallback(() => {
+        // Freeze the canvas snapshot at the moment the user/auto-save requested
+        // the save. Requests themselves are serialized so an older request can
+        // never finish writing after a newer one.
+        const snapshot = latestWorkflowRef.current;
+        const save = saveQueueRef.current.catch(() => undefined).then(async () => {
             const workflow: WorkflowData = {
-                id: workflowId,
-                title: canvasTitle,
-                nodes,
-                groups,
-                viewport
+                id: workflowIdRef.current,
+                title: snapshot.canvasTitle,
+                nodes: snapshot.nodes,
+                groups: snapshot.groups,
+                viewport: snapshot.viewport
             };
 
-            const response = await fetch('http://localhost:3001/api/workflows', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(workflow)
-            });
+            try {
+                const response = await fetch('/api/workflows', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(workflow)
+                });
 
-            const result = await response.json().catch(() => ({}));
-            if (!response.ok) {
-                throw new Error(result.error || '项目保存失败');
-            }
-            if (response.ok) {
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(result.error || '项目保存失败');
+                }
+                workflowIdRef.current = result.id;
                 setWorkflowId(result.id);
                 if (result.projectDirName) setProjectDirName(result.projectDirName);
                 console.log('Workflow saved:', result.id);
 
-                // Server converts any base64 image/video data into saved files and,
-                // when it did so, sends the updated nodes back. Write those back into
-                // local state so the base64 is dropped from memory — otherwise the same
-                // base64 would still be sent (and re-saved as a brand new file) on the
-                // very next save.
+                // The server may normalize base64 or cross-project media URLs. Merge
+                // only those URL changes into the latest state; never replace nodes,
+                // statuses or generation results with this request's old snapshot.
                 if (Array.isArray(result.nodes)) {
                     if (ignoreNextChangeRef) ignoreNextChangeRef.current = true;
-                    setNodes(result.nodes);
+                    setNodes(currentNodes => mergeServerNormalizedNodes(
+                        currentNodes,
+                        snapshot.nodes,
+                        result.nodes
+                    ));
                 }
+            } catch (error) {
+                console.error('Failed to save workflow:', error);
+                throw error;
             }
-        } catch (error) {
-            console.error('Failed to save workflow:', error);
-            throw error;
-        }
-    }, [workflowId, canvasTitle, nodes, groups, viewport, setNodes, ignoreNextChangeRef]);
+        });
+        saveQueueRef.current = save;
+        return save;
+    }, [setNodes, ignoreNextChangeRef]);
 
     /**
      * Load workflow from server
@@ -112,8 +129,8 @@ export const useWorkflow = ({
             const isPublic = id.startsWith('public:');
             const workflowId = isPublic ? id.replace('public:', '') : id;
             const endpoint = isPublic
-                ? `http://localhost:3001/api/public-workflows/${workflowId}`
-                : `http://localhost:3001/api/workflows/${workflowId}`;
+                ? `/api/public-workflows/${workflowId}`
+                : `/api/workflows/${workflowId}`;
 
             const response = await fetch(endpoint);
             if (response.ok) {
@@ -121,9 +138,11 @@ export const useWorkflow = ({
 
                 // For public workflows, don't set the workflowId so it saves as a new workflow
                 if (!isPublic) {
+                    workflowIdRef.current = workflow.id;
                     setWorkflowId(workflow.id);
                     setProjectDirName(workflow.projectDirName || null);
                 } else {
+                    workflowIdRef.current = null;
                     setWorkflowId(null); // New copy, not linked to public workflow
                     setProjectDirName(null);
                 }
@@ -195,11 +214,23 @@ export const useWorkflow = ({
      * Reset workflow ID (for creating a new canvas)
      */
     const resetWorkflowId = useCallback(() => {
+        workflowIdRef.current = null;
         setWorkflowId(null);
         setProjectDirName(null);
     }, []);
 
-    const handleCreateWorkflow = useCallback(async (title: string) => {
+    const handleCreateWorkflow = useCallback(async (title: string, locationId?: string | null) => {
+        if (locationId) {
+            if (!window.evanDesktop?.createProject) {
+                throw new Error('自定义项目路径仅在 Evan 桌面应用中可用');
+            }
+            const data = await window.evanDesktop.createProject({ title, locationId });
+            workflowIdRef.current = data.id;
+            setWorkflowId(data.id);
+            setProjectDirName(data.projectDirName || null);
+            return data as WorkflowData;
+        }
+
         const response = await fetch('/api/projects', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -207,9 +238,10 @@ export const useWorkflow = ({
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || '项目创建失败');
+        workflowIdRef.current = data.id;
         setWorkflowId(data.id);
         setProjectDirName(data.projectDirName || null);
-        return data as WorkflowData & { projectDirName?: string };
+        return data as WorkflowData;
     }, []);
 
     return {

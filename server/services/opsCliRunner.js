@@ -12,30 +12,108 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const SERVICES_DIR = path.dirname(fileURLToPath(import.meta.url));
+import { RUNTIME_PATHS } from '../runtime/paths.js';
+import {
+    browserSessionState,
+    browserStateForError,
+    inferBrowserProvider
+} from './browserSessionState.js';
 
 /** server/python —— 内置 Python 运行时根目录。 */
-export const PYTHON_ROOT = path.resolve(SERVICES_DIR, '..', 'python');
+export const PYTHON_ROOT = RUNTIME_PATHS.pythonRoot;
 
 /**
  * venv 解释器路径。Windows 是 Scripts\python.exe，其余平台是 bin/python。
  * 与项目内其它 Python 调用点保持一致的跨平台写法。
  */
 export function resolveOpsPython() {
+    const configured = String(process.env.EVAN_OPS_PYTHON || '').trim();
+    if (configured) return path.resolve(RUNTIME_PATHS.resourcesDir, configured);
     return process.platform === 'win32'
         ? path.join(PYTHON_ROOT, '.venv', 'Scripts', 'python.exe')
         : path.join(PYTHON_ROOT, '.venv', 'bin', 'python');
 }
 
+export function resolveOpsExecutable() {
+    const configured = String(process.env.EVAN_OPS_EXECUTABLE || '').trim();
+    return configured ? path.resolve(RUNTIME_PATHS.resourcesDir, configured) : null;
+}
+
 /** 浏览器自动化环境是否已就绪（未就绪时相关模型应置灰而非报 500）。 */
 export function isBrowserModelsReady() {
-    return fs.existsSync(resolveOpsPython());
+    const executable = resolveOpsExecutable();
+    return executable ? fs.existsSync(executable) : fs.existsSync(resolveOpsPython());
 }
 
 export const BROWSER_MODELS_SETUP_HINT =
     '浏览器自动化模型（Google Flow / 即梦）尚未配置。请先运行：npm run setup:browser-models';
+
+const BROWSER_IDLE_CLOSE_MS = Number(process.env.EVAN_BROWSER_IDLE_CLOSE_MS) || 120_000;
+const BROWSER_LOGIN_IDLE_CLOSE_MS =
+    Number(process.env.EVAN_BROWSER_LOGIN_IDLE_CLOSE_MS) || 15 * 60_000;
+
+let activeBrowserOperations = 0;
+let browserIdleTimer = null;
+
+function opsEnvironment() {
+    return {
+        ...process.env,
+        PYTHONUNBUFFERED: '1',
+        PYTHONPATH: [PYTHON_ROOT, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+        EVAN_DATA_DIR: RUNTIME_PATHS.dataDir,
+        EVAN_RUNTIME_DIR: RUNTIME_PATHS.runtimeDir,
+        EVAN_BROWSER_PROFILE_DIR: RUNTIME_PATHS.browserProfileDir,
+        SESSIONHUB_CHROME_PROFILE: RUNTIME_PATHS.browserProfileDir,
+        SESSIONHUB_CDP_PORT: process.env.SESSIONHUB_CDP_PORT || '19222',
+        PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH
+            || path.join(PYTHON_ROOT, '.browsers'),
+        // Automated desktop generation must stay silent. Foreground browser
+        // commands (`browser open` / `browser login`) already request a visible
+        // window explicitly, so the backend must not globally force auth
+        // recovery popups for every Flow/Jimeng subprocess.
+        OPS_FORCE_LOGIN_POPUP: process.env.OPS_FORCE_LOGIN_POPUP,
+        PYTHONIOENCODING: 'utf-8',
+        NO_COLOR: '1'
+    };
+}
+
+function clearBrowserIdleTimer() {
+    if (!browserIdleTimer) return;
+    clearTimeout(browserIdleTimer);
+    browserIdleTimer = null;
+}
+
+function closeIdleBrowser() {
+    if (activeBrowserOperations > 0) return;
+    const executable = resolveOpsExecutable();
+    const command = executable || resolveOpsPython();
+    const commandArgs = executable
+        ? ['--json', 'browser', 'close']
+        : ['-m', 'ops_cli', '--json', 'browser', 'close'];
+    const child = spawn(command, commandArgs, {
+        cwd: PYTHON_ROOT,
+        env: opsEnvironment(),
+        detached: true,
+        stdio: 'ignore'
+    });
+    child.unref();
+}
+
+function beginBrowserOperation() {
+    clearBrowserIdleTimer();
+    activeBrowserOperations += 1;
+}
+
+function finishBrowserOperation(idleDelayMs) {
+    activeBrowserOperations = Math.max(0, activeBrowserOperations - 1);
+    if (activeBrowserOperations > 0) return;
+    clearBrowserIdleTimer();
+    browserIdleTimer = setTimeout(() => {
+        browserIdleTimer = null;
+        closeIdleBrowser();
+    }, idleDelayMs);
+    browserIdleTimer.unref();
+}
 
 function ensureReady() {
     if (!isBrowserModelsReady()) {
@@ -97,25 +175,48 @@ function deriveRunId(data) {
  * @param {number}   params.timeoutMs
  * @param {string}   params.label  失败信息前缀，如 '即梦视频生成'
  */
-export function runOpsCli({ args, timeoutMs, label }) {
-    ensureReady();
-    const python = resolveOpsPython();
+export function runOpsCli({
+    args,
+    timeoutMs,
+    label,
+    initialSessionState = 'checking',
+    successSessionState = 'authenticated'
+}) {
+    const provider = inferBrowserProvider(args);
+    const tracksBrowser = Boolean(provider) || args[0] === 'browser';
+    try {
+        ensureReady();
+    } catch (error) {
+        const state = browserStateForError(error);
+        if (provider && state) {
+            browserSessionState.transition(provider, state, {
+                errorCode: error.code,
+                message: error.message
+            });
+        }
+        throw error;
+    }
+    const executable = resolveOpsExecutable();
+    const command = executable || resolveOpsPython();
+    const commandArgs = executable
+        ? ['--json', ...args]
+        : ['-m', 'ops_cli', '--json', ...args];
+    const idleDelayMs = args.includes('login') || args.includes('open')
+        ? BROWSER_LOGIN_IDLE_CLOSE_MS
+        : BROWSER_IDLE_CLOSE_MS;
 
     return new Promise((resolve, reject) => {
-        const child = spawn(python, ['-m', 'ops_cli', '--json', ...args], {
+        if (tracksBrowser) beginBrowserOperation();
+        let browserOperationFinished = false;
+        const finishTrackedBrowserOperation = () => {
+            if (!tracksBrowser || browserOperationFinished) return;
+            browserOperationFinished = true;
+            finishBrowserOperation(idleDelayMs);
+        };
+        if (provider) browserSessionState.transition(provider, initialSessionState);
+        const child = spawn(command, commandArgs, {
             cwd: PYTHON_ROOT,
-            env: {
-                ...process.env,
-                PYTHONUNBUFFERED: '1',
-                PYTHONPATH: PYTHON_ROOT,
-                // 强制 Python 用 UTF-8 读写 stdio。
-                // 不设的话，Python 在管道模式下按系统 locale 编码输出，
-                // 中文 Windows 是 cp936(GBK)，而下面按 UTF-8 解，
-                // 报错里的中文会变成「DURATION_NOT_SUPPORTED��x��δ�s��」这种乱码。
-                PYTHONIOENCODING: 'utf-8',
-                // 服务端调用无 tty，Python 侧据此保持静默、不抢前台。
-                NO_COLOR: '1'
-            },
+            env: opsEnvironment(),
             stdio: ['ignore', 'pipe', 'pipe']
         });
 
@@ -126,7 +227,16 @@ export function runOpsCli({ args, timeoutMs, label }) {
         const timer = setTimeout(() => {
             timedOut = true;
             child.kill('SIGTERM');
-            reject(new Error(`${label}执行超时`));
+            const error = new Error(`${label}执行超时`);
+            error.code = 'OPS_TIMEOUT';
+            if (provider) {
+                browserSessionState.transition(provider, 'unknown', {
+                    errorCode: error.code,
+                    message: error.message
+                });
+            }
+            finishTrackedBrowserOperation();
+            reject(error);
         }, timeoutMs);
 
         child.stdout.on('data', chunk => { stdout += chunk.toString(); });
@@ -134,7 +244,16 @@ export function runOpsCli({ args, timeoutMs, label }) {
 
         child.on('error', error => {
             clearTimeout(timer);
-            reject(new Error(`${label}无法启动 Python 进程：${error.message}`));
+            const wrapped = new Error(`${label}无法启动 Python 进程：${error.message}`);
+            wrapped.code = 'BROWSER_MODELS_NOT_READY';
+            if (provider) {
+                browserSessionState.transition(provider, 'browser_unavailable', {
+                    errorCode: wrapped.code,
+                    message: wrapped.message
+                });
+            }
+            finishTrackedBrowserOperation();
+            reject(wrapped);
         });
 
         child.on('close', code => {
@@ -146,23 +265,54 @@ export function runOpsCli({ args, timeoutMs, label }) {
                 payload = extractOpsJson(stdout);
             } catch (error) {
                 const detail = stderr.trim() || `进程退出码 ${code}`;
-                reject(new Error(`${label}失败：${detail}`));
+                const wrapped = new Error(`${label}失败：${detail}`);
+                if (provider) {
+                    browserSessionState.transition(provider, 'unknown', {
+                        errorCode: 'INVALID_CLI_RESPONSE',
+                        message: wrapped.message
+                    });
+                }
+                finishTrackedBrowserOperation();
+                reject(wrapped);
                 return;
             }
 
             const data = payload?.data || {};
             if (code !== 0 || payload?.success !== true) {
                 // Python 侧已把登录失效等归类成结构化 error_code + recovery_hint，
-                // 这里原样透出，用户才知道该去 9222 浏览器登录，而不是看到一串堆栈。
+                // 这里原样透出，让用户打开内置浏览器登录，而不是看到一串堆栈。
                 const parts = [data.error || stderr.trim() || `进程退出码 ${code}`];
                 if (data.recovery_hint) parts.push(data.recovery_hint);
                 const error = new Error(`${label}失败：${parts.join('　')}`);
                 if (data.error_code) error.code = data.error_code;
+                const state = browserStateForError(error);
+                if (provider && state) {
+                    browserSessionState.transition(provider, state, {
+                        errorCode: error.code,
+                        message: error.message
+                    });
+                } else if (provider) {
+                    browserSessionState.transition(provider, 'unknown', {
+                        errorCode: error.code || 'OPS_FAILED',
+                        message: error.message
+                    });
+                }
+                finishTrackedBrowserOperation();
                 reject(error);
                 return;
             }
 
+            if (provider) browserSessionState.transition(provider, successSessionState);
+            finishTrackedBrowserOperation();
             resolve({ data, runId: deriveRunId(data) });
         });
     });
 }
+
+// If the previous app session was interrupted while the dedicated browser was
+// still open, reclaim it after the normal idle window unless a new task starts.
+browserIdleTimer = setTimeout(() => {
+    browserIdleTimer = null;
+    closeIdleBrowser();
+}, BROWSER_IDLE_CLOSE_MS);
+browserIdleTimer.unref();

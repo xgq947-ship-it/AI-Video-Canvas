@@ -1,7 +1,7 @@
 """即梦（jimeng.jianying.com）Seedance 视频生成 provider（image-to-video 能力）。
 
-通过可见的 9222 浏览器驱动即梦「视频生成」页面 UI，不调用未公开 API，也不读取或
-持久化即梦的 cookie / token / storage。9222 浏览器运行时与产物下载复用
+通过 Evan 内置浏览器驱动即梦「视频生成」页面 UI，不调用未公开 API，也不读取或
+持久化即梦的 cookie / token / storage。浏览器运行时与产物下载复用
 `ops_cli.platforms._google_flow_common` 中与站点无关的基座函数；页面 selector 与
 交互流程全部是即梦自己的，不与 Google Flow 共用。
 
@@ -225,7 +225,7 @@ def _response_data(
 
 
 def _raise_auth_required(message: str) -> None:
-    """登录失效走 Ops-Cli 统一 AUTH_REQUIRED 出口，并把 9222 浏览器切到前台。"""
+    """登录失效走统一 AUTH_REQUIRED 出口；后台任务不主动弹出浏览器。"""
     try:
         _bring_login_browser_to_front()
     except Exception:
@@ -235,7 +235,7 @@ def _raise_auth_required(message: str) -> None:
         "AUTH_REQUIRED",
         message,
         retryable=True,
-        recovery_hint="请在 9222 浏览器中登录 jimeng.jianying.com 后重试。",
+        recovery_hint="请在应用打开的内置浏览器中登录 jimeng.jianying.com 后重试。",
     )
 
 
@@ -250,7 +250,7 @@ def _ensure_composer(page: Any, *, timeout_seconds: int = 90) -> None:
     while time.monotonic() < deadline:
         current = (page.url or "").lower()
         if "login" in current or "passport" in current:
-            _raise_auth_required("即梦已跳转到登录页，当前 9222 浏览器未登录即梦。")
+            _raise_auth_required("即梦已跳转到登录页，当前内置浏览器未登录即梦。")
         if JIMENG_HOST not in current:
             raise JimengError("PAGE_NAVIGATION_FAILED", f"页面已离开即梦域名：{page.url}", retryable=True)
         try:
@@ -262,7 +262,7 @@ def _ensure_composer(page: Any, *, timeout_seconds: int = 90) -> None:
             # 编辑器没挂上、同时页面弹着登录框：这才是真掉登录（即梦有时不跳 URL，
             # 只弹扫码框）。其余情况仍按冷启动处理，宁可误判「加载慢」也不误报掉登录。
             if _login_dialog_visible(page):
-                _raise_auth_required("即梦弹出了登录框，当前 9222 浏览器未登录即梦。")
+                _raise_auth_required("即梦弹出了登录框，当前内置浏览器未登录即梦。")
         except JimengError:
             raise
         except Exception:
@@ -715,11 +715,11 @@ def _wait_for_videos(
             if any(marker in str(exc) for marker in FATAL_PAGE_MARKERS):
                 raise JimengError(
                     "BROWSER_CLOSED",
-                    "等待生成结果期间，9222 浏览器或即梦标签页被关闭了。",
+                    "等待生成结果期间，内置浏览器或即梦标签页被关闭了。",
                     retryable=False,
                     recovery_hint=(
                         "任务可能已提交到即梦，请先到即梦历史会话里确认结果，避免重复生成扣积分；"
-                        "重试前请保持 9222 浏览器和即梦标签页开着。"
+                        "重试前请保持内置浏览器和即梦标签页开着。"
                     ),
                 ) from exc
             # 单次 DOM 读取抖动不应中断长任务（中断会导致重复提交、重复扣积分）。

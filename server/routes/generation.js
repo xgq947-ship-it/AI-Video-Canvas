@@ -12,7 +12,8 @@ import { generateGeminiImage, generateVeoVideo } from '../services/gemini.js';
 import { generateSeedanceVideo } from '../services/seedance.js';
 import { generateGoogleFlowWorkflowVideo, isGoogleFlowWorkflowModelId } from '../services/googleFlowWorkflow.js';
 import { generateJimengWorkflowVideo, isJimengWorkflowModelId, resolveJimengModelLabel } from '../services/jimengVideoWorkflow.js';
-import { generateGoogleFlowWorkflowImage, GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID, isGoogleFlowImageWorkflowModel } from '../services/googleFlowImageWorkflow.js';
+import { generateGoogleFlowWorkflowImage, isGoogleFlowImageWorkflowModel } from '../services/googleFlowImageWorkflow.js';
+import { generateJimengWorkflowImage, isJimengImageWorkflowModel } from '../services/jimengImageWorkflow.js';
 import { generateOpenAIImage } from '../services/openai.js';
 import { resolveAudioToBase64, resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
 import { resolveProjectMediaTarget } from '../utils/projectAssets.js';
@@ -71,7 +72,16 @@ router.get('/product-scene-jobs/:jobId', (req, res) => {
 
 router.post('/generate-image', async (req, res) => {
     try {
-        const { nodeId, workflowId, prompt, aspectRatio, resolution, imageBase64: rawImageBase64, imageModel } = req.body;
+        const {
+            nodeId,
+            workflowId,
+            prompt,
+            aspectRatio,
+            resolution,
+            imageBase64: rawImageBase64,
+            imageModel,
+            count: rawCount
+        } = req.body;
         const { GEMINI_API_KEY, OPENAI_API_KEY, LIBRARY_DIR, WORKFLOWS_DIR, PROJECTS_DIR } = req.app.locals;
         const { targetDir, urlPrefix } = resolveProjectMediaTarget(workflowId, 'images', {
             workflowsDir: WORKFLOWS_DIR,
@@ -85,27 +95,43 @@ router.post('/generate-image', async (req, res) => {
         // Determine provider
         const isOpenAIModel = imageModel && imageModel.startsWith('gpt-image-');
         const isGoogleFlowWorkflowModel = isGoogleFlowImageWorkflowModel(imageModel);
+        const isJimengWorkflowModel = isJimengImageWorkflowModel(imageModel);
+        const requestedCount = rawCount === undefined ? 1 : Number(rawCount);
+        if (!Number.isInteger(requestedCount) || requestedCount < 1) {
+            return res.status(400).json({ error: '图片生成数量必须是正整数' });
+        }
+        if ((isJimengWorkflowModel || isGoogleFlowWorkflowModel) && requestedCount > 4) {
+            return res.status(400).json({ error: '浏览器图片模型单次生成数量最多为 4 张' });
+        }
+        if (!isJimengWorkflowModel && !isGoogleFlowWorkflowModel && requestedCount !== 1) {
+            return res.status(400).json({ error: '当前图片模型暂不支持单次多图生成' });
+        }
 
         let imageBuffer;
         let imageFormat = 'png';
+        let workflowImages = null;
 
-        if (isGoogleFlowWorkflowModel) {
-            // --- GOOGLE FLOW LOCAL TEXT-TO-IMAGE WORKFLOW ---
+        if (isGoogleFlowWorkflowModel || isJimengWorkflowModel) {
+            // --- LOCAL BROWSER TEXT-TO-IMAGE WORKFLOW (FLOW / 即梦) ---
             const referenceImages = rawImageBase64
                 ? (Array.isArray(rawImageBase64) ? rawImageBase64 : [rawImageBase64]).filter(Boolean)
                 : [];
 
-            console.log(`Using Google Flow workflow for image: ${imageModel}`);
-            const result = await generateGoogleFlowWorkflowImage({
+            console.log(`Using browser workflow for image: ${imageModel}`);
+            const workflow = isJimengWorkflowModel
+                ? generateJimengWorkflowImage
+                : generateGoogleFlowWorkflowImage;
+            const result = await workflow({
                 prompt,
                 aspectRatio: aspectRatio || '1:1',
+                resolution: resolution || '2K',
                 referenceImageInputs: referenceImages,
                 libraryDir: LIBRARY_DIR,
                 timeoutMinutes: 10,
-                modelId: imageModel
+                modelId: imageModel,
+                count: requestedCount
             });
-            imageBuffer = result.buffer;
-            imageFormat = result.extension;
+            workflowImages = result.images;
         } else if (isOpenAIModel) {
             // --- OPENAI GPT IMAGE GENERATION ---
             if (!OPENAI_API_KEY) {
@@ -152,26 +178,36 @@ router.post('/generate-image', async (req, res) => {
             });
         }
 
-        // Save to library - use unique filename to preserve previous generations
-        const saved = saveBufferToFile(imageBuffer, targetDir, 'img', imageFormat);
-        const resultUrl = `${urlPrefix}/${saved.filename}`;
+        const generatedImages = workflowImages || [{ buffer: imageBuffer, extension: imageFormat }];
+        const resultUrls = generatedImages.map((image, index) => {
+            const saved = saveBufferToFile(image.buffer, targetDir, 'img', image.extension || 'png');
+            const resultUrl = `${urlPrefix}/${saved.filename}`;
+            const metadataId = index === 0 && nodeId
+                ? nodeId
+                : nodeId
+                    ? `${nodeId}-${index + 1}-${saved.id}`
+                    : saved.id;
+            const metadata = {
+                id: metadataId,
+                filename: saved.filename,
+                prompt,
+                model: imageModel || 'gemini-pro',
+                batchIndex: index,
+                batchCount: generatedImages.length,
+                createdAt: new Date().toISOString(),
+                type: 'images'
+            };
+            fs.writeFileSync(
+                path.join(targetDir, `${metadataId}.json`),
+                JSON.stringify(metadata, null, 2)
+            );
+            return resultUrl;
+        });
 
-        // Determine metadata ID: use nodeId for recovery if available, otherwise use file ID
-        const metadataId = nodeId || saved.id;
-
-        // Save metadata (id must match the metadata filename for delete to work)
-        const metadata = {
-            id: metadataId,  // Must match the filename for delete API to find it
-            filename: saved.filename,
-            prompt: prompt,
-            model: imageModel || 'gemini-pro',
-            createdAt: new Date().toISOString(),
-            type: 'images'
-        };
-        fs.writeFileSync(path.join(targetDir, `${metadataId}.json`), JSON.stringify(metadata, null, 2));
-
-        console.log(`Image saved: ${resultUrl} (model: ${imageModel || 'gemini-pro'})`);
-        return res.json({ resultUrl });
+        console.log(
+            `${resultUrls.length} image(s) saved (model: ${imageModel || 'gemini-pro'})`
+        );
+        return res.json({ resultUrl: resultUrls[0], resultUrls });
 
     } catch (error) {
         console.error("Server Image Gen Error:", error);
@@ -201,7 +237,7 @@ router.post('/generate-video', async (req, res) => {
         const isSeedanceModel = videoModel && videoModel.startsWith('seedance-');
         const isGoogleFlowWorkflowModel = isGoogleFlowWorkflowModelId(videoModel);
         const isJimengWorkflowModel = isJimengWorkflowModelId(videoModel);
-        // 两个 provider 都走本地 9222 页面 workflow：输入是真实文件路径而非 base64。
+        // 两个 provider 都走内置浏览器 workflow：输入是真实文件路径而非 base64。
         const isBrowserWorkflowModel = isGoogleFlowWorkflowModel || isJimengWorkflowModel;
 
         // 页面 workflow 需要真实首帧路径；其他供应商继续使用 base64 输入。

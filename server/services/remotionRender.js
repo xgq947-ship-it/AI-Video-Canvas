@@ -12,6 +12,8 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { validateManifestShape, computeTotalDurationSec } from '../../shared/manifest.js';
 import { findMissingAssets } from '../utils/manifestAssets.js';
+import { FFMPEG_PATH } from '../runtime/mediaTools.js';
+import { resolveBundledBrowserExecutable } from '../runtime/browserExecutable.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,7 +39,7 @@ const ffmpegMaster = (inputPath, outputPath, onLog) =>
       '-movflags', '+faststart',
       outputPath,
     ];
-    const proc = spawn('ffmpeg', args);
+    const proc = spawn(FFMPEG_PATH, args);
     let stderr = '';
     proc.stderr.on('data', (d) => {
       stderr += d.toString();
@@ -91,9 +93,17 @@ export const renderManifest = async ({
   // 3) 动态载入重依赖
   const { bundle } = await import('@remotion/bundler');
   const { selectComposition, renderMedia, ensureBrowser } = await import('@remotion/renderer');
+  const browserExecutable = resolveBundledBrowserExecutable();
+  if (!browserExecutable) {
+    throw new Error('未找到 Evan 内置 Chromium；源码开发请运行 npm run setup:browser-models');
+  }
+  const browserOptions = {
+    browserExecutable,
+    chromeMode: 'chrome-for-testing',
+  };
 
   report('preparing', 0.01);
-  await ensureBrowser();
+  await ensureBrowser(browserOptions);
 
   // 4) 打包（首次）
   if (!cachedServeUrl) {
@@ -114,6 +124,7 @@ export const renderManifest = async ({
     serveUrl: cachedServeUrl,
     id: 'Manga',
     inputProps,
+    ...browserOptions,
   });
 
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -132,6 +143,7 @@ export const renderManifest = async ({
     outputLocation: renderTarget,
     inputProps,
     cancelSignal,
+    ...browserOptions,
     onProgress: ({ progress }) => {
       report('rendering', 0.12 + progress * (master ? 0.78 : 0.86));
       if (Math.round(progress * 100) % 10 === 0) log(`render ${(progress * 100).toFixed(0)}%`);

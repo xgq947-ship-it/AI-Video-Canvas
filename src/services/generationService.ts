@@ -15,6 +15,7 @@ export interface GenerateImageParams {
   imageBase64?: string | string[]; // Supports single image or array of images
   imageModel?: string; // Image model version
   nodeId?: string; // ID of the node initiating generation
+  count?: number; // Batch size for providers that support one-request multi-image generation
 }
 
 export interface GenerateVideoParams {
@@ -167,7 +168,7 @@ export const getCodexImageJob = async (jobId: string): Promise<CodexImageJob> =>
 /**
  * Generates an image by calling the backend API
  */
-export const generateImage = async (params: GenerateImageParams): Promise<string> => {
+export const generateImageBatch = async (params: GenerateImageParams): Promise<string[]> => {
   try {
     const response = await fetch('/api/generate-image', {
       method: 'POST',
@@ -181,15 +182,25 @@ export const generateImage = async (params: GenerateImageParams): Promise<string
     }
 
     const data = await response.json();
-    if (!data.resultUrl) {
+    const resultUrls = Array.isArray(data.resultUrls)
+      ? data.resultUrls.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0)
+      : data.resultUrl
+        ? [data.resultUrl]
+        : [];
+    if (resultUrls.length === 0) {
       throw new Error("No image data returned from server");
     }
-    return data.resultUrl;
+    return resultUrls;
 
   } catch (error) {
     console.error("Image Generation Error:", error);
     throw error;
   }
+};
+
+export const generateImage = async (params: GenerateImageParams): Promise<string> => {
+  const resultUrls = await generateImageBatch({ ...params, count: 1 });
+  return resultUrls[0];
 };
 
 /**

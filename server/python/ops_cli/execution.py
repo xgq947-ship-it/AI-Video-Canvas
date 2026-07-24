@@ -102,7 +102,7 @@ def _classify_error(exc: Exception) -> tuple[str, bool, str | None]:
     if any(word in lowered for word in ("auth", "session", "cookie", "401", "403", "unauthorized")) or any(
         word in text for word in ("登录", "鉴权", "scene 不可用", "Scene 校验")
     ):
-        return "AUTH_REQUIRED", True, "请在交互终端执行同一命令，脚本会打开 9222 浏览器等待登录后继续。"
+        return "AUTH_REQUIRED", True, "请在应用打开的内置浏览器中完成登录后重试。"
     if "捕获" in text or "复检" in text or "capture" in lowered:
         return "SCENE_CAPTURE_FAILED", True, "请在交互终端执行同一命令，完成登录后由脚本重新捕获 scene。"
     if any(word in text for word in ("Excel", "xlsx", "下载内容不是合法", "下载内容为空", "文件不存在")):

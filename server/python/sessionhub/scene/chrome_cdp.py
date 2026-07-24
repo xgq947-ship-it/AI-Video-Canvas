@@ -15,60 +15,39 @@ from pathlib import Path
 
 
 CDP_HOST = "127.0.0.1"
-CDP_PORT = 9222
+CDP_PORT = int(os.environ.get("SESSIONHUB_CDP_PORT", "19222"))
 CDP_URL = f"http://{CDP_HOST}:{CDP_PORT}"
-# 专用浏览器渠道：默认用 Chrome Beta。它的 bundle id 独立（com.google.Chrome.beta），
-# 与日常 Stable Chrome 从系统层面隔离，双击 .html / 点链接不会误投到本自动化实例。
-# 可用 SESSIONHUB_CHROME_BUNDLE / _APP / _PROFILE 环境变量覆盖以切换渠道或路径。
+# The desktop distribution bundles the Chromium revision matched to Playwright.
+# SESSIONHUB_CHROME_APP remains as an explicit development/diagnostic override.
 IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
 
-CHROME_APP_NAME = os.environ.get("SESSIONHUB_CHROME_BUNDLE", "Google Chrome Beta")
-
 
 def _default_chrome_bin() -> Path:
-    """按平台推导专用浏览器可执行文件。
-
-    macOS 默认用 Chrome Beta（bundle id 独立，与日常 Stable 隔离）。
-    Windows 上一般只装一个 Chrome，按常见安装位置依次探测；探测不到就返回
-    第一个候选，让 start_chrome 报出「找不到 Chrome」并提示用
-    SESSIONHUB_CHROME_APP 指定。
-    """
+    """定位与当前 Playwright 版本成对分发的 Chromium。"""
     override = os.environ.get("SESSIONHUB_CHROME_APP", "").strip()
     if override:
         return Path(override)
 
-    if IS_MACOS:
-        return Path(f"/Applications/{CHROME_APP_NAME}.app/Contents/MacOS/{CHROME_APP_NAME}")
+    # Playwright calculates the revision-specific executable from
+    # PLAYWRIGHT_BROWSERS_PATH. Using the paired browser avoids protocol drift
+    # from independently updating system Chrome/Beta.
+    try:
+        from playwright.sync_api import sync_playwright  # type: ignore
 
-    if IS_WINDOWS:
-        roots = [
-            Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")),
-            Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")),
-            Path(os.environ.get("LOCALAPPDATA", "")),
-        ]
-        # Beta 优先：Windows 上窗口隐藏是 no-op（没有 osascript 等价物），
-        # 自动化窗口会一直显示在桌面上。若用与日常同款的 Chrome，用户极易
-        # 把它当成自己的窗口顺手关掉，触发 BROWSER_CLOSED 中断生成。
-        # Beta 图标颜色不同，一眼可辨。找不到 Beta 再回退到普通 Chrome。
-        candidates = [root / "Google/Chrome Beta/Application/chrome.exe" for root in roots]
-        candidates += [root / "Google/Chrome/Application/chrome.exe" for root in roots]
-    else:  # Linux 等
-        candidates = [
-            Path("/usr/bin/google-chrome-beta"),
-            Path("/usr/bin/google-chrome"),
-            Path("/usr/bin/chromium"),
-            Path("/usr/bin/chromium-browser"),
-        ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return candidates[0]
+        playwright = sync_playwright().start()
+        try:
+            bundled = Path(playwright.chromium.executable_path)
+        finally:
+            playwright.stop()
+        return bundled
+    except Exception:
+        browser_root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "."))
+        return browser_root / "chromium-not-installed"
 
 
 CHROME_BIN = _default_chrome_bin()
-# 配置目录名不再带 -beta：非 macOS 上用的是普通 Chrome 渠道。
-_DEFAULT_PROFILE_NAME = "chrome-9222-beta" if IS_MACOS else "chrome-9222"
+_DEFAULT_PROFILE_NAME = "evan-browser"
 PROFILE_DIR = Path(
     os.environ.get(
         "SESSIONHUB_CHROME_PROFILE",
@@ -98,7 +77,7 @@ def is_port_open(host: str = CDP_HOST, port: int = CDP_PORT, timeout: float = 0.
 
 def check_cdp() -> tuple[bool, str]:
     if not is_port_open():
-        return False, "9222 端口未开启，Chrome CDP 未启动。"
+        return False, f"{CDP_PORT} 端口未开启，内置浏览器 CDP 未启动。"
     try:
         with urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=2) as resp:
             info = json.loads(resp.read().decode("utf-8"))
@@ -106,27 +85,20 @@ def check_cdp() -> tuple[bool, str]:
         return True, f"Chrome CDP 可用：{browser}"
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         logging.exception("CDP 连接失败")
-        return False, f"9222 端口存在，但 CDP 响应异常：{exc}"
+        return False, f"{CDP_PORT} 端口存在，但 CDP 响应异常：{exc}"
 
 
 def chrome_start_command() -> str:
-    if IS_MACOS:
-        return (
-            f'open -na "{CHROME_APP_NAME}" --args '
-            f"--remote-debugging-port={CDP_PORT} "
-            f'--user-data-dir="{PROFILE_DIR}" '
-            "--new-window about:blank"
-        )
     return (
         f'"{CHROME_BIN}" '
         f"--remote-debugging-port={CDP_PORT} "
         f'--user-data-dir="{PROFILE_DIR}" '
-        "--no-first-run --no-default-browser-check --new-window about:blank"
+        "--lang=en-US --no-first-run --no-default-browser-check --new-window about:blank"
     )
 
 
 def _foreground_allowed() -> bool:
-    """是否允许把 9222 Chrome 切到前台（弹窗）。
+    """是否允许把内置浏览器切到前台（弹窗）。
 
     仅当有人正坐在终端前（stdin 是 tty）才允许弹窗：终端直跑 ops / learn 登录时正常弹。
     launchd 定时、Hermes、workflow 子进程都经 osascript 空环境启动，无 tty → 静默不弹，
@@ -169,12 +141,10 @@ def _debug_log(event: str, **details: object) -> None:
 
 
 def _instance_pid() -> int | None:
-    """专用 9222 Chrome 顶层进程 PID。
+    """使用 Evan profile 的内置浏览器顶层进程 PID。
 
-    关键：按 ``--user-data-dir=<PROFILE_DIR>`` 精确匹配，只锁定这个专用实例，
-    绝不误伤用户日常 Chrome。历史 bug 就是 ``tell application "Google Chrome"``
-    按应用名寻址，Apple 事件落到了用户主 Chrome 上，专用 9222 窗口从未被真正隐藏，
-    于是后台自动化每次都把 9222 窗口晾在前台 → 用户看到「弹窗」。
+    按 ``--user-data-dir=<PROFILE_DIR>`` 精确匹配，只锁定 Evan 实例，
+    绝不误伤用户日常浏览器。
     """
     if IS_WINDOWS:
         return _instance_pid_windows()
@@ -269,12 +239,16 @@ def _instance_command(pid: int) -> str:
 
 def _instance_is_headless(pid: int) -> bool:
     if IS_WINDOWS:
-        # Windows 上查命令行较慢且易受引号影响，直接问 CDP：
-        # 无头实例的 Browser 字段形如 "HeadlessChrome/1xx.x.x.x"。
+        # Chromium 的 `Browser` 字段在新无头模式下也可能仍是
+        # "Chrome/1xx"，不能据此判断。先看已按 PID 精确取得的命令行，
+        # 再用 CDP User-Agent 中的 HeadlessChrome 兜底。
+        command = _instance_command(pid).lower()
+        if "--headless" in command:
+            return True
         try:
             with urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=2) as resp:
                 info = json.loads(resp.read().decode("utf-8"))
-            return "headless" in str(info.get("Browser", "")).lower()
+            return "headlesschrome" in str(info.get("User-Agent", "")).lower()
         except Exception:
             return False
     return "--headless" in _instance_command(pid)
@@ -361,7 +335,7 @@ def bring_chrome_to_front() -> tuple[bool, str]:
         # 不影响生成本身，故静默降级。**绝不能抛异常**：调用方会把异常归类成
         # AUTH_REQUIRED，用户会看到莫名其妙的「请重新登录」。
         _debug_log("bring_chrome_to_front.skip", reason="not_macos")
-        return False, "当前平台不支持自动切前台，请手动切到 9222 浏览器窗口"
+        return False, "当前平台不支持自动切前台，请手动切到内置浏览器窗口"
     if not _foreground_allowed():
         # 非交互式（后台/定时/Hermes）运行：静默跳过切前台，调用方仍会抛出登录错误。
         _debug_log("bring_chrome_to_front.skip", reason="foreground_not_allowed")
@@ -369,16 +343,16 @@ def bring_chrome_to_front() -> tuple[bool, str]:
     pid = _instance_pid()
     if pid is None:
         _debug_log("bring_chrome_to_front.skip", reason="no_pid")
-        return False, "未找到专用 9222 Chrome 实例，跳过切前台"
+        return False, "未找到内置浏览器实例，跳过切前台"
     ok = _system_events(
         f"tell application \"System Events\" to set visible of (first process whose unix id is {pid}) to true",
         f"tell application \"System Events\" to set frontmost of (first process whose unix id is {pid}) to true",
     )
     if ok:
         _debug_log("bring_chrome_to_front.ok", pid=pid)
-        return True, "已将专用 9222 Chrome 切到前台"
+        return True, "已将内置浏览器切到前台"
     _debug_log("bring_chrome_to_front.failed", pid=pid)
-    return False, "切换专用 9222 Chrome 到前台失败"
+    return False, "切换内置浏览器到前台失败"
 
 
 def hide_chrome(*, max_wait_seconds: float = 2.0, poll_interval: float = 0.1) -> tuple[bool, str]:
@@ -390,24 +364,24 @@ def hide_chrome(*, max_wait_seconds: float = 2.0, poll_interval: float = 0.1) ->
     if pid is None:
         # 找不到专用实例时什么都不做，避免误伤用户日常 Chrome。
         _debug_log("hide_chrome.skip", reason="no_pid")
-        return False, "未找到专用 9222 Chrome 实例，跳过隐藏"
+        return False, "未找到内置浏览器实例，跳过隐藏"
     ok = _system_events(
         f"tell application \"System Events\" to set visible of (first process whose unix id is {pid}) to false",
     )
     if ok and _wait_until_hidden(pid, max_wait_seconds=max_wait_seconds, poll_interval=poll_interval):
         _debug_log("hide_chrome.ok", pid=pid)
-        return True, "已将专用 9222 Chrome 隐藏到后台"
+        return True, "已将内置浏览器隐藏到后台"
     if ok:
         _debug_log("hide_chrome.unconfirmed", pid=pid)
-        return False, "隐藏专用 9222 Chrome 命令已发送，但未确认隐藏"
+        return False, "隐藏内置浏览器命令已发送，但未确认隐藏"
     _debug_log("hide_chrome.failed", pid=pid)
-    return False, "隐藏专用 9222 Chrome 失败"
+    return False, "隐藏内置浏览器失败"
 
 
 def surface_for_login(reason: str) -> None:
-    """统一的「需要登录」出口：把专用 9222 Chrome 切到前台让用户手动登录，并抛错中断。
+    """统一的「需要登录」出口：把内置浏览器切到前台让用户手动登录，并抛错中断。
 
-    这是 9222 浏览器唯一允许主动弹窗的场景。其余自动化行为一律静默（后台运行）。
+    这是内置浏览器唯一允许主动弹窗的场景。其余自动化行为一律静默（后台运行）。
     """
     _debug_log("surface_for_login", reason=reason)
     bring_chrome_to_front()
@@ -461,6 +435,19 @@ def stop_chrome() -> tuple[bool, str]:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+    # SIGKILL is asynchronous on macOS. Wait briefly so callers can rely on
+    # memory having actually been reclaimed when this function returns.
+    for _ in range(20):
+        remaining = []
+        for pid in pids:
+            try:
+                os.kill(pid, 0)
+                remaining.append(pid)
+            except ProcessLookupError:
+                pass
+        if not remaining:
+            break
+        time.sleep(0.1)
     return True, "已强制关闭专用 Chrome"
 
 
@@ -469,6 +456,11 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
     ok, msg = check_cdp()
     if ok and not force:
         pid = _instance_pid()
+        if pid is None:
+            return False, (
+                f"{CDP_PORT} 端口已被其他浏览器或程序占用；"
+                f"没有复用它，以免把自动化任务发送到错误的浏览器资料。"
+            )
         if headless and pid is not None and not _instance_is_headless(pid):
             _debug_log("start_chrome.restart_for_headless", pid=pid)
             stop_chrome()
@@ -496,10 +488,8 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
     if not CHROME_BIN.exists():
         return False, f"找不到 Chrome：{CHROME_BIN}"
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    # 默认无头：真正要新拉起实例时，若无人坐在终端前（Hermes/后台/workflow 子进程）
-    # 且未显式要求前台，则无头静默启动，避免后台自动化（含截图时的 bring_to_front）
-    # 把 9222 窗口弹到前台打扰。想看浏览器时双击桌面「Google Chrome 9222.app」会杀掉
-    # 无头实例并拉起可见窗口。注意：此处只影响“新拉起”，不会动已在运行的可见实例。
+    # 默认无头：真正要新拉起实例时，若无人坐在终端前且未显式要求前台，
+    # 则静默启动。需要登录或开启调试模式时再使用可见窗口。
     if not headless and not foreground and not _foreground_allowed():
         headless = True
         _debug_log("start_chrome.default_headless", reason="no_tty_background")
@@ -507,6 +497,7 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
         launch_cmd = [
             str(CHROME_BIN),
             "--headless=new",
+            "--lang=en-US",
             f"--remote-debugging-port={CDP_PORT}",
             f"--user-data-dir={PROFILE_DIR}",
             "--no-first-run",
@@ -517,26 +508,12 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
             "--window-size=1440,900",
             "about:blank",
         ]
-    elif IS_MACOS:
-        # -g 后台打开，不抢前台；-na 强制新实例并透传 --args。
-        launch_cmd = [
-            "/usr/bin/open",
-            "-g",
-            "-na",
-            CHROME_APP_NAME,
-            "--args",
-            f"--remote-debugging-port={CDP_PORT}",
-            f"--user-data-dir={PROFILE_DIR}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--new-window",
-            "--disable-features=OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints",
-            "about:blank",
-        ]
     else:
-        # Windows / Linux 没有 `open`，直接执行 Chrome 可执行文件。
+        # Direct execution works for bundled Chromium on all platforms and
+        # avoids macOS `open -a`, which can only address installed app names.
         launch_cmd = [
             str(CHROME_BIN),
+            "--lang=en-US",
             f"--remote-debugging-port={CDP_PORT}",
             f"--user-data-dir={PROFILE_DIR}",
             "--no-first-run",

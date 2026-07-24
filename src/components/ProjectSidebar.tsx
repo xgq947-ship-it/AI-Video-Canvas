@@ -310,17 +310,21 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
 
       {activeTab === 'canvas' ? (
         <>
-          <div className="flex shrink-0 items-center gap-1.5 px-3 py-4">
+          <div className="flex shrink-0 items-center gap-0.5 px-2 py-4">
             {nodeSearchOpen ? (
-              <SearchBox value={query} onChange={setQuery} compact onCompactClose={() => { setNodeSearchOpen(false); setQuery(''); }} />
+              <div className="min-w-0 flex-1">
+                <SearchBox value={query} onChange={setQuery} compact onCompactClose={() => { setNodeSearchOpen(false); setQuery(''); }} />
+              </div>
             ) : (
               <>
-                <span className={`shrink-0 whitespace-nowrap text-sm font-semibold ${muted}`}>画布元素</span>
+                <span className={`min-w-0 flex-1 truncate whitespace-nowrap text-sm font-semibold ${muted}`}>画布元素</span>
                 <button onClick={() => setSortNewestFirst(value => !value)} className={`shrink-0 rounded-lg p-1.5 ${muted} ${hover}`} title="切换排序"><LayoutList size={18} /></button>
                 <select
                   value={nodeFilter}
                   onChange={event => setNodeFilter(event.target.value)}
-                  className="ml-auto min-w-0 max-w-[72px] shrink bg-transparent text-sm outline-none"
+                  className={`h-8 w-[50px] shrink-0 appearance-none truncate rounded-lg bg-transparent px-1 text-center text-[13px] outline-none ${muted} ${hover}`}
+                  title={`节点类型：${nodeFilter === 'all' ? '全部' : (typeLabel[nodeFilter] || nodeFilter)}`}
+                  aria-label="筛选节点类型"
                 >
                   <option value="all">全部</option>
                   {[...new Set(nodes.map(node => node.type))].map(type => <option key={type} value={type}>{typeLabel[type] || type}</option>)}

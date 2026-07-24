@@ -7,7 +7,7 @@
  */
 
 import React, { useState, useRef, useEffect, memo } from 'react';
-import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Film, Clock, Expand, Shrink, Monitor, Crop, HardDrive, Upload, Loader2, Mic2, ScanSearch } from 'lucide-react';
+import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Images, Film, Clock, Expand, Shrink, Monitor, Crop, HardDrive, Upload, Loader2, Mic2, ScanSearch } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { useBrowserModels } from '../../hooks/useBrowserModels';
 import { ChangeAnglePanel } from './ChangeAnglePanel';
@@ -128,6 +128,24 @@ const IMAGE_MODELS = [
         resolutions: ["自动"],
         aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"]
     },
+    {
+        id: 'jimeng-image-5-0-pro',
+        name: '即梦 · 图片 5.0 Pro',
+        provider: 'workflow',
+        supportsImageToImage: true,
+        supportsMultiImage: true,
+        resolutions: ["2K", "4K"],
+        aspectRatios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"]
+    },
+    {
+        id: 'jimeng-image-5-0-lite',
+        name: '即梦 · 图片 5.0 Lite',
+        provider: 'workflow',
+        supportsImageToImage: true,
+        supportsMultiImage: true,
+        resolutions: ["2K", "4K"],
+        aspectRatios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"]
+    },
 ];
 
 const NodeControlsComponent: React.FC<NodeControlsProps> = ({
@@ -150,6 +168,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const [showDurationDropdown, setShowDurationDropdown] = useState(false);
     const [showResolutionDropdown, setShowResolutionDropdown] = useState(false);
     const [showModelDropdown, setShowModelDropdown] = useState(false);
+    const [showImageCountDropdown, setShowImageCountDropdown] = useState(false);
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
     const [isUploadingVideo, setIsUploadingVideo] = useState(false);
     const [localPrompt, setLocalPrompt] = useState(data.prompt || '');
@@ -167,6 +186,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const durationDropdownRef = useRef<HTMLDivElement>(null);
     const resolutionDropdownRef = useRef<HTMLDivElement>(null);
     const modelDropdownRef = useRef<HTMLDivElement>(null);
+    const imageCountDropdownRef = useRef<HTMLDivElement>(null);
     const promptOptimizerRef = useRef<HTMLDivElement>(null);
     const imagePromptMenuRef = useRef<HTMLDivElement>(null);
     const videoUploadInputRef = useRef<HTMLInputElement>(null);
@@ -207,6 +227,9 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
             }
             if (resolutionDropdownRef.current && !resolutionDropdownRef.current.contains(event.target as Node)) {
                 setShowResolutionDropdown(false);
+            }
+            if (imageCountDropdownRef.current && !imageCountDropdownRef.current.contains(event.target as Node)) {
+                setShowImageCountDropdown(false);
             }
             if (promptOptimizerRef.current && !promptOptimizerRef.current.contains(event.target as Node)) {
                 setShowPromptOptimizer(false);
@@ -585,6 +608,15 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
 
     // Image model selection logic
     const currentImageModel = IMAGE_MODELS.find(m => m.id === data.imageModel) || IMAGE_MODELS[0];
+    const isBrowserBatchImageModel =
+        !isVideoNode && (
+            currentImageModel.id.startsWith('jimeng-image-') ||
+            currentImageModel.id.startsWith('google-flow-')
+        );
+    const imageGenerationCount = Math.min(
+        4,
+        Math.max(1, Number(data.imageGenerationCount) || 1)
+    );
 
     // Filter image models based on connected inputs
     // 0 inputs = all models, 1 input = needs supportsImageToImage, 2+ inputs = needs supportsMultiImage
@@ -1214,7 +1246,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                         {availableImageModels.filter(m => m.provider === 'workflow').length > 0 && (
                                             <>
                                                 <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f] border-t border-neutral-700">
-                                                    Google Flow
+                                                    内置浏览器（Google Flow / 即梦）
                                                 </div>
                                                 {availableImageModels.filter(m => m.provider === 'workflow').map(model => {
                                                     const isUnavailable = isModelUnavailable(model.id);
@@ -1326,6 +1358,55 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                             >
                                                 <span>{res}</span>
                                                 {(data.resolution || 'Auto') === res && <Check size={12} />}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* 浏览器模型原生批量生图。样式与画面比例下拉保持一致。 */}
+                        {isBrowserBatchImageModel && (
+                            <div className="relative" ref={imageCountDropdownRef}>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowImageCountDropdown(!showImageCountDropdown)}
+                                    className="flex items-center gap-1.5 whitespace-nowrap text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
+                                    title="选择单次生成的图片数量"
+                                >
+                                    <Images size={12} className="text-cyan-400" />
+                                    {imageGenerationCount} 张
+                                    <ChevronDown size={11} className="text-neutral-500" />
+                                </button>
+
+                                {showImageCountDropdown && (
+                                    <div
+                                        className="absolute bottom-full mb-2 right-0 w-32 bg-[#252525] border border-neutral-700 rounded-lg shadow-xl overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-100"
+                                        onWheel={(e) => e.stopPropagation()}
+                                    >
+                                        <div className="px-3 py-2 bg-[#1f1f1f]">
+                                            <div className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">
+                                                生成数量
+                                            </div>
+                                            <div className="mt-0.5 text-[9px] text-neutral-600">
+                                                单次最多生成 4 张
+                                            </div>
+                                        </div>
+                                        {[1, 2, 3, 4].map(count => (
+                                            <button
+                                                key={count}
+                                                type="button"
+                                                onClick={() => {
+                                                    onUpdate(data.id, { imageGenerationCount: count });
+                                                    setShowImageCountDropdown(false);
+                                                }}
+                                                className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs transition-colors hover:bg-[#333] ${imageGenerationCount === count
+                                                    ? 'text-cyan-400'
+                                                    : 'text-neutral-300'
+                                                    }`}
+                                            >
+                                                <span>{count} 张</span>
+                                                {imageGenerationCount === count && <Check size={12} />}
                                             </button>
                                         ))}
                                     </div>

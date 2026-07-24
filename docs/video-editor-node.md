@@ -96,10 +96,9 @@ Response:
 
 ### Requirements
 
-- **FFmpeg** must be installed on the server for video trimming to work
-  - Windows: `winget install ffmpeg`
-  - Mac: `brew install ffmpeg`
-  - Linux: `apt install ffmpeg`
+- 桌面安装版已经内置当前平台的 FFmpeg/FFprobe，不需要 `brew`、`winget` 或修改系统
+  `PATH`。
+- 源码开发执行 `npm install` 后使用 `node_modules/ffmpeg-ffprobe-static` 中的平台二进制。
 
 ### File Structure
 
@@ -134,12 +133,15 @@ server/
 ## Troubleshooting
 
 ### "FFmpeg is not installed" error
-Install FFmpeg on your system and restart the server.
+
+- 安装版：重新安装来自可信发布源的完整安装包，并确认安全软件没有隔离
+  `resources/media-tools/ffmpeg.exe`（Windows）或对应 macOS 文件。
+- 源码模式：运行 `npm install` 恢复 Evan 锁定的 FFmpeg/FFprobe，再重启应用。
 
 ### Trimmed video not appearing in library
 - Check the server console for errors
 - Ensure the source video exists in `library/videos/`
-- Verify FFmpeg is working: run `ffmpeg -version` in terminal
+- Verify FFmpeg is working: run `node_modules/ffmpeg-ffprobe-static/ffmpeg -version`
 
 ### Timeline controls not showing
 - Wait for the video metadata to load (may take a moment for large videos)

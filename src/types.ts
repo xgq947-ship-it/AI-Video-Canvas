@@ -67,6 +67,7 @@ export interface NodeData {
   // Settings
   model: string;
   imageModel?: string; // Image model version
+  imageGenerationCount?: number; // 浏览器工作流单次生图数量（Google Flow / 即梦，1-4）
   aspectRatio: string;
   resolution: string;
   isPromptExpanded?: boolean; // Whether the prompt editing area is expanded

@@ -1,13 +1,16 @@
 {
   "name": "twitcanva",
+  "productName": "Evan AI Video Canvas",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "main": "electron/main.js",
   "type": "module",
   "engines": {
     "//": "需要 Node 22+：npm test 依赖 node --test 自身的通配符展开（Node 21 起支持）。Windows 的 cmd 不展开 test/*.test.mjs，低版本 Node 会直接跑不了测试。",
     "node": ">=22"
   },
   "scripts": {
+    "start": "npm run desktop:dev",
     "setup": "node scripts/setup-project.mjs",
     "setup:ai-cli": "node scripts/setup-project.mjs --with-ai-cli",
     "setup:check": "node scripts/setup-project.mjs --check --skip-dependencies",
@@ -19,38 +22,123 @@
     "render:e2e-test": "node scripts/proof-manifest-render.mjs",
     "build": "vite build",
     "preview": "vite preview",
-    "setup:browser-models": "node scripts/setup-browser-models.mjs",
-    "launcher": "node scripts/launcher.mjs",
-    "launcher:gui": "node scripts/launcher-gui.mjs"
+    "desktop:dev": "npm run build && electron .",
+    "desktop:icons": "node scripts/generate-desktop-icons.mjs",
+    "desktop:runtime": "node scripts/prepare-desktop-runtime.mjs",
+    "desktop:verify": "node scripts/verify-desktop-runtime.mjs",
+    "desktop:prepare": "npm run desktop:icons && npm run desktop:runtime && npm run desktop:verify",
+    "desktop:pack": "npm run build && npm run desktop:prepare && electron-builder --dir",
+    "desktop:dist": "npm run build && npm run desktop:prepare && electron-builder",
+    "desktop:dist:mac": "npm run build && npm run desktop:prepare && electron-builder --mac",
+    "desktop:dist:win": "npm run build && npm run desktop:prepare && electron-builder --win --x64",
+    "setup:browser-models": "node scripts/setup-browser-models.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.32.0",
     "@google/generative-ai": "^0.24.1",
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "@react-three/drei": "^10.7.7",
-    "@react-three/fiber": "^9.5.0",
     "@remotion/bundler": "^4.0.489",
     "@remotion/renderer": "^4.0.489",
-    "@types/three": "^0.182.0",
-    "face-api.js": "^0.22.2",
-    "form-data": "^4.0.5",
-    "lucide-react": "^0.556.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "electron-updater": "6.8.9",
+    "express": "^5.2.1",
+    "ffmpeg-ffprobe-static": "6.1.2-rc.1",
     "openai": "^6.14.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "remotion": "^4.0.489",
-    "sharp": "^0.34.5",
-    "three": "^0.182.0",
-    "zod": "^3.25.76"
+    "sharp": "^0.35.3"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.1",
     "@types/node": "^22.14.0",
+    "@types/three": "^0.182.0",
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.2.1",
-    "cors": "^2.8.5",
-    "dotenv": "^17.2.3",
-    "express": "^5.2.1",
+    "electron": "43.2.0",
+    "electron-builder": "26.15.3",
+    "face-api.js": "^0.22.2",
+    "lucide-react": "^0.556.0",
+    "three": "^0.182.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "^6.2.0",
+    "zod": "^3.25.76"
+  },
+  "build": {
+    "appId": "com.evan.aivideocanvas",
+    "productName": "Evan AI Video Canvas",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "server/**/*",
+      "shared/**/*",
+      "remotion/**/*",
+      "LICENSE",
+      "NOTICE",
+      "package.json",
+      "!node_modules/ffmpeg-ffprobe-static{,/**/*}",
+      "!server/python/.venv{,/**/*}",
+      "!server/python/.browsers{,/**/*}",
+      "!server/python/**/__pycache__{,/**/*}"
+    ],
+    "asarUnpack": [
+      "server/python/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "server/python/.browsers",
+        "to": "playwright-browsers",
+        "filter": [
+          "chromium-*/**/*"
+        ]
+      },
+      {
+        "from": "desktop-runtime/current/evan-ops-cli",
+        "to": "runtime/ops-cli"
+      },
+      {
+        "from": "desktop-runtime/current/media-tools",
+        "to": "media-tools"
+      }
+    ],
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "mac": {
+      "category": "public.app-category.video",
+      "icon": "build/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "shortcutName": "Evan AI Video Canvas",
+      "uninstallDisplayName": "Evan AI Video Canvas",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerLanguages": [
+        "zh_CN",
+        "en_US"
+      ]
+    }
   }
 }

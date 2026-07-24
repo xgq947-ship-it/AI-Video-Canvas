@@ -17,6 +17,7 @@ import crypto from 'crypto';
 const MEDIA_URL_FIELDS = ['resultUrl', 'lastFrame', 'editorCanvasData', 'editorBackgroundUrl', 'mediaUrl', 'renderOutputUrl'];
 
 const ILLEGAL_CHARS_RE = new RegExp('[\\/\\\\:*?"<>|]', 'g');
+const WINDOWS_RESERVED_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 
 export function sanitizeDirName(title) {
     const fallback = 'untitled';
@@ -36,7 +37,78 @@ export function sanitizeProjectDirName(title) {
         .trim()
         .replace(/[. ]+$/g, '')
         .slice(0, 40);
-    return cleaned || fallback;
+    if (!cleaned) return fallback;
+    return WINDOWS_RESERVED_NAME_RE.test(cleaned) ? `${cleaned}_project` : cleaned;
+}
+
+function pathEntryExists(candidate) {
+    try {
+        fs.lstatSync(candidate);
+        return true;
+    } catch (error) {
+        if (error.code === 'ENOENT') return false;
+        throw error;
+    }
+}
+
+function isSamePath(left, right) {
+    const normalize = (value) => {
+        let resolved;
+        try {
+            resolved = fs.realpathSync(value);
+        } catch {
+            resolved = path.resolve(value);
+        }
+        resolved = resolved.replace(/^\\\\\?\\/, '');
+        return process.platform === 'win32' ? resolved.toLocaleLowerCase() : resolved;
+    };
+    return normalize(left) === normalize(right);
+}
+
+function ensureExternalProjectAlias(workflow, projectsDir) {
+    const target = path.resolve(workflow.projectPath);
+    const alias = path.join(projectsDir, workflow.projectDirName);
+
+    if (pathEntryExists(alias)) {
+        if (!fs.existsSync(target)) {
+            const error = new Error(`自定义项目文件夹不存在或磁盘未连接：${target}`);
+            error.code = 'PROJECT_LOCATION_MISSING';
+            throw error;
+        }
+        let resolvedAlias;
+        try {
+            resolvedAlias = fs.realpathSync(alias);
+        } catch {
+            const error = new Error(`项目目录映射已失效：${alias}`);
+            error.code = 'PROJECT_LOCATION_MISSING';
+            throw error;
+        }
+        if (!isSamePath(resolvedAlias, target)) {
+            const error = new Error(`项目目录名称已被占用：${workflow.projectDirName}`);
+            error.code = 'EEXIST';
+            throw error;
+        }
+        return target;
+    }
+
+    fs.mkdirSync(target, { recursive: true });
+    fs.mkdirSync(projectsDir, { recursive: true });
+    fs.symlinkSync(target, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    return target;
+}
+
+/** Returns the real project folder, including a user-selected external folder. */
+export function resolveWorkflowProjectRoot(workflow, projectsDir) {
+    if (!workflow?.projectDirName || !projectsDir) return null;
+    if (workflow.projectPath) {
+        if (!path.isAbsolute(workflow.projectPath)) {
+            const error = new Error('自定义项目路径必须是绝对路径');
+            error.code = 'INVALID_PROJECT_LOCATION';
+            throw error;
+        }
+        return path.resolve(workflow.projectPath);
+    }
+    return path.join(projectsDir, workflow.projectDirName);
 }
 
 function projectUrl(projectDirName, type, filename, origin = '') {
@@ -126,7 +198,9 @@ export function ensureProjectFolder(workflow, { projectsDir }, { exactName = fal
             ? baseName
             : buildAssetsDirName(workflow, workflow.title);
     }
-    const root = path.join(projectsDir, workflow.projectDirName);
+    const root = workflow.projectPath
+        ? ensureExternalProjectAlias(workflow, projectsDir)
+        : path.join(projectsDir, workflow.projectDirName);
     for (const type of ['images', 'videos', 'audio']) {
         fs.mkdirSync(path.join(root, type), { recursive: true });
     }
@@ -573,7 +647,27 @@ export function deleteWorkflowAssetDirs(workflow, { imagesDir, videosDir, projec
         dirs.push(path.join(imagesDir, workflow.assetsDirName), path.join(videosDir, workflow.assetsDirName));
     }
     if (projectsDir && workflow?.projectDirName) {
-        dirs.push(path.join(projectsDir, workflow.projectDirName));
+        const alias = path.join(projectsDir, workflow.projectDirName);
+        if (workflow.projectPath) {
+            const target = path.resolve(workflow.projectPath);
+            const manifestPath = path.join(target, 'project.json');
+            let ownsTarget = false;
+            try {
+                const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+                ownsTarget = manifest.id === workflow.id;
+            } catch {
+                // Never recursively delete a custom directory unless its marker
+                // proves that it belongs to this workflow.
+            }
+            if (ownsTarget && fs.existsSync(target)) {
+                fs.rmSync(target, { recursive: true, force: true });
+            }
+            if (pathEntryExists(alias)) {
+                fs.unlinkSync(alias);
+            }
+        } else {
+            dirs.push(alias);
+        }
     }
     for (const dir of dirs) {
         if (fs.existsSync(dir)) {

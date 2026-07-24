@@ -6,8 +6,15 @@
  */
 
 import { NodeData, NodeType, NodeStatus } from '../types';
-import { createProductSceneJob, generateImage, generateVideo, queueCodexImage } from '../services/generationService';
+import {
+    createProductSceneJob,
+    generateImage,
+    generateImageBatch,
+    generateVideo,
+    queueCodexImage
+} from '../services/generationService';
 import { extractVideoLastFrame } from '../utils/videoHelpers';
+import { createAdditionalImagePlacements } from '../utils/imageBatchLayout.js';
 import { minimumReferenceImages, shouldUseReferenceImages } from '../utils/videoModelCapabilities.js';
 import {
     collectNodeReferences,
@@ -19,10 +26,11 @@ import { inferProductSceneAspectRatio, validateProductDimensions } from '../../s
 interface UseGenerationProps {
     nodes: NodeData[];
     updateNode: (id: string, updates: Partial<NodeData>) => void;
+    addNodes: (nodes: NodeData[]) => void;
     workflowId?: string | null;
 }
 
-export const useGeneration = ({ nodes, updateNode, workflowId }: UseGenerationProps) => {
+export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGenerationProps) => {
     // ============================================================================
     // HELPERS
     // ============================================================================
@@ -255,7 +263,59 @@ export const useGeneration = ({ nodes, updateNode, workflowId }: UseGenerationPr
                     return;
                 }
 
-                // Generate image with all parent images and character references
+                const isBrowserBatch =
+                    node.imageModel?.startsWith('jimeng-image-') === true ||
+                    node.imageModel?.startsWith('google-flow-') === true;
+                const generationCount = isBrowserBatch
+                    ? Math.min(4, Math.max(1, Number(node.imageGenerationCount) || 1))
+                    : 1;
+
+                if (isBrowserBatch) {
+                    const rawResultUrls = await generateImageBatch({
+                        workflowId,
+                        prompt: combinedPrompt,
+                        aspectRatio: node.aspectRatio,
+                        resolution: node.resolution,
+                        imageBase64: imageBase64s.length > 0 ? imageBase64s : undefined,
+                        imageModel: node.imageModel,
+                        nodeId: id,
+                        count: generationCount
+                    });
+                    const generatedAt = Date.now();
+                    const resultUrls = rawResultUrls.slice(0, 4).map(
+                        (url, index) => `${url}${url.includes('?') ? '&' : '?'}t=${generatedAt}-${index}`
+                    );
+                    const firstImage = await getImageAspectRatio(resultUrls[0]);
+                    updateNode(id, {
+                        status: NodeStatus.SUCCESS,
+                        resultUrl: resultUrls[0],
+                        resultAspectRatio: firstImage.resultAspectRatio,
+                        generationStartTime: undefined,
+                        errorMessage: undefined
+                    });
+
+                    const additionalNodes = createAdditionalImagePlacements(node, resultUrls)
+                        .map((placement, index): NodeData => ({
+                            id: crypto.randomUUID(),
+                            type: NodeType.IMAGE,
+                            title: `${node.imageModel?.startsWith('google-flow-') ? 'Flow' : '即梦'}图片 ${index + 2}`,
+                            x: placement.x,
+                            y: placement.y,
+                            prompt: combinedPrompt,
+                            status: NodeStatus.SUCCESS,
+                            resultUrl: placement.resultUrl,
+                            parentIds: placement.parentIds,
+                            model: node.model || 'Banana Pro',
+                            imageModel: node.imageModel,
+                            imageGenerationCount: generationCount,
+                            aspectRatio: node.aspectRatio,
+                            resolution: node.resolution
+                        }));
+                    if (additionalNodes.length > 0) addNodes(additionalNodes);
+                    return;
+                }
+
+                // Generate one image for providers without native batch output.
                 const rawResultUrl = await generateImage({
                     workflowId,
                     prompt: combinedPrompt,
@@ -278,6 +338,7 @@ export const useGeneration = ({ nodes, updateNode, workflowId }: UseGenerationPr
                     status: NodeStatus.SUCCESS,
                     resultUrl,
                     resultAspectRatio,
+                    generationStartTime: undefined,
                     // Note: aspectRatio is intentionally NOT updated to preserve user's selection
                     errorMessage: undefined
                 });
@@ -436,6 +497,7 @@ export const useGeneration = ({ nodes, updateNode, workflowId }: UseGenerationPr
                     resultAspectRatio,
                     aspectRatio,
                     lastFrame,
+                    generationStartTime: undefined,
                     errorMessage: undefined // Clear any previous error
                 });
 

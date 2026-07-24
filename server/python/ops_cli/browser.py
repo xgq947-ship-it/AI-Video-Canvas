@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 import uuid
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Iterator
 from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
 from ops_cli.output import CommandResponse
+from ops_cli.config import get_config
 
 
 MANAGED_WINDOW_PREFIX = "ops-cli:"
@@ -19,6 +22,10 @@ PAGE_SNAPSHOT_TIMEOUT_MS = 2000
 PAGE_DEFAULT_TIMEOUT_MS = 30000
 
 _DEDUP_HOSTS: set[str] = set()
+LOGIN_URLS = {
+    "google-flow": "https://labs.google/fx/tools/flow",
+    "jimeng": "https://jimeng.jianying.com/ai-tool/generate?type=video",
+}
 
 
 def browser_status() -> CommandResponse:
@@ -27,6 +34,21 @@ def browser_status() -> CommandResponse:
         platform="browser",
         command="status",
         data={"message": "browser integration is intentionally disabled in this phase"},
+    )
+
+
+def close_browser() -> CommandResponse:
+    sessionhub_root = Path(get_config().sessionhub_root).expanduser().resolve()
+    if str(sessionhub_root) not in sys.path:
+        sys.path.insert(0, str(sessionhub_root))
+    from scene.chrome_cdp import stop_chrome  # type: ignore
+
+    ok, message = stop_chrome()
+    return CommandResponse(
+        success=ok,
+        platform="browser",
+        command="close",
+        data={"message": message, "closed": ok},
     )
 
 
@@ -51,6 +73,70 @@ def check_browser_port(port: int) -> CommandResponse:
             "available": True,
             "browser": payload.get("Browser"),
             "websocket": payload.get("webSocketDebuggerUrl"),
+        },
+    )
+
+
+def open_browser_login(provider: str) -> CommandResponse:
+    login_url = LOGIN_URLS.get(provider)
+    if not login_url:
+        return CommandResponse(
+            success=False,
+            platform="browser",
+            command="login",
+            data={"provider": provider, "error": "不支持的浏览器登录平台"},
+        )
+
+    sessionhub_root = Path(get_config().sessionhub_root).expanduser().resolve()
+    if str(sessionhub_root) not in sys.path:
+        sys.path.insert(0, str(sessionhub_root))
+    from scene.chrome_cdp import CDP_PORT, start_chrome  # type: ignore
+
+    ok, message = start_chrome(foreground=True)
+    if not ok:
+        return CommandResponse(
+            success=False,
+            platform="browser",
+            command="login",
+            data={"provider": provider, "error": message},
+        )
+
+    def _open(context: Any) -> dict[str, Any]:
+        page = context.new_page()
+        page.goto(login_url, wait_until="domcontentloaded", timeout=60_000)
+        return {
+            "provider": provider,
+            "url": login_url,
+            "port": CDP_PORT,
+            "message": "内置浏览器已打开，请完成登录后回到 Evan 重试任务。",
+        }
+
+    data = _with_cdp_context(CDP_PORT, _open)
+    return CommandResponse(success=True, platform="browser", command="login", data=data)
+
+
+def open_browser() -> CommandResponse:
+    """Open or foreground Evan's dedicated browser without choosing a provider."""
+    sessionhub_root = Path(get_config().sessionhub_root).expanduser().resolve()
+    if str(sessionhub_root) not in sys.path:
+        sys.path.insert(0, str(sessionhub_root))
+    from scene.chrome_cdp import CDP_PORT, start_chrome  # type: ignore
+
+    ok, message = start_chrome(foreground=True)
+    if not ok:
+        return CommandResponse(
+            success=False,
+            platform="browser",
+            command="open",
+            data={"error": message},
+        )
+    return CommandResponse(
+        success=True,
+        platform="browser",
+        command="open",
+        data={
+            "port": CDP_PORT,
+            "message": "内置浏览器已打开。",
         },
     )
 
@@ -167,7 +253,7 @@ def build_tab_cleanup_plan(
     now: float | None = None,
     managed_residue_min_age_seconds: int = MANAGED_RESIDUE_MIN_AGE_SECONDS,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Build a conservative cleanup plan for the dedicated 9222 browser.
+    """Build a conservative cleanup plan for the dedicated 19222 browser.
 
     Rules are intentionally narrow:
     - keep one about:blank page as a Chrome window anchor;

@@ -199,7 +199,7 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
     const fetchWorkflows = async () => {
         setLoading(true);
         try {
-            const response = await fetch('http://localhost:3001/api/workflows');
+            const response = await fetch('/api/workflows');
             if (response.ok) {
                 const data = await response.json();
                 setWorkflows(data);
@@ -213,7 +213,7 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
 
     const handleDelete = async (id: string) => {
         try {
-            const response = await fetch(`http://localhost:3001/api/workflows/${id}`, {
+            const response = await fetch(`/api/workflows/${id}`, {
                 method: 'DELETE'
             });
             if (response.ok) {
@@ -246,7 +246,7 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
             return;
         }
         try {
-            const response = await fetch(`http://localhost:3001/api/workflows/${id}/title`, {
+            const response = await fetch(`/api/workflows/${id}/title`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ title })
@@ -277,7 +277,7 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
     const handleRevealAssets = async (id: string, e: React.MouseEvent) => {
         e.stopPropagation();
         try {
-            const response = await fetch(`http://localhost:3001/api/workflows/${id}/reveal-assets`, {
+            const response = await fetch(`/api/workflows/${id}/reveal-assets`, {
                 method: 'POST'
             });
             if (!response.ok) {
@@ -321,7 +321,7 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
         setVisibleCoverCount(COVERS_PER_PAGE); // Reset pagination
 
         try {
-            const response = await fetch('http://localhost:3001/api/assets/images');
+            const response = await fetch('/api/assets/images');
             if (response.ok) {
                 const data = await response.json();
                 setCoverAssets(data);
@@ -337,17 +337,17 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
         if (!editingCoverFor) return;
 
         try {
-            const response = await fetch(`http://localhost:3001/api/workflows/${editingCoverFor}/cover`, {
+            const response = await fetch(`/api/workflows/${editingCoverFor}/cover`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ coverUrl: `http://localhost:3001${assetUrl}` })
+                body: JSON.stringify({ coverUrl: assetUrl })
             });
 
             if (response.ok) {
                 // Update local state
                 setWorkflows(prev => prev.map(w =>
                     w.id === editingCoverFor
-                        ? { ...w, coverUrl: `http://localhost:3001${assetUrl}` }
+                        ? { ...w, coverUrl: assetUrl }
                         : w
                 ));
             }
@@ -560,7 +560,7 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
                                         className="h-32 w-full rounded-lg overflow-hidden hover:ring-2 hover:ring-blue-500 transition-all relative group bg-neutral-900"
                                     >
                                         <LazyImage
-                                            src={`http://localhost:3001${asset.url}`}
+                                            src={asset.url}
                                             alt="Cover option"
                                             className="w-full h-full"
                                             placeholderClassName="rounded-lg"

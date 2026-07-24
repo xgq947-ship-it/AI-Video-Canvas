@@ -1,4 +1,5 @@
 from functools import lru_cache
+import os
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -9,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 # 故原代码用 parents[2] 定位仓库根。本项目布局为 server/python/ops_cli/config.py，
 # 少了 src/ 这一层，因此正确的基准是 parents[1]（= server/python）。
 # 若照抄 parents[2] 会指向 server/，令 sessionhub_root 差一层目录，
-# 且该错误在 `--help` 时不暴露，只在真正生成时报「无法加载 9222 浏览器运行时」。
+# 且该错误在 `--help` 时不暴露，只在真正生成时才会出现。
 PYTHON_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -37,5 +38,11 @@ def get_config() -> AppConfig:
     env_path = Path.cwd() / ".env"
     raw = dotenv_values(env_path) if env_path.exists() else {}
     return AppConfig(
-        sessionhub_root=raw.get("SESSIONHUB_ROOT", "") or _sessionhub_root(),
+        sessionhub_root=(
+            os.environ.get("SESSIONHUB_ROOT", "")
+            or raw.get("SESSIONHUB_ROOT", "")
+            or _sessionhub_root()
+        ),
+        logs_dir=Path(os.environ.get("EVAN_LOGS_DIR", "") or (PYTHON_ROOT / "logs")),
+        runtime_dir=Path(os.environ.get("EVAN_RUNTIME_DIR", "") or (PYTHON_ROOT / "runtime")),
     )

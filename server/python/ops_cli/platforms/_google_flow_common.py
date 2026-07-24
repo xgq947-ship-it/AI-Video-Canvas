@@ -1,6 +1,6 @@
 """Google Flow 浏览器公共基座（多能力共享）。
 
-image-to-video 与 text-to-image 两个能力都通过可见的 9222 浏览器驱动 Google Flow
+image-to-video 与 text-to-image 两个能力都通过内置浏览器驱动 Google Flow
 页面 UI，共享同一套浏览器生命周期、登录/恢复、页面接管与结果等待逻辑。本模块只放
 「与结果类型无关」的通用部分；结果类型相关的配置/采集/等待入口由各 provider 自带。
 
@@ -10,6 +10,7 @@ image-to-video 与 text-to-image 两个能力都通过可见的 9222 浏览器�
 from __future__ import annotations
 
 import mimetypes
+import re
 import sys
 import time
 from contextlib import contextmanager
@@ -21,7 +22,7 @@ from ops_cli.browser import managed_work_page
 from ops_cli.config import get_config
 
 
-GOOGLE_FLOW_PROJECT_URL = "https://labs.google/fx/tools/flow/project/f58e4591-349f-478a-a328-90e5923c7e25"
+GOOGLE_FLOW_HOME_URL = "https://labs.google/fx/tools/flow?hl=en"
 FLOW_FAILURE_MARKERS = (
     # Flow 失败卡通常同时含这两句；用 max(任一命中) 做 OR 判定，兼容 Flow 改写
     # 其中一句。前提假设：这两句只出现在「已失败」的卡片上。若日后确认
@@ -63,11 +64,23 @@ def _is_flow_project_url(value: str) -> bool:
     )
 
 
+def _is_flow_home_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and (parsed.hostname or "").lower() == "labs.google"
+        and parsed.path.rstrip("/") == "/fx/tools/flow"
+    )
+
+
 def _resolve_project_url(context: Any) -> str:
     """解析本次生成使用的 Flow 项目地址。
 
-    本机显式配置优先；其次复用 9222 浏览器已经打开的 Flow 项目；最后使用
-    当前默认项目。平台 URL 只保留在 Ops-Cli，不向 workflow 层泄漏。
+    本机显式配置优先；其次复用内置浏览器已经打开的 Flow 项目；新账号或
+    没有现成项目页时回到 Flow 首页，由 `_ensure_editor` 自动进入或创建项目。
     """
     import os
 
@@ -84,7 +97,46 @@ def _resolve_project_url(context: Any) -> str:
         candidate = str(getattr(existing_page, "url", "") or "")
         if _is_flow_project_url(candidate):
             return candidate
-    return GOOGLE_FLOW_PROJECT_URL
+    return GOOGLE_FLOW_HOME_URL
+
+
+_NEW_PROJECT_LABEL = re.compile(
+    r"new\s+project|新建项目|建立新專案|新增專案|新しいプロジェクト|새\s*프로젝트",
+    re.IGNORECASE,
+)
+
+
+def _enter_or_create_project(page: Any) -> bool:
+    """Enter an existing project or create one from the Flow home page.
+
+    Project URLs are account-specific, so a bundled fixed UUID cannot work for
+    a new user's account. Prefer an existing project link; otherwise click the
+    localized New Project control. Language matching is only a fallback—the
+    resulting `/project/<id>` URL is the authoritative success signal.
+    """
+    try:
+        project_links = page.locator('a[href*="/fx/tools/flow/project/"]')
+        for index in range(project_links.count()):
+            candidate = project_links.nth(index)
+            if candidate.is_visible():
+                candidate.click()
+                page.wait_for_url(re.compile(r"/fx/tools/flow/project/"), timeout=60_000)
+                return True
+    except Exception:
+        pass
+
+    for role in ("button", "link"):
+        try:
+            controls = page.get_by_role(role).filter(has_text=_NEW_PROJECT_LABEL)
+            for index in range(controls.count()):
+                candidate = controls.nth(index)
+                if candidate.is_visible():
+                    candidate.click()
+                    page.wait_for_url(re.compile(r"/fx/tools/flow/project/"), timeout=60_000)
+                    return True
+        except Exception:
+            continue
+    return False
 
 
 def _existing_project_page(context: Any, project_url: str) -> Any | None:
@@ -109,7 +161,7 @@ def _project_work_page(context: Any, project_url: str, owner: str = "google-flow
 
 
 def _wait_cdp_stable(*, required_consecutive: int = 3, timeout_seconds: float = 25.0, poll_interval: float = 0.5) -> None:
-    """连上前确认 9222 CDP 稳定响应，吸收冷启动 / 无头↔有头重启窗口。
+    """连上前确认 19222 CDP 稳定响应，吸收冷启动 / 无头↔有头重启窗口。
 
     start_chrome 只等 CDP 首次响应即返回；但无头↔有头切换、单例锁重启会让端口
     「先通后断」，此刻若立即 goto，会落在半死的上下文上导致编辑器永远等不到（历史上
@@ -149,8 +201,12 @@ def _import_browser_runtime():
     try:
         from scene.chrome_cdp import CDP_URL, start_chrome  # type: ignore
     except Exception as exc:  # pragma: no cover - environment guard
-        raise GoogleFlowError("PAGE_NAVIGATION_FAILED", f"无法加载 9222 浏览器运行时：{exc}", retryable=True) from exc
-    ok, message = start_chrome()
+        raise GoogleFlowError("PAGE_NAVIGATION_FAILED", f"无法加载内置浏览器运行时：{exc}", retryable=True) from exc
+    # All automated Flow/Jimeng generation runs are explicitly headless. This
+    # also replaces a browser that the user previously opened for login/debug
+    # with a headless instance using the same persistent profile, so a later
+    # generation never reuses a visible window and steals focus.
+    ok, message = start_chrome(headless=True)
     if not ok:
         raise GoogleFlowError("PAGE_NAVIGATION_FAILED", message, retryable=True)
     # start_chrome 只保证 CDP 首次响应；冷启动 / 无头↔有头重启期端口会抖动，
@@ -175,16 +231,22 @@ def _bring_login_browser_to_front() -> None:
     sessionhub_root = Path(get_config().sessionhub_root).expanduser().resolve()
     if str(sessionhub_root) not in sys.path:
         sys.path.insert(0, str(sessionhub_root))
-    from scene.chrome_cdp import bring_chrome_to_front  # type: ignore
+    from scene.chrome_cdp import foreground_allowed, start_chrome  # type: ignore
 
-    bring_chrome_to_front()
+    # Server/workflow subprocesses have no interactive TTY: report
+    # AUTH_REQUIRED to the canvas without surfacing a window. Direct
+    # interactive CLI recovery (or an explicit force flag) may still show it.
+    # The app's "打开内置浏览器/登录" commands remain explicitly foregrounded.
+    if foreground_allowed():
+        start_chrome(foreground=True)
 
 
 def _raise_auth_required(message: str, recovery_hint: str) -> None:
     """Google Flow 登录失效时走 Ops-Cli 统一认证出口。
 
-    交互终端会把同一个 9222 长期浏览器切到前台；workflow、定时任务
-    和 Evan 服务端保持静默，只返回结构化 AUTH_REQUIRED，避免抢占前台。
+    交互终端可把同一个 19222 长期浏览器切到前台；workflow、定时任务
+    和 Evan 服务端只返回结构化 AUTH_REQUIRED，必须由用户主动点击
+    「打开内置浏览器/登录」后才显示窗口。
     """
     try:
         _bring_login_browser_to_front()
@@ -249,7 +311,7 @@ def _ensure_editor(
     timeout_ms: int = 30_000,
     poll_interval_ms: int = 500,
     reload_attempts: int = 2,
-) -> None:
+) -> str:
     """确认页面已进入 Google Flow 项目编辑器。
 
     goto 用 `wait_until="domcontentloaded"` 只保证 HTML 解析完成，Slate.js 编辑器是
@@ -266,19 +328,26 @@ def _ensure_editor(
     """
     editor = page.locator('[role="textbox"][contenteditable="true"][data-slate-editor="true"]')
     for attempt in range(reload_attempts + 1):
+        project_navigation_attempted = False
         deadline = time.monotonic() + timeout_ms / 1000
         while True:
             host = (urlparse(page.url).hostname or "").lower()
             if host == "accounts.google.com":
                 _raise_auth_required(
-                    "Google Flow 需要登录。请先在 9222 浏览器完成 Google 登录。",
-                    "请在当前长期运行的 9222 浏览器完成 Google Flow 登录，然后点击重新生成。",
+                    "Google Flow 需要登录。请先在内置浏览器完成 Google 登录。",
+                    "请在当前内置浏览器完成 Google Flow 登录，然后点击重新生成。",
                 )
             try:
                 if editor.count() == 1:
-                    return
+                    return str(page.url)
             except Exception:
                 pass
+            if _is_flow_home_url(str(getattr(page, "url", "") or "")) and not project_navigation_attempted:
+                project_navigation_attempted = True
+                if _enter_or_create_project(page):
+                    # The editor is client-rendered after project navigation;
+                    # keep polling instead of assuming it is ready immediately.
+                    continue
             if time.monotonic() >= deadline:
                 break
             time.sleep(poll_interval_ms / 1000)
@@ -303,11 +372,18 @@ def _ensure_editor(
             "Google Flow 项目编辑器在预期时间内未挂载（多为冷启动或页面渲染慢），"
             "已多次重载仍未就绪，请稍后点击重新生成。",
             retryable=True,
-            recovery_hint="通常稍等 9222 浏览器预热后重试即可，无需重新登录。",
+            recovery_hint="通常稍等内置浏览器预热后重试即可，无需重新登录。",
+        )
+    if _is_flow_home_url(current_url):
+        raise GoogleFlowError(
+            "PROJECT_CREATION_FAILED",
+            "已进入 Google Flow 首页，但未能自动进入或创建项目。",
+            retryable=True,
+            recovery_hint="请在内置浏览器确认账号已完成 Flow 首次使用引导，然后重试。",
         )
     _raise_auth_required(
         "未进入 Google Flow 项目编辑器；当前是登录页或公开介绍页。",
-        "请在当前长期运行的 9222 浏览器登录 Google Flow，进入目标项目后点击重新生成。",
+        "请在内置浏览器登录 Google Flow，进入目标项目后点击重新生成。",
     )
 
 
@@ -488,7 +564,7 @@ def _first_option_selected(options: Any) -> bool:
 
 def _clear_existing_prompt(page: Any) -> None:
     """清理上一次运行残留的提示词和参考图，避免跨任务累积。"""
-    clear = page.get_by_role("button", name="close Clear prompt", exact=True)
+    clear = page.get_by_role("button").filter(has_text=re.compile(r"(^|\s)close(\s|$)", re.IGNORECASE))
     if clear.count() == 1 and clear.is_visible():
         clear.click()
         page.wait_for_timeout(500)
@@ -501,13 +577,17 @@ def _upload_reference_file(page: Any, ref: Path) -> Any:
         try:
             dialog = page.get_by_role("dialog")
             if dialog.count() != 1 or not dialog.is_visible():
-                add = page.get_by_role("button", name="add_2 Create", exact=True)
+                add = page.locator('button[aria-haspopup="dialog"]').filter(
+                    has_text=re.compile(r"(^|\s)add_2(\s|$)", re.IGNORECASE)
+                )
                 _exact_count(add, "REFERENCE_IMAGE_ADD_FAILED", "未找到添加参考图按钮。")
                 add.click()
                 dialog = page.get_by_role("dialog")
                 dialog.wait_for(state="visible", timeout=10_000)
             page.wait_for_timeout(750)
-            upload = dialog.get_by_role("button", name="upload Upload media", exact=True)
+            upload = dialog.get_by_role("button").filter(
+                has_text=re.compile(r"(^|\s)upload(\s|$)", re.IGNORECASE)
+            )
             _exact_count(upload, "REFERENCE_IMAGE_ADD_FAILED", "未找到 Upload media 按钮。")
             with page.expect_file_chooser(timeout=10_000) as chooser_info:
                 # 媒体网格加载时 dialog 会重挂载；force 避免在 actionability 等待期间丢失节点。
@@ -527,7 +607,7 @@ def _upload_reference_file(page: Any, ref: Path) -> Any:
 def _attach_reference_images(page: Any, reference_paths: list[Path]) -> None:
     """通过 composer 的「+」(add_2 Create) 逐张上传本地参考图并 Add to Prompt。
 
-    选择器来自 9222 实时页面探查：composer 「+」= aria-haspopup=dialog 的 add_2 Create
+    选择器来自 19222 实时页面探查：composer 「+」= aria-haspopup=dialog 的 add_2 Create
     （与提交用的 arrow_forward Create 同名不同意图，需按 add_2 精确匹配）；打开的媒体
     选择器 dialog 内 upload Upload media 触发文件选择、Add to Prompt 把选中素材加入提示。
     """
@@ -539,7 +619,10 @@ def _attach_reference_images(page: Any, reference_paths: list[Path]) -> None:
         # 等待「不可点 → 可点」翻转。接受信号（任一即可）：本次文件名命中选中项、或新素材
         # 落到首位且被选中；「翻转」仅作首图兼容兜底。文件名/首位命中要求连续两次稳定后
         # 再点，避免抓到上一次的残留选中态而把旧素材误加入。
-        add_to_prompt = dialog.get_by_role("button", name="Add to Prompt", exact=True)
+        add_to_prompt = dialog.get_by_role("button", name=re.compile(
+            r"Add to Prompt|添加到提示词|加入提示词|新增至提示詞",
+            re.IGNORECASE,
+        ))
         options = dialog.get_by_role("option")
         # set_files 是异步的：先给 Flow 一点时间把新素材落位选中，别抓残留态。
         page.wait_for_timeout(1200)

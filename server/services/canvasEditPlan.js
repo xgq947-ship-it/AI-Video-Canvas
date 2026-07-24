@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { buildManifestFromNodes, computeTotalDurationSec, validateManifestShape } from '../../shared/manifest.js';
+import { FFMPEG_PATH, FFPROBE_PATH } from '../runtime/mediaTools.js';
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const round = (value) => Math.round(Number(value) * 1000) / 1000;
@@ -40,7 +41,7 @@ export const createCanvasEditService = ({ rootDir = path.resolve(process.cwd()) 
 
   const probeDuration = (assetUrl) => {
     const { absolute } = resolveLibraryAsset(assetUrl);
-    const result = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', absolute], { encoding: 'utf8' });
+    const result = spawnSync(FFPROBE_PATH, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', absolute], { encoding: 'utf8' });
     if (result.status !== 0) throw new Error(`ffprobe 失败: ${result.stderr.trim()}`);
     const duration = Number(result.stdout.trim());
     if (!(duration > 0)) throw new Error('无法读取素材时长');
@@ -84,7 +85,7 @@ export const createCanvasEditService = ({ rootDir = path.resolve(process.cwd()) 
   const analyzeDialogue = ({ audioFile, noiseDb = -38, minSilence = 0.18 }) => {
     const asset = resolveLibraryAsset(audioFile);
     const duration = probeDuration(asset.url);
-    const result = spawnSync('ffmpeg', [
+    const result = spawnSync(FFMPEG_PATH, [
       '-hide_banner', '-nostats', '-i', asset.absolute,
       '-af', `silencedetect=noise=${Number(noiseDb)}dB:d=${Number(minSilence)}`,
       '-f', 'null', '-',

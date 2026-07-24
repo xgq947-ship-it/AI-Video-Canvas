@@ -29,8 +29,8 @@
     "desktop:prepare": "npm run desktop:icons && npm run desktop:runtime && npm run desktop:verify",
     "desktop:pack": "npm run build && npm run desktop:prepare && electron-builder --dir",
     "desktop:dist": "npm run build && npm run desktop:prepare && electron-builder",
-    "desktop:dist:mac": "npm run build && npm run desktop:prepare && electron-builder --mac",
-    "desktop:dist:win": "npm run build && npm run desktop:prepare && electron-builder --win --x64",
+    "desktop:dist:mac": "npm run build && npm run desktop:prepare && electron-builder --mac --publish never",
+    "desktop:dist:win": "npm run build && npm run desktop:prepare && electron-builder --win --x64 --publish never",
     "setup:browser-models": "node scripts/setup-browser-models.mjs"
   },
   "dependencies": {

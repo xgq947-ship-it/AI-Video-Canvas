@@ -9,7 +9,10 @@ import { useEffect, useCallback, useRef } from 'react';
 import { NodeData, NodeStatus, NodeType } from '../types';
 import { extractVideoLastFrame } from '../utils/videoHelpers';
 import { getCodexImageJob, getLatestProductSceneJob, getProductSceneJob, type ProductSceneJob } from '../services/generationService';
-import { isGenerationRecoveryExpired } from '../utils/generationRecovery.js';
+import {
+    getInterruptedGenerationMessage,
+    isGenerationRecoveryExpired
+} from '../utils/generationRecovery.js';
 
 interface UseGenerationRecoveryOptions {
     nodes: NodeData[];
@@ -34,7 +37,7 @@ export const useGenerationRecovery = ({
             if (currentNode && isGenerationRecoveryExpired(currentNode)) {
                 updateNode(nodeId, {
                     status: currentNode.resultUrl ? NodeStatus.SUCCESS : NodeStatus.ERROR,
-                    errorMessage: '生成任务已中断或超时，请重新生成。',
+                    errorMessage: getInterruptedGenerationMessage(currentNode),
                     generationStartTime: undefined,
                     productSceneStage: undefined
                 });

@@ -6,13 +6,31 @@ import {
     GOOGLE_FLOW_RECOVERY_TIMEOUT_MS,
     PRODUCT_SCENE_ANALYSIS_RECOVERY_TIMEOUT_MS,
     PRODUCT_SCENE_GENERATION_RECOVERY_TIMEOUT_MS,
+    getInterruptedGenerationMessage,
     getGenerationRecoveryTimeoutMs,
+    isBrowserWorkflowGeneration,
     isGenerationRecoveryExpired
 } from '../src/utils/generationRecovery.js';
 
 test('Google Flow 卡死任务使用 18 分钟恢复上限', () => {
     assert.equal(getGenerationRecoveryTimeoutMs('google-flow-omni-flash'), 18 * 60 * 1000);
+    assert.equal(getGenerationRecoveryTimeoutMs({ imageModel: 'google-flow-nano-banana-2' }), 18 * 60 * 1000);
+    assert.equal(getGenerationRecoveryTimeoutMs({ imageModel: 'jimeng-image-5-0-pro' }), 18 * 60 * 1000);
     assert.equal(GOOGLE_FLOW_RECOVERY_TIMEOUT_MS, 18 * 60 * 1000);
+});
+
+test('浏览器任务中断时先检查平台历史，不能引导用户直接重复生成', () => {
+    const flowImage = { imageModel: 'google-flow-nano-banana-2' };
+    const jimengVideo = { videoModel: 'jimeng-seedance-2-0' };
+    assert.equal(isBrowserWorkflowGeneration(flowImage), true);
+    assert.equal(isBrowserWorkflowGeneration(jimengVideo), true);
+    assert.match(getInterruptedGenerationMessage(flowImage), /平台历史记录/);
+    assert.match(getInterruptedGenerationMessage(flowImage), /避免重复/);
+    assert.doesNotMatch(getInterruptedGenerationMessage(flowImage), /^生成任务已中断或超时，请重新生成/);
+    assert.equal(
+        getInterruptedGenerationMessage({ videoModel: 'seedance-2-0' }),
+        '生成任务已中断或超时，请重新生成。'
+    );
 });
 
 test('产品场景替换按分析与生成阶段使用不同恢复窗口', () => {

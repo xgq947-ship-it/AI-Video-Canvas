@@ -58,10 +58,17 @@ router.post('/api-keys', (req, res) => {
 
 // —— 提示词优化后端（下拉选择）——
 router.get('/optimizer', (req, res) => {
+    const codexStatus = req.app.locals.CODEX_INTEGRATION?.getStatus();
     const providers = listPromptOptimizerProviders().map(provider => ({
         ...provider,
         // CLI 后端无需密钥；API 后端标注其密钥是否已配置，供 UI 提示。
-        keyConfigured: provider.apiKeyField ? Boolean(req.app.locals[provider.apiKeyField]) : true
+        keyConfigured: provider.apiKeyField ? Boolean(req.app.locals[provider.apiKeyField]) : true,
+        available: provider.id === 'codex-cli'
+            ? Boolean(codexStatus?.available && codexStatus?.authenticated)
+            : true,
+        unavailableHint: provider.id === 'codex-cli' && !codexStatus?.authenticated
+            ? (codexStatus?.error || '请先配置并登录 Codex CLI')
+            : ''
     }));
     res.json({ providers, current: describeOptimizerSettings(req.app) });
 });
@@ -78,6 +85,38 @@ router.post('/optimizer', (req, res) => {
     } catch (error) {
         console.error('[优化后端] 保存失败：', error);
         res.status(400).json({ error: error.message || '优化后端保存失败' });
+    }
+});
+
+router.get('/codex', (req, res) => {
+    try {
+        const integration = req.app.locals.CODEX_INTEGRATION;
+        if (!integration) return res.status(503).json({ error: 'Codex 服务不可用' });
+        res.json(integration.getStatus({
+            force: req.query.refresh === '1'
+        }));
+    } catch (error) {
+        res.status(500).json({ error: error.message || '读取 Codex 状态失败' });
+    }
+});
+
+router.post('/codex', (req, res) => {
+    try {
+        const integration = req.app.locals.CODEX_INTEGRATION;
+        if (!integration) return res.status(503).json({ error: 'Codex 服务不可用' });
+        res.json(integration.setCliPath(req.body?.cliPath || ''));
+    } catch (error) {
+        res.status(400).json({ error: error.message || '保存 Codex 配置失败' });
+    }
+});
+
+router.post('/codex/login', (req, res) => {
+    try {
+        const integration = req.app.locals.CODEX_INTEGRATION;
+        if (!integration) return res.status(503).json({ error: 'Codex 服务不可用' });
+        res.status(202).json(integration.startLogin());
+    } catch (error) {
+        res.status(400).json({ error: error.message || '启动 Codex 登录失败' });
     }
 });
 

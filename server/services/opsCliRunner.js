@@ -18,6 +18,10 @@ import {
     browserStateForError,
     inferBrowserProvider
 } from './browserSessionState.js';
+import {
+    decodeProcessOutput,
+    withUtf8PythonEnvironment
+} from '../utils/processOutput.js';
 
 /** server/python —— 内置 Python 运行时根目录。 */
 export const PYTHON_ROOT = RUNTIME_PATHS.pythonRoot;
@@ -55,9 +59,9 @@ const BROWSER_LOGIN_IDLE_CLOSE_MS =
 let activeBrowserOperations = 0;
 let browserIdleTimer = null;
 
-function opsEnvironment() {
+export function opsEnvironment() {
     return {
-        ...process.env,
+        ...withUtf8PythonEnvironment(process.env),
         PYTHONUNBUFFERED: '1',
         PYTHONPATH: [PYTHON_ROOT, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
         EVAN_DATA_DIR: RUNTIME_PATHS.dataDir,
@@ -72,7 +76,6 @@ function opsEnvironment() {
         // window explicitly, so the backend must not globally force auth
         // recovery popups for every Flow/Jimeng subprocess.
         OPS_FORCE_LOGIN_POPUP: process.env.OPS_FORCE_LOGIN_POPUP,
-        PYTHONIOENCODING: 'utf-8',
         NO_COLOR: '1'
     };
 }
@@ -180,7 +183,9 @@ export function runOpsCli({
     timeoutMs,
     label,
     initialSessionState = 'checking',
-    successSessionState = 'authenticated'
+    successSessionState = 'authenticated',
+    spawnProcess = spawn,
+    sessionStateStore = browserSessionState
 }) {
     const provider = inferBrowserProvider(args);
     const tracksBrowser = Boolean(provider) || args[0] === 'browser';
@@ -189,7 +194,7 @@ export function runOpsCli({
     } catch (error) {
         const state = browserStateForError(error);
         if (provider && state) {
-            browserSessionState.transition(provider, state, {
+            sessionStateStore.transition(provider, state, {
                 errorCode: error.code,
                 message: error.message
             });
@@ -213,24 +218,25 @@ export function runOpsCli({
             browserOperationFinished = true;
             finishBrowserOperation(idleDelayMs);
         };
-        if (provider) browserSessionState.transition(provider, initialSessionState);
-        const child = spawn(command, commandArgs, {
+        if (provider) sessionStateStore.transition(provider, initialSessionState);
+        const child = spawnProcess(command, commandArgs, {
             cwd: PYTHON_ROOT,
             env: opsEnvironment(),
             stdio: ['ignore', 'pipe', 'pipe']
         });
 
-        let stdout = '';
-        let stderr = '';
-        let timedOut = false;
+        const stdoutChunks = [];
+        const stderrChunks = [];
+        let settled = false;
 
         const timer = setTimeout(() => {
-            timedOut = true;
+            if (settled) return;
+            settled = true;
             child.kill('SIGTERM');
             const error = new Error(`${label}执行超时`);
             error.code = 'OPS_TIMEOUT';
             if (provider) {
-                browserSessionState.transition(provider, 'unknown', {
+                sessionStateStore.transition(provider, 'unknown', {
                     errorCode: error.code,
                     message: error.message
                 });
@@ -239,15 +245,17 @@ export function runOpsCli({
             reject(error);
         }, timeoutMs);
 
-        child.stdout.on('data', chunk => { stdout += chunk.toString(); });
-        child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+        child.stdout.on('data', chunk => { stdoutChunks.push(Buffer.from(chunk)); });
+        child.stderr.on('data', chunk => { stderrChunks.push(Buffer.from(chunk)); });
 
         child.on('error', error => {
+            if (settled) return;
+            settled = true;
             clearTimeout(timer);
             const wrapped = new Error(`${label}无法启动 Python 进程：${error.message}`);
             wrapped.code = 'BROWSER_MODELS_NOT_READY';
             if (provider) {
-                browserSessionState.transition(provider, 'browser_unavailable', {
+                sessionStateStore.transition(provider, 'browser_unavailable', {
                     errorCode: wrapped.code,
                     message: wrapped.message
                 });
@@ -257,9 +265,12 @@ export function runOpsCli({
         });
 
         child.on('close', code => {
+            if (settled) return;
+            settled = true;
             clearTimeout(timer);
-            if (timedOut) return;
 
+            const stdout = decodeProcessOutput(stdoutChunks);
+            const stderr = decodeProcessOutput(stderrChunks);
             let payload;
             try {
                 payload = extractOpsJson(stdout);
@@ -267,7 +278,7 @@ export function runOpsCli({
                 const detail = stderr.trim() || `进程退出码 ${code}`;
                 const wrapped = new Error(`${label}失败：${detail}`);
                 if (provider) {
-                    browserSessionState.transition(provider, 'unknown', {
+                    sessionStateStore.transition(provider, 'unknown', {
                         errorCode: 'INVALID_CLI_RESPONSE',
                         message: wrapped.message
                     });
@@ -287,12 +298,12 @@ export function runOpsCli({
                 if (data.error_code) error.code = data.error_code;
                 const state = browserStateForError(error);
                 if (provider && state) {
-                    browserSessionState.transition(provider, state, {
+                    sessionStateStore.transition(provider, state, {
                         errorCode: error.code,
                         message: error.message
                     });
                 } else if (provider) {
-                    browserSessionState.transition(provider, 'unknown', {
+                    sessionStateStore.transition(provider, 'unknown', {
                         errorCode: error.code || 'OPS_FAILED',
                         message: error.message
                     });
@@ -302,7 +313,7 @@ export function runOpsCli({
                 return;
             }
 
-            if (provider) browserSessionState.transition(provider, successSessionState);
+            if (provider) sessionStateStore.transition(provider, successSessionState);
             finishTrackedBrowserOperation();
             resolve({ data, runId: deriveRunId(data) });
         });

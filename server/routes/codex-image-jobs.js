@@ -10,6 +10,22 @@ const router = express.Router();
 
 router.post('/codex-image-jobs', (req, res) => {
     try {
+        const codexStatus = req.app.locals.CODEX_INTEGRATION?.getStatus();
+        if (!codexStatus?.available) {
+            return res.status(503).json({
+                error: '未检测到 Codex CLI。请在设置 → Codex 服务中选择本机 Codex。'
+            });
+        }
+        if (!codexStatus.authenticated) {
+            return res.status(401).json({
+                error: 'Codex 尚未登录。请在设置 → Codex 服务中完成 ChatGPT 登录。'
+            });
+        }
+        if (!codexStatus.skillInstalled || !codexStatus.queueBridgeReady) {
+            return res.status(503).json({
+                error: 'Codex 运行桥接未准备完成，请重启 Evan 后重试。'
+            });
+        }
         const { CODEX_IMAGE_JOBS_DIR, LIBRARY_DIR, WORKFLOWS_DIR, PROJECTS_DIR } = req.app.locals;
         const target = resolveProjectMediaTarget(req.body.workflowId, 'images', {
             workflowsDir: WORKFLOWS_DIR,

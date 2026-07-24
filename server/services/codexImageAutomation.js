@@ -8,6 +8,11 @@ const ACTIVE_STATUSES = new Set(['pending', 'processing']);
 const LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_LOG_FILES = 10;
 
+function windowsCommandLine(command, args) {
+    const quote = value => `"${String(value).replaceAll('"', '""')}"`;
+    return [quote(command), ...args.map(quote)].join(' ');
+}
+
 export function pruneCodexAutomationLogs(
     automationDir,
     { now = Date.now(), maxAgeMs = LOG_RETENTION_MS, maxFiles = MAX_LOG_FILES } = {}
@@ -31,14 +36,15 @@ export function pruneCodexAutomationLogs(
     return removed;
 }
 
-export function buildCodexAutomationCommand(projectRoot, codexPath) {
+export function buildCodexAutomationCommand(projectRoot, codexPath, queueCommand = '') {
     const command = resolveCodexBin({ projectRoot, configuredPath: codexPath });
     const prompt = [
         '使用 twitcanva-codex-images skill，自动处理当前 Evan 项目中的全部图片生成任务。',
         '先恢复 processing 任务，再按创建时间处理 pending 任务，直到连续两次检查队列都为空。',
         '必须使用当前 ChatGPT 登录包含的内置 image_gen 能力，不调用 OpenAI API，也不要索要 API Key。',
+        queueCommand ? `Evan 队列桥接命令为：${queueCommand}` : '',
         '严格只操作 library/codex-image-jobs、library/projects 下当前项目素材目录及兼容的 library/images，不修改项目源代码，不等待用户输入。'
-    ].join('\n');
+    ].filter(Boolean).join('\n');
 
     return {
         command,
@@ -57,6 +63,9 @@ export function createCodexImageAutomation({
     projectRoot,
     jobsDir,
     codexPath,
+    workspaceDir = projectRoot,
+    commandEnvironment = () => process.env,
+    platform = process.platform,
     enabled = process.env.CODEX_IMAGE_AUTOMATION !== 'false',
     spawnProcess = spawn,
     maxAttempts = 3,
@@ -64,7 +73,17 @@ export function createCodexImageAutomation({
     timeoutMs = 30 * 60 * 1000
 }) {
     const automationDir = path.join(jobsDir, 'automation');
-    const commandSpec = buildCodexAutomationCommand(projectRoot, codexPath);
+    const resolveCommandSpec = () => {
+        const environment = typeof commandEnvironment === 'function'
+            ? commandEnvironment()
+            : commandEnvironment;
+        return buildCodexAutomationCommand(
+            workspaceDir,
+            typeof codexPath === 'function' ? codexPath() : codexPath,
+            environment?.EVAN_CODEX_QUEUE || ''
+        );
+    };
+    const initialCommandSpec = resolveCommandSpec();
     let child = null;
     let scheduled = false;
     let retryTimer = null;
@@ -72,7 +91,7 @@ export function createCodexImageAutomation({
     let state = {
         enabled,
         status: enabled ? 'idle' : 'disabled',
-        command: commandSpec.command,
+        command: initialCommandSpec.command,
         pid: null,
         startedAt: null,
         finishedAt: null,
@@ -142,6 +161,7 @@ export function createCodexImageAutomation({
     const run = () => {
         if (!enabled || child || getActiveJobs().length === 0) return;
 
+        const commandSpec = resolveCommandSpec();
         fs.mkdirSync(automationDir, { recursive: true });
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const logFile = path.join(automationDir, `worker-${timestamp}.log`);
@@ -159,15 +179,26 @@ export function createCodexImageAutomation({
             finishedAt: null,
             lastExitCode: null,
             lastError: null,
+            command: commandSpec.command,
             logFile
         };
 
         let settled = false;
         let timeout;
         try {
-            child = spawnProcess(commandSpec.command, commandSpec.args, {
-                cwd: projectRoot,
-                env: process.env,
+            const environment = typeof commandEnvironment === 'function'
+                ? commandEnvironment()
+                : commandEnvironment;
+            const isWindowsScript = platform === 'win32' && /\.(?:cmd|bat)$/i.test(commandSpec.command);
+            const spawnCommand = isWindowsScript
+                ? (environment.ComSpec || 'cmd.exe')
+                : commandSpec.command;
+            const spawnArgs = isWindowsScript
+                ? ['/d', '/s', '/c', windowsCommandLine(commandSpec.command, commandSpec.args)]
+                : commandSpec.args;
+            child = spawnProcess(spawnCommand, spawnArgs, {
+                cwd: workspaceDir,
+                env: environment,
                 stdio: ['ignore', logFd, logFd]
             });
             state = { ...state, pid: child.pid || null };

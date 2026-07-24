@@ -19,6 +19,7 @@ from ops_cli.platforms._google_flow_common import (
     _attach_reference_images,
     _bring_login_browser_to_front,
     _clear_existing_prompt,
+    _close_settings_menu,
     _download_media,
     _ensure_editor,
     _exact_count,
@@ -142,98 +143,111 @@ def _response_data(
     }
 
 
-def _open_settings_menu(page: Any) -> Any:
+def _open_settings_menu(page: Any) -> tuple[Any, Any]:
     """打开生成设置面板，兼容页面当前停留在 Image 或 Video 模式。
 
     汇总按钮文本会随当前模式变化：Video 模式常显示时长，Image 模式显示模型名；
     两种模式都会包含画幅图标 ligature ``crop_``，因此不能用 ``Video ·`` 作为前置条件。
     """
     settings = page.locator('button[aria-haspopup="menu"]').filter(has_text="crop_")
-    _exact_count(settings, "PAGE_NAVIGATION_FAILED", "未找到视频设置按钮。")
+    settings = _exact_count(settings, "PAGE_NAVIGATION_FAILED", "未找到视频设置按钮。")
     settings.click()
 
     menu = page.get_by_role("menu").filter(has_text=re.compile(r"16:9|9:16"))
-    _exact_count(menu, "PAGE_NAVIGATION_FAILED", "未找到视频设置菜单。")
-    return menu
+    menu = _exact_count(menu, "PAGE_NAVIGATION_FAILED", "未找到视频设置菜单。")
+    return settings, menu
 
 
 def _configure_video(page: Any, *, duration: int, aspect_ratio: str, model: str, mode: str = MODE_FRAMES) -> None:
-    menu = _open_settings_menu(page)
-
-    video_tab = menu.get_by_role("tab").filter(
-        has_text=re.compile(r"(^|\s)play_circle(\s|$)", re.IGNORECASE)
-    )
-    _exact_count(video_tab, "PAGE_NAVIGATION_FAILED", "未找到 Video 模式。")
-    video_tab.click()
-
-    # 输入子模式：ingredients → chrome_extension Ingredients（多参考图，无 Start 槽位）；
-    # 否则 crop_free Frames（首帧/首尾帧）。两个子模式的比例/时长/模型选项一致。
-    if mode == MODE_INGREDIENTS:
-        ingredients_tab = menu.get_by_role("tab").filter(
-            has_text=re.compile(r"(^|\s)chrome_extension(\s|$)", re.IGNORECASE)
+    settings, menu = _open_settings_menu(page)
+    try:
+        video_tab = menu.get_by_role("tab").filter(
+            has_text=re.compile(r"(^|\s)play_circle(\s|$)", re.IGNORECASE)
         )
-        _exact_count(ingredients_tab, "REFERENCE_IMAGE_ADD_FAILED", "未找到 Ingredients 多参考图模式。")
-        ingredients_tab.click()
-    else:
-        frames_tab = menu.get_by_role("tab").filter(
-            has_text=re.compile(r"(^|\s)crop_free(\s|$)", re.IGNORECASE)
-        )
-        _exact_count(frames_tab, "FIRST_FRAME_UPLOAD_FAILED", "未找到 Frames 首尾帧模式。")
-        frames_tab.click()
+        video_tab = _exact_count(video_tab, "PAGE_NAVIGATION_FAILED", "未找到 Video 模式。")
+        video_tab.click()
 
-    # ⚠️ 顺序很重要：必须先选模型，再选比例和时长。
-    # Flow 的可选时长是**跟着模型变**的（例如 Veo 3.1 - Lite 与 Omni Flash
-    # 提供的时长档位不同）。若先点时长，校验的是「上一个模型」的选项，
-    # 会误报 DURATION_NOT_SUPPORTED；即使侥幸点中，切模型后也可能被重置。
-    model_button = menu.locator('button[aria-haspopup="menu"]')
-    _exact_count(model_button, "MODEL_NOT_FOUND", "未找到视频模型下拉框。")
-    model_button.click()
-    model_item = page.get_by_role("menuitem", name=f"volume_up {model}", exact=True)
-    _exact_count(model_item, "MODEL_NOT_FOUND", f"页面未提供模型：{model}")
-    model_item.click()
-    # 选完模型菜单会收起，设置菜单也可能一起关掉，重新打开再设比例/时长。
-    page.wait_for_timeout(800)
-    if menu.count() == 0 or not menu.is_visible():
-        menu = _open_settings_menu(page)
-
-    ratio_name = "crop_9_16 9:16" if aspect_ratio == "9:16" else "crop_16_9 16:9"
-    ratio_tab = menu.get_by_role("tab", name=ratio_name, exact=True)
-    _exact_count(ratio_tab, "ASPECT_RATIO_NOT_SUPPORTED", f"页面未提供比例 {aspect_ratio}。")
-    ratio_tab.click()
-
-    # 有些 Flow 模型（如 Veo 3.1 - Lite）**完全不提供时长选择**，菜单里一个
-    # "Ns" tab 都没有，只有比例和输出数量。这种情况要跳过而不是报错——
-    # 之前无条件找 tab，导致这类模型必然 DURATION_NOT_SUPPORTED，根本没法用。
-    duration_tabs = menu.get_by_role("tab").filter(has_text=re.compile(r"^\d+s$"))
-    if duration_tabs.count() == 0:
-        # 该模型时长固定，用它自己的默认值即可。
-        pass
-    else:
-        duration_tab = menu.get_by_role("tab", name=f"{duration}s", exact=True)
-        if duration_tab.count() != 1:
-            offered = sorted({
-                text.strip()
-                for text in duration_tabs.all_inner_texts()
-                if text.strip()
-            })
-            raise GoogleFlowError(
-                "DURATION_NOT_SUPPORTED",
-                f"模型「{model}」不提供 {duration}s 时长"
-                + (f"，只支持 {'、'.join(offered)}。" if offered else "。"),
+        # 输入子模式：ingredients → chrome_extension Ingredients（多参考图，无 Start 槽位）；
+        # 否则 crop_free Frames（首帧/首尾帧）。两个子模式的比例/时长/模型选项一致。
+        if mode == MODE_INGREDIENTS:
+            ingredients_tab = menu.get_by_role("tab").filter(
+                has_text=re.compile(r"(^|\s)chrome_extension(\s|$)", re.IGNORECASE)
             )
-        duration_tab.click()
-    page.keyboard.press("Escape")
+            ingredients_tab = _exact_count(
+                ingredients_tab,
+                "REFERENCE_IMAGE_ADD_FAILED",
+                "未找到 Ingredients 多参考图模式。",
+            )
+            ingredients_tab.click()
+        else:
+            frames_tab = menu.get_by_role("tab").filter(
+                has_text=re.compile(r"(^|\s)crop_free(\s|$)", re.IGNORECASE)
+            )
+            frames_tab = _exact_count(
+                frames_tab,
+                "FIRST_FRAME_UPLOAD_FAILED",
+                "未找到 Frames 首尾帧模式。",
+            )
+            frames_tab.click()
+
+        # ⚠️ 顺序很重要：必须先选模型，再选比例和时长。
+        # Flow 的可选时长是**跟着模型变**的（例如 Veo 3.1 - Lite 与 Omni Flash
+        # 提供的时长档位不同）。若先点时长，校验的是「上一个模型」的选项，
+        # 会误报 DURATION_NOT_SUPPORTED；即使侥幸点中，切模型后也可能被重置。
+        model_button = menu.locator('button[aria-haspopup="menu"]')
+        model_button = _exact_count(model_button, "MODEL_NOT_FOUND", "未找到视频模型下拉框。")
+        model_button.click()
+        model_item = page.get_by_role("menuitem", name=f"volume_up {model}", exact=True)
+        model_item = _exact_count(model_item, "MODEL_NOT_FOUND", f"页面未提供模型：{model}")
+        model_item.click()
+        # 选完模型菜单会收起，设置菜单也可能一起关掉，重新打开再设比例/时长。
+        page.wait_for_timeout(800)
+        if menu.count() == 0 or not menu.is_visible():
+            settings, menu = _open_settings_menu(page)
+
+        ratio_name = "crop_9_16 9:16" if aspect_ratio == "9:16" else "crop_16_9 16:9"
+        ratio_tab = menu.get_by_role("tab", name=ratio_name, exact=True)
+        ratio_tab = _exact_count(
+            ratio_tab,
+            "ASPECT_RATIO_NOT_SUPPORTED",
+            f"页面未提供比例 {aspect_ratio}。",
+        )
+        ratio_tab.click()
+
+        # 有些 Flow 模型（如 Veo 3.1 - Lite）**完全不提供时长选择**，菜单里一个
+        # "Ns" tab 都没有，只有比例和输出数量。这种情况要跳过而不是报错——
+        # 之前无条件找 tab，导致这类模型必然 DURATION_NOT_SUPPORTED，根本没法用。
+        duration_tabs = menu.get_by_role("tab").filter(has_text=re.compile(r"^\d+s$"))
+        if duration_tabs.count() == 0:
+            # 该模型时长固定，用它自己的默认值即可。
+            pass
+        else:
+            duration_tab = menu.get_by_role("tab", name=f"{duration}s", exact=True)
+            if duration_tab.count() != 1:
+                offered = sorted({
+                    text.strip()
+                    for text in duration_tabs.all_inner_texts()
+                    if text.strip()
+                })
+                raise GoogleFlowError(
+                    "DURATION_NOT_SUPPORTED",
+                    f"模型「{model}」不提供 {duration}s 时长"
+                    + (f"，只支持 {'、'.join(offered)}。" if offered else "。"),
+                )
+            duration_tab.click()
+    finally:
+        _close_settings_menu(page, menu, settings)
 
 
 def _upload_first_frame(page: Any, frame_path: Path) -> None:
     start = page.locator('[type="button"][aria-haspopup="dialog"]').filter(has_text="Start")
-    _exact_count(start, "FIRST_FRAME_UPLOAD_FAILED", "未找到 Start 首帧槽位。")
+    start = _exact_count(start, "FIRST_FRAME_UPLOAD_FAILED", "未找到 Start 首帧槽位。")
     start.click()
 
     dialog = page.get_by_role("dialog")
-    _exact_count(dialog, "FIRST_FRAME_UPLOAD_FAILED", "未打开首帧素材选择框。")
+    dialog = _exact_count(dialog, "FIRST_FRAME_UPLOAD_FAILED", "未打开首帧素材选择框。")
     upload = dialog.get_by_role("button", name="upload Upload media", exact=True)
-    _exact_count(upload, "FIRST_FRAME_UPLOAD_FAILED", "未找到 Upload media 按钮。")
+    upload = _exact_count(upload, "FIRST_FRAME_UPLOAD_FAILED", "未找到 Upload media 按钮。")
     try:
         with page.expect_file_chooser(timeout=10_000) as chooser_info:
             upload.click()
@@ -300,6 +314,15 @@ def _download_video(page: Any, video_url: str, output_dir: Path, stamp: str) -> 
     return _download_media(page, video_url, output_dir, stamp, prefix="google_flow_", default_ext=".mp4")
 
 
+def _capture_proof_screenshot(page: Any, screenshot_path: Path) -> str | None:
+    """生成结果已出现后，截图失败不能把成功任务误报为可重试失败。"""
+    try:
+        page.screenshot(path=str(screenshot_path), full_page=True, timeout=30_000)
+        return str(screenshot_path)
+    except Exception:
+        return None
+
+
 def _execute_generation(
     *,
     prompt: str,
@@ -311,7 +334,7 @@ def _execute_generation(
     model: str,
     output_dir: Path,
     timeout_minutes: int,
-) -> tuple[str | None, str, str]:
+) -> tuple[str | None, str, str | None]:
     cdp_url, PlaywrightError, PlaywrightTimeoutError, sync_playwright = _import_browser_runtime()
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -331,7 +354,11 @@ def _execute_generation(
                     project_url = _ensure_editor(page)
                     _configure_video(page, duration=duration, aspect_ratio=aspect_ratio, model=model, mode=mode)
                     prompt_box = page.locator('[role="textbox"][contenteditable="true"][data-slate-editor="true"]')
-                    _exact_count(prompt_box, "PROMPT_INPUT_NOT_FOUND", "未找到提示词输入框。")
+                    prompt_box = _exact_count(
+                        prompt_box,
+                        "PROMPT_INPUT_NOT_FOUND",
+                        "未找到提示词输入框。",
+                    )
 
                     if mode == MODE_INGREDIENTS:
                         # 清掉上次残留的提示词/参考图。
@@ -353,7 +380,7 @@ def _execute_generation(
                     create = page.get_by_role("button").filter(
                         has_text=re.compile(r"(^|\s)arrow_forward(\s|$)", re.IGNORECASE)
                     )
-                    _exact_count(create, "GENERATE_BUTTON_NOT_FOUND", "未找到生成按钮。")
+                    create = _exact_count(create, "GENERATE_BUTTON_NOT_FOUND", "未找到生成按钮。")
                     if not create.is_enabled():
                         raise GoogleFlowError("GENERATE_BUTTON_NOT_FOUND", "生成按钮不可用，请检查首帧和提示词。")
                     create.click()
@@ -368,16 +395,22 @@ def _execute_generation(
                         created_pages=created_pages,
                     )
                     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    screenshot_path = output_dir / f"google_flow_{stamp}.png"
-                    result_page.screenshot(path=str(screenshot_path), full_page=True, timeout=30_000)
+                    screenshot_path = _capture_proof_screenshot(
+                        result_page,
+                        output_dir / f"google_flow_{stamp}.png",
+                    )
                     video_path = _download_video(result_page, video_url, output_dir, stamp)
                     if not video_path and not video_url.startswith(("http://", "https://")):
                         raise GoogleFlowError(
                             "VIDEO_DOWNLOAD_FAILED",
-                            "生成完成，但页面只返回临时 blob 地址，无法保存视频或提供可复用链接。",
-                            retryable=True,
+                            "Google Flow 已生成视频，但页面只返回临时地址，自动保存失败。",
+                            retryable=False,
+                            recovery_hint=(
+                                "请到 Google Flow 项目历史中下载本次结果，不要直接重新生成，"
+                                "避免重复消耗额度。"
+                            ),
                         )
-                    return video_path, video_url, str(screenshot_path)
+                    return video_path, video_url, screenshot_path
             finally:
                 # 关闭本次接管时自己新建的孤儿标签页；复用到的既有标签不在其中，
                 # managed_work_page 创建的工作页由它自己的上下文管理器关闭。

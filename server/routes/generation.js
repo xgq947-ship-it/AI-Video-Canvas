@@ -34,6 +34,14 @@ const productSceneContext = appLocals => ({
 
 router.post('/product-scene-jobs', (req, res) => {
     try {
+        const codexStatus = req.app.locals.CODEX_INTEGRATION?.getStatus();
+        if (!codexStatus?.available || !codexStatus.authenticated) {
+            return res.status(codexStatus?.available ? 401 : 503).json({
+                error: codexStatus?.available
+                    ? 'Codex 尚未登录，请先在设置 → Codex 服务中登录 ChatGPT'
+                    : '未检测到 Codex CLI，请先在设置 → Codex 服务中完成配置'
+            });
+        }
         const job = createProductSceneJob(req.body || {}, productSceneContext(req.app.locals));
         return res.status(202).json(job);
     } catch (error) {

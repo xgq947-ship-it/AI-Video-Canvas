@@ -117,6 +117,7 @@ export function inferBrowserProvider(args = []) {
 
 export function browserStateForError(error) {
     if (['AUTH_REQUIRED', 'SCENE_CAPTURE_FAILED'].includes(error?.code)) return 'expired';
+    if (error?.code === 'SUBMISSION_UNKNOWN') return 'submission_unknown';
     if (['BROWSER_CLOSED', 'BROWSER_MODELS_NOT_READY'].includes(error?.code)) {
         return 'browser_unavailable';
     }

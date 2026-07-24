@@ -10,7 +10,9 @@ Evan 是一个本地优先的 AI 图片、视频与漫剧生产桌面应用。�
 ## 普通用户
 
 安装版已经内置 Electron 后端、Chromium、FFmpeg/FFprobe 和独立自动化运行时，不要求
-用户安装 Node.js、Python、Chrome、Chrome Beta、Codex CLI 或 Claude CLI。
+用户安装 Node.js、Python、Chrome 或 Chrome Beta。普通画布、Flow/即梦和本地渲染也不
+依赖 Codex；只有选择“Codex 生图”等可选高级能力时，才需要用户单独安装并登录最新版
+Codex CLI。Evan 不捆绑固定 Codex 版本。
 
 - [macOS 首次安装与使用](docs/首次安装使用-macOS.md)
 - [Windows 首次安装与使用](docs/首次安装使用-Windows.md)

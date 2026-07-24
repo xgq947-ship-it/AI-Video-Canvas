@@ -12,6 +12,8 @@
 
 - 最终用户使用自包含 Electron 安装包，不得重新引入系统 Chrome、Chrome Beta、Node、
   Python 或 FFmpeg 作为运行前置条件。
+- Codex 是可选连接器：不得把固定版本 Codex CLI 打入安装包或锁进项目依赖。运行时使用
+  用户单独安装/更新的 CLI；Evan 仅管理应用专用 `CODEX_HOME`、Skill、队列桥接和状态 UI。
 - Flow/即梦自动生成默认使用 Evan 内置 Chromium 无头运行；只有用户主动登录或调试时
   才显示浏览器。
 - 用户项目、素材、密钥和 `browser-profile` 属于持久化用户数据，升级和普通卸载不得

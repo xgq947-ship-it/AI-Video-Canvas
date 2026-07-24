@@ -222,9 +222,62 @@ def _import_browser_runtime():
 
 
 def _exact_count(locator: Any, error_code: str, message: str) -> Any:
-    if locator.count() != 1:
-        raise GoogleFlowError(error_code, message)
-    return locator
+    count = locator.count()
+    if count == 1:
+        return locator
+    visible: list[Any] = []
+    for index in range(count):
+        node = locator.nth(index)
+        try:
+            if node.is_visible():
+                visible.append(node)
+        except Exception:
+            continue
+    if len(visible) == 1:
+        return visible[0]
+    raise GoogleFlowError(error_code, message)
+
+
+def _locator_visible(locator: Any) -> bool:
+    try:
+        count = locator.count()
+        for index in range(count):
+            node = locator if count == 1 else locator.nth(index)
+            try:
+                if node.is_visible():
+                    return True
+            except Exception:
+                continue
+        return False
+    except Exception:
+        return False
+
+
+def _close_settings_menu(page: Any, menu: Any, trigger: Any) -> None:
+    """收起 Flow 设置菜单，并验证它不再遮挡 composer。
+
+    第三方页面的菜单在切换模型/比例后可能保留。只发一个 Escape 没有成功判据，
+    会把遮挡问题推迟到上传或提交步骤才报一个误导性的 click timeout。
+    """
+    for _ in range(3):
+        if not _locator_visible(menu):
+            return
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(250)
+
+    if _locator_visible(menu):
+        try:
+            trigger.click(force=True, timeout=3000)
+        except Exception:
+            trigger.evaluate("(element) => element.click()")
+        page.wait_for_timeout(500)
+
+    if _locator_visible(menu):
+        raise GoogleFlowError(
+            "PAGE_NAVIGATION_FAILED",
+            "Google Flow 参数设置菜单未能关闭，已中止提交；请稍后重试。",
+            retryable=True,
+        )
 
 
 def _bring_login_browser_to_front() -> None:
@@ -489,9 +542,13 @@ def wait_for_new_media(
                 consecutive_read_errors += 1
                 if consecutive_read_errors >= MAX_CONSECUTIVE_PAGE_READ_ERRORS:
                     raise GoogleFlowError(
-                        "PAGE_NAVIGATION_FAILED",
+                        "SUBMISSION_UNKNOWN",
                         f"生成期间连续 {consecutive_read_errors} 次读取 Flow 页面失败：{exc}",
-                        retryable=True,
+                        retryable=False,
+                        recovery_hint=(
+                            "生成请求已经提交，状态暂时无法确认。请先到 Google Flow 项目历史中"
+                            "确认是否已有结果，避免直接重试造成重复生成和额度消耗。"
+                        ),
                     ) from exc
                 time.sleep(2)
                 continue
@@ -506,12 +563,24 @@ def wait_for_new_media(
             replacement_deadline = replacement_deadline or time.monotonic() + 30
             if time.monotonic() >= replacement_deadline:
                 raise GoogleFlowError(
-                    "PAGE_NAVIGATION_FAILED",
+                    "SUBMISSION_UNKNOWN",
                     "生成期间 Flow 工作标签页关闭，且 30 秒内未找到可接管的项目页面。",
-                    retryable=True,
+                    retryable=False,
+                    recovery_hint=(
+                        "生成请求已经提交，请先到 Google Flow 项目历史中确认结果，"
+                        "避免直接重试造成重复生成和额度消耗。"
+                    ),
                 ) from exc
             time.sleep(1)
-    raise GoogleFlowError("GENERATION_TIMEOUT", f"等待生成超过 {timeout_minutes} 分钟。", retryable=True)
+    raise GoogleFlowError(
+        "SUBMISSION_UNKNOWN",
+        f"等待 Google Flow 生成超过 {timeout_minutes} 分钟，无法确认任务最终状态。",
+        retryable=False,
+        recovery_hint=(
+            "生成请求已经提交，请先到 Google Flow 项目历史中确认结果；"
+            "确认没有任务后再重新生成，避免重复消耗额度。"
+        ),
+    )
 
 
 def _download_media(
@@ -580,7 +649,7 @@ def _upload_reference_file(page: Any, ref: Path) -> Any:
                 add = page.locator('button[aria-haspopup="dialog"]').filter(
                     has_text=re.compile(r"(^|\s)add_2(\s|$)", re.IGNORECASE)
                 )
-                _exact_count(add, "REFERENCE_IMAGE_ADD_FAILED", "未找到添加参考图按钮。")
+                add = _exact_count(add, "REFERENCE_IMAGE_ADD_FAILED", "未找到添加参考图按钮。")
                 add.click()
                 dialog = page.get_by_role("dialog")
                 dialog.wait_for(state="visible", timeout=10_000)
@@ -588,7 +657,7 @@ def _upload_reference_file(page: Any, ref: Path) -> Any:
             upload = dialog.get_by_role("button").filter(
                 has_text=re.compile(r"(^|\s)upload(\s|$)", re.IGNORECASE)
             )
-            _exact_count(upload, "REFERENCE_IMAGE_ADD_FAILED", "未找到 Upload media 按钮。")
+            upload = _exact_count(upload, "REFERENCE_IMAGE_ADD_FAILED", "未找到 Upload media 按钮。")
             with page.expect_file_chooser(timeout=10_000) as chooser_info:
                 # 媒体网格加载时 dialog 会重挂载；force 避免在 actionability 等待期间丢失节点。
                 upload.click(force=True, timeout=10_000)

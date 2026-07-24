@@ -29,6 +29,9 @@ test('桌面安装包按目标平台原生构建并在打包前验收运行时',
   assert.match(runtimeBuilder, /\['ffmpeg\.README', 'README\.md'\]/);
   assert.match(runtimeVerifier, /chrome-win64/);
   assert.match(runtimeVerifier, /chrome-mac-arm64/);
+  assert.ok(pkg.build.files.includes('scripts/codex-image-queue.mjs'));
+  assert.ok(pkg.build.files.includes('integrations/skills/twitcanva-codex-images/**/*'));
+  assert.ok(pkg.build.asarUnpack.includes('integrations/skills/twitcanva-codex-images/**/*'));
 });
 
 test('Windows NSIS 保留用户数据并创建桌面和开始菜单快捷方式', () => {
@@ -69,6 +72,8 @@ test('自定义项目路径只通过 Electron 原生选择器和桌面令牌提�
   assert.match(electronMain, /showOpenDialog/);
   assert.match(electronMain, /X-Evan-Desktop-Token/);
   assert.match(electronPreload, /selectProjectLocation/);
+  assert.match(electronPreload, /selectCodexCli/);
+  assert.match(electronMain, /codex:select-cli/);
   assert.match(serverMain, /EVAN_DESKTOP_TOKEN/);
   assert.match(serverMain, /自定义项目路径必须通过桌面应用选择/);
 });

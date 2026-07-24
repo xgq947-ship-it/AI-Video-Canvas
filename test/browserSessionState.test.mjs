@@ -43,6 +43,7 @@ test('browser provider is inferred from ops cli arguments', () => {
 test('only explicit auth and browser errors change availability state', () => {
     assert.equal(browserStateForError({ code: 'AUTH_REQUIRED' }), 'expired');
     assert.equal(browserStateForError({ code: 'SCENE_CAPTURE_FAILED' }), 'expired');
+    assert.equal(browserStateForError({ code: 'SUBMISSION_UNKNOWN' }), 'submission_unknown');
     assert.equal(browserStateForError({ code: 'BROWSER_CLOSED' }), 'browser_unavailable');
     assert.equal(browserStateForError({ code: 'PAGE_NAVIGATION_FAILED' }), null);
 });

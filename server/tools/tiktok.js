@@ -11,6 +11,7 @@ import path from 'path';
 import { spawn } from 'child_process';
 import crypto from 'crypto';
 import { FFMPEG_PATH } from '../runtime/mediaTools.js';
+import { decodeProcessOutput } from '../utils/processOutput.js';
 
 // ============================================================================
 // CONSTANTS
@@ -293,15 +294,16 @@ async function trimVideoFrames(inputPath, outputPath, duration) {
 
         const proc = spawn(FFMPEG_PATH, args);
 
-        let stderr = '';
+        const stderrChunks = [];
         proc.stderr.on('data', (data) => {
-            stderr += data.toString();
+            stderrChunks.push(Buffer.from(data));
         });
 
         proc.on('close', (code) => {
             if (code === 0) {
                 resolve();
             } else {
+                const stderr = decodeProcessOutput(stderrChunks);
                 reject(new Error(`FFmpeg failed with code ${code}: ${stderr.slice(-500)}`));
             }
         });

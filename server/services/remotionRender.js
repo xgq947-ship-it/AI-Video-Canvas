@@ -9,11 +9,13 @@
 import path from 'path';
 import fs from 'fs';
 import { spawn } from 'child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'url';
 import { validateManifestShape, computeTotalDurationSec } from '../../shared/manifest.js';
 import { findMissingAssets } from '../utils/manifestAssets.js';
 import { FFMPEG_PATH } from '../runtime/mediaTools.js';
 import { resolveBundledBrowserExecutable } from '../runtime/browserExecutable.js';
+import { decodeProcessOutput } from '../utils/processOutput.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -40,15 +42,22 @@ const ffmpegMaster = (inputPath, outputPath, onLog) =>
       outputPath,
     ];
     const proc = spawn(FFMPEG_PATH, args);
-    let stderr = '';
+    const stderrChunks = [];
+    const logDecoder = new StringDecoder('utf8');
     proc.stderr.on('data', (d) => {
-      stderr += d.toString();
-      if (onLog) onLog(d.toString());
+      stderrChunks.push(Buffer.from(d));
+      const text = logDecoder.write(d);
+      if (onLog && text) onLog(text);
     });
     proc.on('error', reject);
     proc.on('close', (code) => {
+      const tail = logDecoder.end();
+      if (onLog && tail) onLog(tail);
       if (code === 0) resolve();
-      else reject(new Error(`ffmpeg loudnorm 失败 (code ${code}): ${stderr.slice(-500)}`));
+      else {
+        const stderr = decodeProcessOutput(stderrChunks);
+        reject(new Error(`ffmpeg loudnorm 失败 (code ${code}): ${stderr.slice(-500)}`));
+      }
     });
   });
 

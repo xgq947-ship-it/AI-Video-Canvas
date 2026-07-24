@@ -28,6 +28,8 @@ from ops_cli.platforms.image_to_video.providers.jimeng import (
     REJECTION_MARKERS,
     JimengError,
     _composer_image_count,
+    _close_transient_popovers,
+    _ensure_result_delivery,
     _ensure_composer,
     _fill_prompt,
     _matched_line,
@@ -255,8 +257,7 @@ def _configure_output(page: Any, *, aspect_ratio: str, resolution: str, count: i
             required=True,
         )
     finally:
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(400)
+        _close_transient_popovers(page, trigger=button)
 
 
 def _attach_reference_images(page: Any, reference_paths: list[Path]) -> None:
@@ -355,7 +356,7 @@ def _wait_for_images(
         except Exception as exc:
             if any(marker in str(exc) for marker in FATAL_PAGE_MARKERS):
                 raise JimengError(
-                    "BROWSER_CLOSED",
+                    "SUBMISSION_UNKNOWN",
                     "等待图片结果期间，内置浏览器或即梦标签页被关闭了。",
                     retryable=False,
                     recovery_hint="任务可能已提交，请先在即梦历史会话中确认，避免重复扣积分。",
@@ -363,16 +364,24 @@ def _wait_for_images(
             consecutive_read_errors += 1
             if consecutive_read_errors >= MAX_CONSECUTIVE_PAGE_READ_ERRORS:
                 raise JimengError(
-                    "PAGE_NAVIGATION_FAILED",
+                    "SUBMISSION_UNKNOWN",
                     f"图片生成期间连续 {consecutive_read_errors} 次读取即梦页面失败：{exc}",
-                    retryable=True,
+                    retryable=False,
+                    recovery_hint=(
+                        "图片生成请求已经提交，请先在即梦历史会话中确认结果，"
+                        "避免直接重试造成重复生成和积分消耗。"
+                    ),
                 ) from exc
             time.sleep(2)
     detail = f"页面提示：{queue_message}。" if queue_message else ""
     raise JimengError(
-        "GENERATION_TIMEOUT",
-        f"等待即梦图片生成超过 {timeout_minutes} 分钟。{detail}",
-        retryable=True,
+        "SUBMISSION_UNKNOWN",
+        f"等待即梦图片生成超过 {timeout_minutes} 分钟，无法确认任务最终状态。{detail}",
+        retryable=False,
+        recovery_hint=(
+            "图片生成请求已经提交，请先在即梦历史会话中确认结果；"
+            "确认没有任务后再重新生成，避免重复消耗积分。"
+        ),
     )
 
 
@@ -439,12 +448,11 @@ def _execute_generation(
                         default_ext=".png",
                     )
                     images.append({"path": saved, "url": url})
-                if not any(item["path"] for item in images):
-                    raise JimengError(
-                        "IMAGE_DOWNLOAD_FAILED",
-                        "即梦已生成图片，但无法保存到本地。",
-                        retryable=True,
-                    )
+                _ensure_result_delivery(
+                    images,
+                    error_code="IMAGE_DOWNLOAD_FAILED",
+                    media_label="图片",
+                )
                 screenshot = output_dir / f"jimeng_img_{stamp}.png"
                 try:
                     page.screenshot(path=str(screenshot), full_page=False, timeout=30_000)

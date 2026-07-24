@@ -79,6 +79,8 @@
       "server/**/*",
       "shared/**/*",
       "remotion/**/*",
+      "scripts/codex-image-queue.mjs",
+      "integrations/skills/twitcanva-codex-images/**/*",
       "LICENSE",
       "NOTICE",
       "package.json",
@@ -88,7 +90,8 @@
       "!server/python/**/__pycache__{,/**/*}"
     ],
     "asarUnpack": [
-      "server/python/**/*"
+      "server/python/**/*",
+      "integrations/skills/twitcanva-codex-images/**/*"
     ],
     "extraResources": [
       {

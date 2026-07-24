@@ -23,6 +23,8 @@ import { applyApiKeysToApp, loadApiKeyOverrides } from './services/apiKeyStore.j
 import { normalizeCharacterAssetMeta } from './services/characterAssets.js';
 import { createUniqueAssetFilename } from './services/assetFilenames.js';
 import { createCodexImageAutomation } from './services/codexImageAutomation.js';
+import { createCodexIntegration } from './services/codexIntegration.js';
+import { decodeProcessOutput } from './utils/processOutput.js';
 import { scanAssetLibrary } from './utils/scanAssetLibrary.js';
 import {
     organizeWorkflowAssets,
@@ -134,9 +136,17 @@ app.locals.PROJECTS_DIR = PROJECTS_DIR;
 app.locals.WORKFLOWS_DIR = WORKFLOWS_DIR;
 app.locals.LIBRARY_DIR = LIBRARY_DIR;
 app.locals.CODEX_IMAGE_JOBS_DIR = CODEX_IMAGE_JOBS_DIR;
+app.locals.CODEX_INTEGRATION = createCodexIntegration({
+    resourcesDir: RUNTIME_PATHS.resourcesDir,
+    dataDir: RUNTIME_PATHS.dataDir,
+    libraryDir: LIBRARY_DIR
+});
 app.locals.CODEX_IMAGE_AUTOMATION = createCodexImageAutomation({
     projectRoot: RUNTIME_PATHS.resourcesDir,
-    jobsDir: CODEX_IMAGE_JOBS_DIR
+    workspaceDir: app.locals.CODEX_INTEGRATION.runtime.workspaceDir,
+    jobsDir: CODEX_IMAGE_JOBS_DIR,
+    codexPath: app.locals.CODEX_INTEGRATION.command,
+    commandEnvironment: app.locals.CODEX_INTEGRATION.commandEnvironment
 });
 applyApiKeysToApp(app, process.env, API_KEY_OVERRIDES);
 
@@ -1687,9 +1697,9 @@ async function trimVideoWithFFmpeg(inputPath, outputPath, startTime, endTime) {
 
         const proc = spawn(FFMPEG_PATH, args);
 
-        let stderr = '';
+        const stderrChunks = [];
         proc.stderr.on('data', (data) => {
-            stderr += data.toString();
+            stderrChunks.push(Buffer.from(data));
         });
 
         proc.on('close', (code) => {
@@ -1697,6 +1707,7 @@ async function trimVideoWithFFmpeg(inputPath, outputPath, startTime, endTime) {
                 console.log(`[Video Trim] Successfully trimmed video`);
                 resolve();
             } else {
+                const stderr = decodeProcessOutput(stderrChunks);
                 reject(new Error(`FFmpeg failed with code ${code}: ${stderr.slice(-500)}`));
             }
         });

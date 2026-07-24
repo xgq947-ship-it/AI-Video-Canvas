@@ -6,6 +6,24 @@ export const DEFAULT_GENERATION_RECOVERY_TIMEOUT_MS = 30 * 60 * 1000;
 export const PRODUCT_SCENE_ANALYSIS_RECOVERY_TIMEOUT_MS = 4 * 60 * 1000;
 export const PRODUCT_SCENE_GENERATION_RECOVERY_TIMEOUT_MS = 13 * 60 * 1000;
 
+export function isBrowserWorkflowGeneration(nodeOrModel) {
+    if (typeof nodeOrModel === 'string') {
+        return isBrowserWorkflowVideoModel(nodeOrModel)
+            || nodeOrModel.startsWith('google-flow-')
+            || nodeOrModel.startsWith('jimeng-image-');
+    }
+    return isBrowserWorkflowVideoModel(nodeOrModel?.videoModel)
+        || String(nodeOrModel?.imageModel || '').startsWith('google-flow-')
+        || String(nodeOrModel?.imageModel || '').startsWith('jimeng-image-');
+}
+
+export function getInterruptedGenerationMessage(node) {
+    if (isBrowserWorkflowGeneration(node)) {
+        return '生成请求可能已经提交，但应用无法确认最终状态。请先到对应平台历史记录中检查结果，确认没有任务后再重新生成，避免重复消耗额度。';
+    }
+    return '生成任务已中断或超时，请重新生成。';
+}
+
 // 内置浏览器 workflow（Google Flow / 即梦）：进程侧 timeout 是 15+2 分钟，
 // 前端恢复窗口取 18 分钟与之对齐，避免节点比后端更早被判超时。
 export function getGenerationRecoveryTimeoutMs(nodeOrVideoModel) {
@@ -20,8 +38,7 @@ export function getGenerationRecoveryTimeoutMs(nodeOrVideoModel) {
             ? PRODUCT_SCENE_GENERATION_RECOVERY_TIMEOUT_MS
             : PRODUCT_SCENE_ANALYSIS_RECOVERY_TIMEOUT_MS;
     }
-    const videoModel = typeof nodeOrVideoModel === 'string' ? nodeOrVideoModel : nodeOrVideoModel?.videoModel;
-    return isBrowserWorkflowVideoModel(videoModel)
+    return isBrowserWorkflowGeneration(nodeOrVideoModel)
         ? GOOGLE_FLOW_RECOVERY_TIMEOUT_MS
         : DEFAULT_GENERATION_RECOVERY_TIMEOUT_MS;
 }

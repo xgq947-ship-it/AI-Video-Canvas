@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
     buildAiCliInstallArgs,
     buildDependencyInstallArgs,
+    buildSetupCommandInvocation,
     ensureLocalEnv,
     initializeOptimizerPreference,
     installBundledCodexSkill,
@@ -19,8 +20,24 @@ test('基础依赖正常安装，AI CLI 使用隔离目录且只在明确启用�
     assert.deepEqual(buildDependencyInstallArgs(), ['install']);
     const args = buildAiCliInstallArgs('/repo');
     assert.deepEqual(args.slice(0, 5), ['install', '--prefix', path.join('/repo', '.local-ai-cli'), '--no-save', '--package-lock=false']);
-    assert.equal(args.includes('@openai/codex@^0.145.0'), true);
+    assert.equal(args.includes('@openai/codex@latest'), true);
     assert.equal(args.includes('@anthropic-ai/claude-code@^2.1.218'), true);
+});
+
+test('Windows 项目安装与 CLI 探测通过 cmd.exe 执行包装脚本', () => {
+    const invocation = buildSetupCommandInvocation(
+        'C:\\Users\\测试 用户\\AppData\\Roaming\\npm\\npm.cmd',
+        ['install', '--prefix', 'C:\\Evan Project\\.local-ai-cli'],
+        {
+            platform: 'win32',
+            environment: { ComSpec: 'C:\\Windows\\System32\\cmd.exe' }
+        }
+    );
+
+    assert.equal(invocation.command, 'C:\\Windows\\System32\\cmd.exe');
+    assert.deepEqual(invocation.args.slice(0, 3), ['/d', '/s', '/c']);
+    assert.match(invocation.args[3], /^"C:\\Users\\测试 用户\\.*npm\.cmd"/);
+    assert.match(invocation.args[3], /"C:\\Evan Project\\\.local-ai-cli"/);
 });
 
 test('初始化复制 .env 但不覆盖已有本机配置', () => {
@@ -76,6 +93,20 @@ test('CLI 路径优先使用用户覆盖，其次 ChatGPT App 或项目本地依
     assert.equal(resolveCodexBin({ projectRoot: root, environment: {}, platform: 'linux', exists }), managedCodex);
     assert.equal(resolveClaudeBin({ projectRoot: root, environment: {}, platform: 'linux', exists }), managedClaude);
     assert.match(getProjectCliPath('C:\\repo', 'codex', 'win32'), /codex\.cmd$/);
+});
+
+test('Codex 自动发现优先使用 PATH 中持续更新的独立安装', () => {
+    const root = '/tmp/evan-cli-path';
+    const pathCodex = path.join(root, 'bin', 'codex');
+    const managedCodex = getManagedCliPath(root, 'codex', 'linux');
+    const existing = new Set([pathCodex, managedCodex]);
+
+    assert.equal(resolveCodexBin({
+        projectRoot: root,
+        environment: { PATH: path.join(root, 'bin') },
+        platform: 'linux',
+        exists: value => existing.has(value)
+    }), pathCodex);
 });
 
 test('未安装 Codex 和 Claude 时初始化跳过 CLI 与 Skill 且正常完成', () => {

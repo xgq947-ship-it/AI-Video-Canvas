@@ -12,7 +12,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectDir = path.resolve(__dirname, '..');
-const libraryDir = path.join(projectDir, 'library');
+const libraryDir = path.resolve(process.env.EVAN_LIBRARY_DIR || path.join(projectDir, 'library'));
 const jobsDir = path.join(libraryDir, 'codex-image-jobs');
 const imagesDir = path.join(libraryDir, 'images');
 const projectsDir = path.join(libraryDir, 'projects');

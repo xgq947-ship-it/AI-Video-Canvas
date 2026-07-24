@@ -81,11 +81,11 @@ test('即梦拒绝素材时立刻失败，并带回页面原话（不再空转�
     assert.match(r.hint, /更换参考图/);
 });
 
-test('浏览器被关闭时快速失败，不当成 DOM 抖动重试', { skip: ready ? false : '未配置 server/python/.venv' }, () => {
+test('提交后浏览器被关闭时进入状态未知，禁止直接重试', { skip: ready ? false : '未配置 server/python/.venv' }, () => {
     const closed = 'Locator.count: Target page, context or browser has been closed';
     const r = runPython(PROBE.replace('%%ARG%%', `exc=Exception(${JSON.stringify(closed)})`));
 
-    assert.equal(r.code, 'BROWSER_CLOSED');
+    assert.equal(r.code, 'SUBMISSION_UNKNOWN');
     assert.equal(r.retryable, false);
     // 任务可能已提交，必须提醒先去即梦确认，否则重试会重复扣积分
     assert.match(r.hint, /历史会话/);

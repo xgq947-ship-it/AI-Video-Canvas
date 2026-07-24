@@ -10,6 +10,7 @@ import React, { useState, useRef, useEffect, memo } from 'react';
 import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Images, Film, Clock, Expand, Shrink, Monitor, Crop, HardDrive, Upload, Loader2, Mic2, ScanSearch } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { useBrowserModels } from '../../hooks/useBrowserModels';
+import { useCodexService } from '../../hooks/useCodexService';
 import { ChangeAnglePanel } from './ChangeAnglePanel';
 import type { NodeReference } from '../../utils/nodeReferences.js';
 import { extractReferenceLabels } from '../../utils/nodeReferences.js';
@@ -210,6 +211,8 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
 
     // Google Flow / 即梦 依赖本机浏览器自动化运行时，未配置时置灰并说明原因。
     const { browserModelsHint, isModelUnavailable } = useBrowserModels();
+    const { codexReady, codexLoading, codexHint } = useCodexService();
+    const codexUnavailable = !codexLoading && !codexReady;
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -1230,11 +1233,16 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                                 {availableImageModels.filter(m => m.provider === 'codex').map(model => (
                                                     <button
                                                         key={model.id}
-                                                        onClick={() => handleImageModelChange(model.id)}
-                                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${currentImageModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'}`}
+                                                        onClick={() => !codexUnavailable && handleImageModelChange(model.id)}
+                                                        disabled={codexUnavailable}
+                                                        title={codexUnavailable ? codexHint : model.name}
+                                                        className={`w-full flex items-center justify-between px-3 py-2 text-xs text-left transition-colors ${codexUnavailable
+                                                            ? 'cursor-not-allowed text-neutral-600'
+                                                            : `hover:bg-[#333] ${currentImageModel.id === model.id ? 'text-blue-400' : 'text-neutral-300'}`
+                                                            }`}
                                                     >
                                                         <span className="flex items-center gap-2">
-                                                            <Sparkles size={12} className="text-blue-400" />
+                                                            <Sparkles size={12} className={codexUnavailable ? 'text-neutral-600' : 'text-blue-400'} />
                                                             {model.name}
                                                         </span>
                                                         {currentImageModel.id === model.id && <Check size={12} />}
@@ -1493,12 +1501,16 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                 <button
                     onClick={(e) => {
                         e.stopPropagation();
+                        if (!isVideoNode && currentImageModel.provider === 'codex' && codexUnavailable) return;
                         onGenerate(data.id);
                     }}
-                    className={'group w-9 h-9 rounded-full flex items-center justify-center transition-all duration-200 ' + (isDark
-                        ? 'bg-white text-neutral-900 hover:bg-neutral-100 active:scale-95'
-                        : 'bg-neutral-900 text-white hover:bg-neutral-800 active:scale-95')}
-                    title="生成"
+                    disabled={!isVideoNode && currentImageModel.provider === 'codex' && codexUnavailable}
+                    className={'group w-9 h-9 rounded-full flex items-center justify-center transition-all duration-200 ' + (!isVideoNode && currentImageModel.provider === 'codex' && codexUnavailable
+                        ? 'cursor-not-allowed bg-neutral-700 text-neutral-500'
+                        : isDark
+                            ? 'bg-white text-neutral-900 hover:bg-neutral-100 active:scale-95'
+                            : 'bg-neutral-900 text-white hover:bg-neutral-800 active:scale-95')}
+                    title={!isVideoNode && currentImageModel.provider === 'codex' && codexUnavailable ? codexHint : '生成'}
                 >
                     <svg
                         viewBox="0 0 24 24"

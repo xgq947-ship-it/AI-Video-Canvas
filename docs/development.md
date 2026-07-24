@@ -98,7 +98,21 @@ Chrome。常驻 Worker 完成后将移除该固定端口。
 
 ## 可选 AI CLI / MCP
 
-Codex 和 Claude 不属于安装版的必需依赖。源码开发需要测试 Claude Code 本地剪辑编排时：
+Codex 和 Claude 不属于安装版的必需依赖。Evan 不把 Codex CLI 打入安装包，而是在运行
+时自动发现用户单独安装、持续更新的版本。也可以在“设置 → Codex 服务”选择明确路径。
+安装版会使用用户数据目录下独立的 `codex-home/`，并自动准备 Evan 画布 Skill 与队列
+桥接命令；源码模式保留开发者现有的 `CODEX_HOME`。
+
+需要安装或更新开发机的可选 CLI 时：
+
+```bash
+npm run setup:ai-cli
+```
+
+该命令始终请求当前最新版 `@openai/codex`，不会在仓库依赖中锁定 Codex 版本。CLI 更新
+后只要可执行路径未改变，Evan 无需重新配置。
+
+需要测试 Claude Code 本地剪辑编排时：
 
 ```bash
 npm run mcp:claude

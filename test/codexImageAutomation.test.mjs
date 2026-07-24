@@ -21,20 +21,25 @@ function fixture() {
 }
 
 test('Codex 自动生图固定使用 Plus 会话和工作区沙箱', () => {
-    const spec = buildCodexAutomationCommand('/tmp/twitcanva', '/tmp/codex');
+    const spec = buildCodexAutomationCommand('/tmp/twitcanva', '/tmp/codex', '/tmp/evan-codex-queue');
     assert.equal(spec.command, '/tmp/codex');
     assert.deepEqual(spec.args.slice(0, 7), [
         'exec', '--ephemeral', '-C', '/tmp/twitcanva', '-s', 'workspace-write', '--color'
     ]);
     assert.match(spec.args.at(-1), /ChatGPT 登录包含的内置 image_gen/);
     assert.match(spec.args.at(-1), /不调用 OpenAI API/);
+    assert.match(spec.args.at(-1), /evan-codex-queue/);
 });
 
 test('连续通知只启动一个 Codex worker', async t => {
     const dirs = fixture();
     t.after(() => fs.rmSync(dirs.root, { recursive: true, force: true }));
     const children = [];
-    const spawnProcess = () => {
+    let spawnedCommand = '';
+    let spawnedOptions = null;
+    const spawnProcess = (command, _args, options) => {
+        spawnedCommand = command;
+        spawnedOptions = options;
         const child = new EventEmitter();
         child.pid = 12345;
         child.kill = () => {};
@@ -43,8 +48,13 @@ test('连续通知只启动一个 Codex worker', async t => {
     };
     const automation = createCodexImageAutomation({
         projectRoot: dirs.root,
+        workspaceDir: dirs.libraryDir,
         jobsDir: dirs.jobsDir,
-        codexPath: '/tmp/codex',
+        codexPath: () => '/tmp/codex-current',
+        commandEnvironment: () => ({
+            ...process.env,
+            EVAN_CODEX_QUEUE: '/tmp/evan-codex-queue'
+        }),
         spawnProcess,
         maxAttempts: 1,
         timeoutMs: 1000
@@ -55,12 +65,50 @@ test('连续通知只启动一个 Codex worker', async t => {
     await new Promise(resolve => setImmediate(resolve));
 
     assert.equal(children.length, 1);
+    assert.equal(spawnedCommand, '/tmp/codex-current');
+    assert.equal(spawnedOptions.cwd, dirs.libraryDir);
+    assert.equal(spawnedOptions.env.EVAN_CODEX_QUEUE, '/tmp/evan-codex-queue');
     assert.equal(automation.getStatus().status, 'running');
     assert.equal(automation.getStatus().queuedJobs, 1);
 
     children[0].emit('close', 1);
     assert.equal(automation.getStatus().status, 'error');
     assert.match(automation.getStatus().lastError, /退出码 1/);
+});
+
+test('Windows 的 codex.cmd 通过 ComSpec 启动', async t => {
+    const dirs = fixture();
+    t.after(() => fs.rmSync(dirs.root, { recursive: true, force: true }));
+    let invocation = null;
+    const child = new EventEmitter();
+    child.pid = 23456;
+    child.kill = () => {};
+    const automation = createCodexImageAutomation({
+        projectRoot: dirs.root,
+        workspaceDir: dirs.libraryDir,
+        jobsDir: dirs.jobsDir,
+        codexPath: 'C:\\Users\\tester\\AppData\\Roaming\\npm\\codex.cmd',
+        commandEnvironment: {
+            ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+            EVAN_CODEX_QUEUE: 'C:\\Evan\\evan-codex-queue.cmd'
+        },
+        platform: 'win32',
+        spawnProcess: (command, args, options) => {
+            invocation = { command, args, options };
+            return child;
+        },
+        maxAttempts: 1,
+        timeoutMs: 1000
+    });
+
+    automation.notify();
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(invocation.command, 'C:\\Windows\\System32\\cmd.exe');
+    assert.deepEqual(invocation.args.slice(0, 3), ['/d', '/s', '/c']);
+    assert.match(invocation.args[3], /codex\.cmd/);
+    assert.match(invocation.args[3], /workspace-write/);
+    child.emit('close', 1);
 });
 
 test('worker 日志只保留七天内最新十份', t => {

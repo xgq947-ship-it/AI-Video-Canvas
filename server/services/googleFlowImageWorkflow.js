@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { runOpsCli } from './opsCliRunner.js';
 import { enqueueGoogleFlowWorkflow } from './googleFlowWorkflowQueue.js';
+import { fetchWorkflowMedia } from '../utils/workflowMedia.js';
 
 export const GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID = 'google-flow-nano-banana-2';
 // 画布模型 id → Ops-Cli text_to_image --model 值（Flow Image 模式下拉里的模型名）。
@@ -142,13 +143,19 @@ async function loadBrowserImageEntry(image, fallbackPath, providerName) {
 
     const imageUrl = image?.url;
     if (!imageUrl || !/^https?:\/\//.test(imageUrl)) {
-        throw new Error(`${providerName} workflow 完成，但没有可用的图片文件或下载地址`);
+        throw new Error(
+            `${providerName} 已生成结果，但没有可用的图片文件或下载地址。`
+            + '请先到对应平台历史记录中下载结果，不要直接重新生成。'
+        );
     }
-    const response = await fetch(imageUrl);
-    if (!response.ok) throw new Error(`${providerName}图片下载失败：HTTP ${response.status}`);
+    const downloaded = await fetchWorkflowMedia(imageUrl, {
+        providerName,
+        expectedType: 'image',
+        recoveryHint: '请先到对应平台历史记录中下载本次结果，不要直接重新生成。'
+    });
     return {
-        buffer: Buffer.from(await response.arrayBuffer()),
-        extension: inferImageExtension(imageUrl, response.headers.get('content-type') || ''),
+        buffer: downloaded.buffer,
+        extension: inferImageExtension(imageUrl, downloaded.contentType),
         source: 'workflow-url'
     };
 }
@@ -158,7 +165,10 @@ export async function loadBrowserImageResults(outputs, { providerName = '浏览�
     const imagePaths = Array.isArray(outputs?.image_paths) ? outputs.image_paths : [];
     const resultCount = Math.max(images.length, imagePaths.length);
     if (resultCount === 0) {
-        throw new Error(`${providerName} workflow 完成，但没有返回图片结果`);
+        throw new Error(
+            `${providerName} 已完成生成，但没有返回可保存的图片结果。`
+            + '请先到对应平台历史记录中确认并下载，不要直接重新生成。'
+        );
     }
 
     const results = [];

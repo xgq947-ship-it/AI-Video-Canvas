@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Eye, EyeOff, KeyRound, Loader2, ShieldCheck, Trash2, Wand2, X } from 'lucide-react';
+import { CheckCircle2, Eye, EyeOff, FolderOpen, KeyRound, Loader2, LogIn, RefreshCw, ShieldCheck, TerminalSquare, Trash2, Wand2, X } from 'lucide-react';
+import { notifyCodexStatusChanged } from '../../hooks/useCodexService';
 
 interface ApiKeyField {
     name: string;
@@ -18,6 +19,25 @@ interface OptimizerProvider {
     defaultModel: string;
     defaultEffort: string;
     keyConfigured: boolean;
+    available?: boolean;
+    unavailableHint?: string;
+}
+
+interface CodexStatus {
+    available: boolean;
+    authenticated: boolean;
+    configuredPath: string;
+    resolvedPath: string;
+    version: string;
+    codexHome: string;
+    skillInstalled: boolean;
+    queueBridgeReady: boolean;
+    error: string;
+    login: {
+        running: boolean;
+        startedAt: string | null;
+        lastError: string | null;
+    };
 }
 
 interface ApiKeySettingsModalProps {
@@ -40,6 +60,23 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
     // 模型覆盖按后端各自记忆：{ 后端id: 模型字符串 }
     const [optimizerModels, setOptimizerModels] = useState<Record<string, string>>({});
     const [initialOptimizer, setInitialOptimizer] = useState<{ provider: string; models: Record<string, string> }>({ provider: 'deepseek', models: {} });
+    const [codexStatus, setCodexStatus] = useState<CodexStatus | null>(null);
+    const [isCodexBusy, setIsCodexBusy] = useState(false);
+
+    const applyCodexStatus = (status: CodexStatus) => {
+        setCodexStatus(status);
+        notifyCodexStatusChanged();
+    };
+
+    const loadCodexStatus = async (refresh = false) => {
+        const response = await fetch(`/api/settings/codex${refresh ? '?refresh=1' : ''}`, {
+            cache: 'no-store'
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || '读取 Codex 状态失败');
+        applyCodexStatus(result);
+        return result as CodexStatus;
+    };
 
     useEffect(() => {
         if (!isOpen) return;
@@ -67,7 +104,8 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                     setOptimizerModels(models);
                     setInitialOptimizer({ provider: current.provider, models });
                 }
-            })
+            }),
+            loadCodexStatus()
         ])
             .catch(fetchError => {
                 if (!cancelled) setError(fetchError.message || '读取配置失败');
@@ -78,6 +116,16 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
 
         return () => { cancelled = true; };
     }, [isOpen]);
+
+    useEffect(() => {
+        if (!isOpen || !codexStatus?.login?.running) return;
+        const timer = window.setInterval(() => {
+            loadCodexStatus(true).catch(fetchError => {
+                setError(fetchError.message || '刷新 Codex 登录状态失败');
+            });
+        }, 2_000);
+        return () => window.clearInterval(timer);
+    }, [isOpen, codexStatus?.login?.running]);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -174,6 +222,49 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
         }
     };
 
+    const saveCodexPath = async (cliPath: string) => {
+        setIsCodexBusy(true);
+        setError('');
+        try {
+            const response = await fetch('/api/settings/codex', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cliPath })
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || '保存 Codex 路径失败');
+            applyCodexStatus(result);
+        } catch (saveError) {
+            setError(saveError instanceof Error ? saveError.message : '保存 Codex 路径失败');
+        } finally {
+            setIsCodexBusy(false);
+        }
+    };
+
+    const handleSelectCodex = async () => {
+        if (!window.evanDesktop?.selectCodexCli) {
+            setError('当前不是桌面应用，无法打开 Codex 文件选择器');
+            return;
+        }
+        const selected = await window.evanDesktop.selectCodexCli();
+        if ('path' in selected) await saveCodexPath(selected.path);
+    };
+
+    const handleCodexLogin = async () => {
+        setIsCodexBusy(true);
+        setError('');
+        try {
+            const response = await fetch('/api/settings/codex/login', { method: 'POST' });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || '启动 Codex 登录失败');
+            applyCodexStatus(result);
+        } catch (loginError) {
+            setError(loginError instanceof Error ? loginError.message : '启动 Codex 登录失败');
+        } finally {
+            setIsCodexBusy(false);
+        }
+    };
+
     if (!isOpen) return null;
 
     return (
@@ -204,6 +295,78 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                         <div className="flex h-48 items-center justify-center gap-2 text-sm text-neutral-500"><Loader2 size={18} className="animate-spin" />正在读取配置</div>
                     ) : (
                         <div className="space-y-4">
+                            <section className={`rounded-xl border p-4 ${isDark ? 'border-neutral-800 bg-[#202020]' : 'border-neutral-200 bg-neutral-50'}`}>
+                                <div className="mb-1 flex items-center justify-between gap-3">
+                                    <div className="flex items-center gap-2">
+                                        <TerminalSquare size={14} className={isDark ? 'text-blue-400' : 'text-blue-600'} />
+                                        <h3 className="text-sm font-medium">Codex 服务</h3>
+                                    </div>
+                                    <span className={`text-[11px] ${codexStatus?.authenticated
+                                        ? 'text-emerald-400'
+                                        : codexStatus?.available
+                                            ? 'text-amber-400'
+                                            : 'text-neutral-500'
+                                        }`}>
+                                        {codexStatus?.authenticated
+                                            ? '已连接'
+                                            : codexStatus?.available
+                                                ? (codexStatus.login?.running ? '等待登录' : '需要登录')
+                                                : '未检测到'}
+                                    </span>
+                                </div>
+                                <p className={`mb-3 text-[11px] ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                                    Evan 使用电脑上持续更新的 Codex CLI，不内置固定版本。登录资料和项目 Skill 保存在 Evan 专用目录。
+                                </p>
+                                <div className={`rounded-lg border px-3 py-2 text-[11px] ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-200 bg-white'}`}>
+                                    <div className="truncate" title={codexStatus?.resolvedPath || ''}>
+                                        路径：{codexStatus?.resolvedPath || '正在检测…'}
+                                    </div>
+                                    {codexStatus?.version && <div className="mt-1 truncate text-neutral-500">版本：{codexStatus.version}</div>}
+                                    {codexStatus?.error && !codexStatus.authenticated && (
+                                        <div className="mt-1 text-amber-400">{codexStatus.login?.lastError || codexStatus.error}</div>
+                                    )}
+                                </div>
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={handleSelectCodex}
+                                        disabled={isCodexBusy}
+                                        className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs transition-colors ${isDark ? 'border-neutral-700 hover:bg-neutral-700' : 'border-neutral-300 hover:bg-neutral-100'}`}
+                                    >
+                                        <FolderOpen size={13} />选择 Codex
+                                    </button>
+                                    {codexStatus?.configuredPath && (
+                                        <button
+                                            type="button"
+                                            onClick={() => saveCodexPath('')}
+                                            disabled={isCodexBusy}
+                                            className={`rounded-lg border px-3 py-2 text-xs transition-colors ${isDark ? 'border-neutral-700 hover:bg-neutral-700' : 'border-neutral-300 hover:bg-neutral-100'}`}
+                                        >
+                                            恢复自动检测
+                                        </button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={() => loadCodexStatus(true).catch(refreshError => setError(refreshError.message))}
+                                        disabled={isCodexBusy}
+                                        className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs transition-colors ${isDark ? 'border-neutral-700 hover:bg-neutral-700' : 'border-neutral-300 hover:bg-neutral-100'}`}
+                                    >
+                                        <RefreshCw size={13} />刷新
+                                    </button>
+                                    {codexStatus?.available && !codexStatus.authenticated && (
+                                        <button
+                                            type="button"
+                                            onClick={handleCodexLogin}
+                                            disabled={isCodexBusy || codexStatus.login?.running}
+                                            className="flex items-center gap-1.5 rounded-lg bg-blue-500 px-3 py-2 text-xs text-white transition-colors hover:bg-blue-400 disabled:opacity-50"
+                                        >
+                                            {codexStatus.login?.running ? <Loader2 size={13} className="animate-spin" /> : <LogIn size={13} />}
+                                            {codexStatus.login?.running ? '请在浏览器完成登录' : '登录 ChatGPT'}
+                                        </button>
+                                    )}
+                                </div>
+                            </section>
+
                             {/* 提示词优化后端选择 */}
                             <section className={`rounded-xl border p-4 ${isDark ? 'border-neutral-800 bg-[#202020]' : 'border-neutral-200 bg-neutral-50'}`}>
                                 <div className="mb-1 flex items-center gap-2">
@@ -223,7 +386,14 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                             className={`h-10 w-full rounded-lg border bg-transparent px-3 text-sm outline-none transition-colors ${isDark ? 'border-neutral-700 text-white focus:border-blue-500' : 'border-neutral-300 text-neutral-900 focus:border-blue-500'}`}
                                         >
                                             {optimizerProviders.map(provider => (
-                                                <option key={provider.id} value={provider.id} className={isDark ? 'bg-[#202020]' : ''}>{provider.label}</option>
+                                                <option
+                                                    key={provider.id}
+                                                    value={provider.id}
+                                                    disabled={provider.available === false && provider.id !== optimizerProvider}
+                                                    className={isDark ? 'bg-[#202020]' : ''}
+                                                >
+                                                    {provider.label}{provider.available === false ? '（未连接）' : ''}
+                                                </option>
                                             ))}
                                         </select>
                                     </div>
@@ -250,6 +420,9 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                 )}
                                 {selectedOptimizer && !selectedOptimizer.keyConfigured && (
                                     <p className="mt-2 text-[11px] text-amber-400">该后端需要在下方填写 {selectedOptimizer.apiKeyField} 才能使用。</p>
+                                )}
+                                {selectedOptimizer?.available === false && (
+                                    <p className="mt-2 text-[11px] text-amber-400">{selectedOptimizer.unavailableHint || '该 CLI 后端尚未连接。'}</p>
                                 )}
                             </section>
 

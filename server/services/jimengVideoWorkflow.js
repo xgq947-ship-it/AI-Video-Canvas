@@ -20,6 +20,7 @@ import {
     resolveLocalLibraryImage,
     writeDataUrlImage
 } from './googleFlowWorkflow.js';
+import { fetchWorkflowMedia } from '../utils/workflowMedia.js';
 
 export const JIMENG_WORKFLOW_MODEL_ID = 'jimeng-seedance-2-0';
 export const JIMENG_FAST_WORKFLOW_MODEL_ID = 'jimeng-seedance-2-0-fast';
@@ -112,14 +113,20 @@ async function loadVideoResult(outputs) {
 
     const videoUrl = outputs?.video_url;
     if (!videoUrl || !/^https?:\/\//.test(videoUrl)) {
-        throw new Error('即梦视频 workflow 完成，但没有可用的视频文件或下载地址');
+        throw new Error(
+            '即梦已生成视频，但没有可用的视频文件或下载地址。'
+            + '请先到即梦历史会话中下载结果，不要直接重新生成。'
+        );
     }
-    const response = await fetch(videoUrl);
-    if (!response.ok) throw new Error(`即梦视频下载失败：HTTP ${response.status}`);
-    const contentType = (response.headers.get('content-type') || '').toLowerCase();
+    const downloaded = await fetchWorkflowMedia(videoUrl, {
+        providerName: '即梦',
+        expectedType: 'video',
+        recoveryHint: '请先到即梦历史会话中下载本次结果，不要直接重新生成。'
+    });
+    const contentType = downloaded.contentType;
     const extension = contentType.includes('webm') ? 'webm' : 'mp4';
     return {
-        buffer: Buffer.from(await response.arrayBuffer()),
+        buffer: downloaded.buffer,
         extension,
         source: 'workflow-url'
     };

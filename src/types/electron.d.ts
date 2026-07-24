@@ -7,6 +7,10 @@ declare global {
         | { canceled: true }
         | { canceled: false; locationId: string; path: string }
       >;
+      selectCodexCli: () => Promise<
+        | { canceled: true }
+        | { canceled: false; path: string }
+      >;
       createProject: (input: {
         title: string;
         locationId?: string | null;

@@ -6,11 +6,12 @@ import path from 'path';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { resolveClaudeBin, resolveCodexBin } from '../server/services/cliPaths.js';
+import { decodeProcessOutput } from '../server/utils/processOutput.js';
 
 const scriptFile = fileURLToPath(import.meta.url);
 const defaultProjectRoot = path.resolve(path.dirname(scriptFile), '..');
 export const BUNDLED_SKILL_NAME = 'twitcanva-codex-images';
-export const AI_CLI_PACKAGES = ['@openai/codex@^0.145.0', '@anthropic-ai/claude-code@^2.1.218'];
+export const AI_CLI_PACKAGES = ['@openai/codex@latest', '@anthropic-ai/claude-code@^2.1.218'];
 
 function log(status, message) {
     process.stdout.write(`${status} ${message}\n`);
@@ -42,13 +43,45 @@ export function initializeOptimizerPreference(projectRoot, provider = 'codex-cli
     return { created: true, path: configPath };
 }
 
-export function probeCli(command, args, { timeout = 15000 } = {}) {
-    const result = spawnSync(command, args, { encoding: 'utf8', timeout, windowsHide: true });
+function quoteWindowsCommandArg(value) {
+    return `"${String(value).replaceAll('"', '""')}"`;
+}
+
+export function buildSetupCommandInvocation(
+    command,
+    args,
+    { platform = process.platform, environment = process.env } = {}
+) {
+    if (platform !== 'win32' || !/\.(?:cmd|bat)$/i.test(command)) {
+        return { command, args };
+    }
+    return {
+        command: environment.ComSpec || environment.COMSPEC || 'cmd.exe',
+        args: [
+            '/d',
+            '/s',
+            '/c',
+            [quoteWindowsCommandArg(command), ...args.map(quoteWindowsCommandArg)].join(' ')
+        ]
+    };
+}
+
+export function probeCli(
+    command,
+    args,
+    { timeout = 15000, platform = process.platform, environment = process.env } = {}
+) {
+    const invocation = buildSetupCommandInvocation(command, args, { platform, environment });
+    const result = spawnSync(invocation.command, invocation.args, {
+        timeout,
+        windowsHide: true,
+        env: environment
+    });
     return {
         available: !result.error && result.status === 0,
         status: result.status,
-        stdout: String(result.stdout || '').trim(),
-        stderr: String(result.stderr || '').trim(),
+        stdout: decodeProcessOutput(result.stdout).trim(),
+        stderr: decodeProcessOutput(result.stderr).trim(),
         error: result.error?.message || ''
     };
 }
@@ -68,7 +101,12 @@ function claudeAuthenticated(command, probe = probeCli) {
 }
 
 function runRequired(command, args, cwd) {
-    const result = spawnSync(command, args, { cwd, stdio: 'inherit', windowsHide: false });
+    const invocation = buildSetupCommandInvocation(command, args);
+    const result = spawnSync(invocation.command, invocation.args, {
+        cwd,
+        stdio: 'inherit',
+        windowsHide: false
+    });
     if (result.error || result.status !== 0) {
         throw new Error(`${command} ${args.join(' ')} 执行失败${result.error ? `：${result.error.message}` : ''}`);
     }

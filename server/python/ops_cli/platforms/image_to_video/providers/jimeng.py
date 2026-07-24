@@ -242,9 +242,8 @@ def _raise_auth_required(message: str) -> None:
 def _ensure_composer(page: Any, *, timeout_seconds: int = 90) -> None:
     """等待 composer（提示词输入框 + 工具条）挂载。
 
-    冷启动时即梦前端要拉一大堆 chunk，编辑器迟迟不挂载并不等于掉登录——这正是
-    google-flow 早高峰被误判 AUTH_REQUIRED 的老坑。因此只有 URL 明确跳到登录页
-    才判 AUTH_REQUIRED，其余一律 EDITOR_NOT_READY（可重试）。
+    冷启动时即梦前端要拉一大堆 chunk，编辑器迟迟不挂载并不等于掉登录。同时，
+    新版游客页也会渲染完整编辑器，因此必须先检查登录框/登录菜单，再接受 composer。
     """
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -254,15 +253,23 @@ def _ensure_composer(page: Any, *, timeout_seconds: int = 90) -> None:
         if JIMENG_HOST not in current:
             raise JimengError("PAGE_NAVIGATION_FAILED", f"页面已离开即梦域名：{page.url}", retryable=True)
         try:
-            editor = page.locator(PROMPT_EDITOR)
+            # 游客页同样会渲染提示词编辑器和工具条，不能把“编辑器可见”当成已登录。
+            # 登录框也不能先被通用 overlay 清理吞掉，否则会一直拖到提交阶段才失败。
+            if _login_dialog_visible(page) or _login_control_visible(page):
+                _raise_auth_required("即梦当前处于未登录状态，请先登录内置浏览器中的即梦。")
+            editor = _visible_prompt_editor(page)
             toolbar = page.locator(TOOLBAR_SELECT)
-            if editor.count() >= 1 and editor.first.is_visible() and toolbar.count() >= 1:
+            toolbar_visible = False
+            for index in range(toolbar.count()):
+                try:
+                    if toolbar.nth(index).is_visible():
+                        toolbar_visible = True
+                        break
+                except Exception:
+                    continue
+            if editor is not None and toolbar_visible:
                 _dismiss_overlays(page)
                 return
-            # 编辑器没挂上、同时页面弹着登录框：这才是真掉登录（即梦有时不跳 URL，
-            # 只弹扫码框）。其余情况仍按冷启动处理，宁可误判「加载慢」也不误报掉登录。
-            if _login_dialog_visible(page):
-                _raise_auth_required("即梦弹出了登录框，当前内置浏览器未登录即梦。")
         except JimengError:
             raise
         except Exception:
@@ -281,6 +288,32 @@ def _login_dialog_visible(page: Any) -> bool:
         return dialog.count() > 0 and dialog.first.is_visible()
     except Exception:
         return False
+
+
+def _login_control_visible(page: Any) -> bool:
+    """识别新版即梦游客页右上角的登录菜单，避免把游客 composer 当成已登录。"""
+    for label in ("登录", "Log in", "Login"):
+        try:
+            controls = page.get_by_role("menuitem", name=label, exact=True)
+            for index in range(controls.count()):
+                if controls.nth(index).is_visible():
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def _visible_prompt_editor(page: Any) -> Any | None:
+    """返回当前可见 composer；即梦首页会同时渲染顶部与底部两套编辑器。"""
+    editors = page.locator(PROMPT_EDITOR)
+    for index in range(editors.count()):
+        node = editors.nth(index)
+        try:
+            if node.is_visible():
+                return node
+        except Exception:
+            continue
+    return None
 
 
 def _dismiss_overlays(page: Any) -> None:
@@ -305,13 +338,50 @@ def _dismiss_overlays(page: Any) -> None:
         pass
 
 
+def _visible_popover_count(page: Any) -> int:
+    """返回仍会拦截鼠标事件的即梦浮层数量。"""
+    try:
+        return page.locator(".lv-popover:visible").count()
+    except Exception:
+        return 0
+
+
+def _close_transient_popovers(page: Any, *, trigger: Any | None = None) -> None:
+    """可靠收起设置浮层，兼容 Escape 不再生效的即梦新版页面。
+
+    即梦的比例/分辨率弹层近期会在选择选项后继续停留，其中的数值输入框覆盖在
+    ProseMirror 编辑器上。只按一次 Escape 会让后续 editor.click() 被拦截直到超时。
+    先尝试键盘关闭；仍未关闭时直接触发原工具条按钮的点击处理器来切换浮层状态。
+    """
+    for _ in range(3):
+        if _visible_popover_count(page) == 0:
+            return
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(250)
+
+    if trigger is not None and _visible_popover_count(page) > 0:
+        try:
+            trigger.click(force=True, timeout=3000)
+        except Exception:
+            # DOM click 不经过命中测试，专门处理浮层遮住触发按钮的情况。
+            trigger.evaluate("(element) => element.click()")
+        page.wait_for_timeout(500)
+
+    if _visible_popover_count(page) > 0:
+        raise JimengError(
+            "PAGE_NAVIGATION_FAILED",
+            "即梦参数设置浮层未能关闭，已中止提交；请稍后重试。",
+            retryable=True,
+        )
+
+
 def _visible_select(page: Any, keyword: str, *, error_code: str, message: str) -> Any:
     """工具条上三个 lv-select（创作类型 / 模型 / 参考模式）按当前文案区分。"""
     selects = page.locator(TOOLBAR_SELECT)
     for index in range(selects.count()):
         node = selects.nth(index)
         try:
-            if keyword in (node.inner_text() or ""):
+            if node.is_visible() and keyword in (node.inner_text() or ""):
                 return node
         except Exception:
             continue
@@ -366,7 +436,7 @@ def _toolbar_button(page: Any, predicate) -> Any | None:
     for index in range(buttons.count()):
         node = buttons.nth(index)
         try:
-            if predicate((node.inner_text() or "").strip()):
+            if node.is_visible() and predicate((node.inner_text() or "").strip()):
                 return node
         except Exception:
             continue
@@ -419,8 +489,7 @@ def _configure_output(page: Any, *, aspect_ratio: str, resolution: str, count: i
         if count_field.count() > 0 or count > 1:
             _pick_radio(page, title=FIELD_COUNT, value=str(count), error_code="COUNT_NOT_SUPPORTED", required=False)
     finally:
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(500)
+        _close_transient_popovers(page, trigger=button)
 
 
 def _configure_duration(page: Any, duration: int) -> None:
@@ -437,8 +506,7 @@ def _configure_duration(page: Any, duration: int) -> None:
     box.first.fill(str(duration))
     page.keyboard.press("Enter")
     page.wait_for_timeout(800)
-    page.keyboard.press("Escape")
-    page.wait_for_timeout(500)
+    _close_transient_popovers(page, trigger=button)
     # 页面会把越界值夹回可用区间，因此必须回读确认，不能只管写。
     applied = _duration_button(page)
     applied_text = (applied.inner_text() or "").strip() if applied is not None else ""
@@ -453,7 +521,8 @@ def _configure_duration(page: Any, duration: int) -> None:
 # 用它把参考素材缩略图的统计范围锁死在输入框内，避免把左侧会话列表 / 历史记录卡片
 # 里的图算进来。
 _COMPOSER_IMAGE_COUNT_JS = """() => {
-  const editor = document.querySelector('div.tiptap[contenteditable="true"]');
+  const editor = [...document.querySelectorAll('div.tiptap[contenteditable="true"]')]
+    .find(el => el.getBoundingClientRect().height > 0 && el.getBoundingClientRect().width > 0);
   if (!editor) return -1;
   let node = editor;
   while (node && !(node.querySelector && node.querySelector('input[type=file]'))) {
@@ -507,8 +576,10 @@ def _resolve_reference_names(reference_paths: list[Path], reference_names: list[
 
 def _reference_option_labels(page: Any) -> list[str]:
     """打开 @ 浮层，读出页面当前认得的参考素材名（顺序即编号顺序）。"""
-    editor = page.locator(PROMPT_EDITOR).first
-    editor.click()
+    editor = _visible_prompt_editor(page)
+    if editor is None:
+        raise JimengError("PROMPT_INPUT_NOT_FOUND", "未找到可见的提示词输入框。")
+    editor.focus()
     page.keyboard.type("@")
     page.wait_for_timeout(2500)
     options = page.locator("li.lv-select-option")
@@ -580,10 +651,12 @@ def _attach_reference_images(page: Any, reference_paths: list[Path], reference_n
 
 
 def _fill_prompt(page: Any, prompt: str) -> None:
-    editor = page.locator(PROMPT_EDITOR).first
-    if editor.count() == 0:
-        raise JimengError("PROMPT_INPUT_NOT_FOUND", "未找到提示词输入框。")
-    editor.click()
+    editor = _visible_prompt_editor(page)
+    if editor is None:
+        raise JimengError("PROMPT_INPUT_NOT_FOUND", "未找到可见的提示词输入框。")
+    # focus() 不依赖鼠标命中测试。即使第三方页面的浮层正在退场，也不会再被其中的
+    # 分辨率数值输入框（例如 value=2048）拦截 30 秒。
+    editor.focus()
     # tiptap/ProseMirror 富文本不接受 fill()。也**不能**用 keyboard.type：提示词里
     # 一个 @ 就会触发即梦的「参考内容」mention 浮层，后面的字会被浮层吞掉或变成
     # 一个错误的引用。insert_text 直接走 CDP 文本插入，不产生按键事件。
@@ -714,7 +787,7 @@ def _wait_for_videos(
             # 「连续 5 次读取失败」把真正的原因埋掉。这里直接快速失败并说人话。
             if any(marker in str(exc) for marker in FATAL_PAGE_MARKERS):
                 raise JimengError(
-                    "BROWSER_CLOSED",
+                    "SUBMISSION_UNKNOWN",
                     "等待生成结果期间，内置浏览器或即梦标签页被关闭了。",
                     retryable=False,
                     recovery_hint=(
@@ -726,9 +799,13 @@ def _wait_for_videos(
             consecutive_read_errors += 1
             if consecutive_read_errors >= MAX_CONSECUTIVE_PAGE_READ_ERRORS:
                 raise JimengError(
-                    "PAGE_NAVIGATION_FAILED",
+                    "SUBMISSION_UNKNOWN",
                     f"生成期间连续 {consecutive_read_errors} 次读取即梦页面失败：{exc}",
-                    retryable=True,
+                    retryable=False,
+                    recovery_hint=(
+                        "生成请求已经提交，请先到即梦历史会话确认结果，"
+                        "避免直接重试造成重复生成和积分消耗。"
+                    ),
                 ) from exc
             time.sleep(2)
     message = f"等待即梦生成超过 {timeout_minutes} 分钟。"
@@ -738,7 +815,50 @@ def _wait_for_videos(
             "可改用 VIP 档模型（--model \"即梦 Seedance 2.0 VIP\"）或调大 --timeout-minutes；"
             "任务已提交，稍后可在即梦历史会话里取回结果。"
         )
-    raise JimengError("GENERATION_TIMEOUT", message, retryable=True)
+    if not queue_hint:
+        message += "任务可能仍在生成或排队。"
+    raise JimengError(
+        "SUBMISSION_UNKNOWN",
+        message,
+        retryable=False,
+        recovery_hint=(
+            "生成请求已经提交，请先到即梦历史会话确认结果；"
+            "确认没有任务后再重新生成，避免重复消耗积分。"
+        ),
+    )
+
+
+def _ensure_result_delivery(
+    items: list[dict[str, Any]],
+    *,
+    error_code: str,
+    media_label: str,
+) -> None:
+    """结果已生成时，本地文件或可复用 HTTP 地址任一存在即可交给 Node 层接管。"""
+    if any(
+        item.get("path")
+        or str(item.get("url") or "").startswith(("http://", "https://"))
+        for item in items
+    ):
+        return
+    raise JimengError(
+        error_code,
+        f"即梦已生成{media_label}，但页面只返回临时地址，自动保存失败。",
+        retryable=False,
+        recovery_hint=(
+            f"请到即梦历史会话中下载本次{media_label}，不要直接重新生成，"
+            "避免重复消耗积分。"
+        ),
+    )
+
+
+def _capture_proof_screenshot(page: Any, screenshot_path: Path) -> str | None:
+    """结果出现后截图仅作存证，失败不能推翻已经完成的付费任务。"""
+    try:
+        page.screenshot(path=str(screenshot_path), full_page=False, timeout=30_000)
+        return str(screenshot_path)
+    except Exception:
+        return None
 
 
 def _execute_generation(
@@ -753,7 +873,7 @@ def _execute_generation(
     model: str,
     output_dir: Path,
     timeout_minutes: int,
-) -> tuple[list[dict[str, Any]], str]:
+) -> tuple[list[dict[str, Any]], str | None]:
     cdp_url, PlaywrightError, PlaywrightTimeoutError, sync_playwright = _import_browser_runtime()
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -803,21 +923,22 @@ def _execute_generation(
                 )
 
                 stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                screenshot_path = output_dir / f"jimeng_{stamp}.png"
-                page.screenshot(path=str(screenshot_path), full_page=False, timeout=30_000)
+                screenshot_path = _capture_proof_screenshot(
+                    page,
+                    output_dir / f"jimeng_{stamp}.png",
+                )
                 videos: list[dict[str, Any]] = []
                 for index, url in enumerate(video_urls, start=1):
                     saved = _download_media(
                         page, url, output_dir, f"{stamp}_{index}", prefix="jimeng_", default_ext=".mp4"
                     )
                     videos.append({"path": saved, "url": url})
-                if not any(item["path"] for item in videos):
-                    raise JimengError(
-                        "VIDEO_DOWNLOAD_FAILED",
-                        "生成完成，但视频均未能保存到本地；请检查输出目录权限或稍后重试。",
-                        retryable=True,
-                    )
-                return videos, str(screenshot_path)
+                _ensure_result_delivery(
+                    videos,
+                    error_code="VIDEO_DOWNLOAD_FAILED",
+                    media_label="视频",
+                )
+                return videos, screenshot_path
             finally:
                 try:
                     if not page.is_closed():

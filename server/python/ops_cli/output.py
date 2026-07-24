@@ -1,11 +1,22 @@
 import json
+import sys
 from typing import Any
 
 from pydantic import BaseModel, Field
 from rich.console import Console
 
 
-console = Console()
+def _force_utf8_stream(stream: Any) -> None:
+    """PyInstaller on Windows may otherwise inherit the active ANSI code page."""
+    try:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError, ValueError):
+        pass
+
+
+_force_utf8_stream(sys.stdout)
+_force_utf8_stream(sys.stderr)
+console = Console(force_terminal=False, color_system=None)
 
 
 class CommandResponse(BaseModel):

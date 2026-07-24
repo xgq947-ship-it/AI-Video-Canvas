@@ -21,6 +21,7 @@ import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
 import { resolveClaudeBin, resolveCodexBin } from './cliPaths.js';
+import { decodeProcessOutput } from '../utils/processOutput.js';
 
 const CLI_TIMEOUT_MS = 180000;
 // 与 codexImageAutomation.js 一致：优先 ChatGPT.app 内置 codex，未安装再退回 PATH 里的 codex。
@@ -28,6 +29,29 @@ function upstreamError(message, httpStatus) {
     const error = new Error(message);
     error.status = httpStatus >= 500 ? 502 : httpStatus;
     return error;
+}
+
+function quoteWindowsCommandArg(value) {
+    return `"${String(value).replaceAll('"', '""')}"`;
+}
+
+export function buildCliInvocation(
+    bin,
+    args,
+    { platform = process.platform, environment = process.env } = {}
+) {
+    if (platform !== 'win32' || !/\.(?:cmd|bat)$/i.test(bin)) {
+        return { command: bin, args };
+    }
+    return {
+        command: environment.ComSpec || environment.COMSPEC || 'cmd.exe',
+        args: [
+            '/d',
+            '/s',
+            '/c',
+            [quoteWindowsCommandArg(bin), ...args.map(quoteWindowsCommandArg)].join(' ')
+        ]
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -70,11 +94,14 @@ function runCli(bin, args, label) {
     return new Promise((resolve, reject) => {
         let child;
         try {
-            child = execFile(bin, args, {
+            const invocation = buildCliInvocation(bin, args);
+            child = execFile(invocation.command, invocation.args, {
                 cwd: os.tmpdir(),
                 timeout: CLI_TIMEOUT_MS,
                 maxBuffer: 32 * 1024 * 1024,
-                env: process.env
+                encoding: 'buffer',
+                env: process.env,
+                windowsHide: true
             }, (error, stdout, stderr) => {
                 if (error) {
                     if (error.code === 'ENOENT') {
@@ -85,11 +112,11 @@ function runCli(bin, args, label) {
                         reject(upstreamError(`${label} 调用超时（${Math.round(CLI_TIMEOUT_MS / 1000)}s）`, 504));
                         return;
                     }
-                    const detail = String(stderr || error.message || '').trim();
+                    const detail = (decodeProcessOutput(stderr) || error.message || '').trim();
                     reject(upstreamError(`${label} 调用失败：${detail || '未知错误'}`, 502));
                     return;
                 }
-                resolve(String(stdout || '').trim());
+                resolve(decodeProcessOutput(stdout).trim());
             });
         } catch (spawnError) {
             reject(upstreamError(`${label} 无法启动：${spawnError.message}`, 502));

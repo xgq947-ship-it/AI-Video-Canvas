@@ -67,6 +67,8 @@ function runtimeEnvironment() {
             process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe'
         ),
         EVAN_DESKTOP: '1',
+        EVAN_ELECTRON_EXECUTABLE: process.execPath,
+        EVAN_ELECTRON_RUN_AS_NODE: '1',
         SESSIONHUB_CDP_PORT: '19222',
         PLAYWRIGHT_BROWSERS_PATH: app.isPackaged
             ? path.join(process.resourcesPath, 'playwright-browsers')
@@ -181,6 +183,22 @@ ipcMain.handle('project:create', async (_event, { title, locationId } = {}) => {
     } catch (error) {
         return { ok: false, error: error.message || '项目创建失败' };
     }
+});
+
+ipcMain.handle('codex:select-cli', async () => {
+    const options = {
+        title: '选择 Codex CLI',
+        buttonLabel: '选择此文件',
+        properties: ['openFile'],
+        filters: process.platform === 'win32'
+            ? [{ name: 'Codex CLI', extensions: ['exe', 'cmd', 'bat'] }]
+            : []
+    };
+    const result = mainWindow
+        ? await dialog.showOpenDialog(mainWindow, options)
+        : await dialog.showOpenDialog(options);
+    if (result.canceled || !result.filePaths[0]) return { canceled: true };
+    return { canceled: false, path: path.resolve(result.filePaths[0]) };
 });
 
 function startBackend() {

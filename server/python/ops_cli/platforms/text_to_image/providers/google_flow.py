@@ -23,6 +23,7 @@ from ops_cli.platforms._google_flow_common import (
     GoogleFlowError,
     _attach_reference_images,
     _clear_existing_prompt,
+    _close_settings_menu,
     _download_media,
     _ensure_editor,
     _exact_count,
@@ -139,52 +140,59 @@ def _response_data(
     }
 
 
-def _open_settings_menu(page: Any) -> Any:
+def _open_settings_menu(page: Any) -> tuple[Any, Any]:
     """打开生成设置面板并返回该 menu locator。
 
     汇总按钮文本随模式/模型变化（如「🍌 Nano Banana 2 crop_9_16 1x」），用比例图标
     ligature「crop_」定位，兼容不同模型名。
     """
     settings = page.locator('button[aria-haspopup="menu"]').filter(has_text="crop_")
-    _exact_count(settings, "PAGE_NAVIGATION_FAILED", "未找到生图设置按钮。")
+    settings = _exact_count(settings, "PAGE_NAVIGATION_FAILED", "未找到生图设置按钮。")
     settings.click()
     menu = page.get_by_role("menu").filter(has_text=re.compile(r"16:9")).filter(
         has_text=re.compile(r"1:1")
     )
-    _exact_count(menu, "PAGE_NAVIGATION_FAILED", "未找到生图设置菜单。")
-    return menu
+    menu = _exact_count(menu, "PAGE_NAVIGATION_FAILED", "未找到生图设置菜单。")
+    return settings, menu
 
 
 def _configure_image(page: Any, *, aspect_ratio: str, count: int, model: str) -> None:
-    menu = _open_settings_menu(page)
+    settings, menu = _open_settings_menu(page)
+    try:
+        image_tab = menu.get_by_role("tab").filter(
+            has_text=re.compile(r"(^|\s)image(\s|$)", re.IGNORECASE)
+        )
+        image_tab = _exact_count(image_tab, "PAGE_NAVIGATION_FAILED", "未找到 Image 模式。")
+        image_tab.click()
 
-    image_tab = menu.get_by_role("tab").filter(
-        has_text=re.compile(r"(^|\s)image(\s|$)", re.IGNORECASE)
-    )
-    _exact_count(image_tab, "PAGE_NAVIGATION_FAILED", "未找到 Image 模式。")
-    image_tab.click()
-
-    ratio_name = _RATIO_TAB_NAMES[aspect_ratio]
-    ratio_tab = menu.get_by_role("tab", name=ratio_name, exact=True)
-    _exact_count(ratio_tab, "ASPECT_RATIO_NOT_SUPPORTED", f"页面未提供比例 {aspect_ratio}。")
-    ratio_tab.click()
-
-    count_name = "1x" if count == 1 else f"x{count}"
-    count_tab = menu.get_by_role("tab", name=count_name, exact=True)
-    _exact_count(count_tab, "COUNT_NOT_SUPPORTED", f"页面未提供张数 {count_name}。")
-    count_tab.click()
-
-    # 默认模型（Nano Banana 2）通常已选中；仅在请求了别的模型时才切换。
-    if model != DEFAULT_MODEL:
+        # 浏览器 profile 会记住上次模型。即使本次请求默认 Nano Banana 2 也必须
+        # 显式选择。模型也可能重置比例/张数，因此必须先选模型再写其余参数。
         model_button = menu.locator('button[aria-haspopup="menu"]')
-        _exact_count(model_button, "MODEL_NOT_FOUND", "未找到生图模型下拉框。")
+        model_button = _exact_count(model_button, "MODEL_NOT_FOUND", "未找到生图模型下拉框。")
         model_button.click()
         # exact=True 避免「Nano Banana 2」误匹配「Nano Banana 2 Lite」。
         model_item = page.get_by_role("menuitem", name=f"🍌 {model}", exact=True)
-        _exact_count(model_item, "MODEL_NOT_FOUND", f"页面未提供模型：{model}")
+        model_item = _exact_count(model_item, "MODEL_NOT_FOUND", f"页面未提供模型：{model}")
         model_item.click()
+        page.wait_for_timeout(800)
+        if menu.count() == 0 or not menu.is_visible():
+            settings, menu = _open_settings_menu(page)
 
-    page.keyboard.press("Escape")
+        ratio_name = _RATIO_TAB_NAMES[aspect_ratio]
+        ratio_tab = menu.get_by_role("tab", name=ratio_name, exact=True)
+        ratio_tab = _exact_count(
+            ratio_tab,
+            "ASPECT_RATIO_NOT_SUPPORTED",
+            f"页面未提供比例 {aspect_ratio}。",
+        )
+        ratio_tab.click()
+
+        count_name = "1x" if count == 1 else f"x{count}"
+        count_tab = menu.get_by_role("tab", name=count_name, exact=True)
+        count_tab = _exact_count(count_tab, "COUNT_NOT_SUPPORTED", f"页面未提供张数 {count_name}。")
+        count_tab.click()
+    finally:
+        _close_settings_menu(page, menu, settings)
 
 
 def _image_urls(page: Any) -> list[str]:
@@ -241,7 +249,11 @@ def _execute_generation(
                         _attach_reference_images(page, reference_paths)
 
                     prompt_box = page.locator('[role="textbox"][contenteditable="true"][data-slate-editor="true"]')
-                    _exact_count(prompt_box, "PROMPT_INPUT_NOT_FOUND", "未找到提示词输入框。")
+                    prompt_box = _exact_count(
+                        prompt_box,
+                        "PROMPT_INPUT_NOT_FOUND",
+                        "未找到提示词输入框。",
+                    )
                     prompt_box.fill(prompt)
 
                     previous_urls = set(_image_urls(page))
@@ -249,7 +261,7 @@ def _execute_generation(
                     create = page.get_by_role("button").filter(
                         has_text=re.compile(r"(^|\s)arrow_forward(\s|$)", re.IGNORECASE)
                     )
-                    _exact_count(create, "GENERATE_BUTTON_NOT_FOUND", "未找到生成按钮。")
+                    create = _exact_count(create, "GENERATE_BUTTON_NOT_FOUND", "未找到生成按钮。")
                     if not create.is_enabled():
                         raise GoogleFlowError("GENERATE_BUTTON_NOT_FOUND", "生成按钮不可用，请检查提示词。")
                     create.click()
@@ -277,8 +289,12 @@ def _execute_generation(
                     ):
                         raise GoogleFlowError(
                             "IMAGE_DOWNLOAD_FAILED",
-                            "生成完成，但无法保存图片，也没有可复用的图片链接。",
-                            retryable=True,
+                            "Google Flow 已生成图片，但页面只返回临时地址，自动保存失败。",
+                            retryable=False,
+                            recovery_hint=(
+                                "请到 Google Flow 项目历史中下载本次图片，不要直接重新生成，"
+                                "避免重复消耗额度。"
+                            ),
                         )
                     screenshot_path = _capture_proof_screenshot(
                         result_page,

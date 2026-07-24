@@ -58,6 +58,7 @@ Electron 主进程
 - `logs/`：后端、自动化和渲染日志
 - `browser-profile/`：即梦与 Flow 的持久化登录态
 - `runtime/`：临时状态与进程通信文件
+- `codex-home/`：安装版可选 Codex 连接器的独立登录资料、配置和 Evan Skill
 
 大体积素材目录后续允许用户迁移，但浏览器 profile 和配置不跟随素材目录迁移。
 
@@ -133,7 +134,13 @@ Chrome Beta 9222。常驻 Worker 完成后将不再暴露固定 CDP 端口。
 ## 7. AI CLI 边界
 
 - Codex / Claude 不作为应用启动和本地渲染的前置条件。
-- Codex 作为可选高级连接器，使用应用专用 `CODEX_HOME`，不得依赖用户全局 Skill。
+- Codex 作为可选高级连接器；CLI 可执行文件由用户单独安装和持续更新，安装包不得捆绑
+  固定 Codex 版本。
+- 启动时依次读取用户明确选择的路径、常见系统安装位置和 `PATH`；不可用时只禁用 Codex
+  模型，不影响其他功能。
+- 安装版使用应用专用 `CODEX_HOME`，自动安装版本化的 Evan Skill 和队列桥接命令，不
+  依赖或修改用户全局 Skill；源码模式保留开发者现有 `CODEX_HOME`。
+- Codex 登录由设置页显式触发，认证过期后允许重新登录；认证资料不得通过本地 API 返回。
 - Claude 第一版优先使用 API/SDK；是否分发 Claude Code 需单独完成商业条款审查。
 - CLI 登录失效与浏览器 provider 一样返回结构化 `auth_required`，不得只输出终端报错。
 
@@ -168,6 +175,8 @@ Chrome Beta 9222。常驻 Worker 完成后将不再暴露固定 CDP 端口。
 - 构建前会清理并验收平台相关 Ops CLI、Chromium 和 FFmpeg/FFprobe，避免跨平台混装。
 - 品牌图标会从 `public/TwitCanva-logo.png` 生成 ICNS/ICO。
 - 自动更新入口已接入，未配置发布源时安全禁用。
+- Codex 连接器支持自动发现/手动选择本机 CLI、独立 `CODEX_HOME`、登录状态检测、重新
+  登录、安装版 Skill/队列桥接；未安装或未登录时画布会禁用 Codex 模型并给出明确提示。
 
 正式对外发布前仍需：
 

@@ -24,6 +24,7 @@ test('桌面安装包按目标平台原生构建并在打包前验收运行时',
   assert.match(pkg.scripts['desktop:dist:win'], /electron-builder --win --x64/);
   assert.match(pkg.scripts['desktop:prepare'], /desktop:icons.*desktop:runtime.*desktop:verify/);
   assert.match(runtimeBuilder, /fs\.rmSync\(OUTPUT_ROOT/);
+  assert.match(runtimeBuilder, /\['ffmpeg\.README', 'README\.md'\]/);
   assert.match(runtimeVerifier, /chrome-win64/);
   assert.match(runtimeVerifier, /chrome-mac-arm64/);
 });

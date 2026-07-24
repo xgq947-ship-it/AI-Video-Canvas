@@ -41,15 +41,21 @@ function run(command, args, label) {
 function prepareMediaTools() {
     const extension = IS_WINDOWS ? '.exe' : '';
     const entries = [
-        [`ffmpeg${extension}`, `ffmpeg${extension}`],
-        [`ffprobe${extension}`, `ffprobe${extension}`],
-        ['LICENSE', 'PACKAGE-LICENSE'],
-        ['ffmpeg.README', 'FFMPEG-BUILD-README']
+        [[`ffmpeg${extension}`], `ffmpeg${extension}`],
+        [[`ffprobe${extension}`], `ffprobe${extension}`],
+        [['LICENSE'], 'PACKAGE-LICENSE'],
+        // The package installer downloads ffmpeg.README on macOS/Linux, while
+        // some Windows binary archives only retain the package-level README.
+        [['ffmpeg.README', 'README.md'], 'FFMPEG-BUILD-README']
     ];
     fs.mkdirSync(MEDIA_OUTPUT_ROOT, { recursive: true });
-    for (const [sourceName, destinationName] of entries) {
-        const source = path.join(MEDIA_PACKAGE_ROOT, sourceName);
-        if (!fs.existsSync(source)) fail(`内置媒体工具缺少文件：${source}`);
+    for (const [sourceNames, destinationName] of entries) {
+        const source = sourceNames
+            .map((sourceName) => path.join(MEDIA_PACKAGE_ROOT, sourceName))
+            .find((candidate) => fs.existsSync(candidate));
+        if (!source) {
+            fail(`内置媒体工具缺少文件：${sourceNames.join(' 或 ')}`);
+        }
         fs.copyFileSync(source, path.join(MEDIA_OUTPUT_ROOT, destinationName));
     }
     if (!IS_WINDOWS) {

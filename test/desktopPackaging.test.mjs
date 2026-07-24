@@ -58,6 +58,10 @@ test('安装器 CI 同时使用原生 macOS 和 Windows runner', () => {
   assert.match(installerWorkflow, /release\/\*\.exe/);
   assert.match(installerWorkflow, /actions\/download-artifact@v4/);
   assert.match(installerWorkflow, /gh release create/);
+  assert.match(installerWorkflow, /actions: write/);
+  assert.match(installerWorkflow, /retention-days: 1/);
+  assert.match(installerWorkflow, /GITHUB_RUN_ID\/artifacts/);
+  assert.match(installerWorkflow, /--method DELETE/);
 });
 
 test('自定义项目路径只通过 Electron 原生选择器和桌面令牌提交', () => {

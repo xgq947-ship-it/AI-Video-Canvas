@@ -42,7 +42,8 @@ npm run desktop:dist:win   # 必须在 Windows x64 上运行
 
 平台运行时包含平台相关二进制，不能在 macOS 上直接生成可信的 Windows 完整安装包。
 仓库提供 `.github/workflows/desktop-installers.yml`，会分别在原生 macOS/Windows runner
-生成安装介质。完整说明见 [开发指南](docs/development.md) 和
+生成安装介质、创建 GitHub Release，并在发布成功后删除 Actions 临时产物。完整说明见
+[开发指南](docs/development.md)、[发布与跨电脑开发](docs/发布与跨电脑开发.md) 和
 [桌面运行时架构](docs/desktop-runtime-architecture.md)。
 
 ## 文档

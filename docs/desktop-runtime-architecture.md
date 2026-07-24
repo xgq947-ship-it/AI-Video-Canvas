@@ -163,6 +163,8 @@ Chrome Beta 9222。常驻 Worker 完成后将不再暴露固定 CDP 端口。
 - Flow 新账号可从首页进入已有项目或自动创建项目。
 - Flow/即梦生图支持 1—4 张批量结果，并持久化为画布水平图片节点。
 - macOS DMG/ZIP 与 Windows x64 NSIS 的原生构建脚本和 GitHub Actions 矩阵已配置。
+- 版本 Tag 会自动创建 GitHub Release；发布成功后删除重复的 Actions 临时产物，只保留
+  Release 中供下载和更新使用的安装文件。
 - 构建前会清理并验收平台相关 Ops CLI、Chromium 和 FFmpeg/FFprobe，避免跨平台混装。
 - 品牌图标会从 `public/TwitCanva-logo.png` 生成 ICNS/ICO。
 - 自动更新入口已接入，未配置发布源时安全禁用。

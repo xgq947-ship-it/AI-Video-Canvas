@@ -57,7 +57,13 @@ npm run desktop:dist:win # 仅在 Windows x64：NSIS EXE
 安装包。
 
 仓库的 `.github/workflows/desktop-installers.yml` 支持手动触发或 `v*` Tag 触发，分别在
-`macos-latest`（arm64）和 `windows-latest`（x64）runner 构建并上传安装介质。
+`macos-latest`（arm64）和 `windows-latest`（x64）runner 构建安装介质。`v*` Tag
+构建会在两个平台均成功后创建 GitHub Release，随后删除 Actions 中用于跨 Job 传递的
+临时产物；临时产物的 1 天保留期只用于发布失败兜底。
+
+版本发布、跨电脑接手和存储边界见
+[发布与跨电脑开发](发布与跨电脑开发.md)。不要把 `release/`、`desktop-runtime/`、
+Python 虚拟环境、内置浏览器或 `node_modules/` 提交进 Git。
 
 正式分发前还需要 macOS 签名/公证、Windows Authenticode 签名和生产更新源。详细边界见
 [桌面运行时架构](desktop-runtime-architecture.md)。

@@ -7,6 +7,7 @@ on:
       - 'v*'
 
 permissions:
+  actions: write
   contents: write
 
 jobs:
@@ -67,7 +68,8 @@ jobs:
             release/*.yml
             release/*.blockmap
           if-no-files-found: error
-          retention-days: 14
+          # Release 发布成功后会立即删除；1 天仅作为发布步骤失败时的兜底。
+          retention-days: 1
 
   publish:
     name: 发布 GitHub Release
@@ -95,3 +97,15 @@ jobs:
               --title "Evan AI Video Canvas $GITHUB_REF_NAME" \
               --generate-notes
           fi
+
+      - name: 删除本次 Actions 临时产物
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --jq '.artifacts[].id' |
+          while read -r artifact_id; do
+            gh api --method DELETE \
+              "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id"
+          done

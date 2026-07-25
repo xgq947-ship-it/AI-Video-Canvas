@@ -168,7 +168,6 @@ export default function App() {
     setSelectedNodeIds,
     addNode,
     updateNode,
-    deleteNode,
     deleteNodes,
     clearSelection,
     handleSelectTypeFromMenu
@@ -264,6 +263,40 @@ export default function App() {
       closeAssetLibrary();
     }
   });
+
+  const trashDeleteInFlight = React.useRef(false);
+  const deleteNodesWithTrash = React.useCallback(async (ids: string[]) => {
+    const uniqueIds = [...new Set(ids)];
+    const deleted = nodes.filter(node => uniqueIds.includes(node.id));
+    const hasProjectImage = Boolean(workflowId) && deleted.some(node =>
+      [NodeType.IMAGE, NodeType.IMAGE_EDITOR, NodeType.CAMERA_ANGLE].includes(node.type)
+      && typeof node.resultUrl === 'string'
+      && /\/library\/projects\/[^/]+\/images\//.test(node.resultUrl)
+    );
+
+    if (!hasProjectImage) {
+      deleteNodes(uniqueIds);
+      return;
+    }
+    if (trashDeleteInFlight.current) return;
+
+    trashDeleteInFlight.current = true;
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(workflowId!)}/trash`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodeIds: uniqueIds, nodes })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || '移入回收站失败');
+      deleteNodes(uniqueIds);
+    } catch (error) {
+      console.error('Failed to move canvas image to trash:', error);
+      window.alert(error instanceof Error ? error.message : '移入回收站失败，图片没有删除');
+    } finally {
+      trashDeleteInFlight.current = false;
+    }
+  }, [workflowId, nodes, deleteNodes]);
 
   // Simple dirty flag for unsaved changes tracking
   const [isDirty, setIsDirty] = React.useState(false);
@@ -725,7 +758,7 @@ export default function App() {
     setNodes,
     setSelectedNodeIds,
     setContextMenu,
-    deleteNodes,
+    deleteNodes: deleteNodesWithTrash,
     deleteSelectedConnection,
     clearSelection,
     clearSelectionBox,
@@ -977,7 +1010,8 @@ export default function App() {
     contextMenu,
     setContextMenu,
     handleOpenCreateAsset,
-    handleSelectTypeFromMenu
+    handleSelectTypeFromMenu,
+    onDeleteNodes: deleteNodesWithTrash
   });
 
   // Wrapper functions that pass closeWorkflowPanel to panel handlers
@@ -1624,6 +1658,15 @@ export default function App() {
           canvasTheme={canvasTheme}
           onToggleTheme={() => setCanvasTheme(prev => prev === 'dark' ? 'light' : 'dark')}
           lastAutoSaveTime={lastAutoSaveTime}
+          workflowId={workflowId}
+          onRestoreNodes={(restoredNodes) => {
+            if (restoredNodes.length === 0) return;
+            setNodes(current => {
+              const currentIds = new Set(current.map(node => node.id));
+              return [...current, ...restoredNodes.filter(node => !currentIds.has(node.id))];
+            });
+            setSelectedNodeIds(restoredNodes.map(node => node.id));
+          }}
           showBrand={false}
           sidebarOffset={sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH}
         />
@@ -1940,8 +1983,8 @@ export default function App() {
           const aspectRatio = generationSettings.aspectRatio;
           const resolution = generationSettings.resolution;
 
-          // Flow / 即梦原生支持一次返回多张图。第一张回填当前节点，其余结果
-          // 在右侧水平创建独立节点，不设置 parentIds，因此不会出现连接线。
+          // Flow / 即梦原生支持一次返回多张图。纯文生图仍向右横排且不连线；
+          // 带参考素材时改为纵向排列，并让每张结果都连接同一组参考节点。
           if (imageModel.startsWith('jimeng-image-') || imageModel.startsWith('google-flow-')) {
             updateNode(sourceId, {
               prompt,
@@ -1973,10 +2016,23 @@ export default function App() {
               const resultUrls = rawResultUrls.slice(0, 4).map(
                 (url, index) => `${url}${url.includes('?') ? '&' : '?'}t=${generatedAt}-${index}`
               );
+              const connectedReferenceParentIds = collectNodeReferences(sourceNode.parentIds, nodes)
+                .filter(reference =>
+                  (reference.kind === 'image' || reference.kind === 'video')
+                  && Boolean(reference.previewUrl || reference.url)
+                )
+                .map(reference => reference.id);
+              const hasReferenceImage = Boolean(editorModal.imageUrl);
 
               const additionalNodes: NodeData[] = createAdditionalImagePlacements(
                 sourceNode,
-                resultUrls
+                resultUrls,
+                hasReferenceImage
+                  ? {
+                    layout: 'vertical',
+                    parentIds: connectedReferenceParentIds
+                  }
+                  : undefined
               ).map((placement, index) => ({
                 id: crypto.randomUUID(),
                 type: NodeType.IMAGE,

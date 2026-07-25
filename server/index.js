@@ -32,10 +32,19 @@ import {
     renameWorkflowAssetDirs,
     ensureProjectFolder,
     importProjectAsset,
+    resolveWorkflowProjectRoot,
     resolveProjectMediaTarget,
     saveProjectImageUpload,
     sanitizeProjectDirName
 } from './utils/projectAssets.js';
+import {
+    getProjectTrashPreviewPath,
+    listProjectTrash,
+    permanentlyDeleteProjectTrashEntry,
+    purgeExpiredProjectTrash,
+    restoreProjectTrashEntry,
+    trashWorkflowNodes
+} from './services/projectTrash.js';
 import { execFile } from 'child_process';
 import {
     buildPromptOptimizationInstruction,
@@ -583,6 +592,22 @@ const writeProjectManifest = (workflow) => {
     fs.writeFileSync(manifestPath, JSON.stringify(workflow, null, 2));
 };
 
+const purgeAllExpiredProjectTrash = () => {
+    for (const filename of fs.readdirSync(WORKFLOWS_DIR).filter(name => name.endsWith('.json'))) {
+        try {
+            const workflow = JSON.parse(fs.readFileSync(path.join(WORKFLOWS_DIR, filename), 'utf8'));
+            const projectRoot = resolveWorkflowProjectRoot(workflow, PROJECTS_DIR);
+            if (projectRoot && fs.existsSync(projectRoot)) purgeExpiredProjectTrash(projectRoot);
+        } catch (error) {
+            console.warn(`[回收站] 清理 ${filename} 失败：${error.message}`);
+        }
+    }
+};
+
+purgeAllExpiredProjectTrash();
+const projectTrashCleanupTimer = setInterval(purgeAllExpiredProjectTrash, 60 * 60 * 1000);
+projectTrashCleanupTimer.unref?.();
+
 const findWorkflowByTitle = (title, exceptId = null) => {
     const normalized = title.trim().toLocaleLowerCase();
     for (const file of fs.readdirSync(WORKFLOWS_DIR).filter(name => name.endsWith('.json'))) {
@@ -759,6 +784,97 @@ app.get('/api/projects/:id/assets', (req, res) => {
     } catch (error) {
         console.error('List project assets error:', error);
         res.status(500).json({ error: error.message });
+    }
+});
+
+const loadWorkflowForTrash = (workflowId) => {
+    const workflowPath = path.join(WORKFLOWS_DIR, `${workflowId}.json`);
+    if (!fs.existsSync(workflowPath)) {
+        const error = new Error('项目不存在');
+        error.code = 'PROJECT_NOT_FOUND';
+        throw error;
+    }
+    const workflow = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
+    const projectRoot = resolveWorkflowProjectRoot(workflow, PROJECTS_DIR);
+    if (!projectRoot || !fs.existsSync(projectRoot)) {
+        const error = new Error('项目文件夹不存在或磁盘未连接');
+        error.code = 'PROJECT_LOCATION_MISSING';
+        throw error;
+    }
+    return { workflow, workflowPath, projectRoot };
+};
+
+const saveTrashWorkflow = (workflow, workflowPath) => {
+    workflow.updatedAt = new Date().toISOString();
+    fs.writeFileSync(workflowPath, JSON.stringify(workflow, null, 2));
+    writeProjectManifest(workflow);
+};
+
+app.get('/api/projects/:id/trash', (req, res) => {
+    try {
+        const { workflow, projectRoot } = loadWorkflowForTrash(req.params.id);
+        res.json(listProjectTrash(workflow, projectRoot));
+    } catch (error) {
+        const status = error.code === 'PROJECT_NOT_FOUND' ? 404 : 500;
+        res.status(status).json({ error: error.message });
+    }
+});
+
+app.post('/api/projects/:id/trash', (req, res) => {
+    try {
+        const currentNodes = Array.isArray(req.body?.nodes) ? req.body.nodes : null;
+        const nodeIds = Array.isArray(req.body?.nodeIds)
+            ? req.body.nodeIds.filter(id => typeof id === 'string')
+            : [];
+        if (!currentNodes || nodeIds.length === 0) {
+            return res.status(400).json({ error: '缺少要删除的画布节点' });
+        }
+        const { workflow, workflowPath, projectRoot } = loadWorkflowForTrash(req.params.id);
+        const result = trashWorkflowNodes(workflow, currentNodes, nodeIds, projectRoot);
+        saveTrashWorkflow(workflow, workflowPath);
+        res.status(201).json({
+            success: true,
+            entry: result.entry,
+            deletedNodeIds: result.deletedNodes.map(node => node.id)
+        });
+    } catch (error) {
+        console.error('Move project image to trash error:', error);
+        const status = error.code === 'PROJECT_NOT_FOUND' ? 404 : 500;
+        res.status(status).json({ error: error.message });
+    }
+});
+
+app.post('/api/projects/:id/trash/:entryId/restore', (req, res) => {
+    try {
+        const { workflow, workflowPath, projectRoot } = loadWorkflowForTrash(req.params.id);
+        const restoredNodes = restoreProjectTrashEntry(workflow, projectRoot, req.params.entryId);
+        saveTrashWorkflow(workflow, workflowPath);
+        res.json({ success: true, restoredNodes });
+    } catch (error) {
+        const status = error.code === 'TRASH_NOT_FOUND' || error.code === 'PROJECT_NOT_FOUND' ? 404 : 500;
+        res.status(status).json({ error: error.message });
+    }
+});
+
+app.delete('/api/projects/:id/trash/:entryId', (req, res) => {
+    try {
+        const { projectRoot } = loadWorkflowForTrash(req.params.id);
+        permanentlyDeleteProjectTrashEntry(projectRoot, req.params.entryId);
+        res.json({ success: true });
+    } catch (error) {
+        const status = error.code === 'TRASH_NOT_FOUND' || error.code === 'PROJECT_NOT_FOUND' ? 404 : 500;
+        res.status(status).json({ error: error.message });
+    }
+});
+
+app.get('/api/projects/:id/trash/:entryId/preview', (req, res) => {
+    try {
+        const { projectRoot } = loadWorkflowForTrash(req.params.id);
+        const previewPath = getProjectTrashPreviewPath(projectRoot, req.params.entryId);
+        if (!previewPath) return res.status(404).end();
+        res.sendFile(previewPath);
+    } catch (error) {
+        res.status(error.code === 'PROJECT_NOT_FOUND' ? 404 : 500).json({ error: error.message });
     }
 });
 

@@ -5,8 +5,10 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, Globe2, KeyRound, Loader2, Plus, Save, Settings } from 'lucide-react';
+import { ChevronDown, Globe2, KeyRound, Loader2, Plus, Save, Settings, Trash2 } from 'lucide-react';
+import { NodeData } from '../types';
 import { ApiKeySettingsModal } from './modals/ApiKeySettingsModal';
+import { TrashModal } from './modals/TrashModal';
 
 interface TopBarProps {
     // Title
@@ -22,6 +24,8 @@ interface TopBarProps {
     onNew: () => void;
     hasUnsavedChanges: boolean;
     lastAutoSaveTime?: number;
+    workflowId?: string | null;
+    onRestoreNodes: (nodes: NodeData[]) => void;
     // Theme
     canvasTheme: 'dark' | 'light';
     onToggleTheme: () => void;
@@ -41,6 +45,8 @@ export const TopBar: React.FC<TopBarProps> = ({
     onNew,
     hasUnsavedChanges,
     lastAutoSaveTime,
+    workflowId,
+    onRestoreNodes,
     canvasTheme,
     onToggleTheme,
     showBrand = true,
@@ -50,6 +56,7 @@ export const TopBar: React.FC<TopBarProps> = ({
     const [isSaving, setIsSaving] = useState(false);
     const [showSettingsMenu, setShowSettingsMenu] = useState(false);
     const [showApiSettings, setShowApiSettings] = useState(false);
+    const [showTrash, setShowTrash] = useState(false);
     const [isOpeningBrowser, setIsOpeningBrowser] = useState(false);
     const [browserOpenError, setBrowserOpenError] = useState<string | null>(null);
     const settingsMenuRef = useRef<HTMLDivElement>(null);
@@ -238,6 +245,20 @@ export const TopBar: React.FC<TopBarProps> = ({
                                         <span className="mt-0.5 block text-[10px] text-neutral-500">查看即梦与 Google Flow 页面</span>
                                     </span>
                                 </button>
+                                <button
+                                    onClick={() => {
+                                        setShowSettingsMenu(false);
+                                        setShowTrash(true);
+                                    }}
+                                    disabled={!workflowId}
+                                    className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${canvasTheme === 'dark' ? 'text-neutral-200 hover:bg-neutral-700' : 'text-neutral-700 hover:bg-neutral-100'}`}
+                                >
+                                    <Trash2 size={16} className="shrink-0 text-amber-400" />
+                                    <span>
+                                        <span className="block font-medium">回收站</span>
+                                        <span className="mt-0.5 block text-[10px] text-neutral-500">7 天内恢复或永久删除</span>
+                                    </span>
+                                </button>
                                 {browserOpenError && (
                                     <div className="mx-2 mb-1 rounded-lg bg-red-500/10 px-2 py-1.5 text-[10px] leading-4 text-red-400">
                                         {browserOpenError}
@@ -309,6 +330,13 @@ export const TopBar: React.FC<TopBarProps> = ({
             <ApiKeySettingsModal
                 isOpen={showApiSettings}
                 onClose={() => setShowApiSettings(false)}
+                canvasTheme={canvasTheme}
+            />
+            <TrashModal
+                isOpen={showTrash}
+                workflowId={workflowId}
+                onClose={() => setShowTrash(false)}
+                onRestoreNodes={onRestoreNodes}
                 canvasTheme={canvasTheme}
             />
         </>

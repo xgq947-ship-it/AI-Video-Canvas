@@ -20,6 +20,7 @@ interface UseContextMenuHandlersOptions {
         viewport: Viewport,
         closeMenu: () => void
     ) => void;
+    onDeleteNodes?: (ids: string[]) => void | Promise<void>;
 }
 
 export const useContextMenuHandlers = ({
@@ -28,7 +29,8 @@ export const useContextMenuHandlers = ({
     contextMenu,
     setContextMenu,
     handleOpenCreateAsset,
-    handleSelectTypeFromMenu
+    handleSelectTypeFromMenu,
+    onDeleteNodes
 }: UseContextMenuHandlersOptions) => {
     // ============================================================================
     // DOUBLE-CLICK & RIGHT-CLICK
@@ -114,13 +116,18 @@ export const useContextMenuHandlers = ({
     }, [contextMenu.sourceNodeId, handleOpenCreateAsset]);
 
     const handleContextMenuSelect = useCallback((type: NodeType | 'DELETE') => {
+        if (type === 'DELETE' && contextMenu.sourceNodeId && onDeleteNodes) {
+            void onDeleteNodes([contextMenu.sourceNodeId]);
+            setContextMenu(previous => ({ ...previous, isOpen: false }));
+            return;
+        }
         handleSelectTypeFromMenu(
             type,
             contextMenu,
             viewport,
             () => setContextMenu(prev => ({ ...prev, isOpen: false }))
         );
-    }, [handleSelectTypeFromMenu, contextMenu, viewport, setContextMenu]);
+    }, [handleSelectTypeFromMenu, contextMenu, viewport, setContextMenu, onDeleteNodes]);
 
     const handleToolbarAdd = useCallback((e: React.MouseEvent) => {
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();

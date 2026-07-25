@@ -277,6 +277,13 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                     : 1;
 
                 if (isBrowserBatch) {
+                    const connectedReferenceParentIds = directReferences
+                        .filter(reference =>
+                            (reference.kind === 'image' || reference.kind === 'video')
+                            && Boolean(reference.previewUrl || reference.url)
+                        )
+                        .map(reference => reference.id);
+                    const hasReferenceImages = imageBase64s.length > 0;
                     const rawResultUrls = await generateImageBatch({
                         workflowId,
                         prompt: combinedPrompt,
@@ -300,7 +307,19 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                         errorMessage: undefined
                     });
 
-                    const additionalNodes = createAdditionalImagePlacements(node, resultUrls)
+                    const additionalNodes = createAdditionalImagePlacements(
+                        {
+                            ...node,
+                            resultAspectRatio: firstImage.resultAspectRatio
+                        },
+                        resultUrls,
+                        hasReferenceImages
+                            ? {
+                                layout: 'vertical',
+                                parentIds: connectedReferenceParentIds
+                            }
+                            : undefined
+                    )
                         .map((placement, index): NodeData => ({
                             id: crypto.randomUUID(),
                             type: NodeType.IMAGE,
@@ -310,6 +329,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                             prompt: combinedPrompt,
                             status: NodeStatus.SUCCESS,
                             resultUrl: placement.resultUrl,
+                            resultAspectRatio: firstImage.resultAspectRatio,
                             parentIds: placement.parentIds,
                             model: node.model || 'Banana Pro',
                             imageModel: node.imageModel,

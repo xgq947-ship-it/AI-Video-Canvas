@@ -187,6 +187,9 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
             } else if (node.type === NodeType.IMAGE || node.type === NodeType.IMAGE_EDITOR) {
                 // Collect ALL parent images for multi-input generation
                 const imageBase64s: string[] = [];
+                // 即梦页面最多接收 12 张参考图；Gemini/Codex 现有链路允许 14 张。
+                // 在遍历祖先时就按当前 provider 收口，避免即梦多参考图请求到后端才失败。
+                const imageReferenceLimit = node.imageModel?.startsWith('jimeng-image-') ? 12 : 14;
 
                 // Collect successful direct parents and all successful image ancestors.
                 // A linear role workflow therefore keeps the original face identity image
@@ -197,7 +200,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                     const visitedParentIds = new Set<string>();
                     const addedUrls = new Set<string>();
 
-                    while (pendingParentIds.length > 0 && imageBase64s.length < 14) {
+                    while (pendingParentIds.length > 0 && imageBase64s.length < imageReferenceLimit) {
                         const parentId = pendingParentIds.shift()!;
                         if (visitedParentIds.has(parentId)) continue;
                         visitedParentIds.add(parentId);
@@ -218,7 +221,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                         // nodes so connecting one look asset is enough to lock both face
                         // identity and wardrobe consistency.
                         for (const characterUrl of parent.characterReferenceUrls || []) {
-                            if (imageBase64s.length >= 14) break;
+                            if (imageBase64s.length >= imageReferenceLimit) break;
                             if (!addedUrls.has(characterUrl)) {
                                 imageBase64s.push(characterUrl);
                                 addedUrls.add(characterUrl);
@@ -236,7 +239,10 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                 // Add character reference URLs from storyboard nodes (for maintaining character consistency)
                 if (node.characterReferenceUrls && node.characterReferenceUrls.length > 0) {
                     for (const charUrl of node.characterReferenceUrls) {
-                        if (imageBase64s.length < 14 && !imageBase64s.includes(charUrl)) { // Respect Gemini's limit
+                        if (
+                            imageBase64s.length < imageReferenceLimit
+                            && !imageBase64s.includes(charUrl)
+                        ) {
                             imageBase64s.push(charUrl);
                         }
                     }

@@ -142,6 +142,61 @@ print(json.dumps({
     assert.equal(result.text, '一只戴红围巾的猫');
 });
 
+test('上传参考图后优先选择当前 composer，并重新解析重挂载的编辑器', {
+    skip: ready ? false : '未配置 server/python/.venv'
+}, () => {
+    const result = runPython(`
+import json
+from ops_cli.platforms.image_to_video.providers import jimeng as j
+
+class Editor:
+    def __init__(self, name, score):
+        self.name = name
+        self.score = score
+        self.text = "结合参考、输入文字或参考内容，描述你想如何调整图片。"
+        self.focused = False
+    def is_visible(self): return True
+    def evaluate(self, script, arg=None):
+        if arg is None:
+            return self.score
+        self.focused = True
+        self.text = arg
+        return True
+    def inner_text(self): return self.text
+
+class Editors:
+    def __init__(self, nodes): self.nodes = nodes
+    def count(self): return len(self.nodes)
+    def nth(self, index): return self.nodes[index]
+
+class Keyboard:
+    def press(self, key): pass
+    def insert_text(self, text): raise AssertionError("原子写入成功后不应走键盘兜底")
+
+class Page:
+    def __init__(self):
+        self.stale = Editor("stale", 10)
+        self.composer = Editor("composer", 100000)
+        self.keyboard = Keyboard()
+    def locator(self, selector):
+        assert selector == j.PROMPT_EDITOR
+        return Editors([self.stale, self.composer])
+    def wait_for_timeout(self, milliseconds): pass
+
+page = Page()
+j._fill_prompt(page, "给这个@参考图1 戴一顶帽子")
+print(json.dumps({
+    "stale": page.stale.text,
+    "composer": page.composer.text,
+    "composerFocused": page.composer.focused,
+}, ensure_ascii=False))
+`);
+
+    assert.match(result.stale, /结合参考/);
+    assert.equal(result.composer, '给这个@参考图1 戴一顶帽子');
+    assert.equal(result.composerFocused, true);
+});
+
 test('即使游客页渲染了完整编辑器，也必须先报告未登录', {
     skip: ready ? false : '未配置 server/python/.venv'
 }, () => {

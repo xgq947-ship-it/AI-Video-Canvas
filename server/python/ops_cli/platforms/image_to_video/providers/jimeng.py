@@ -304,16 +304,45 @@ def _login_control_visible(page: Any) -> bool:
 
 
 def _visible_prompt_editor(page: Any) -> Any | None:
-    """返回当前可见 composer；即梦首页会同时渲染顶部与底部两套编辑器。"""
+    """返回当前真正可提交的 composer。
+
+    即梦会同时保留首页编辑器、参考图描述编辑器和响应式副本。上传参考图后 DOM 还会
+    重挂载；简单返回第一个可见节点会把提示词写进旧编辑器。优先选处在文件上传 composer
+    内、且不属于 dialog/popover 的可见编辑器，再用页面位置打破同分。
+    """
     editors = page.locator(PROMPT_EDITOR)
+    candidates: list[tuple[float, Any]] = []
     for index in range(editors.count()):
         node = editors.nth(index)
         try:
-            if node.is_visible():
-                return node
+            if not node.is_visible():
+                continue
+            score = float(
+                node.evaluate(
+                    """el => {
+                      let ancestor = el;
+                      let hasFileInput = false;
+                      while (ancestor) {
+                        if (ancestor.querySelector && ancestor.querySelector('input[type=file]')) {
+                          hasFileInput = true;
+                          break;
+                        }
+                        ancestor = ancestor.parentElement;
+                      }
+                      const blocked = Boolean(el.closest('[role=dialog], .lv-popover'));
+                      const rect = el.getBoundingClientRect();
+                      return (hasFileInput ? 100000 : 0)
+                        + (blocked ? -1000000 : 0)
+                        + Math.max(0, rect.bottom);
+                    }"""
+                )
+            )
+            candidates.append((score, node))
         except Exception:
-            continue
-    return None
+            # 测试替身或旧 Playwright 不支持 evaluate 时仍保持兼容，但把后出现的
+            # 可见编辑器放在前面，匹配即梦参考图模式的真实 DOM 顺序。
+            candidates.append((float(index), node))
+    return max(candidates, key=lambda item: item[0])[1] if candidates else None
 
 
 def _dismiss_overlays(page: Any) -> None:
@@ -651,28 +680,61 @@ def _attach_reference_images(page: Any, reference_paths: list[Path], reference_n
 
 
 def _fill_prompt(page: Any, prompt: str) -> None:
-    editor = _visible_prompt_editor(page)
-    if editor is None:
-        raise JimengError("PROMPT_INPUT_NOT_FOUND", "未找到可见的提示词输入框。")
-    # focus() 不依赖鼠标命中测试。即使第三方页面的浮层正在退场，也不会再被其中的
-    # 分辨率数值输入框（例如 value=2048）拦截 30 秒。
-    editor.focus()
-    # tiptap/ProseMirror 富文本不接受 fill()。也**不能**用 keyboard.type：提示词里
-    # 一个 @ 就会触发即梦的「参考内容」mention 浮层，后面的字会被浮层吞掉或变成
-    # 一个错误的引用。insert_text 直接走 CDP 文本插入，不产生按键事件。
-    page.keyboard.press("ControlOrMeta+a")
-    page.keyboard.press("Backspace")
-    page.keyboard.insert_text(prompt)
-    page.wait_for_timeout(800)
-    # 回读校验：提示词没完整落进编辑器就提交，等于花积分生成一个错的视频。
-    typed = (editor.inner_text() or "").replace("\n", "").strip()
     expected = prompt.replace("\n", "").strip()
-    if expected not in typed:
-        raise JimengError(
-            "PROMPT_INPUT_NOT_FOUND",
-            f"提示词未能完整写入编辑器（页面回读：{typed[:60]}…），已中止提交，未消耗积分。",
-            retryable=True,
-        )
+    typed = ""
+    for attempt in range(3):
+        editor = _visible_prompt_editor(page)
+        if editor is None:
+            raise JimengError("PROMPT_INPUT_NOT_FOUND", "未找到可见的提示词输入框。")
+
+        # 上传参考图会重挂载 Tiptap。把 focus、全选和插入放在同一次页面脚本里可避免
+        # focus() 返回后节点立即失效；execCommand 会触发 ProseMirror 所需的 input
+        # 事件，同时不会像 keyboard.type 那样让 @ 打开 mention 浮层并吞掉后续文字。
+        inserted_atomically = False
+        try:
+            inserted_atomically = bool(
+                editor.evaluate(
+                    """(element, text) => {
+                      element.focus();
+                      const selection = window.getSelection();
+                      const range = document.createRange();
+                      range.selectNodeContents(element);
+                      selection.removeAllRanges();
+                      selection.addRange(range);
+                      return document.execCommand('insertText', false, text);
+                    }""",
+                    prompt,
+                )
+            )
+        except Exception:
+            inserted_atomically = False
+
+        if not inserted_atomically:
+            # 兼容禁用 execCommand 的页面和轻量测试替身。
+            editor = _visible_prompt_editor(page)
+            if editor is None:
+                continue
+            editor.focus()
+            page.keyboard.press("ControlOrMeta+a")
+            page.keyboard.press("Backspace")
+            page.keyboard.insert_text(prompt)
+
+        page.wait_for_timeout(800)
+        current = _visible_prompt_editor(page)
+        if current is not None:
+            typed = (current.inner_text() or "").replace("\n", "").strip()
+            if expected in typed:
+                return
+        # 参考图模式第一次写入时可能正好撞上 composer 重挂载，重新解析节点后再试。
+        if attempt < 2:
+            page.wait_for_timeout(500)
+
+    # 回读校验：提示词没完整落进编辑器就提交，等于花积分生成一个错误任务。
+    raise JimengError(
+        "PROMPT_INPUT_NOT_FOUND",
+        f"提示词未能完整写入编辑器（页面回读：{typed[:60]}…），已中止提交，未消耗积分。",
+        retryable=True,
+    )
 
 
 def _submit(page: Any) -> None:

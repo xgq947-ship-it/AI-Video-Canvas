@@ -138,3 +138,88 @@ print(json.dumps({"clicks": clicks, "closed": closed}))
     );
     assert.deepEqual(result.closed, [true]);
 });
+
+test('Flow 已处于 Image 模式时允许页面省略模式 tab', {
+    skip: ready ? false : '未配置 server/python/.venv'
+}, () => {
+    const result = runPython(`
+import json
+from ops_cli.platforms.text_to_image.providers import google_flow as g
+
+clicks = []
+
+class Empty:
+    def filter(self, **kwargs): return self
+    def count(self): return 0
+    def nth(self, index): raise IndexError(index)
+
+class Node:
+    def __init__(self, name, text=""):
+        self.name = name
+        self.text = text
+    def filter(self, **kwargs): return self
+    def locator(self, selector):
+        if selector in ('[role="tab"]', 'button', '[role="menuitem"]'):
+            return Empty()
+        return Node("model-button")
+    def get_by_role(self, role, name=None, exact=False):
+        return Node(f"{role}:{name}")
+    def click(self, **kwargs): clicks.append(self.name)
+    def count(self): return 1
+    def is_visible(self): return True
+    def inner_text(self): return self.text
+
+class Page:
+    def get_by_role(self, role, name=None, exact=False):
+        return Node(f"{role}:{name}")
+    def wait_for_timeout(self, milliseconds): pass
+
+settings = Node("settings", "🍌 Nano Banana 2 crop_square 1x")
+menu = Node("menu", "Nano Banana 2 16:9 1:1 1x x2 x3 x4")
+g._open_settings_menu = lambda page: (settings, menu)
+g._close_settings_menu = lambda page, overlay, trigger: None
+g._configure_image(Page(), aspect_ratio="1:1", count=2, model=g.DEFAULT_MODEL)
+print(json.dumps({"clicks": clicks}))
+`);
+
+    assert.ok(result.clicks.includes('model-button'));
+    assert.ok(result.clicks.includes('tab:crop_square 1:1'));
+    assert.ok(result.clicks.includes('tab:x2'));
+});
+
+test('Flow 多图等待按 URL 去重，不把响应式副本当成多张结果', {
+    skip: ready ? false : '未配置 server/python/.venv'
+}, () => {
+    const result = runPython(`
+import json
+from ops_cli.platforms import _google_flow_common as c
+
+class Body:
+    def inner_text(self, timeout=0): return ""
+
+class Page:
+    def locator(self, selector): return Body()
+    def wait_for_timeout(self, milliseconds): pass
+
+page, urls = c.wait_for_new_media(
+    Page(),
+    context=None,
+    project_url="https://labs.google/fx/tools/flow/project/test",
+    collect_urls=lambda page: [
+        "https://example.test/result-1.png",
+        "https://example.test/result-1.png",
+        "https://example.test/result-2.png",
+    ],
+    previous_urls=set(),
+    previous_failure_count=0,
+    timeout_minutes=1,
+    min_new=2,
+)
+print(json.dumps({"urls": urls}))
+`);
+
+    assert.deepEqual(result.urls, [
+        'https://example.test/result-1.png',
+        'https://example.test/result-2.png'
+    ]);
+});

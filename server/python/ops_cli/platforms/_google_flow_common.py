@@ -523,7 +523,15 @@ def wait_for_new_media(
                     "Google Flow 已明确返回生成失败，请稍后点击重新生成；失败任务不会扣费。",
                     retryable=True,
                 )
-            new_urls = [url for url in collect_urls(active_page) if url not in previous_urls]
+            # 同一张结果图可能同时出现在预览卡、历史卡和隐藏的响应式副本中。
+            # 去重后再判断数量，避免多图任务把一个 URL 的多个 DOM 副本误当成多张结果。
+            new_urls: list[str] = []
+            seen_urls: set[str] = set()
+            for url in collect_urls(active_page):
+                if url in previous_urls or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                new_urls.append(url)
             if len(new_urls) >= min_new:
                 return active_page, new_urls[:min_new]
             consecutive_read_errors = 0

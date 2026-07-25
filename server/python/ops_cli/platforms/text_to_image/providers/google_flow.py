@@ -30,6 +30,7 @@ from ops_cli.platforms._google_flow_common import (
     _first_option_selected,
     _import_browser_runtime,
     _generation_failure_count,
+    _locator_visible,
     _project_work_page,
     _resolve_project_url,
     _selected_media_matches_reference,
@@ -159,11 +160,42 @@ def _open_settings_menu(page: Any) -> tuple[Any, Any]:
 def _configure_image(page: Any, *, aspect_ratio: str, count: int, model: str) -> None:
     settings, menu = _open_settings_menu(page)
     try:
-        image_tab = menu.get_by_role("tab").filter(
-            has_text=re.compile(r"(^|\s)image(\s|$)", re.IGNORECASE)
-        )
-        image_tab = _exact_count(image_tab, "PAGE_NAVIGATION_FAILED", "未找到 Image 模式。")
-        image_tab.click()
+        # Flow 会按窗口宽度把 Image / Video 切换器渲染成 tab、button 或 menuitem；
+        # 已经处于 Image 模式时，新版页面甚至会省略切换器，只保留香蕉模型。不能再把
+        # role=tab 当成唯一页面识别信号。
+        image_mode = None
+        image_label = re.compile(r"(^|\s)(image|图片)(\s|$)", re.IGNORECASE)
+        for selector in ('[role="tab"]', 'button', '[role="menuitem"]'):
+            candidates = menu.locator(selector).filter(has_text=image_label)
+            try:
+                image_mode = _exact_count(
+                    candidates,
+                    "PAGE_NAVIGATION_FAILED",
+                    "Image 模式控件不唯一。",
+                )
+                break
+            except GoogleFlowError:
+                continue
+
+        if image_mode is not None:
+            image_mode.click()
+            page.wait_for_timeout(500)
+            if not _locator_visible(menu):
+                settings, menu = _open_settings_menu(page)
+        else:
+            # 当前设置摘要或菜单里已经出现香蕉模型，足以证明页面正处于 Image
+            # 模式；此时不应因为切换器被响应式 UI 隐藏而中止任务。
+            summary = " ".join(
+                filter(
+                    None,
+                    (
+                        (settings.inner_text() or "").strip(),
+                        (menu.inner_text() or "").strip(),
+                    ),
+                )
+            )
+            if "🍌" not in summary and not any(name in summary for name in SUPPORTED_MODELS):
+                raise GoogleFlowError("PAGE_NAVIGATION_FAILED", "未找到 Image 模式。")
 
         # 浏览器 profile 会记住上次模型。即使本次请求默认 Nano Banana 2 也必须
         # 显式选择。模型也可能重置比例/张数，因此必须先选模型再写其余参数。
@@ -175,7 +207,7 @@ def _configure_image(page: Any, *, aspect_ratio: str, count: int, model: str) ->
         model_item = _exact_count(model_item, "MODEL_NOT_FOUND", f"页面未提供模型：{model}")
         model_item.click()
         page.wait_for_timeout(800)
-        if menu.count() == 0 or not menu.is_visible():
+        if not _locator_visible(menu):
             settings, menu = _open_settings_menu(page)
 
         ratio_name = _RATIO_TAB_NAMES[aspect_ratio]
@@ -186,6 +218,9 @@ def _configure_image(page: Any, *, aspect_ratio: str, count: int, model: str) ->
             f"页面未提供比例 {aspect_ratio}。",
         )
         ratio_tab.click()
+        page.wait_for_timeout(400)
+        if not _locator_visible(menu):
+            settings, menu = _open_settings_menu(page)
 
         count_name = "1x" if count == 1 else f"x{count}"
         count_tab = menu.get_by_role("tab", name=count_name, exact=True)

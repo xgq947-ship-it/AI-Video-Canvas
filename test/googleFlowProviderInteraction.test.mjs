@@ -223,3 +223,96 @@ print(json.dumps({"urls": urls}))
         'https://example.test/result-2.png'
     ]);
 });
+
+test('Flow 新版无文字提交按钮按 composer 右侧结构定位', {
+    skip: ready ? false : '未配置 server/python/.venv'
+}, () => {
+    const result = runPython(`
+import json
+from ops_cli.platforms.text_to_image.providers import google_flow as g
+
+class Control:
+    def __init__(self, name, x, *, popup=False, label=""):
+        self.name = name
+        self.x = x
+        self.popup = popup
+        self.label = label
+    def is_visible(self): return True
+    def is_enabled(self): return True
+    def get_attribute(self, name):
+        if name == "aria-haspopup": return "dialog" if self.popup else None
+        if name == "aria-label": return self.label or None
+        return None
+    def inner_text(self): return ""
+    def bounding_box(self): return {"x": self.x, "y": 120, "width": 40, "height": 40}
+
+class Controls:
+    def __init__(self, nodes): self.nodes = nodes
+    def count(self): return len(self.nodes)
+    def nth(self, index): return self.nodes[index]
+
+class Composer:
+    def __init__(self, nodes): self.nodes = nodes
+    def locator(self, selector): return Controls(self.nodes)
+
+class Prompt:
+    def __init__(self, nodes): self.nodes = nodes
+    def bounding_box(self): return {"x": 100, "y": 100, "width": 500, "height": 80}
+    def locator(self, selector): return Composer(self.nodes)
+
+nodes = [
+    Control("upload", 110, popup=True),
+    Control("settings", 480, popup=True),
+    Control("submit", 610),
+]
+selected = g._find_generate_button(object(), Prompt(nodes))
+print(json.dumps({"selected": selected.name}))
+`);
+
+    assert.equal(result.selected, 'submit');
+});
+
+test('Flow 提交按钮优先接受 Generate 可访问名称', {
+    skip: ready ? false : '未配置 server/python/.venv'
+}, () => {
+    const result = runPython(`
+import json
+from ops_cli.platforms.text_to_image.providers import google_flow as g
+
+class Control:
+    def __init__(self, name, label, x):
+        self.name = name
+        self.label = label
+        self.x = x
+    def is_visible(self): return True
+    def is_enabled(self): return True
+    def get_attribute(self, name):
+        if name == "aria-label": return self.label
+        return None
+    def inner_text(self): return ""
+    def bounding_box(self): return {"x": self.x, "y": 20, "width": 40, "height": 40}
+
+class Controls:
+    def __init__(self, nodes): self.nodes = nodes
+    def count(self): return len(self.nodes)
+    def nth(self, index): return self.nodes[index]
+
+class Composer:
+    def __init__(self, nodes): self.nodes = nodes
+    def locator(self, selector): return Controls(self.nodes)
+
+class Prompt:
+    def __init__(self, nodes): self.nodes = nodes
+    def bounding_box(self): return {"x": 100, "y": 100, "width": 500, "height": 80}
+    def locator(self, selector): return Composer(self.nodes)
+
+nodes = [
+    Control("unrelated-right", "", 620),
+    Control("generate", "Generate", 200),
+]
+selected = g._find_generate_button(object(), Prompt(nodes))
+print(json.dumps({"selected": selected.name}))
+`);
+
+    assert.equal(result.selected, 'generate');
+});

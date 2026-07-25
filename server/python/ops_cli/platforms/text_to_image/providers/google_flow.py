@@ -22,6 +22,7 @@ from ops_cli.output import CommandResponse
 from ops_cli.platforms._google_flow_common import (
     GoogleFlowError,
     _attach_reference_images,
+    _capture_editor_diagnostics,
     _clear_existing_prompt,
     _close_settings_menu,
     _download_media,
@@ -65,6 +66,15 @@ _RATIO_TAB_NAMES = {
     "3:4": "crop_portrait 3:4",
     "9:16": "crop_9_16 9:16",
 }
+
+_CREATE_BUTTON_LABEL = re.compile(
+    r"(^|\s)(arrow_forward|arrow_right_alt|send|create|generate|创建|生成)(\s|$)",
+    re.IGNORECASE,
+)
+_NON_SUBMIT_LABEL = re.compile(
+    r"add_2|attach|upload|settings|tune|more_vert|添加|上传|设置",
+    re.IGNORECASE,
+)
 
 
 def _default_output_dir() -> Path:
@@ -238,6 +248,65 @@ def _image_urls(page: Any) -> list[str]:
     )
 
 
+def _find_generate_button(page: Any, prompt_box: Any) -> Any | None:
+    """定位当前 composer 的提交按钮，兼容 Flow 图标与可访问名更新。
+
+    旧页面按钮正文是 ``arrow_forward Create``，新版会只保留 aria-label、改用
+    ``send`` 图标，或者把按钮渲染成 ``role=button``。先匹配明确的提交语义；若第三方
+    页面把文案全部移除，则只在提示词所在的最小 composer 内选择位于编辑器右侧、非
+    popup trigger 的唯一可用按钮，避免误点上传/设置。
+    """
+    prompt_bounds = prompt_box.bounding_box()
+    try:
+        composer = prompt_box.locator("xpath=ancestor::*[.//button or .//*[@role='button']][1]")
+        controls = composer.locator("button, [role='button']")
+    except Exception:
+        controls = page.locator("button, [role='button']")
+
+    ranked: list[tuple[float, Any]] = []
+    for index in range(controls.count()):
+        control = controls.nth(index)
+        try:
+            if not control.is_visible() or not control.is_enabled():
+                continue
+            if (control.get_attribute("aria-haspopup") or "").strip():
+                continue
+            label = " ".join(
+                filter(
+                    None,
+                    (
+                        (control.get_attribute("aria-label") or "").strip(),
+                        (control.get_attribute("title") or "").strip(),
+                        (control.inner_text() or "").strip(),
+                    ),
+                )
+            )
+            if _NON_SUBMIT_LABEL.search(label):
+                continue
+            bounds = control.bounding_box()
+            explicit = bool(_CREATE_BUTTON_LABEL.search(label))
+            if not explicit:
+                if prompt_bounds is None or bounds is None:
+                    continue
+                prompt_right = prompt_bounds["x"] + prompt_bounds["width"]
+                control_center_x = bounds["x"] + bounds["width"] / 2
+                control_center_y = bounds["y"] + bounds["height"] / 2
+                if control_center_x < prompt_right - 80:
+                    continue
+                if not (
+                    prompt_bounds["y"] - 24
+                    <= control_center_y
+                    <= prompt_bounds["y"] + prompt_bounds["height"] + 40
+                ):
+                    continue
+            right_edge = (bounds["x"] + bounds["width"]) if bounds else 0
+            score = (100_000 if explicit else 0) + right_edge
+            ranked.append((score, control))
+        except Exception:
+            continue
+    return max(ranked, key=lambda item: item[0])[1] if ranked else None
+
+
 def _capture_proof_screenshot(page: Any, screenshot_path: Path) -> str | None:
     """尽力保存页面存证；截图失败不能推翻已经完成的生成结果。"""
     try:
@@ -293,10 +362,10 @@ def _execute_generation(
 
                     previous_urls = set(_image_urls(page))
                     previous_failure_count = _generation_failure_count(page)
-                    create = page.get_by_role("button").filter(
-                        has_text=re.compile(r"(^|\s)arrow_forward(\s|$)", re.IGNORECASE)
-                    )
-                    create = _exact_count(create, "GENERATE_BUTTON_NOT_FOUND", "未找到生成按钮。")
+                    create = _find_generate_button(page, prompt_box)
+                    if create is None:
+                        _capture_editor_diagnostics(page, "generate_button_not_found")
+                        raise GoogleFlowError("GENERATE_BUTTON_NOT_FOUND", "未找到生成按钮。")
                     if not create.is_enabled():
                         raise GoogleFlowError("GENERATE_BUTTON_NOT_FOUND", "生成按钮不可用，请检查提示词。")
                     create.click()

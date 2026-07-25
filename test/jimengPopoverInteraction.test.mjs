@@ -197,6 +197,129 @@ print(json.dumps({
     assert.equal(result.composerFocused, true);
 });
 
+test('即梦多图按媒体路径去重，不把 p11/p26 CDN 副本当成两张图', {
+    skip: ready ? false : '未配置 server/python/.venv'
+}, () => {
+    const result = runPython(`
+import json
+from ops_cli.platforms.text_to_image.providers import jimeng as j
+
+class Page:
+    def wait_for_timeout(self, milliseconds): pass
+
+j._result_area_text = lambda page: ""
+j._image_urls = lambda page: [
+    "https://p11-dreamina-sign.byteimg.com/tos-cn-i/first~resize:360.webp?x-signature=one",
+    "https://p26-dreamina-sign.byteimg.com/tos-cn-i/first~resize:360.webp?x-signature=two",
+    "https://p11-dreamina-sign.byteimg.com/tos-cn-i/second~resize:360.webp?x-signature=three",
+]
+urls = j._wait_for_images(Page(), previous_urls=set(), expected=2, timeout_minutes=1)
+print(json.dumps({
+    "sameIdentity": j._image_identity(j._image_urls(None)[0]) == j._image_identity(j._image_urls(None)[1]),
+    "urls": urls,
+}))
+`);
+
+    assert.equal(result.sameIdentity, true);
+    assert.equal(result.urls.length, 2);
+    assert.match(result.urls[0], /first/);
+    assert.match(result.urls[1], /second/);
+});
+
+test('即梦图片模式把有效 @参考图标签转成可提交文本', {
+    skip: ready ? false : '未配置 server/python/.venv'
+}, () => {
+    const result = runPython(`
+import json
+from ops_cli.platforms.text_to_image.providers import jimeng as j
+
+print(json.dumps({
+    "withRefs": j._prompt_for_image_composer(
+        "让@参考图1 和 @图片2 保持外观，忽略@参考图3",
+        2,
+    ),
+    "withoutRefs": j._prompt_for_image_composer("保留@参考图1", 0),
+}, ensure_ascii=False))
+`);
+
+    assert.equal(result.withRefs, '让参考图1 和 图片2 保持外观，忽略@参考图3');
+    assert.equal(result.withoutRefs, '保留@参考图1');
+});
+
+test('即梦上传参考图后的素材合规弹窗会点击特定确认按钮', {
+    skip: ready ? false : '未配置 server/python/.venv'
+}, () => {
+    const result = runPython(`
+import json
+from ops_cli.platforms.image_to_video.providers import jimeng as j
+
+class Confirm:
+    def __init__(self): self.clicked = False
+    def count(self): return 1
+    def nth(self, index): return self
+    def is_visible(self): return True
+    def click(self, timeout=0): self.clicked = True
+
+class Dialog:
+    def __init__(self, confirm): self.confirm = confirm
+    def is_visible(self): return True
+    def inner_text(self, timeout=0): return "素材合规校验\\n确认"
+    def get_by_text(self, pattern): return self.confirm
+
+class Dialogs:
+    def __init__(self, dialog): self.dialog = dialog
+    def count(self): return 1
+    def nth(self, index): return self.dialog
+
+class Page:
+    def __init__(self):
+        self.confirm = Confirm()
+        self.dialogs = Dialogs(Dialog(self.confirm))
+    def locator(self, selector): return self.dialogs
+    def wait_for_timeout(self, milliseconds): pass
+
+page = Page()
+j._dismiss_overlays(page)
+print(json.dumps({"confirmed": page.confirm.clicked}))
+`);
+
+    assert.equal(result.confirmed, true);
+});
+
+test('即梦结果采集只读取主记录区并要求足够的显示尺寸', {
+    skip: ready ? false : '未配置 server/python/.venv'
+}, () => {
+    const result = runPython(`
+import json
+from ops_cli.platforms.text_to_image.providers import jimeng as j
+
+class Images:
+    def evaluate_all(self, script):
+        assert "renderedWidth >= 96" in script
+        assert "renderedHeight >= 96" in script
+        return ["https://p11-dreamina-sign.byteimg.com/result.webp"]
+
+class Area:
+    def locator(self, selector):
+        assert selector == "img"
+        return Images()
+
+class Areas:
+    def count(self): return 1
+    @property
+    def first(self): return Area()
+
+class Page:
+    def locator(self, selector):
+        assert selector == "[class*='record-list']"
+        return Areas()
+
+print(json.dumps({"urls": j._image_urls(Page())}))
+`);
+
+    assert.deepEqual(result.urls, ['https://p11-dreamina-sign.byteimg.com/result.webp']);
+});
+
 test('即使游客页渲染了完整编辑器，也必须先报告未登录', {
     skip: ready ? false : '未配置 server/python/.venv'
 }, () => {

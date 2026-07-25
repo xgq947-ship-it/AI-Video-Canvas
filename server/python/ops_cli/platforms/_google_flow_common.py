@@ -654,26 +654,59 @@ def _upload_reference_file(page: Any, ref: Path) -> Any:
         try:
             dialog = page.get_by_role("dialog")
             if dialog.count() != 1 or not dialog.is_visible():
-                add = page.locator('button[aria-haspopup="dialog"]').filter(
-                    has_text=re.compile(r"(^|\s)add_2(\s|$)", re.IGNORECASE)
+                # Flow 新版把 add_2 图标改成了无正文的 aria-label 按钮；先锁定
+                # composer 内会打开 dialog 的控件，再用多语言添加素材语义兜底。
+                editor = page.locator(
+                    '[role="textbox"][contenteditable="true"][data-slate-editor="true"]'
                 )
+                editor = _exact_count(
+                    editor,
+                    "REFERENCE_IMAGE_ADD_FAILED",
+                    "未找到添加参考图所需的提示词编辑器。",
+                )
+                composer = editor.locator(
+                    "xpath=ancestor::*[.//button or .//*[@role='button']][1]"
+                )
+                add = composer.locator(
+                    'button[aria-haspopup="dialog"], [role="button"][aria-haspopup="dialog"]'
+                )
+                if add.count() == 0:
+                    add = composer.locator("button, [role='button']").filter(
+                        has_text=re.compile(
+                            r"(^|\s)(add_2|add|upload|media|ingredient|添加|上传|素材|参考)(\s|$)",
+                            re.IGNORECASE,
+                        )
+                    )
                 add = _exact_count(add, "REFERENCE_IMAGE_ADD_FAILED", "未找到添加参考图按钮。")
                 add.click()
                 dialog = page.get_by_role("dialog")
                 dialog.wait_for(state="visible", timeout=10_000)
             page.wait_for_timeout(750)
-            upload = dialog.get_by_role("button").filter(
-                has_text=re.compile(r"(^|\s)upload(\s|$)", re.IGNORECASE)
-            )
-            upload = _exact_count(upload, "REFERENCE_IMAGE_ADD_FAILED", "未找到 Upload media 按钮。")
-            with page.expect_file_chooser(timeout=10_000) as chooser_info:
-                # 媒体网格加载时 dialog 会重挂载；force 避免在 actionability 等待期间丢失节点。
-                upload.click(force=True, timeout=10_000)
-            chooser_info.value.set_files(str(ref))
+            # 新版 Upload media 是普通文本容器而非 button role。若 dialog 已挂载
+            # file input，直接赋值最稳定；否则点击精确文案并接管 file chooser。
+            file_input = dialog.locator("input[type=file]")
+            if file_input.count() > 0:
+                file_input.first.set_input_files(str(ref))
+            else:
+                # Upload media 位于媒体选择器左下角，但新版 DOM 把它挂在 dialog
+                # 的 portal 兄弟节点中，因此需要从 page 级别查找。
+                upload = page.get_by_text(
+                    re.compile(r"Upload media|上传媒体|上传素材", re.IGNORECASE)
+                )
+                upload = _exact_count(
+                    upload,
+                    "REFERENCE_IMAGE_ADD_FAILED",
+                    "未找到 Upload media 控件。",
+                )
+                with page.expect_file_chooser(timeout=10_000) as chooser_info:
+                    # 媒体网格加载时 dialog 会重挂载；force 避免在 actionability 等待期间丢失节点。
+                    upload.click(force=True, timeout=10_000)
+                chooser_info.value.set_files(str(ref))
             return page.get_by_role("dialog")
         except Exception as exc:
             last_error = exc
             page.wait_for_timeout(1000)
+    _capture_editor_diagnostics(page, "reference_add_failed")
     raise GoogleFlowError(
         "REFERENCE_IMAGE_ADD_FAILED",
         f"上传参考图失败：{last_error}",

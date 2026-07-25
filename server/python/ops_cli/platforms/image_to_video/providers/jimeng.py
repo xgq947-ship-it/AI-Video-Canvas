@@ -352,8 +352,30 @@ def _dismiss_overlays(page: Any) -> None:
     所有点击都落在遮罩上。best-effort：按一次 Escape，再点掉可见的关闭按钮。
     """
     try:
-        if page.locator(".lv-modal, [role=dialog]").count() == 0:
+        dialogs = page.locator(".lv-modal, [role=dialog]")
+        if dialogs.count() == 0:
             return
+        # 上传参考图后即梦会弹出一次「素材合规校验」说明。它没有关闭叉，Escape
+        # 也不生效；必须点击该特定弹窗里的确认，否则提交按钮会一直 disabled。
+        for index in range(dialogs.count()):
+            dialog = dialogs.nth(index)
+            try:
+                if not dialog.is_visible():
+                    continue
+                text = dialog.inner_text(timeout=3000)
+                if "素材合规校验" not in text and "素材合规" not in text:
+                    continue
+                confirm = dialog.get_by_text(
+                    re.compile(r"^(确认|知道了|我知道了|Confirm|Got it)$", re.IGNORECASE)
+                )
+                for confirm_index in range(confirm.count()):
+                    node = confirm.nth(confirm_index)
+                    if node.is_visible():
+                        node.click(timeout=3000)
+                        page.wait_for_timeout(500)
+                        return
+            except Exception:
+                continue
         page.keyboard.press("Escape")
         page.wait_for_timeout(400)
         close = page.locator(".lv-modal-close, [aria-label='Close'], [aria-label='关闭']")
@@ -737,7 +759,35 @@ def _fill_prompt(page: Any, prompt: str) -> None:
     )
 
 
+def _capture_jimeng_diagnostics(page: Any, tag: str) -> None:
+    """保存即梦失败现场，供真实页面更新时定位；best-effort，不改变主错误。"""
+    target_dir = Path(
+        os.environ.get("JIMENG_DIAG_DIR", "").strip()
+        or (Path.home() / "Desktop" / "即梦诊断")
+    )
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    try:
+        body = page.locator("body").inner_text(timeout=3000)[:1200]
+        target_dir.mkdir(parents=True, exist_ok=True)
+        (target_dir / f"{tag}_{stamp}.txt").write_text(
+            f"url: {getattr(page, 'url', '')}\n\nbody_prefix:\n{body}\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        return
+    try:
+        page.screenshot(
+            path=str(target_dir / f"{tag}_{stamp}.png"),
+            full_page=False,
+            timeout=8000,
+            animations="disabled",
+        )
+    except Exception:
+        pass
+
+
 def _submit(page: Any) -> None:
+    _dismiss_overlays(page)
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         buttons = page.locator(SUBMIT_BUTTON)
@@ -750,6 +800,7 @@ def _submit(page: Any) -> None:
             except Exception:
                 continue
         page.wait_for_timeout(2000)
+    _capture_jimeng_diagnostics(page, "submit_disabled")
     raise JimengError("GENERATE_BUTTON_NOT_FOUND", "生成按钮长时间不可用，请检查提示词与参考素材。")
 
 

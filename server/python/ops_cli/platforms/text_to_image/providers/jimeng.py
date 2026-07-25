@@ -9,10 +9,12 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from ops_cli.output import CommandResponse
 from ops_cli.platforms._google_flow_common import _download_media, _import_browser_runtime
@@ -62,10 +64,27 @@ _IGNORED_IMAGE_URL_PATTERNS = (
     "favicon",
     "avatar",
 )
+_IMAGE_REFERENCE_TAG = re.compile(r"@(?P<label>(?:参考图|图片)\s*(?P<index>\d+))")
 
 
 def _default_output_dir() -> Path:
     return Path.home() / "Desktop" / "即梦图片生成"
+
+
+def _prompt_for_image_composer(prompt: str, reference_count: int) -> str:
+    """把画板的 @参考图N 标签转成即梦图片模式可提交的普通文本。
+
+    即梦视频模式需要真正的 @mention；图片模式则由上传缩略图直接绑定参考素材，
+    字面 ``@参考图1`` 不会变成 mention，反而会让提交按钮保持 disabled。
+    """
+    if reference_count <= 0:
+        return prompt
+
+    def replace(match: re.Match[str]) -> str:
+        index = int(match.group("index"))
+        return match.group("label") if 1 <= index <= reference_count else match.group(0)
+
+    return _IMAGE_REFERENCE_TAG.sub(replace, prompt)
 
 
 def _generate_url() -> str:
@@ -295,13 +314,22 @@ def _attach_reference_images(page: Any, reference_paths: list[Path]) -> None:
 
 
 def _image_urls(page: Any) -> list[str]:
-    candidates = page.locator("img").evaluate_all(
+    # 只从主结果记录区取图。上传参考图后，composer 缩略图会先用 blob:，提交后再
+    # 换成带签名的 http URL；若扫描整页，它会被误判成新结果，导致参考图单张返回
+    # 原图、参考图多张在第 2 张仍生成时提前成功。
+    result_area = page.locator("[class*='record-list']")
+    root = result_area.first if result_area.count() > 0 else page
+    candidates = root.locator("img").evaluate_all(
         """els => els.map(el => ({
              src: el.currentSrc || el.src || '',
              width: el.naturalWidth || 0,
              height: el.naturalHeight || 0,
+             renderedWidth: el.getBoundingClientRect().width || 0,
+             renderedHeight: el.getBoundingClientRect().height || 0,
            }))
-           .filter(item => item.src.startsWith('http') && item.width >= 256 && item.height >= 256)
+           .filter(item => item.src.startsWith('http')
+             && item.width >= 256 && item.height >= 256
+             && item.renderedWidth >= 96 && item.renderedHeight >= 96)
            .map(item => item.src)"""
     )
     return [
@@ -309,6 +337,16 @@ def _image_urls(page: Any) -> list[str]:
         for url in candidates
         if not any(pattern in url.lower() for pattern in _IGNORED_IMAGE_URL_PATTERNS)
     ]
+
+
+def _image_identity(url: str) -> str:
+    """把同一即梦结果的多 CDN/签名 URL 归并为一个媒体身份。
+
+    页面会为同一张图同时渲染 p11/p26 两个 byteimg 地址，host、签名和尺寸参数不同，
+    但 path 中的媒体 UUID 相同。按完整 URL 去重会让 count=2 提前返回两份相同文件。
+    """
+    parsed = urlparse(str(url or ""))
+    return parsed.path or str(url or "")
 
 
 def _wait_for_images(
@@ -320,6 +358,8 @@ def _wait_for_images(
 ) -> list[str]:
     deadline = time.monotonic() + timeout_minutes * 60
     collected: list[str] = []
+    previous_identities = {_image_identity(url) for url in previous_urls}
+    collected_identities: set[str] = set()
     consecutive_read_errors = 0
     queue_message = ""
     while time.monotonic() < deadline:
@@ -345,8 +385,11 @@ def _wait_for_images(
                         retryable=True,
                     )
             for url in _image_urls(page):
-                if url not in previous_urls and url not in collected:
-                    collected.append(url)
+                identity = _image_identity(url)
+                if identity in previous_identities or identity in collected_identities:
+                    continue
+                collected_identities.add(identity)
+                collected.append(url)
             if len(collected) >= expected:
                 return collected[:expected]
             consecutive_read_errors = 0
@@ -425,7 +468,7 @@ def _execute_generation(
                     count=count,
                 )
                 _attach_reference_images(page, reference_paths)
-                _fill_prompt(page, prompt)
+                _fill_prompt(page, _prompt_for_image_composer(prompt, len(reference_paths)))
 
                 previous_urls = set(_image_urls(page))
                 _submit(page)

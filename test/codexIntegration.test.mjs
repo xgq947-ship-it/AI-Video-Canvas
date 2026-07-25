@@ -26,9 +26,25 @@ const waitFor = async predicate => {
 test('桌面版使用本机 Codex 路径、独立登录目录和内置队列桥接', async t => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-codex-integration-'));
     const libraryDir = path.join(dataDir, 'library');
-    const fakeCodex = path.join(dataDir, 'codex');
+    const fakeCodex = path.join(dataDir, process.platform === 'win32' ? 'codex.cmd' : 'codex');
     fs.mkdirSync(libraryDir, { recursive: true });
-    fs.writeFileSync(fakeCodex, `#!/bin/sh
+    fs.writeFileSync(fakeCodex, process.platform === 'win32'
+        ? `@echo off
+if "%~1"=="--version" (
+  echo codex-cli 9.9.9
+  exit /b 0
+)
+if "%~1"=="login" if "%~2"=="status" (
+  if exist "%CODEX_HOME%\\auth-ok" exit /b 0
+  exit /b 1
+)
+if "%~1"=="login" (
+  type nul > "%CODEX_HOME%\\auth-ok"
+  exit /b 0
+)
+exit /b 1
+`
+        : `#!/bin/sh
 if [ "$1" = "--version" ]; then
   echo "codex-cli 9.9.9"
   exit 0
@@ -43,7 +59,7 @@ if [ "$1" = "login" ]; then
 fi
 exit 1
 `);
-    fs.chmodSync(fakeCodex, 0o700);
+    if (process.platform !== 'win32') fs.chmodSync(fakeCodex, 0o700);
     t.after(() => {
         setRuntimeCodexPath('');
         fs.rmSync(dataDir, { recursive: true, force: true });
@@ -76,10 +92,19 @@ exit 1
     await waitFor(() => integration.getStatus({ force: true }).authenticated);
     assert.equal(integration.getStatus({ force: true }).authenticated, true);
 
-    const queue = spawnSync(integration.runtime.runnerPath, ['list'], {
-        encoding: 'utf8',
-        env: integration.commandEnvironment()
-    });
+    const queue = process.platform === 'win32'
+        ? spawnSync(
+            process.env.ComSpec || 'cmd.exe',
+            ['/d', '/s', '/c', `"${integration.runtime.runnerPath}" list`],
+            {
+                encoding: 'utf8',
+                env: integration.commandEnvironment()
+            }
+        )
+        : spawnSync(integration.runtime.runnerPath, ['list'], {
+            encoding: 'utf8',
+            env: integration.commandEnvironment()
+        });
     assert.equal(queue.status, 0, queue.stderr);
     assert.deepEqual(JSON.parse(queue.stdout), []);
 });

@@ -64,6 +64,12 @@ server/python/logs/
 server/python/runtime/
 server/python/output/
 # 安全：登录态绝不入库
+# browser-profile 是完整的 Chrome Profile（Default/Cookies、Login Data 等），
+# 一旦入库就是把各平台登录凭据推到远端。正常位置在 Electron 的 userData 下，
+# 但任何把 EVAN_BROWSER_PROFILE_DIR / SESSIONHUB_CHROME_PROFILE 设成相对路径的
+# 调用都会在仓库根目录再造一份，必须无条件忽略。
+browser-profile/
+**/browser-profile/
 server/python/sessionhub/data/
 server/python/sessionhub/session/
 **/cookies/

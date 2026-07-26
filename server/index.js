@@ -876,7 +876,16 @@ app.get('/api/projects/:id/trash/:entryId/preview', (req, res) => {
         const { projectRoot } = loadWorkflowForTrash(req.params.id);
         const previewPath = getProjectTrashPreviewPath(projectRoot, req.params.entryId);
         if (!previewPath) return res.status(404).end();
-        res.sendFile(previewPath);
+        // Express blocks files below dot-directories by default. Trash previews
+        // live below the project-local `.trash/` folder, so explicitly allow
+        // this already-resolved file while keeping the rest of the directory
+        // private.
+        res.sendFile(previewPath, {
+            dotfiles: 'allow',
+            headers: {
+                'Cache-Control': 'private, no-cache'
+            }
+        });
     } catch (error) {
         res.status(error.code === 'PROJECT_NOT_FOUND' ? 404 : 500).json({ error: error.message });
     }

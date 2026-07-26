@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -124,4 +125,96 @@ test('永久删除和七天到期清理只移除回收站副本', (t) => {
         1
     );
     assert.equal(listProjectTrash(second.workflow, second.projectRoot, Date.now()).length, 0);
+});
+
+test('回收站预览接口可以读取隐藏 .trash 目录中的真实图片', async t => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-trash-preview-api-'));
+    t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+
+    const libraryDir = path.join(dataDir, 'library');
+    const workflowId = 'workflow-trash-preview';
+    const projectDirName = 'TrashPreviewProject';
+    const projectRoot = path.join(libraryDir, 'projects', projectDirName);
+    const workflowsDir = path.join(libraryDir, 'workflows');
+    fs.mkdirSync(path.join(projectRoot, 'images'), { recursive: true });
+    fs.mkdirSync(workflowsDir, { recursive: true });
+
+    // Valid 1x1 PNG so the response is verified as an actual browser image,
+    // not only as arbitrary bytes returned with a successful status.
+    const imageBytes = Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        'base64'
+    );
+    const node = {
+        id: 'preview-image',
+        type: 'Image',
+        title: '回收站预览',
+        x: 0,
+        y: 0,
+        resultUrl: `/library/projects/${projectDirName}/images/preview.png`
+    };
+    const workflow = {
+        id: workflowId,
+        title: '回收站预览测试',
+        projectDirName,
+        nodes: [node],
+        groups: [],
+        viewport: { x: 0, y: 0, zoom: 1 }
+    };
+    fs.writeFileSync(path.join(projectRoot, 'images', 'preview.png'), imageBytes);
+    fs.writeFileSync(path.join(projectRoot, 'project.json'), JSON.stringify(workflow));
+    fs.writeFileSync(path.join(workflowsDir, `${workflowId}.json`), JSON.stringify(workflow));
+
+    const child = spawn(process.execPath, [
+        '--input-type=module',
+        '--eval',
+        "import('./server/index.js').then(({ startBackend }) => startBackend({ port: 0 }))"
+    ], {
+        cwd: path.resolve(import.meta.dirname, '..'),
+        env: {
+            ...process.env,
+            NODE_ENV: 'test',
+            EVAN_DESKTOP: '1',
+            EVAN_DATA_DIR: dataDir
+        },
+        stdio: ['ignore', 'pipe', 'pipe']
+    });
+    t.after(() => {
+        if (!child.killed) child.kill('SIGTERM');
+    });
+
+    const origin = await new Promise((resolve, reject) => {
+        let output = '';
+        const timeout = setTimeout(() => reject(new Error(`backend startup timed out:\n${output}`)), 10_000);
+        const inspect = chunk => {
+            output += chunk.toString();
+            const match = output.match(/Backend server running on (http:\/\/127\.0\.0\.1:\d+)/);
+            if (!match) return;
+            clearTimeout(timeout);
+            resolve(match[1]);
+        };
+        child.stdout.on('data', inspect);
+        child.stderr.on('data', inspect);
+        child.once('exit', code => {
+            clearTimeout(timeout);
+            reject(new Error(`backend exited before ready (${code}):\n${output}`));
+        });
+    });
+
+    const trashedResponse = await fetch(`${origin}/api/projects/${workflowId}/trash`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodes: [node], nodeIds: [node.id] })
+    });
+    assert.equal(trashedResponse.status, 201, await trashedResponse.text());
+
+    const entriesResponse = await fetch(`${origin}/api/projects/${workflowId}/trash`);
+    assert.equal(entriesResponse.status, 200);
+    const [entry] = await entriesResponse.json();
+    assert.ok(entry?.previewUrl);
+
+    const previewResponse = await fetch(`${origin}${entry.previewUrl}`);
+    assert.equal(previewResponse.status, 200);
+    assert.equal(previewResponse.headers.get('content-type'), 'image/png');
+    assert.deepEqual(Buffer.from(await previewResponse.arrayBuffer()), imageBytes);
 });

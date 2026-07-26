@@ -26,6 +26,33 @@ const remainingLabel = (expiresAt: string) => {
     return `${days} 天后自动删除`;
 };
 
+const TrashPreview: React.FC<{
+    entry: TrashEntry;
+}> = ({ entry }) => {
+    const [failed, setFailed] = useState(false);
+    const previewUrl = entry.previewUrl
+        ? `${entry.previewUrl}${entry.previewUrl.includes('?') ? '&' : '?'}deletedAt=${encodeURIComponent(entry.deletedAt)}`
+        : null;
+
+    if (!previewUrl || failed) {
+        return (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-neutral-500">
+                <ImageIcon size={32} />
+                {failed && <span className="text-xs">预览暂不可用</span>}
+            </div>
+        );
+    }
+
+    return (
+        <img
+            src={previewUrl}
+            alt={entry.title}
+            className="h-full w-full object-cover"
+            onError={() => setFailed(true)}
+        />
+    );
+};
+
 export const TrashModal: React.FC<TrashModalProps> = ({
     isOpen,
     workflowId,
@@ -148,11 +175,7 @@ export const TrashModal: React.FC<TrashModalProps> = ({
                                     className={`overflow-hidden rounded-2xl border ${isDark ? 'border-neutral-700 bg-neutral-900' : 'border-neutral-200 bg-neutral-50'}`}
                                 >
                                     <div className={`flex h-36 items-center justify-center overflow-hidden ${isDark ? 'bg-black' : 'bg-neutral-200'}`}>
-                                        {entry.previewUrl ? (
-                                            <img src={entry.previewUrl} alt={entry.title} className="h-full w-full object-cover" />
-                                        ) : (
-                                            <ImageIcon size={32} className="text-neutral-500" />
-                                        )}
+                                        <TrashPreview entry={entry} />
                                     </div>
                                     <div className="p-4">
                                         <div className="truncate text-sm font-medium">{entry.title}</div>

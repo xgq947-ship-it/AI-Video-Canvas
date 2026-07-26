@@ -82,34 +82,32 @@ def _probe_flow_login(page: Any) -> dict[str, Any]:
 
 
 def _probe_jimeng_login(page: Any) -> dict[str, Any]:
-    """只读确认即梦登录；游客页即使渲染完整 composer 也不能通过。"""
+    """用即梦官方账号接口只读确认登录，游客编辑器不能作为成功证据。"""
     from ops_cli.platforms.image_to_video.providers.jimeng import (  # type: ignore
-        JimengError,
-        _ensure_composer,
+        _account_login_state,
     )
 
     page.goto(LOGIN_URLS["jimeng"], wait_until="domcontentloaded", timeout=60_000)
-    try:
-        _ensure_composer(page, timeout_seconds=LOGIN_PROBE_TIMEOUT_SECONDS)
-    except JimengError as exc:
-        if exc.error_code == "AUTH_REQUIRED":
-            return {
-                "authenticated": False,
-                "reason": "not-authenticated",
-                "evidence": "login-control",
-                "message": "即梦当前未登录",
-            }
+    account_state = _account_login_state(page)
+    if account_state is True:
+        return {
+            "authenticated": True,
+            "reason": "authenticated",
+            "evidence": "account-api-user-id",
+            "message": "已通过即梦账号接口确认登录",
+        }
+    if account_state is False:
         return {
             "authenticated": False,
-            "reason": "unconfirmed",
-            "evidence": exc.error_code,
-            "message": f"即梦登录状态无法确认：{exc}",
+            "reason": "not-authenticated",
+            "evidence": "account-api-guest",
+            "message": "即梦账号接口确认当前未登录",
         }
     return {
-        "authenticated": True,
-        "reason": "authenticated",
-        "evidence": "authenticated-composer",
-        "message": "已在真实即梦页面确认账号登录",
+        "authenticated": False,
+        "reason": "unconfirmed",
+        "evidence": "account-api-unconfirmed",
+        "message": "即梦账号接口暂时无法确认登录状态",
     }
 
 
@@ -130,12 +128,30 @@ def check_browser_logins(providers: list[str] | None = None) -> CommandResponse:
         sys.path.insert(0, str(sessionhub_root))
     from scene.chrome_cdp import (  # type: ignore
         CDP_PORT,
+        PROFILE_DIR,
         _instance_is_headless,
         _instance_pid,
         _instance_supports_playwright,
         start_chrome,
         stop_chrome,
     )
+
+    if not PROFILE_DIR.exists():
+        results = {
+            provider: {
+                "authenticated": False,
+                "reason": "not-authenticated",
+                "evidence": "profile-missing",
+                "message": "尚未创建 Evan 专属 Chrome 登录资料",
+            }
+            for provider in selected
+        }
+        return CommandResponse(
+            success=True,
+            platform="browser",
+            command="check-login",
+            data={"providers": results},
+        )
 
     # 只在**必要时**重启浏览器。
     #

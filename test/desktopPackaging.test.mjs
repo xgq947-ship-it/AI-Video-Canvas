@@ -11,6 +11,10 @@ const runtimeVerifier = fs.readFileSync(
   new URL('../scripts/verify-desktop-runtime.mjs', import.meta.url),
   'utf8'
 );
+const automationRuntimeSetup = fs.readFileSync(
+  new URL('../scripts/setup-browser-models.mjs', import.meta.url),
+  'utf8'
+);
 const installerWorkflow = fs.readFileSync(
   new URL('../.github/workflows/desktop-installers.yml', import.meta.url),
   'utf8'
@@ -31,6 +35,8 @@ test('桌面安装包按目标平台原生构建并在打包前验收运行时',
   assert.doesNotMatch(runtimeVerifier, /chrome-win64|chrome-mac-arm64|Chrome for Testing/);
   assert.match(runtimeVerifier, /用户电脑上的 Google Chrome/);
   assert.equal(pkg.build.extraResources.some(entry => entry.to === 'playwright-browsers'), false);
+  assert.match(automationRuntimeSetup, /fs\.rmSync\(LEGACY_BROWSER_ROOT/);
+  assert.doesNotMatch(automationRuntimeSetup, /playwright.+install/);
   assert.ok(pkg.build.files.includes('scripts/codex-image-queue.mjs'));
   assert.ok(pkg.build.files.includes('integrations/skills/twitcanva-codex-images/**/*'));
   assert.ok(pkg.build.asarUnpack.includes('integrations/skills/twitcanva-codex-images/**/*'));

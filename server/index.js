@@ -1253,12 +1253,39 @@ app.post('/api/browser-sessions/:provider/reauthenticate', async (req, res) => {
 app.post('/api/browser-sessions/check', async (req, res) => {
     const requested = Array.isArray(req.body?.providers) ? req.body.providers.map(String) : [];
     const providers = requested.length ? requested : ['jimeng', 'google-flow'];
+    const force = req.body?.force === true;
     if (providers.some(provider => !['google-flow', 'jimeng'].includes(provider))) {
         return res.status(400).json({ error: '包含不支持的浏览器登录平台' });
     }
-    for (const provider of providers) browserSessionState.transition(provider, 'checking');
+    const cacheTtlMs = 2 * 60_000;
+    const cachedResults = {};
+    const providersToProbe = providers.filter(provider => {
+        const session = browserSessionState.get(provider);
+        const verifiedAt = Date.parse(session.updatedAt || '');
+        const definitive = ['authenticated', 'expired'].includes(session.state);
+        const fresh = Number.isFinite(verifiedAt) && Date.now() - verifiedAt < cacheTtlMs;
+        if (!force && definitive && fresh) {
+            cachedResults[provider] = {
+                authenticated: session.state === 'authenticated',
+                reason: session.state === 'authenticated' ? 'authenticated' : 'not-authenticated',
+                evidence: 'session-cache',
+                message: session.message
+            };
+            return false;
+        }
+        return true;
+    });
+    for (const provider of providersToProbe) browserSessionState.transition(provider, 'checking');
+    if (providersToProbe.length === 0) {
+        return res.json({
+            success: true,
+            cached: true,
+            results: cachedResults,
+            sessions: browserSessionState.list()
+        });
+    }
     try {
-        const providerArgs = providers.flatMap(provider => ['--provider', provider]);
+        const providerArgs = providersToProbe.flatMap(provider => ['--provider', provider]);
         const { data } = await enqueueBrowserWorkflow(() => runOpsCli({
             args: ['browser', 'check-login', ...providerArgs],
             timeoutMs: 90_000,
@@ -1266,8 +1293,8 @@ app.post('/api/browser-sessions/check', async (req, res) => {
             trackSessionState: false,
             maxAttempts: 1
         }));
-        const results = data.providers || {};
-        for (const provider of providers) {
+        const results = { ...cachedResults, ...(data.providers || {}) };
+        for (const provider of providersToProbe) {
             const result = results[provider] || {};
             if (result.authenticated === true) {
                 browserSessionState.transition(provider, 'authenticated', {
@@ -1287,7 +1314,7 @@ app.post('/api/browser-sessions/check', async (req, res) => {
         }
         res.json({ success: true, results, sessions: browserSessionState.list() });
     } catch (error) {
-        for (const provider of providers) {
+        for (const provider of providersToProbe) {
             browserSessionState.transition(provider, 'unknown', {
                 errorCode: error.code || 'LOGIN_PROBE_FAILED',
                 message: error.message

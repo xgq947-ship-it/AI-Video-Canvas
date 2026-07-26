@@ -1,9 +1,9 @@
 # Google Flow / 即梦 浏览器自动化所需依赖。
 # 由 `npm run setup:automation-runtime` 安装到 server/python/.venv。
 httpx>=0.28.0
-# Must stay pinned: the bundled Chromium revision and Playwright's CDP client
-# are released as a tested pair. An unbounded upgrade caused Chrome Beta 151
-# protocol failures such as Browser.setDownloadBehavior.
+# Must stay pinned: Playwright's CDP client must remain compatible with the
+# minimum supported system Google Chrome. An unbounded upgrade previously
+# caused protocol failures such as Browser.setDownloadBehavior.
 playwright==1.61.0
 pydantic>=2.9.0
 PyYAML>=6.0.2

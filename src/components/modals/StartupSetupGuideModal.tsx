@@ -201,7 +201,7 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
             const response = await fetch('/api/browser-sessions/check', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ providers: [provider] })
+                body: JSON.stringify({ providers: [provider], force: true })
             });
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(result.error || '登录状态检查失败');

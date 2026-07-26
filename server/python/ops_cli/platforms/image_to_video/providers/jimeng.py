@@ -35,6 +35,10 @@ from ops_cli.platforms._google_flow_common import (
 JIMENG_SCENE = "jimeng/video_generate"
 DEFAULT_GENERATE_URL = "https://jimeng.jianying.com/ai-tool/generate?type=video"
 JIMENG_HOST = "jimeng.jianying.com"
+JIMENG_ACCOUNT_INFO_PATH = (
+    "/passport/account/info/v2/"
+    "?aid=513695&account_sdk_source=web&sdk_version=2.2.6"
+)
 
 # 默认走 VIP 通道：非 VIP 通道高峰期排队可到数小时，自动化任务几乎必然撞 timeout。
 # 想省积分可显式传 --model "即梦 Seedance 2.0" 并调大 --timeout-minutes。
@@ -247,6 +251,37 @@ def _raise_auth_required(message: str) -> None:
     )
 
 
+def _account_login_state(page: Any) -> bool | None:
+    """通过即梦自己的只读账号接口确认登录态，不返回或持久化账号内容。
+
+    True 只代表接口返回了非空 user_id；明确的游客响应返回 False；网络或结构变化返回
+    None，由调用方显示“无法确认”，绝不把编辑器可见当成登录成功。
+    """
+    try:
+        result = page.evaluate(
+            """async (url) => {
+                const response = await fetch(url, { credentials: 'include' });
+                const payload = await response.json();
+                return {
+                    httpStatus: response.status,
+                    message: payload?.message || '',
+                    errorCode: payload?.data?.error_code ?? null,
+                    hasUserId: Boolean(payload?.data?.user_id)
+                };
+            }""",
+            JIMENG_ACCOUNT_INFO_PATH,
+        )
+    except Exception:
+        return None
+    if not isinstance(result, dict) or int(result.get("httpStatus") or 0) != 200:
+        return None
+    if result.get("hasUserId") is True:
+        return True
+    if result.get("errorCode") == 13 or str(result.get("message") or "").lower() == "error":
+        return False
+    return None
+
+
 def _editor_ready_timeout_seconds(default_seconds: int) -> int:
     """编辑器等待窗口。
 
@@ -272,6 +307,9 @@ def _ensure_composer(page: Any, *, timeout_seconds: int | None = None) -> None:
     """
     timeout_seconds = _editor_ready_timeout_seconds(90 if timeout_seconds is None else timeout_seconds)
     deadline = time.monotonic() + timeout_seconds
+    account_state = _account_login_state(page)
+    if account_state is False:
+        _raise_auth_required("即梦账号接口确认当前未登录，请先登录 Evan 专属 Chrome 中的即梦。")
     while time.monotonic() < deadline:
         current = (page.url or "").lower()
         if "login" in current or "passport" in current:

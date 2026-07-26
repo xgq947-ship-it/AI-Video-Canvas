@@ -96,6 +96,52 @@ test('Flow 探针不再依赖那个公开营销页', () => {
     assert.match(probe, /GOOGLE_ACCOUNT_PROBE_URL/);
 });
 
+test('即梦探针只接受账号接口的明确身份，不把游客编辑器当成登录成功', { skip: !ready }, () => {
+    const script = `
+import json, sys
+sys.path.insert(0, '.')
+from ops_cli.browser import _probe_jimeng_login
+
+class FakePage:
+    url = 'about:blank'
+    def __init__(self, result):
+        self.result = result
+    def goto(self, url, **kwargs):
+        self.url = 'https://jimeng.jianying.com/ai-tool/home'
+    def evaluate(self, script, argument):
+        return self.result
+
+cases = {
+    'signed-in': {'httpStatus': 200, 'message': 'success', 'errorCode': 0, 'hasUserId': True},
+    'guest': {'httpStatus': 200, 'message': 'error', 'errorCode': 13, 'hasUserId': False},
+    'unknown': {'httpStatus': 503, 'message': '', 'errorCode': None, 'hasUserId': False},
+}
+print(json.dumps({name: _probe_jimeng_login(FakePage(result)) for name, result in cases.items()}))
+`;
+    const results = runPython(script);
+    assert.equal(results['signed-in'].authenticated, true);
+    assert.equal(results['signed-in'].evidence, 'account-api-user-id');
+    assert.equal(results.guest.authenticated, false);
+    assert.equal(results.guest.reason, 'not-authenticated');
+    assert.equal(results.guest.evidence, 'account-api-guest');
+    assert.equal(results.unknown.reason, 'unconfirmed');
+});
+
+test('登录检查支持 Profile 缺失快速失败和进程内短期缓存', () => {
+    const pythonSource = fs.readFileSync(path.join(PYTHON_ROOT, 'ops_cli', 'browser.py'), 'utf8');
+    assert.match(pythonSource, /if not PROFILE_DIR\.exists\(\)/);
+    assert.match(pythonSource, /"evidence": "profile-missing"/);
+
+    const serverSource = fs.readFileSync(path.join(ROOT, 'server', 'index.js'), 'utf8');
+    const route = serverSource.slice(
+        serverSource.indexOf("app.post('/api/browser-sessions/check'"),
+        serverSource.indexOf("app.post('/api/browser/open'")
+    );
+    assert.match(route, /2 \* 60_000/);
+    assert.match(route, /evidence: 'session-cache'/);
+    assert.match(route, /req\.body\?\.force === true/);
+});
+
 test('已经是无头 CDP 实例时不重启浏览器', () => {
     const source = fs.readFileSync(path.join(PYTHON_ROOT, 'ops_cli', 'browser.py'), 'utf8');
     const block = source.slice(

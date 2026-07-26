@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PYTHON_ROOT = path.join(ROOT, 'server', 'python');
+const LEGACY_BROWSER_ROOT = path.join(PYTHON_ROOT, '.browsers');
 const IS_WINDOWS = process.platform === 'win32';
 const VENV_PYTHON = IS_WINDOWS
     ? path.join(PYTHON_ROOT, '.venv', 'Scripts', 'python.exe')
@@ -66,6 +67,11 @@ function run(cmd, args, label, options = {}) {
 }
 
 log('=== 安装 Evan Chrome 自动化运行环境（Google Flow / 即梦）===\n');
+
+if (fs.existsSync(LEGACY_BROWSER_ROOT)) {
+    fs.rmSync(LEGACY_BROWSER_ROOT, { recursive: true, force: true });
+    log('🧹 已删除旧版内置 Chromium 缓存 server/python/.browsers');
+}
 
 const python = findPython();
 if (!python) {

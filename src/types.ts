@@ -152,11 +152,32 @@ export interface NodeData {
   personaAnalysis?: string;
   compositionAnalysis?: string;
   productAnalysis?: string;
-  productSceneStage?: 'analyzing' | 'generating';
+  productSceneStage?: 'analyzing' | 'generating_images' | 'images_completed' | 'generating_videos' | 'completed' | 'partial_failed';
   productSceneJobId?: string;
-  productSceneJobStatus?: 'pending' | 'processing' | 'completed' | 'failed';
+  productSceneJobStatus?: 'pending' | 'processing' | 'completed' | 'partial_failed' | 'failed';
   productSceneStageLabel?: string;
   productSceneRecognitionModel?: string;
+  productSceneRecognitionProvider?: 'codex-cli' | 'gemini-web';
+  productSceneImageCount?: number;
+  productSceneVideoPromptSourceId?: string;
+  productSceneAutoGenerateVideo?: boolean;
+  productSceneVideoModel?: string;
+  productSceneVideoAspectRatio?: string;
+  productSceneVideoDuration?: number;
+  productSceneVideoResolution?: string;
+  productSceneVideoGenerateAudio?: boolean;
+  productSceneQueueCurrent?: number;
+  productSceneQueueTotal?: number;
+  productSceneVideoTasks?: Array<{
+    index: number;
+    imageNodeId: string;
+    videoNodeId: string;
+    status: 'waiting' | 'running' | 'success' | 'failed';
+    resultUrl?: string;
+    error?: string;
+    errorCode?: string;
+    retryBlocked?: boolean;
+  }>;
   productSceneResultNodeId?: string;
   productSceneSourceJobId?: string; // 普通图片结果节点用于防止恢复时重复创建
 

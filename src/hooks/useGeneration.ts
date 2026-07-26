@@ -22,6 +22,7 @@ import {
     selectPromptReferences,
 } from '../utils/nodeReferences.js';
 import { inferProductSceneAspectRatio, validateProductDimensions } from '../../shared/productSceneReplacement.js';
+import { getImageGenerationProvider, getVideoGenerationProvider } from '../../shared/generationProviders.js';
 
 interface UseGenerationProps {
     nodes: NodeData[];
@@ -158,11 +159,14 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                     node.aspectRatio,
                     inferProductSceneAspectRatio(sceneNode.resultAspectRatio || sceneNode.aspectRatio, '1:1')
                 );
+                const videoPromptNode = nodes.find(parent => parent.id === node.productSceneVideoPromptSourceId && parent.type === NodeType.TEXT);
                 const job = await createProductSceneJob({
                     jobId: requestedProductSceneJobId,
                     workflowId,
                     nodeId: id,
-                    retryJobId: node.productSceneJobStatus === 'failed' ? node.productSceneJobId : undefined,
+                    retryJobId: node.productSceneJobStatus === 'failed' || node.productSceneJobStatus === 'partial_failed'
+                        ? node.productSceneJobId
+                        : undefined,
                     sceneImage: sceneUrl,
                     productImage: productUrl,
                     dimensions: dimensions!,
@@ -170,14 +174,25 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                     preserveProductMarkings: node.preserveProductMarkings !== false,
                     personaBrief: node.personaBrief,
                     imageModel: node.imageModel || 'google-flow-nano-banana-pro',
+                    imageCount: node.productSceneImageCount || 1,
+                    imageResolution: node.resolution,
                     aspectRatio: productAspectRatio,
+                    recognitionProvider: node.productSceneRecognitionProvider || 'codex-cli',
+                    videoPrompt: videoPromptNode?.prompt || '',
+                    videoPromptSourceId: videoPromptNode?.id,
+                    videoModel: node.productSceneVideoModel || 'gemini-web-video',
+                    videoAspectRatio: node.productSceneVideoAspectRatio || '16:9',
+                    videoDuration: node.productSceneVideoDuration,
+                    videoResolution: node.productSceneVideoResolution,
+                    videoGenerateAudio: node.productSceneVideoGenerateAudio !== false,
+                    autoGenerateVideo: node.productSceneAutoGenerateVideo === true,
                 });
                 updateNode(id, {
                     status: NodeStatus.LOADING,
                     aspectRatio: productAspectRatio,
                     productSceneJobId: job.id,
                     productSceneJobStatus: job.status,
-                    productSceneStage: job.stage === 'generating' ? 'generating' : 'analyzing',
+                    productSceneStage: job.stage === 'generating_images' ? 'generating_images' : 'analyzing',
                     productSceneStageLabel: job.stageLabel,
                     productSceneRecognitionModel: `${job.recognitionProvider} · ${job.recognitionModel}`,
                     generationStartTime: Date.now(),
@@ -189,7 +204,8 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                 const imageBase64s: string[] = [];
                 // 即梦页面最多接收 12 张参考图；Gemini/Codex 现有链路允许 14 张。
                 // 在遍历祖先时就按当前 provider 收口，避免即梦多参考图请求到后端才失败。
-                const imageReferenceLimit = node.imageModel?.startsWith('jimeng-image-') ? 12 : 14;
+                const imageProvider = getImageGenerationProvider(node.imageModel);
+                const imageReferenceLimit = imageProvider?.maxReferenceImages || 14;
 
                 // Collect successful direct parents and all successful image ancestors.
                 // A linear role workflow therefore keeps the original face identity image
@@ -269,11 +285,9 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                     return;
                 }
 
-                const isBrowserBatch =
-                    node.imageModel?.startsWith('jimeng-image-') === true ||
-                    node.imageModel?.startsWith('google-flow-') === true;
+                const isBrowserBatch = Boolean(imageProvider?.supportsMultipleOutputs);
                 const generationCount = isBrowserBatch
-                    ? Math.min(4, Math.max(1, Number(node.imageGenerationCount) || 1))
+                    ? Math.min(imageProvider?.maxOutputCount || 1, Math.max(1, Number(node.imageGenerationCount) || 1))
                     : 1;
 
                 if (isBrowserBatch) {
@@ -323,7 +337,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                         .map((placement, index): NodeData => ({
                             id: crypto.randomUUID(),
                             type: NodeType.IMAGE,
-                            title: `${node.imageModel?.startsWith('google-flow-') ? 'Flow' : '即梦'}图片 ${index + 2}`,
+                            title: `${imageProvider?.name || '生成'} ${index + 2}`,
                             x: placement.x,
                             y: placement.y,
                             prompt: combinedPrompt,
@@ -418,6 +432,10 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                     && shouldUseReferenceParent(reference.id)
                     && Boolean(reference.previewUrl || reference.url)
                 );
+                const videoProvider = getVideoGenerationProvider(node.videoModel);
+                if (videoProvider && visualReferences.length > videoProvider.maxReferenceImages) {
+                    throw new Error(`${videoProvider.name} 最多支持 ${videoProvider.maxReferenceImages} 张参考图`);
+                }
                 const useReferenceImages = shouldUseReferenceImages(node.videoModel, visualReferences.length);
                 if (useReferenceImages) {
                     videoReferenceImages = visualReferences.map(reference => (reference.previewUrl || reference.url)!);
@@ -488,7 +506,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                     duration: node.videoDuration,
                     videoModel: node.videoModel,
                     referenceAudioUrls,
-                    generateAudio: true, // 支持原生音频的视频模型固定生成音频
+                    generateAudio: node.generateAudio !== false,
                     nodeId: id
                 });
 

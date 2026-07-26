@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createProductSceneJob, getLatestProductSceneJob, getProductSceneJob } from '../server/services/productSceneJobs.js';
+import { cancelProductSceneJob, createProductSceneJob, getLatestProductSceneJob, getProductSceneJob } from '../server/services/productSceneJobs.js';
 
 const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
@@ -22,7 +22,7 @@ const setup = () => {
 const waitForTerminalJob = async (jobId, context) => {
   for (let index = 0; index < 100; index += 1) {
     const job = getProductSceneJob(jobId, 'workflow-1', context);
-    if (job?.status === 'completed' || job?.status === 'failed') return job;
+    if (['completed', 'partial_failed', 'failed'].includes(job?.status)) return job;
     await new Promise(resolve => setTimeout(resolve, 10));
   }
   throw new Error('job did not reach terminal state');
@@ -154,4 +154,163 @@ test('客户端预分配任务 ID 可幂等创建，最新任务可用于页面�
   assert.equal(latest?.status, 'completed');
   assert.equal(recognitionCalls, 1);
   assert.equal(generationCalls, 1);
+});
+
+test('多图视频串行执行，单条失败保留成功结果，重试只补失败子任务', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let activeVideos = 0;
+  let maxActiveVideos = 0;
+  const firstVideoCalls = [];
+  const context = {
+    dirs: env.dirs,
+    libraryDir: env.root,
+    runRecognition: async () => JSON.stringify({
+      sceneSpec: '客厅场景', personaSpec: '通用女性形象',
+      compositionSpec: '半身入画，双手扶住产品', productSpec: '白色揉腹仪',
+    }),
+    generateImages: async () => [0, 1, 2].map(index => ({
+      buffer: Buffer.from(`image-${index}`), extension: 'png',
+    })),
+    generateVideo: async ({ job, index }) => {
+      activeVideos += 1;
+      maxActiveVideos = Math.max(maxActiveVideos, activeVideos);
+      firstVideoCalls.push({ index, prompt: job.videoPrompt });
+      await new Promise(resolve => setTimeout(resolve, 5));
+      activeVideos -= 1;
+      if (index === 1) throw new Error('第二条视频模拟失败');
+      return { buffer: Buffer.from(`video-${index}`), extension: 'mp4' };
+    },
+  };
+  const videoPayload = {
+    ...payload,
+    imageCount: 3,
+    autoGenerateVideo: true,
+    videoPrompt: '产品固定在腹部，镜头缓慢推进，保留环境音',
+    videoPromptSourceId: 'text-node',
+    videoModel: 'gemini-web-video',
+    videoAspectRatio: '9:16',
+    videoDuration: 8,
+  };
+
+  const first = createProductSceneJob(videoPayload, context);
+  const partial = await waitForTerminalJob(first.id, context);
+  assert.equal(partial.status, 'partial_failed');
+  assert.equal(maxActiveVideos, 1);
+  assert.deepEqual(firstVideoCalls.map(item => item.index), [0, 1, 2]);
+  assert.ok(firstVideoCalls.every(item => item.prompt === videoPayload.videoPrompt));
+  assert.deepEqual(partial.videoTasks.map(task => task.status), ['success', 'failed', 'success']);
+  assert.equal(partial.resultUrls.length, 3);
+
+  const preservedImageUrls = [...partial.resultUrls];
+  const preservedVideoIds = [...partial.videoResultNodeIds];
+  const retryCalls = [];
+  const retryContext = {
+    ...context,
+    generateImages: async () => { throw new Error('重试不应重新生成已完成图片'); },
+    generateVideo: async ({ index }) => {
+      retryCalls.push(index);
+      return { buffer: Buffer.from(`retry-video-${index}`), extension: 'mp4' };
+    },
+  };
+  const retried = createProductSceneJob({ ...videoPayload, retryJobId: partial.id }, retryContext);
+  const completed = await waitForTerminalJob(retried.id, retryContext);
+  assert.equal(completed.status, 'completed');
+  assert.deepEqual(retryCalls, [1]);
+  assert.deepEqual(completed.resultUrls, preservedImageUrls);
+  assert.deepEqual(completed.videoResultNodeIds, preservedVideoIds);
+  assert.deepEqual(completed.videoTasks.map(task => task.status), ['success', 'success', 'success']);
+});
+
+test('取消视频队列只结束后续提交，并保留正在执行的成功结果', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let releaseFirstVideo;
+  const firstVideoGate = new Promise(resolve => { releaseFirstVideo = resolve; });
+  const videoCalls = [];
+  const context = {
+    dirs: env.dirs,
+    libraryDir: env.root,
+    runRecognition: async () => JSON.stringify({
+      sceneSpec: '客厅场景', personaSpec: '通用女性形象',
+      compositionSpec: '半身入画', productSpec: '白色揉腹仪',
+    }),
+    generateImages: async () => [0, 1].map(index => ({ buffer: Buffer.from(`image-${index}`), extension: 'png' })),
+    generateVideo: async ({ index }) => {
+      videoCalls.push(index);
+      if (index === 0) await firstVideoGate;
+      return { buffer: Buffer.from(`video-${index}`), extension: 'mp4' };
+    },
+  };
+  const created = createProductSceneJob({
+    ...payload, imageCount: 2, autoGenerateVideo: true,
+    videoPrompt: '镜头缓慢推进', videoModel: 'gemini-web-video', videoDuration: 8,
+  }, context);
+  for (let index = 0; index < 100; index += 1) {
+    const current = getProductSceneJob(created.id, 'workflow-1', context);
+    if (current?.videoTasks?.[0]?.status === 'running') break;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  cancelProductSceneJob(created.id, 'workflow-1', context);
+  releaseFirstVideo();
+  const cancelled = await waitForTerminalJob(created.id, context);
+
+  assert.equal(cancelled.status, 'partial_failed');
+  assert.deepEqual(videoCalls, [0]);
+  assert.deepEqual(cancelled.videoTasks.map(task => task.status), ['success', 'waiting']);
+  assert.match(cancelled.error, /队列已取消/);
+});
+
+test('视频提交状态未知时重试不会重复提交扣费', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const unknown = new Error('浏览器在提交后崩溃');
+  unknown.code = 'BROWSER_CLOSED';
+  unknown.submitted = true;
+  const context = {
+    dirs: env.dirs,
+    libraryDir: env.root,
+    runRecognition: async () => JSON.stringify({
+      sceneSpec: '客厅场景', personaSpec: '通用人物', compositionSpec: '半身构图', productSpec: '白色产品',
+    }),
+    generateImages: async () => [{ buffer: Buffer.from('image'), extension: 'png' }],
+    generateVideo: async () => { throw unknown; },
+  };
+  const videoPayload = {
+    ...payload, autoGenerateVideo: true, videoPrompt: '镜头推进',
+    videoModel: 'gemini-web-video', videoDuration: 8,
+  };
+  const first = createProductSceneJob(videoPayload, context);
+  const partial = await waitForTerminalJob(first.id, context);
+  assert.equal(partial.videoTasks[0].retryBlocked, true);
+  assert.match(partial.error, /不会重复提交/);
+
+  let retryCalls = 0;
+  const retried = createProductSceneJob({ ...videoPayload, retryJobId: partial.id }, {
+    ...context,
+    generateImages: async () => { throw new Error('不应重新生成图片'); },
+    generateVideo: async () => { retryCalls += 1; return { buffer: Buffer.from('video'), extension: 'mp4' }; },
+  });
+  const stillPartial = await waitForTerminalJob(retried.id, context);
+  assert.equal(stillPartial.status, 'partial_failed');
+  assert.equal(retryCalls, 0);
+});
+
+test('建任务时就把画幅收敛到图片模型的能力表', async t => {
+  // 回归：场景图是竖构图时推断出 3:4，而 Gemini Web 图片不支持 3:4。
+  // 不收敛的话要等识图跑完几分钟，才在 Provider 侧抛 ASPECT_RATIO_NOT_SUPPORTED。
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const context = {
+    dirs: env.dirs,
+    libraryDir: env.root,
+    runRecognition: async () => JSON.stringify({
+      sceneSpec: '客厅场景', personaSpec: '通用人物', compositionSpec: '半身构图', productSpec: '白色产品',
+    }),
+    generateImages: async () => [{ buffer: Buffer.from('image'), extension: 'png' }],
+  };
+  const job = createProductSceneJob({ ...payload, imageModel: 'gemini-web-image', aspectRatio: '3:4' }, context);
+  assert.equal(job.aspectRatio, '16:9');
+  const finished = await waitForTerminalJob(job.id, context);
+  assert.equal(finished.aspectRatio, '16:9');
 });

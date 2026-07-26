@@ -56,6 +56,8 @@ test('已下线模型与配音供应商的密钥字段不再暴露', () => {
     assert.equal(fields.some(field => field.name === 'KLING_SECRET_KEY'), false);
     assert.equal(fields.some(field => field.name === 'MINIMAX_API_KEY'), false);
     assert.equal(fields.some(field => field.name === 'MINIMAX_GROUP_ID'), false);
+    assert.equal(fields.some(field => field.name === 'GEMINI_API_KEY'), false);
+    assert.equal(fields.some(field => field.name === 'OPENAI_API_KEY'), false);
 });
 
 test('提示词优化可单独配置 DeepSeek API 密钥', () => {
@@ -64,4 +66,17 @@ test('提示词优化可单独配置 DeepSeek API 密钥', () => {
 
     assert.equal(deepseek.provider, 'DeepSeek');
     assert.match(deepseek.label, /提示词优化/);
+});
+
+test('设置接口不再接受 Gemini 与 OpenAI API Key 写入或清除', () => {
+    const libraryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'twitcanva-api-hidden-'));
+    const current = { GEMINI_API_KEY: 'legacy-gemini', OPENAI_API_KEY: 'legacy-openai' };
+    const saved = saveApiKeyOverrides(libraryDir, current, {
+        GEMINI_API_KEY: 'new-gemini',
+        OPENAI_API_KEY: 'new-openai'
+    }, ['GEMINI_API_KEY', 'OPENAI_API_KEY']);
+
+    assert.equal(saved.GEMINI_API_KEY, 'legacy-gemini');
+    assert.equal(saved.OPENAI_API_KEY, 'legacy-openai');
+    fs.rmSync(libraryDir, { recursive: true, force: true });
 });

@@ -13,7 +13,7 @@ export const BROWSER_SESSION_STATES = Object.freeze([
 ]);
 
 const VALID_STATES = new Set(BROWSER_SESSION_STATES);
-const PROVIDERS = Object.freeze(['google-flow', 'jimeng']);
+const PROVIDERS = Object.freeze(['google-flow', 'jimeng', 'gemini-web']);
 
 function initialProviderState(provider) {
     return {
@@ -116,6 +116,7 @@ export class BrowserSessionStateStore {
 
 export function inferBrowserProvider(args = []) {
     const values = Array.isArray(args) ? args.map(value => String(value)) : [];
+    if (values.includes('gemini-web')) return 'gemini-web';
     if (values.includes('google-flow')) return 'google-flow';
     if (values.includes('jimeng')) return 'jimeng';
     return null;

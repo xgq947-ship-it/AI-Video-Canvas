@@ -56,11 +56,18 @@ export const useNodeManagement = () => {
         };
 
         if (type === NodeType.PRODUCT_SCENE_REPLACE) {
-            newNode.title = '产品场景替换';
+            newNode.title = '产品短视频生成';
             newNode.imageModel = 'google-flow-nano-banana-pro';
             newNode.aspectRatio = '1:1';
             newNode.productDimensions = { length: 0, width: 0, height: 0, unit: 'cm' };
             newNode.preserveProductMarkings = true;
+            newNode.productSceneRecognitionProvider = 'codex-cli';
+            newNode.productSceneImageCount = 1;
+            newNode.productSceneAutoGenerateVideo = false;
+            newNode.productSceneVideoModel = 'gemini-web-video';
+            newNode.productSceneVideoAspectRatio = '16:9';
+            newNode.productSceneVideoDuration = 8;
+            newNode.productSceneVideoGenerateAudio = true;
         }
 
         setNodes(prev => [...prev, newNode]);
@@ -166,11 +173,18 @@ export const useNodeManagement = () => {
                 }
 
                 if (type === NodeType.PRODUCT_SCENE_REPLACE) {
-                    newNode.title = '产品场景替换';
+                    newNode.title = '产品短视频生成';
                     newNode.imageModel = 'google-flow-nano-banana-pro';
                     newNode.aspectRatio = '1:1';
                     newNode.productDimensions = { length: 0, width: 0, height: 0, unit: 'cm' };
                     newNode.preserveProductMarkings = true;
+                    newNode.productSceneRecognitionProvider = 'codex-cli';
+                    newNode.productSceneImageCount = 1;
+                    newNode.productSceneAutoGenerateVideo = false;
+                    newNode.productSceneVideoModel = 'gemini-web-video';
+                    newNode.productSceneVideoAspectRatio = '16:9';
+                    newNode.productSceneVideoDuration = 8;
+                    newNode.productSceneVideoGenerateAudio = true;
                 }
 
                 setNodes(prev => [...prev, newNode]);

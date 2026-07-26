@@ -12,6 +12,7 @@ import typer
 from ops_cli.capabilities import CapabilitySpec
 from ops_cli.cli_helpers import _execute
 from ops_cli.platforms.image_to_video.providers.google_flow import run_video_generate
+from ops_cli.platforms.image_to_video.providers.gemini_web import run_video_generate as run_gemini_web_video_generate
 from ops_cli.platforms.image_to_video.providers.jimeng import (
     DEFAULT_MODEL as JIMENG_DEFAULT_MODEL,
 )
@@ -25,6 +26,7 @@ def register(app: typer.Typer, capabilities: dict[str, CapabilitySpec]) -> None:
         help="Image-to-video generation (multiple model providers).", no_args_is_help=True
     )
     google_flow_app = typer.Typer(help="Google Flow image-to-video.", no_args_is_help=True)
+    gemini_web_app = typer.Typer(help="Gemini Apps web video generation.", no_args_is_help=True)
 
     @google_flow_app.command("generate")
     def google_flow_generate(
@@ -64,6 +66,27 @@ def register(app: typer.Typer, capabilities: dict[str, CapabilitySpec]) -> None:
             params=params,
             handler=lambda: run_video_generate(**params),
         )
+
+    @gemini_web_app.command("generate")
+    def gemini_web_generate(
+        ctx: typer.Context,
+        prompt: str = typer.Option(..., "--prompt"),
+        reference_image: list[str] = typer.Option([], "--reference-image"),
+        duration: int = typer.Option(8, "--duration"),
+        aspect_ratio: str = typer.Option("16:9", "--aspect-ratio"),
+        camera_movement: str = typer.Option("", "--camera-movement"),
+        native_audio: bool = typer.Option(True, "--native-audio/--no-native-audio"),
+        output_dir: str | None = typer.Option(None, "--output-dir"),
+        timeout_minutes: int = typer.Option(15, "--timeout-minutes"),
+        dry_run: bool = typer.Option(False, "--dry-run"),
+        execute: bool = typer.Option(False, "--execute"),
+    ) -> None:
+        params = {
+            "prompt": prompt, "reference_images": list(reference_image), "duration": duration,
+            "aspect_ratio": aspect_ratio, "camera_movement": camera_movement, "native_audio": native_audio,
+            "output_dir": output_dir, "timeout_minutes": timeout_minutes, "dry_run": dry_run, "execute": execute,
+        }
+        _execute(ctx, command_name="ops gemini_web image-to-video generate", params=params, handler=lambda: run_gemini_web_video_generate(**params))
 
     jimeng_app = typer.Typer(help="即梦 Seedance image/text-to-video.", no_args_is_help=True)
 
@@ -112,6 +135,7 @@ def register(app: typer.Typer, capabilities: dict[str, CapabilitySpec]) -> None:
         )
 
     image_to_video_app.add_typer(google_flow_app, name="google-flow")
+    image_to_video_app.add_typer(gemini_web_app, name="gemini-web")
     image_to_video_app.add_typer(jimeng_app, name="jimeng")
     app.add_typer(image_to_video_app, name="image-to-video")
 
@@ -133,4 +157,9 @@ def register(app: typer.Typer, capabilities: dict[str, CapabilitySpec]) -> None:
         recovery_policy="interactive_if_tty",
         dry_run_policy="no_browser",
         artifact_types=("video", "png"),
+    )
+    capabilities["image_to_video.gemini_web.generate"] = CapabilitySpec(
+        id="image_to_video.gemini_web.generate", platform="gemini_web", command="image-to-video generate",
+        scenes=("gemini_web/video_generate",), recovery_policy="interactive_if_tty",
+        dry_run_policy="no_browser", artifact_types=("video", "mp4"),
     )

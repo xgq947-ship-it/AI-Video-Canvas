@@ -2,6 +2,12 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { generateGoogleFlowWorkflowImage, isGoogleFlowImageWorkflowModel } from './googleFlowImageWorkflow.js';
+import { generateJimengWorkflowImage, isJimengImageWorkflowModel } from './jimengImageWorkflow.js';
+import { generateGoogleFlowWorkflowVideo, isGoogleFlowWorkflowModelId } from './googleFlowWorkflow.js';
+import { generateJimengWorkflowVideo, isJimengWorkflowModelId, resolveJimengModelLabel } from './jimengVideoWorkflow.js';
+import { generateGeminiWebImage, generateGeminiWebVideo, isGeminiWebImageModel, isGeminiWebVideoModel } from './geminiWebWorkflow.js';
+import { generateSeedanceVideo } from './seedance.js';
+import { createCodexImageJob, getCodexImageJob } from './codexImageJobs.js';
 import { getPromptOptimizerProvider } from './promptOptimizerProviders.js';
 import { resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
 import { resolveProjectMediaTarget } from '../utils/projectAssets.js';
@@ -15,6 +21,13 @@ import {
   validateProductDimensions,
 } from '../../shared/productSceneReplacement.js';
 import { isMassageEquipmentName } from '../../shared/massageEquipmentCategories.js';
+import {
+  clampImageOutputCount,
+  getImageGenerationProvider,
+  getVideoGenerationProvider,
+  normalizeImageAspectRatio,
+  normalizeVideoParameters,
+} from '../../shared/generationProviders.js';
 
 const activeJobs = new Set();
 
@@ -50,14 +63,14 @@ const parseStructuredAnalysis = text => {
   const fenced = source.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] || source;
   const firstBrace = fenced.indexOf('{');
   const lastBrace = fenced.lastIndexOf('}');
-  if (firstBrace < 0 || lastBrace <= firstBrace) throw new Error('Codex 识图结果不是有效 JSON');
+  if (firstBrace < 0 || lastBrace <= firstBrace) throw new Error('识图结果不是有效 JSON');
   const parsed = JSON.parse(fenced.slice(firstBrace, lastBrace + 1));
   const sceneAnalysis = String(parsed.sceneSpec || '').trim();
   const productAnalysis = String(parsed.productSpec || '').trim();
   const personaAnalysis = String(parsed.personaSpec || '').trim();
   const compositionAnalysis = String(parsed.compositionSpec || '').trim();
   if (!sceneAnalysis || !personaAnalysis || !compositionAnalysis || !productAnalysis) {
-    throw new Error('Codex 识图结果缺少 sceneSpec、personaSpec、compositionSpec 或 productSpec');
+    throw new Error('识图结果缺少 sceneSpec、personaSpec、compositionSpec 或 productSpec');
   }
   return { sceneAnalysis, personaAnalysis, compositionAnalysis, productAnalysis };
 };
@@ -76,6 +89,7 @@ const buildCombinedRecognitionInstruction = job => [
 ].join('\n\n');
 
 const completeFromExistingMetadata = (job, dirs) => {
+  if (Array.isArray(job.resultUrls) && job.resultUrls.length > 0) return false;
   const { imageTarget } = getJobStorage(job.workflowId, dirs);
   const metaPath = path.join(imageTarget.targetDir, `${job.resultNodeId}.json`);
   if (!fs.existsSync(metaPath)) return false;
@@ -88,6 +102,99 @@ const completeFromExistingMetadata = (job, dirs) => {
   return true;
 };
 
+const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+async function waitForCodexResult(context, codexJobId, timeoutMs = 30 * 60_000) {
+  context.codexAutomation?.notify?.();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const current = getCodexImageJob(context.codexJobsDir, codexJobId);
+    if (current?.status === 'completed' && current.resultUrl) return current.resultUrl;
+    if (current?.status === 'failed') throw new Error(current.error || 'Codex 生图任务失败');
+    await delay(1_500);
+  }
+  throw new Error('Codex 生图任务超时');
+}
+
+async function generateProductImages(job, context) {
+  const provider = getImageGenerationProvider(job.imageModel);
+  if (!provider) throw new Error(`未知图片模型：${job.imageModel}`);
+  const count = clampImageOutputCount(job.imageModel, job.imageCount);
+  const request = {
+    prompt: job.prompt,
+    aspectRatio: job.aspectRatio,
+    resolution: job.imageResolution || 'Auto',
+    referenceImageInputs: [job.productImage],
+    libraryDir: context.libraryDir,
+    timeoutMinutes: 10,
+    modelId: job.imageModel,
+    count,
+  };
+  if (isGoogleFlowImageWorkflowModel(job.imageModel)) return (await generateGoogleFlowWorkflowImage(request)).images;
+  if (isJimengImageWorkflowModel(job.imageModel)) return (await generateJimengWorkflowImage(request)).images;
+  if (isGeminiWebImageModel(job.imageModel)) return (await generateGeminiWebImage(request)).images;
+  if (job.imageModel === 'codex-imagegen') {
+    const target = resolveProjectMediaTarget(job.workflowId, 'images', context.dirs);
+    const results = [];
+    for (let index = 0; index < count; index += 1) {
+      const codexJob = createCodexImageJob({
+        jobsDir: context.codexJobsDir,
+        libraryDir: context.libraryDir,
+        nodeId: `${job.nodeId}-image-${index + 1}`,
+        prompt: job.prompt,
+        aspectRatio: job.aspectRatio,
+        resolution: job.imageResolution || 'Auto',
+        referenceImages: [job.productImage],
+        workflowId: job.workflowId,
+        projectDirName: target.projectDirName,
+      });
+      results.push({ resultUrl: await waitForCodexResult(context, codexJob.id) });
+    }
+    return results;
+  }
+  throw new Error(`产品短视频节点暂不支持图片模型：${job.imageModel}`);
+}
+
+async function generateProductVideo(job, imageUrl, index, context) {
+  const model = getVideoGenerationProvider(job.videoModel);
+  if (!model || !model.supportsImageToVideo) throw new Error('所选视频模型不支持图生视频');
+  const parameters = normalizeVideoParameters(job.videoModel, { aspectRatio: job.videoAspectRatio, duration: job.videoDuration });
+  if (isGeminiWebVideoModel(job.videoModel)) {
+    return generateGeminiWebVideo({
+      prompt: job.videoPrompt, referenceImageInputs: [imageUrl], libraryDir: context.libraryDir,
+      aspectRatio: parameters.aspectRatio, duration: parameters.duration || 8, timeoutMinutes: 15,
+      nativeAudio: job.videoGenerateAudio !== false,
+    });
+  }
+  if (isGoogleFlowWorkflowModelId(job.videoModel)) {
+    return generateGoogleFlowWorkflowVideo({
+      prompt: job.videoPrompt, firstFrameInput: imageUrl, referenceImageInputs: [], libraryDir: context.libraryDir,
+      aspectRatio: parameters.aspectRatio, duration: parameters.duration, modelId: job.videoModel, timeoutMinutes: 15,
+    });
+  }
+  if (isJimengWorkflowModelId(job.videoModel)) {
+    return generateJimengWorkflowVideo({
+      prompt: job.videoPrompt, referenceImageInputs: [imageUrl], referenceLabels: [`产品替换图${index + 1}`],
+      model: resolveJimengModelLabel(job.videoModel), aspectRatio: parameters.aspectRatio,
+      duration: parameters.duration || 5, resolution: job.videoResolution || '720P',
+      libraryDir: context.libraryDir, timeoutMinutes: 15,
+    });
+  }
+  if (job.videoModel?.startsWith('seedance-')) {
+    if (!context.arkApiKey) throw new Error('Seedance 需要在设置中配置火山方舟 ARK API Key');
+    const remoteUrl = await generateSeedanceVideo({
+      prompt: job.videoPrompt, imageBase64: resolveImageToBase64(imageUrl), modelId: job.videoModel,
+      aspectRatio: parameters.aspectRatio, resolution: job.videoResolution || '720p',
+      duration: parameters.duration || 5, generateAudio: job.videoGenerateAudio !== false,
+      apiKey: context.arkApiKey,
+    });
+    const response = await fetch(remoteUrl);
+    if (!response.ok) throw new Error(`Seedance 视频下载失败：HTTP ${response.status}`);
+    return { buffer: Buffer.from(await response.arrayBuffer()), extension: 'mp4', source: 'url' };
+  }
+  throw new Error(`产品短视频节点暂不支持视频模型：${job.videoModel}`);
+}
+
 async function executeJob(job, context) {
   const { dirs, libraryDir, recognitionModel = 'gpt-5.6-sol' } = context;
   if (activeJobs.has(job.id)) return;
@@ -96,16 +203,26 @@ async function executeJob(job, context) {
     if (completeFromExistingMetadata(job, dirs)) return;
 
     job.status = 'processing';
+    job.imageCount = clampImageOutputCount(job.imageModel, job.imageCount || 1);
+    job.resultNodeIds = Array.isArray(job.resultNodeIds) && job.resultNodeIds.length
+      ? job.resultNodeIds
+      : [job.resultNodeId || crypto.randomUUID()];
+    job.videoResultNodeIds = Array.isArray(job.videoResultNodeIds) && job.videoResultNodeIds.length
+      ? job.videoResultNodeIds
+      : Array.from({ length: job.imageCount }, () => crypto.randomUUID());
     if (!job.sceneAnalysis || !job.personaAnalysis || !job.compositionAnalysis || !job.productAnalysis) {
       job.stage = 'analyzing';
-      job.stageLabel = 'Codex 正在识别两张图片';
+      job.stageLabel = job.recognitionProvider === 'gemini-web'
+        ? 'Gemini Web 正在识别两张图片'
+        : 'Codex 正在识别两张图片';
       writeJob(job, dirs);
 
       const sceneDataUrl = resolveImageToBase64(job.sceneImage);
       const productDataUrl = resolveImageToBase64(job.productImage);
       if (!sceneDataUrl || !productDataUrl) throw new Error('无法读取场景参考图或我方产品图');
 
-      const provider = getPromptOptimizerProvider('codex-cli');
+      const provider = getPromptOptimizerProvider(job.recognitionProvider);
+      if (!provider) throw new Error(`未知识图 Provider：${job.recognitionProvider}`);
       const recognitionRequest = {
           systemInstruction: buildCombinedRecognitionInstruction(job),
           userPrompt: '严格按图片顺序识别，并返回指定 JSON。',
@@ -114,18 +231,18 @@ async function executeJob(job, context) {
           effort: provider.defaultEffort || 'medium',
           temperature: 0.1,
           maxTokens: 3500,
+          libraryDir,
       };
       const text = context.runRecognition
         ? await context.runRecognition(recognitionRequest)
         : await provider.run(recognitionRequest);
       Object.assign(job, parseStructuredAnalysis(text));
-      job.recognitionProvider = 'codex-cli';
-      job.recognitionModel = recognitionModel;
+      job.recognitionModel = job.recognitionProvider === 'gemini-web' ? 'Gemini Web' : recognitionModel;
       writeJob(job, dirs);
     }
 
-    job.stage = 'generating';
-    job.stageLabel = 'Google Flow 正在生成图片';
+    job.stage = 'generating_images';
+    job.stageLabel = `正在生成替换图 0 / ${job.imageCount}`;
     job.prompt = buildProductScenePrompt({
       sceneAnalysis: job.sceneAnalysis,
       personaAnalysis: job.personaAnalysis,
@@ -138,40 +255,122 @@ async function executeJob(job, context) {
     });
     writeJob(job, dirs);
 
-    const generationRequest = {
-      prompt: job.prompt,
-      aspectRatio: job.aspectRatio,
-      // 竞品场景图刻意不进生图模型：只要它作为参考图出现，模型就会复刻原视频里
-      // 那个人的脸。场景与人物全部由提示词重建，参考图只留我方产品用于锁外观。
-      referenceImageInputs: [job.productImage],
-      libraryDir,
-      timeoutMinutes: 10,
-      modelId: job.imageModel,
-    };
-    const result = context.generateImage
-      ? await context.generateImage(generationRequest)
-      : await generateGoogleFlowWorkflowImage(generationRequest);
-
     const { imageTarget } = getJobStorage(job.workflowId, dirs);
-    const saved = saveBufferToFile(result.buffer, imageTarget.targetDir, 'img', result.extension);
-    const metadata = {
-      id: job.resultNodeId,
-      filename: saved.filename,
-      prompt: job.prompt,
-      model: job.imageModel,
-      aspectRatio: job.aspectRatio,
-      createdAt: new Date().toISOString(),
-      type: 'images',
-      sourceJobId: job.id,
-    };
-    atomicWriteJson(path.join(imageTarget.targetDir, `${job.resultNodeId}.json`), metadata);
+    const generatedImages = Array.isArray(job.resultUrls) && job.resultUrls.length
+      ? job.resultUrls.map(resultUrl => ({ resultUrl }))
+      : context.generateImages
+      ? await context.generateImages(job)
+        : context.generateImage
+        ? [await context.generateImage({
+            prompt: job.prompt, aspectRatio: job.aspectRatio,
+            referenceImageInputs: [job.productImage], libraryDir,
+            timeoutMinutes: 10, modelId: job.imageModel, count: 1,
+          })]
+        : await generateProductImages(job, context);
+    if (!Array.isArray(generatedImages) || generatedImages.length === 0) {
+      throw new Error('图片模型没有返回可保存的产品替换图');
+    }
+    const imageResults = [];
+    for (let index = 0; index < Math.min(generatedImages.length, job.imageCount); index += 1) {
+      const result = generatedImages[index];
+      const nodeId = job.resultNodeIds[index] || crypto.randomUUID();
+      job.resultNodeIds[index] = nodeId;
+      let resultUrl = result.resultUrl;
+      if (!resultUrl) {
+        const saved = saveBufferToFile(result.buffer, imageTarget.targetDir, 'img', result.extension || 'png');
+        resultUrl = `${imageTarget.urlPrefix}/${saved.filename}`;
+        atomicWriteJson(path.join(imageTarget.targetDir, `${nodeId}.json`), {
+          id: nodeId, filename: saved.filename, prompt: job.prompt, model: job.imageModel,
+          aspectRatio: job.aspectRatio, createdAt: new Date().toISOString(), type: 'images',
+          sourceJobId: job.id, batchIndex: index, batchCount: generatedImages.length,
+        });
+      }
+      imageResults.push({ index, nodeId, resultUrl, status: 'success' });
+      job.imageResults = imageResults;
+      job.resultUrls = imageResults.map(item => item.resultUrl);
+      job.resultUrl = job.resultUrls[0];
+      job.resultNodeId = job.resultNodeIds[0];
+      job.stageLabel = `正在生成替换图 ${index + 1} / ${job.imageCount}`;
+      writeJob(job, dirs);
+    }
 
-    job.status = 'completed';
-    job.stage = 'completed';
-    job.stageLabel = '生成完成';
-    job.resultUrl = `${imageTarget.urlPrefix}/${saved.filename}`;
-    job.completedAt = metadata.createdAt;
-    job.error = undefined;
+    job.stage = 'images_completed';
+    job.stageLabel = `${imageResults.length} 张替换图已完成`;
+    writeJob(job, dirs);
+
+    if (!job.autoGenerateVideo) {
+      job.status = 'completed';
+      job.stage = 'completed';
+      job.stageLabel = '图片生成完成';
+      job.completedAt = new Date().toISOString();
+      job.error = undefined;
+      writeJob(job, dirs);
+      return;
+    }
+    if (!job.videoPrompt) throw new Error('自动生成视频已开启，但没有连接短视频提示词文本节点');
+
+    const { targetDir: videoDir, urlPrefix: videoPrefix } = resolveProjectMediaTarget(job.workflowId, 'videos', dirs);
+    job.stage = 'generating_videos';
+    job.videoTasks = Array.isArray(job.videoTasks) && job.videoTasks.length
+      ? job.videoTasks.map(task => task.status === 'running'
+          ? { ...task, status: 'failed', error: '应用在提交后中断，请先检查平台历史记录；系统不会自动重复提交' }
+          : task)
+      : imageResults.map((image, index) => ({
+          index, imageNodeId: image.nodeId, videoNodeId: job.videoResultNodeIds[index], status: 'waiting',
+        }));
+    writeJob(job, dirs);
+    for (let index = 0; index < imageResults.length; index += 1) {
+      const latest = readJob(job.id, job.workflowId, dirs);
+      if (latest?.cancelRequested) {
+        job.cancelRequested = true;
+        break;
+      }
+      const task = job.videoTasks[index];
+      if (task.status === 'success' || task.status === 'failed') continue;
+      task.status = 'running';
+      job.currentVideoIndex = index + 1;
+      job.stageLabel = `正在生成视频 ${index + 1} / ${imageResults.length}`;
+      writeJob(job, dirs);
+      try {
+        const video = context.generateVideo
+          ? await context.generateVideo({ job, image: imageResults[index], index })
+          : await generateProductVideo(job, imageResults[index].resultUrl, index, context);
+        const saved = saveBufferToFile(video.buffer, videoDir, 'vid', video.extension || 'mp4');
+        task.status = 'success';
+        task.resultUrl = `${videoPrefix}/${saved.filename}`;
+        atomicWriteJson(path.join(videoDir, `${task.videoNodeId}.json`), {
+          id: task.videoNodeId, filename: saved.filename, prompt: job.videoPrompt, model: job.videoModel,
+          aspectRatio: job.videoAspectRatio, duration: job.videoDuration, createdAt: new Date().toISOString(),
+          type: 'videos', sourceJobId: job.id, sourceImageNodeId: task.imageNodeId,
+        });
+      } catch (videoError) {
+        task.status = 'failed';
+        task.error = videoError instanceof Error ? videoError.message : String(videoError);
+        task.errorCode = videoError?.code;
+        task.retryBlocked = videoError?.submitted === true;
+      }
+      // 取消请求可能在当前视频执行期间由另一个请求写入磁盘；写回任务结果前合并，
+      // 不能让内存中的旧 job 覆盖掉 cancelRequested。
+      if (readJob(job.id, job.workflowId, dirs)?.cancelRequested) {
+        job.cancelRequested = true;
+      }
+      writeJob(job, dirs);
+    }
+
+    const failedCount = job.videoTasks.filter(task => task.status === 'failed').length;
+    const retryBlockedCount = job.videoTasks.filter(task => task.status === 'failed' && task.retryBlocked).length;
+    const successCount = job.videoTasks.filter(task => task.status === 'success').length;
+    job.status = failedCount || job.cancelRequested ? 'partial_failed' : 'completed';
+    job.stage = failedCount || job.cancelRequested ? 'partial_failed' : 'completed';
+    job.stageLabel = job.cancelRequested
+      ? `已取消，保留 ${successCount} 条已完成视频`
+      : failedCount ? `完成 ${successCount} / ${job.videoTasks.length} 条视频` : '图片与视频全部完成';
+    job.completedAt = new Date().toISOString();
+    job.error = job.cancelRequested
+      ? `视频队列已取消，已保留 ${successCount} 条成功结果`
+      : retryBlockedCount
+        ? `${retryBlockedCount} 条视频提交状态未知，请先检查平台历史记录；系统不会重复提交`
+        : failedCount ? `${failedCount} 条视频生成失败，已保留成功结果` : undefined;
     writeJob(job, dirs);
   } catch (error) {
     job.status = 'failed';
@@ -191,8 +390,19 @@ export function createProductSceneJob(payload, context) {
   if (!payload.workflowId || !payload.nodeId || !payload.sceneImage || !payload.productImage) {
     throw new Error('缺少项目、节点或两张参考图片');
   }
-  if (!isGoogleFlowImageWorkflowModel(payload.imageModel)) {
-    throw new Error('产品场景替换当前仅支持 Google Flow 图片模型');
+  const imageProvider = getImageGenerationProvider(payload.imageModel);
+  if (!imageProvider) throw new Error('请选择有效的图片生成模型');
+  const imageCount = clampImageOutputCount(payload.imageModel, payload.imageCount);
+  if (Number(payload.imageCount || 1) !== imageCount) {
+    throw new Error(`${imageProvider.name} 单次最多生成 ${imageProvider.maxOutputCount} 张图片`);
+  }
+  const recognitionProvider = payload.recognitionProvider === 'gemini-web' ? 'gemini-web' : 'codex-cli';
+  const videoProvider = getVideoGenerationProvider(payload.videoModel);
+  if (payload.autoGenerateVideo && !videoProvider?.supportsImageToVideo) {
+    throw new Error('自动生成视频需要选择支持图生视频的模型');
+  }
+  if (payload.autoGenerateVideo && !String(payload.videoPrompt || '').trim()) {
+    throw new Error('自动生成视频已开启，请连接短视频提示词文本节点');
   }
   if (payload.productCategory && !isMassageEquipmentName(payload.productCategory)) {
     throw new Error('请选择有效的按摩器材产品类别');
@@ -215,12 +425,31 @@ export function createProductSceneJob(payload, context) {
   const previous = payload.retryJobId
     ? readJob(payload.retryJobId, payload.workflowId, context.dirs)
     : null;
+  const canReusePartialResults = previous?.status === 'partial_failed'
+    && previous.imageModel === payload.imageModel
+    && Number(previous.imageCount || 1) === imageCount
+    && previous.sceneImage === payload.sceneImage
+    && previous.productImage === payload.productImage
+    && Array.isArray(previous.resultUrls)
+    && previous.resultUrls.length > 0;
+  const reusableResultNodeIds = canReusePartialResults && Array.isArray(previous.resultNodeIds)
+    ? previous.resultNodeIds
+    : Array.from({ length: imageCount }, () => crypto.randomUUID());
+  const reusableVideoResultNodeIds = canReusePartialResults && Array.isArray(previous.videoResultNodeIds)
+    ? previous.videoResultNodeIds
+    : Array.from({ length: imageCount }, () => crypto.randomUUID());
+  const reusableVideoTasks = canReusePartialResults && Array.isArray(previous.videoTasks)
+    ? previous.videoTasks.map(task => task.status === 'success' || task.retryBlocked
+        ? { ...task }
+        : { ...task, status: 'waiting', error: undefined, errorCode: undefined, retryBlocked: undefined, resultUrl: undefined })
+    : undefined;
   const now = new Date().toISOString();
   const job = {
     id: requestedJobId || crypto.randomUUID(),
     workflowId: payload.workflowId,
     nodeId: payload.nodeId,
-    resultNodeId: crypto.randomUUID(),
+    resultNodeIds: reusableResultNodeIds,
+    videoResultNodeIds: reusableVideoResultNodeIds,
     status: 'pending',
     stage: 'queued',
     stageLabel: '任务已创建',
@@ -231,9 +460,28 @@ export function createProductSceneJob(payload, context) {
     preserveProductMarkings: payload.preserveProductMarkings !== false,
     personaBrief: String(payload.personaBrief || '').trim(),
     imageModel: payload.imageModel,
-    aspectRatio: inferProductSceneAspectRatio(payload.aspectRatio, '1:1'),
-    recognitionProvider: 'codex-cli',
-    recognitionModel: context.recognitionModel || 'gpt-5.6-sol',
+    imageCount,
+    imageResolution: payload.imageResolution || 'Auto',
+    // 场景图推断出的画幅可能不在所选图片模型的能力表里（例如竖构图推出 3:4，
+    // 而 Gemini Web 只支持 16:9/9:16/1:1/3:2/4:3）。在建任务时收口，
+    // 否则要等识图跑完、真正提交生成时才在 Provider 侧硬失败。
+    aspectRatio: normalizeImageAspectRatio(payload.imageModel, inferProductSceneAspectRatio(payload.aspectRatio, '1:1')),
+    recognitionProvider,
+    recognitionModel: recognitionProvider === 'gemini-web' ? 'Gemini Web' : (context.recognitionModel || 'gpt-5.6-sol'),
+    videoPrompt: String(payload.videoPrompt || '').trim(),
+    videoPromptSourceId: String(payload.videoPromptSourceId || ''),
+    videoModel: payload.videoModel || 'gemini-web-video',
+    videoAspectRatio: normalizeVideoParameters(payload.videoModel || 'gemini-web-video', { aspectRatio: payload.videoAspectRatio, duration: payload.videoDuration }).aspectRatio,
+    videoDuration: normalizeVideoParameters(payload.videoModel || 'gemini-web-video', { aspectRatio: payload.videoAspectRatio, duration: payload.videoDuration }).duration,
+    videoResolution: payload.videoResolution || '自动',
+    videoGenerateAudio: payload.videoGenerateAudio !== false,
+    autoGenerateVideo: payload.autoGenerateVideo === true,
+    ...(canReusePartialResults ? {
+      resultUrls: previous.resultUrls,
+      resultUrl: previous.resultUrl,
+      imageResults: previous.imageResults,
+      videoTasks: reusableVideoTasks,
+    } : {}),
     ...(previous?.sceneAnalysis && previous?.personaAnalysis
       && previous?.compositionAnalysis && previous?.productAnalysis
       ? {
@@ -246,6 +494,7 @@ export function createProductSceneJob(payload, context) {
     createdAt: now,
     updatedAt: now,
   };
+  job.resultNodeId = job.resultNodeIds[0];
   writeJob(job, context.dirs);
   void executeJob(job, context);
   return job;
@@ -278,4 +527,13 @@ export function getProductSceneJob(jobId, workflowId, context) {
     void executeJob(job, context);
   }
   return job;
+}
+
+export function cancelProductSceneJob(jobId, workflowId, context) {
+  const job = readJob(jobId, workflowId, context.dirs);
+  if (!job) return null;
+  if (!['pending', 'processing'].includes(job.status)) return job;
+  job.cancelRequested = true;
+  job.stageLabel = '正在结束当前任务，后续视频将不再提交';
+  return writeJob(job, context.dirs);
 }

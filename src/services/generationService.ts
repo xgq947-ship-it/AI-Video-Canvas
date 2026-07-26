@@ -81,10 +81,10 @@ export interface ProductSceneJob {
   workflowId: string;
   nodeId: string;
   resultNodeId: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  stage: 'queued' | 'analyzing' | 'generating' | 'completed' | 'failed';
+  status: 'pending' | 'processing' | 'completed' | 'partial_failed' | 'failed';
+  stage: 'queued' | 'analyzing' | 'generating_images' | 'images_completed' | 'generating_videos' | 'completed' | 'partial_failed' | 'failed';
   stageLabel: string;
-  recognitionProvider: 'codex-cli';
+  recognitionProvider: 'codex-cli' | 'gemini-web';
   recognitionModel: string;
   imageModel: string;
   aspectRatio: string;
@@ -94,6 +94,17 @@ export interface ProductSceneJob {
   compositionAnalysis?: string;
   productAnalysis?: string;
   resultUrl?: string;
+  resultNodeIds?: string[];
+  resultUrls?: string[];
+  imageCount?: number;
+  autoGenerateVideo?: boolean;
+  videoPrompt?: string;
+  videoPromptSourceId?: string;
+  videoModel?: string;
+  videoAspectRatio?: string;
+  videoDuration?: number;
+  currentVideoIndex?: number;
+  videoTasks?: Array<{ index: number; imageNodeId: string; videoNodeId: string; status: 'waiting' | 'running' | 'success' | 'failed'; resultUrl?: string; error?: string; errorCode?: string; retryBlocked?: boolean }>;
   error?: string;
   createdAt: string;
   updatedAt?: string;
@@ -112,6 +123,17 @@ export interface CreateProductSceneJobParams {
   personaBrief?: string;
   imageModel: string;
   aspectRatio: string;
+  imageCount?: number;
+  imageResolution?: string;
+  recognitionProvider?: 'codex-cli' | 'gemini-web';
+  videoPrompt?: string;
+  videoPromptSourceId?: string;
+  videoModel?: string;
+  videoAspectRatio?: string;
+  videoDuration?: number;
+  videoResolution?: string;
+  videoGenerateAudio?: boolean;
+  autoGenerateVideo?: boolean;
 }
 
 export const createProductSceneJob = async (params: CreateProductSceneJobParams): Promise<ProductSceneJob> => {
@@ -137,6 +159,15 @@ export const getLatestProductSceneJob = async (nodeId: string, workflowId: strin
   if (response.status === 404) return null;
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || '无法读取最新产品场景替换任务');
+  return data;
+};
+
+export const cancelProductSceneJob = async (jobId: string, workflowId: string): Promise<ProductSceneJob> => {
+  const response = await fetch(`/api/product-scene-jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workflowId })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || '取消产品短视频任务失败');
   return data;
 };
 

@@ -12,6 +12,7 @@ import {
     loadOptimizerPreference,
     saveOptimizerPreference
 } from '../services/optimizerPreference.js';
+import { browserSessionState } from '../services/browserSessionState.js';
 
 const router = express.Router();
 
@@ -65,10 +66,14 @@ router.get('/optimizer', (req, res) => {
         keyConfigured: provider.apiKeyField ? Boolean(req.app.locals[provider.apiKeyField]) : true,
         available: provider.id === 'codex-cli'
             ? Boolean(codexStatus?.available && codexStatus?.authenticated)
-            : true,
+            : provider.id === 'gemini-web'
+                ? browserSessionState.get('gemini-web').state === 'authenticated'
+                : true,
         unavailableHint: provider.id === 'codex-cli' && !codexStatus?.authenticated
             ? (codexStatus?.error || '请先配置并登录 Codex CLI')
-            : ''
+            : provider.id === 'gemini-web'
+                ? '请先在 Browser Automation 中登录并验证 Gemini Web'
+                : ''
     }));
     res.json({ providers, current: describeOptimizerSettings(req.app) });
 });

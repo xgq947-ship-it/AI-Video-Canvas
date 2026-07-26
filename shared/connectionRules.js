@@ -53,6 +53,7 @@ export const isValidNodeConnection = (parentType, childType) => {
     return (
       childType === NODE.IMAGE ||
       childType === NODE.VIDEO ||
+      childType === NODE.PRODUCT_SCENE_REPLACE ||
       childType === NODE.AUDIO ||
       childType === NODE.SUBTITLE
     );
@@ -61,7 +62,7 @@ export const isValidNodeConnection = (parentType, childType) => {
   // 非 TEXT 来源不能连向音轨 / 字幕
   if (AUDIO_KINDS.includes(childType) || childType === NODE.SUBTITLE) return false;
 
-  // 产品场景替换只接收图片类输入；输出仍可进入后续图片/视频链路。
+  // 产品短视频生成接收两张图片和一个文本提示词。
   if (childType === NODE.PRODUCT_SCENE_REPLACE) {
     return parentType === NODE.IMAGE || parentType === NODE.IMAGE_EDITOR;
   }

@@ -51,6 +51,8 @@ interface CodexStatus {
     };
 }
 
+interface BrowserSession { state: string; message?: string | null; }
+
 interface ApiKeySettingsModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -85,6 +87,8 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
     const [initialOptimizer, setInitialOptimizer] = useState<{ provider: string; models: Record<string, string> }>({ provider: 'deepseek', models: {} });
     const [codexStatus, setCodexStatus] = useState<CodexStatus | null>(null);
     const [isCodexBusy, setIsCodexBusy] = useState(false);
+    const [browserSessions, setBrowserSessions] = useState<Record<string, BrowserSession>>({});
+    const [browserBusy, setBrowserBusy] = useState(false);
 
     const applyCodexStatus = (status: CodexStatus) => {
         setCodexStatus(status);
@@ -129,6 +133,11 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                 }
             }),
             loadCodexStatus()
+            ,fetch('/api/capabilities', { cache: 'no-store' }).then(async response => {
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || '读取 Browser Automation 状态失败');
+                if (!cancelled) setBrowserSessions(result.browserModels?.sessions || {});
+            })
         ])
             .catch(fetchError => {
                 if (!cancelled) setError(fetchError.message || '读取配置失败');
@@ -290,6 +299,31 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
         } finally {
             setIsCodexBusy(false);
         }
+    };
+
+    const handleGeminiBrowser = async (action: 'open' | 'check') => {
+        setBrowserBusy(true);
+        setError('');
+        try {
+            const response = action === 'open'
+                ? await fetch('/api/browser-sessions/gemini-web/reauthenticate', { method: 'POST' })
+                : await fetch('/api/browser-sessions/check', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ providers: ['gemini-web'], force: true })
+                });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || 'Gemini Web 操作失败');
+            setBrowserSessions(current => result.sessions || (result.session
+                ? { ...current, 'gemini-web': result.session }
+                : current));
+            if (action === 'check') {
+                const optimizerResponse = await fetch('/api/settings/optimizer', { cache: 'no-store' });
+                const optimizerResult = await optimizerResponse.json().catch(() => ({}));
+                if (optimizerResponse.ok) setOptimizerProviders(optimizerResult.providers || []);
+            }
+        } catch (browserError) {
+            setError(browserError instanceof Error ? browserError.message : 'Gemini Web 操作失败');
+        } finally { setBrowserBusy(false); }
     };
 
     if (!isOpen) return null;
@@ -478,6 +512,21 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                             {codexStatus.login?.running ? '请在浏览器完成登录' : '登录 ChatGPT'}
                                         </button>
                                     )}
+                                </div>
+                            </section>
+
+                            <section className={`rounded-2xl border p-5 transition-colors ${sectionSurface}`}>
+                                <div className="mb-1 flex items-center justify-between gap-3">
+                                    <div className="flex items-center gap-2"><Sparkles size={14} className="text-cyan-400" /><h3 className="text-sm font-medium">Gemini Web Browser Automation</h3></div>
+                                    <span className={`text-[11px] ${browserSessions['gemini-web']?.state === 'authenticated' ? 'text-emerald-400' : browserSessions['gemini-web']?.state === 'checking' ? 'text-blue-400' : 'text-amber-400'}`}>
+                                        {browserSessions['gemini-web']?.state === 'authenticated' ? '已验证' : browserSessions['gemini-web']?.state === 'checking' ? '检查中' : browserSessions['gemini-web']?.state === 'expired' ? '登录失效' : '未登录'}
+                                    </span>
+                                </div>
+                                <p className={`mb-3 text-[11px] leading-5 ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>图片、视频、识图和提示词优化共用 Evan 专属 Chrome Profile，不读取日常 Chrome。</p>
+                                {browserSessions['gemini-web']?.message && <p className="mb-3 text-[11px] text-amber-400">{browserSessions['gemini-web'].message}</p>}
+                                <div className="flex gap-2">
+                                    <button type="button" disabled={browserBusy} onClick={() => void handleGeminiBrowser('open')} className="flex items-center gap-1.5 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-semibold text-black disabled:opacity-50"><LogIn size={13} />打开登录窗口</button>
+                                    <button type="button" disabled={browserBusy} onClick={() => void handleGeminiBrowser('check')} className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs disabled:opacity-50 ${isDark ? 'border-neutral-700' : 'border-neutral-300'}`}>{browserBusy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}检查登录状态</button>
                                 </div>
                             </section>
 

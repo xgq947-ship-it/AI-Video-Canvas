@@ -23,6 +23,12 @@ import {
 } from '../../../shared/promptOptimizationProfiles.js';
 import { shouldUseReferenceImages, usesReferenceMaterialsOnly } from '../../utils/videoModelCapabilities.js';
 import { buildReverseImagePromptInstruction, type ReverseImagePromptMode } from '../../../shared/reverseImagePrompt.js';
+import {
+    IMAGE_GENERATION_PROVIDERS,
+    VIDEO_GENERATION_PROVIDERS,
+    supportedImageOutputCounts,
+    type VideoGenerationProvider,
+} from '../../../shared/generationProviders.js';
 
 interface NodeControlsProps {
     workflowId?: string;
@@ -61,93 +67,33 @@ const VIDEO_DURATIONS = [5, 6, 8, 10];
 // aspectRatios: Supported aspect ratios (most video models support 16:9 and 9:16)
 const VIDEO_ASPECT_RATIOS = ["16:9", "9:16"];
 
-interface VideoModelOption {
-    id: string;
-    name: string;
-    provider: 'google' | 'workflow' | 'seedance';
-    supportsTextToVideo: boolean;
-    supportsImageToVideo: boolean;
+type VideoModelOption = VideoGenerationProvider & {
     supportsMultiImage: boolean;
-    supportsIngredients?: boolean; // Google Flow Ingredients：多参考图合成（≥2 张自动触发）
-    supportsAudio?: boolean;
+    supportsIngredients: boolean;
+    supportsAudio: boolean;
     durations: number[];
-    resolutions: string[];
-    durationResolutionMap?: Record<number, string[]>;
     aspectRatios: string[];
-}
+    durationResolutionMap?: Record<number, string[]>;
+};
 
-const VIDEO_MODELS: VideoModelOption[] = [
-    { id: 'google-flow-omni-flash', name: 'Google Flow · Omni Flash', provider: 'workflow', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, supportsIngredients: true, durations: [4, 6, 8, 10], resolutions: ['自动'], aspectRatios: ['16:9', '9:16'] },
-    { id: 'google-flow-veo-3-1-lite', name: 'Google Flow · Veo 3.1 - Lite', provider: 'workflow', supportsTextToVideo: false, supportsImageToVideo: true, supportsMultiImage: false, supportsIngredients: true, durations: [], resolutions: ['自动'], aspectRatios: ['16:9', '9:16'] },
-    { id: 'jimeng-seedance-2-0-mini', name: '即梦 · Seedance 2.0 mini', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
-    { id: 'jimeng-seedance-2-0-fast', name: '即梦 · Seedance 2.0 Fast VIP', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
-    { id: 'jimeng-seedance-2-0', name: '即梦 · Seedance 2.0 VIP', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
-    { id: 'jimeng-seedance-2-0-fast-standard', name: '即梦 · Seedance 2.0 Fast', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
-    { id: 'jimeng-seedance-2-0-standard', name: '即梦 · Seedance 2.0', provider: 'workflow', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsIngredients: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'], aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] },
-    // 供应商仅保留当前主模型，避免同一能力出现多套过时入口。
-    { id: 'seedance-2-0', name: 'Seedance 2.0', provider: 'seedance', supportsTextToVideo: true, supportsImageToVideo: true, supportsMultiImage: true, supportsAudio: true, durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'], aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] },
-];
+const VIDEO_MODELS: VideoModelOption[] = VIDEO_GENERATION_PROVIDERS.map(model => ({
+    ...model,
+    supportsMultiImage: model.supportsMultipleReferenceImages,
+    supportsIngredients: model.supportsMultipleReferenceImages,
+    supportsAudio: model.supportsNativeAudio,
+    durations: model.supportedDurations,
+    aspectRatios: model.supportedAspectRatios,
+}));
 
 // Image model versions with metadata
 // supportsImageToImage: Can use a single reference image (for image-to-image transformation)
 // supportsMultiImage: Can use multiple reference images (2-4) via Multi-Image API
 // aspectRatios: Supported aspect ratios for the model
-const IMAGE_MODELS = [
-    {
-        id: 'codex-imagegen',
-        name: 'Codex 生图',
-        provider: 'codex',
-        supportsImageToImage: true,
-        supportsMultiImage: true,
-        resolutions: ["Auto"],
-        aspectRatios: ["Auto", "1:1", "9:16", "16:9", "3:4", "4:3", "3:2", "2:3", "5:4", "4:5", "21:9"]
-    },
-    {
-        id: 'google-flow-nano-banana-pro',
-        name: 'Google Flow · Nano Banana Pro',
-        provider: 'workflow',
-        supportsImageToImage: true,
-        supportsMultiImage: true,
-        resolutions: ["自动"],
-        aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"]
-    },
-    {
-        id: 'google-flow-nano-banana-2',
-        name: 'Google Flow · Nano Banana 2',
-        provider: 'workflow',
-        supportsImageToImage: true,
-        supportsMultiImage: true,
-        resolutions: ["自动"],
-        aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"]
-    },
-    {
-        id: 'google-flow-nano-banana-2-lite',
-        name: 'Google Flow · Nano Banana 2 Lite',
-        provider: 'workflow',
-        supportsImageToImage: true,
-        supportsMultiImage: true,
-        resolutions: ["自动"],
-        aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"]
-    },
-    {
-        id: 'jimeng-image-5-0-pro',
-        name: '即梦 · 图片 5.0 Pro',
-        provider: 'workflow',
-        supportsImageToImage: true,
-        supportsMultiImage: true,
-        resolutions: ["2K", "4K"],
-        aspectRatios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"]
-    },
-    {
-        id: 'jimeng-image-5-0-lite',
-        name: '即梦 · 图片 5.0 Lite',
-        provider: 'workflow',
-        supportsImageToImage: true,
-        supportsMultiImage: true,
-        resolutions: ["2K", "4K"],
-        aspectRatios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"]
-    },
-];
+const IMAGE_MODELS = IMAGE_GENERATION_PROVIDERS.map(model => ({
+    ...model,
+    supportsMultiImage: model.supportsMultipleReferenceImages,
+    aspectRatios: model.supportedAspectRatios,
+}));
 
 const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     workflowId,
@@ -611,13 +557,10 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
 
     // Image model selection logic
     const currentImageModel = IMAGE_MODELS.find(m => m.id === data.imageModel) || IMAGE_MODELS[0];
-    const isBrowserBatchImageModel =
-        !isVideoNode && (
-            currentImageModel.id.startsWith('jimeng-image-') ||
-            currentImageModel.id.startsWith('google-flow-')
-        );
+    const imageOutputCounts = supportedImageOutputCounts(currentImageModel.id);
+    const isBrowserBatchImageModel = !isVideoNode && imageOutputCounts.length > 1;
     const imageGenerationCount = Math.min(
-        4,
+        imageOutputCounts[imageOutputCounts.length - 1],
         Math.max(1, Number(data.imageGenerationCount) || 1)
     );
 
@@ -1254,7 +1197,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                         {availableImageModels.filter(m => m.provider === 'workflow').length > 0 && (
                                             <>
                                                 <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f] border-t border-neutral-700">
-                                                    Evan 专属 Chrome（Google Flow / 即梦）
+                                                    Evan 专属 Chrome（Flow / 即梦 / Gemini）
                                                 </div>
                                                 {availableImageModels.filter(m => m.provider === 'workflow').map(model => {
                                                     const isUnavailable = isModelUnavailable(model.id);
@@ -1397,10 +1340,10 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                                 生成数量
                                             </div>
                                             <div className="mt-0.5 text-[9px] text-neutral-600">
-                                                单次最多生成 4 张
+                                                单次最多生成 {imageOutputCounts.length} 张
                                             </div>
                                         </div>
-                                        {[1, 2, 3, 4].map(count => (
+                                        {imageOutputCounts.map(count => (
                                             <button
                                                 key={count}
                                                 type="button"
@@ -1546,6 +1489,16 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                         {/* Advanced Settings Content - Only for Video nodes */}
                         {showAdvanced && isVideoNode && (
                             <div className="mt-3 space-y-3">
+                                {currentVideoModel.supportsAudio && (
+                                    <label className="flex items-center justify-between rounded-lg bg-neutral-800 px-3 py-2 text-xs text-neutral-300">
+                                        <span>原生音频（环境音、音效与台词）</span>
+                                        <input
+                                            type="checkbox"
+                                            checked={data.generateAudio !== false}
+                                            onChange={event => onUpdate(data.id, { generateAudio: event.target.checked })}
+                                        />
+                                    </label>
+                                )}
                                 {/* Frame Inputs - Show when 2+ nodes are connected */}
                                 {(connectedImageNodes.length >= 2 || (useReferenceMaterials && connectedImageNodes.length >= 1)) && (
                                     <div className="space-y-2">

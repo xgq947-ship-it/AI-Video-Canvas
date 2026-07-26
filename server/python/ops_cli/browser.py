@@ -23,10 +23,11 @@ MANAGED_RESIDUE_MIN_AGE_SECONDS = 2 * 60 * 60
 PAGE_SNAPSHOT_TIMEOUT_MS = 2000
 PAGE_DEFAULT_TIMEOUT_MS = 30000
 
-_DEDUP_HOSTS: set[str] = {"labs.google", "jimeng.jianying.com"}
+_DEDUP_HOSTS: set[str] = {"labs.google", "jimeng.jianying.com", "gemini.google.com"}
 LOGIN_URLS = {
     "google-flow": "https://labs.google/fx/tools/flow",
     "jimeng": "https://jimeng.jianying.com/ai-tool/generate?type=video",
+    "gemini-web": "https://gemini.google.com/app",
 }
 
 LOGIN_PROBE_TIMEOUT_SECONDS = 25
@@ -54,6 +55,16 @@ _GOOGLE_SIGNED_OUT_HOSTS = {"accounts.google.com", "www.google.com", "google.com
 
 def _probe_flow_login(page: Any) -> dict[str, Any]:
     """只读确认 Google 账号登录态（Flow 的前提），按重定向判定。"""
+    return probe_google_account_login(page)
+
+
+def probe_google_account_login(page: Any) -> dict[str, Any]:
+    """按 myaccount.google.com 的重定向判定 Google 账号登录态。
+
+    Flow 与 Gemini 都没有独立于 Google 账号的授权步骤，登录态判定共用这一个信号：
+    未登录必定被重定向离开 myaccount.google.com。只有探针超时才会返回 unconfirmed，
+    页面 DOM 的形状永远不参与判定。
+    """
     page.goto(GOOGLE_ACCOUNT_PROBE_URL, wait_until="domcontentloaded", timeout=60_000)
     deadline = time.monotonic() + LOGIN_PROBE_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
@@ -109,6 +120,12 @@ def _probe_jimeng_login(page: Any) -> dict[str, Any]:
         "evidence": "account-api-unconfirmed",
         "message": "即梦账号接口暂时无法确认登录状态",
     }
+
+
+def _probe_gemini_login(page: Any) -> dict[str, Any]:
+    from ops_cli.platforms._gemini_web_common import probe_gemini_login
+
+    return probe_gemini_login(page)
 
 
 def check_browser_logins(providers: list[str] | None = None) -> CommandResponse:
@@ -185,11 +202,12 @@ def check_browser_logins(providers: list[str] | None = None) -> CommandResponse:
         for provider in selected:
             page = context.new_page()
             try:
-                results[provider] = (
-                    _probe_flow_login(page)
-                    if provider == "google-flow"
-                    else _probe_jimeng_login(page)
-                )
+                if provider == "google-flow":
+                    results[provider] = _probe_flow_login(page)
+                elif provider == "jimeng":
+                    results[provider] = _probe_jimeng_login(page)
+                else:
+                    results[provider] = _probe_gemini_login(page)
             except Exception as exc:
                 results[provider] = {
                     "authenticated": False,

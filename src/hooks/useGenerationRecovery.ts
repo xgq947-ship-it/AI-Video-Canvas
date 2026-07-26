@@ -185,21 +185,24 @@ export const useGenerationRecovery = ({
                 return;
             }
 
-            if (job.status === 'completed' && job.resultUrl) {
+            if ((job.status === 'completed' || job.status === 'partial_failed') && (job.resultUrl || job.resultUrls?.length)) {
                 onProductSceneCompleted?.(node, job);
                 updateNode(nodeId, {
-                    status: NodeStatus.SUCCESS,
+                    status: job.status === 'partial_failed' ? NodeStatus.ERROR : NodeStatus.SUCCESS,
                     prompt: job.prompt || node.prompt,
-                    productSceneJobStatus: 'completed',
+                    productSceneJobStatus: job.status,
                     productSceneStage: undefined,
                     productSceneStageLabel: job.stageLabel,
                     productSceneRecognitionModel: `${job.recognitionProvider} · ${job.recognitionModel}`,
                     productSceneResultNodeId: job.resultNodeId,
+                    productSceneQueueCurrent: job.currentVideoIndex,
+                    productSceneQueueTotal: job.videoTasks?.length,
+                    productSceneVideoTasks: job.videoTasks,
                     sceneAnalysis: job.sceneAnalysis,
                     personaAnalysis: job.personaAnalysis,
                     compositionAnalysis: job.compositionAnalysis,
                     productAnalysis: job.productAnalysis,
-                    errorMessage: undefined,
+                    errorMessage: job.status === 'partial_failed' ? job.error : undefined,
                     generationStartTime: undefined,
                 });
                 return;
@@ -207,11 +210,21 @@ export const useGenerationRecovery = ({
 
             // 轮询是 1.5s 一次且任务可能跑好几分钟：阶段没变就不要写节点，
             // 否则整块画布每 1.5s 重渲染一次，并把项目一直标记成待自动保存。
-            const nextStage = job.stage === 'generating' ? 'generating' : 'analyzing';
+            const nextStage: NodeData['productSceneStage'] = job.stage === 'generating_images'
+                ? 'generating_images'
+                : job.stage === 'images_completed'
+                    ? 'images_completed'
+                    : job.stage === 'generating_videos'
+                        ? 'generating_videos'
+                        : 'analyzing';
             const stageUnchanged = node.productSceneJobStatus === job.status &&
                 node.productSceneStage === nextStage &&
                 node.productSceneStageLabel === job.stageLabel;
             if (stageUnchanged) return;
+
+            if (job.resultUrl || job.resultUrls?.length) {
+                onProductSceneCompleted?.(node, job);
+            }
 
             updateNode(nodeId, {
                 productSceneJobStatus: job.status,
@@ -222,6 +235,9 @@ export const useGenerationRecovery = ({
                 personaAnalysis: job.personaAnalysis,
                 compositionAnalysis: job.compositionAnalysis,
                 productAnalysis: job.productAnalysis,
+                productSceneQueueCurrent: job.currentVideoIndex,
+                productSceneQueueTotal: job.videoTasks?.length,
+                productSceneVideoTasks: job.videoTasks,
                 prompt: job.prompt || node.prompt,
                 errorMessage: undefined,
             });
@@ -236,9 +252,15 @@ export const useGenerationRecovery = ({
             const latest = await getLatestProductSceneJob(nodeId, workflowId);
             const node = nodesRef.current.find(item => item.id === nodeId);
             if (!latest || !node) return;
-            const hasResultNode = nodesRef.current.some(item =>
-                item.id === latest.resultNodeId || item.productSceneSourceJobId === latest.id
-            );
+            const availableResultIds = [
+                ...(latest.resultNodeIds || [latest.resultNodeId]).filter(Boolean),
+                ...(latest.videoTasks || []).filter(task => task.status === 'success').map(task => task.videoNodeId),
+            ];
+            const hasResultNode = availableResultIds.length > 0
+                && availableResultIds.every(resultId => nodesRef.current.some(item => item.id === resultId));
+            if (!hasResultNode && (latest.resultUrl || latest.resultUrls?.length)) {
+                onProductSceneCompleted?.(node, latest);
+            }
             if (latest.id === node.productSceneJobId && (latest.status !== 'completed' || hasResultNode)) return;
 
             const commonUpdates: Partial<NodeData> = {
@@ -249,18 +271,21 @@ export const useGenerationRecovery = ({
                 personaAnalysis: latest.personaAnalysis,
                 compositionAnalysis: latest.compositionAnalysis,
                 productAnalysis: latest.productAnalysis,
+                productSceneQueueCurrent: latest.currentVideoIndex,
+                productSceneQueueTotal: latest.videoTasks?.length,
+                productSceneVideoTasks: latest.videoTasks,
                 prompt: latest.prompt || node.prompt,
             };
-            if (latest.status === 'completed' && latest.resultUrl) {
+            if ((latest.status === 'completed' || latest.status === 'partial_failed') && (latest.resultUrl || latest.resultUrls?.length)) {
                 onProductSceneCompleted?.(node, latest);
                 updateNode(nodeId, {
                     ...commonUpdates,
-                    status: NodeStatus.SUCCESS,
+                    status: latest.status === 'partial_failed' ? NodeStatus.ERROR : NodeStatus.SUCCESS,
                     productSceneStage: undefined,
                     productSceneStageLabel: latest.stageLabel,
                     productSceneResultNodeId: latest.resultNodeId,
                     generationStartTime: undefined,
-                    errorMessage: undefined,
+                    errorMessage: latest.status === 'partial_failed' ? latest.error : undefined,
                 });
                 return;
             }
@@ -278,7 +303,13 @@ export const useGenerationRecovery = ({
             updateNode(nodeId, {
                 ...commonUpdates,
                 status: NodeStatus.LOADING,
-                productSceneStage: latest.stage === 'generating' ? 'generating' : 'analyzing',
+                productSceneStage: latest.stage === 'generating_images'
+                    ? 'generating_images'
+                    : latest.stage === 'images_completed'
+                        ? 'images_completed'
+                        : latest.stage === 'generating_videos'
+                            ? 'generating_videos'
+                            : 'analyzing',
                 productSceneStageLabel: latest.stageLabel,
                 errorMessage: undefined,
             });

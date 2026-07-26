@@ -12,6 +12,7 @@ export const JIMENG_FAST_VIDEO_MODEL = 'jimeng-seedance-2-0-fast';
 export const JIMENG_MINI_VIDEO_MODEL = 'jimeng-seedance-2-0-mini';
 export const JIMENG_STANDARD_FAST_VIDEO_MODEL = 'jimeng-seedance-2-0-fast-standard';
 export const JIMENG_STANDARD_VIDEO_MODEL = 'jimeng-seedance-2-0-standard';
+export const GEMINI_WEB_VIDEO_MODEL = 'gemini-web-video';
 const JIMENG_VIDEO_MODELS = new Set([
     JIMENG_MINI_VIDEO_MODEL,
     JIMENG_FAST_VIDEO_MODEL,
@@ -24,7 +25,8 @@ const JIMENG_VIDEO_MODELS = new Set([
 export const BROWSER_WORKFLOW_VIDEO_MODELS = new Set([
     GOOGLE_FLOW_VIDEO_MODEL,
     GOOGLE_FLOW_VEO_3_1_LITE_VIDEO_MODEL,
-    ...JIMENG_VIDEO_MODELS
+    ...JIMENG_VIDEO_MODELS,
+    GEMINI_WEB_VIDEO_MODEL
 ]);
 
 export function isBrowserWorkflowVideoModel(videoModel) {
@@ -36,7 +38,7 @@ export function isBrowserWorkflowVideoModel(videoModel) {
  * 即梦：连 1 张也是参考素材，不是首帧。
  */
 export function usesReferenceMaterialsOnly(videoModel) {
-    return JIMENG_VIDEO_MODELS.has(videoModel);
+    return JIMENG_VIDEO_MODELS.has(videoModel) || videoModel === GEMINI_WEB_VIDEO_MODEL;
 }
 
 /**

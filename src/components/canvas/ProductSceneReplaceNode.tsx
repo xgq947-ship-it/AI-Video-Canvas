@@ -1,15 +1,24 @@
 import React from 'react';
-import { Box, Image as ImageIcon, Loader2, PackageCheck, Ruler, Tags, UserRound, WandSparkles } from 'lucide-react';
+import { Box, FileText, Film, Image as ImageIcon, Loader2, PackageCheck, Ruler, Tags, UserRound, WandSparkles, X } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { NodeConnectors } from './NodeConnectors';
 import {
   inferProductSceneAspectRatio,
-  PRODUCT_SCENE_ASPECT_RATIOS,
   validateProductDimensions,
 } from '../../../shared/productSceneReplacement.js';
 import { MASSAGE_EQUIPMENT_SECTIONS } from '../../../shared/massageEquipmentCategories.js';
+import {
+  IMAGE_GENERATION_PROVIDERS,
+  VIDEO_GENERATION_PROVIDERS,
+  getImageGenerationProvider,
+  getVideoGenerationProvider,
+  normalizeImageAspectRatio,
+  supportedImageOutputCounts,
+} from '../../../shared/generationProviders.js';
+import { cancelProductSceneJob } from '../../services/generationService';
 
 interface Props {
+  workflowId?: string;
   data: NodeData;
   allNodes: NodeData[];
   selected: boolean;
@@ -21,15 +30,10 @@ interface Props {
   onConnectorDown: (event: React.PointerEvent, id: string, side: 'left' | 'right') => void;
 }
 
-const IMAGE_MODELS = [
-  { id: 'google-flow-nano-banana-pro', label: 'Google Flow · Nano Banana Pro' },
-  { id: 'google-flow-nano-banana-2', label: 'Google Flow · Nano Banana 2' },
-  { id: 'google-flow-nano-banana-2-lite', label: 'Google Flow · Nano Banana 2 Lite' },
-];
-
 const previewUrl = (node?: NodeData) => node?.resultUrl || node?.editorBackgroundUrl;
 
 export const ProductSceneReplaceNode: React.FC<Props> = ({
+  workflowId,
   data,
   allNodes,
   selected,
@@ -48,6 +52,9 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
       (node.type === NodeType.IMAGE || node.type === NodeType.IMAGE_EDITOR) &&
       previewUrl(node)
     ));
+  const connectedTextNodes = (data.parentIds || [])
+    .map(id => allNodes.find(node => node.id === id))
+    .filter((node): node is NodeData => Boolean(node?.type === NodeType.TEXT));
 
   const availableIds = new Set(connectedImages.map(node => node.id));
   const sceneId = data.sceneReferenceId && availableIds.has(data.sceneReferenceId)
@@ -58,22 +65,49 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
     : connectedImages.find(node => node.id !== sceneId)?.id || '';
   const sceneNode = allNodes.find(node => node.id === sceneId);
   const productNode = allNodes.find(node => node.id === productId);
+  const promptSourceId = data.productSceneVideoPromptSourceId && connectedTextNodes.some(node => node.id === data.productSceneVideoPromptSourceId)
+    ? data.productSceneVideoPromptSourceId
+    : connectedTextNodes[0]?.id || '';
+  const promptNode = allNodes.find(node => node.id === promptSourceId);
+  const imageProvider = getImageGenerationProvider(data.imageModel) || IMAGE_GENERATION_PROVIDERS[1];
+  const imageCounts = supportedImageOutputCounts(imageProvider.id);
+  const imageCount = Math.min(imageCounts[imageCounts.length - 1], Math.max(1, data.productSceneImageCount || 1));
+  const videoProvider = getVideoGenerationProvider(data.productSceneVideoModel) || VIDEO_GENERATION_PROVIDERS.find(model => model.id === 'gemini-web-video')!;
+  const videoRatios = videoProvider.supportedAspectRatios;
+  const videoDurations = videoProvider.supportedDurations;
   const dimensions = data.productDimensions || { length: 0, width: 0, height: 0, unit: 'cm' as const };
   const dimensionError = validateProductDimensions(dimensions);
-  const canGenerate = Boolean(sceneNode && productNode && !dimensionError && data.status !== NodeStatus.LOADING);
+  const missingVideoPrompt = data.productSceneAutoGenerateVideo && !promptNode?.prompt?.trim();
+  const canGenerate = Boolean(sceneNode && productNode && !dimensionError && !missingVideoPrompt && data.status !== NodeStatus.LOADING);
 
   React.useEffect(() => {
     const updates: Partial<NodeData> = {};
     if (sceneId !== (data.sceneReferenceId || '')) updates.sceneReferenceId = sceneId || undefined;
     if (productId !== (data.productReferenceId || '')) updates.productReferenceId = productId || undefined;
+    if (promptSourceId !== (data.productSceneVideoPromptSourceId || '')) updates.productSceneVideoPromptSourceId = promptSourceId || undefined;
     if (sceneId && data.sceneAspectReferenceId !== sceneId) {
       updates.sceneAspectReferenceId = sceneId;
-      updates.aspectRatio = inferProductSceneAspectRatio(sceneNode?.resultAspectRatio || sceneNode?.aspectRatio, '1:1');
+      // 场景图推断出的画幅不一定在当前图片模型的能力表里，写回前先收口，
+      // 否则下拉显示的是收口后的值、真正提交的却是不支持的原值。
+      updates.aspectRatio = normalizeImageAspectRatio(
+        imageProvider.id,
+        inferProductSceneAspectRatio(sceneNode?.resultAspectRatio || sceneNode?.aspectRatio, '1:1')
+      );
     }
     if (Object.keys(updates).length > 0) {
       onUpdate(data.id, updates);
     }
-  }, [data.id, data.productReferenceId, data.sceneAspectReferenceId, data.sceneReferenceId, onUpdate, productId, sceneId, sceneNode?.aspectRatio, sceneNode?.resultAspectRatio]);
+  }, [data.id, data.productReferenceId, data.productSceneVideoPromptSourceId, data.sceneAspectReferenceId, data.sceneReferenceId, imageProvider.id, onUpdate, productId, promptSourceId, sceneId, sceneNode?.aspectRatio, sceneNode?.resultAspectRatio]);
+
+  const handleCancel = async () => {
+    if (!workflowId || !data.productSceneJobId) return;
+    try {
+      await cancelProductSceneJob(data.productSceneJobId, workflowId);
+      onUpdate(data.id, { productSceneStageLabel: '正在结束当前任务，后续视频将不再提交' });
+    } catch (error) {
+      onUpdate(data.id, { errorMessage: error instanceof Error ? error.message : '取消队列失败' });
+    }
+  };
 
   const updateDimension = (field: 'length' | 'width' | 'height', raw: string) => {
     onUpdate(data.id, {
@@ -130,8 +164,8 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
       <NodeConnectors nodeId={data.id} onConnectorDown={onConnectorDown} canvasTheme={canvasTheme} />
       <div className={`w-[460px] overflow-hidden rounded-2xl border shadow-2xl transition-all duration-200 ${isDark ? 'border-neutral-700 bg-[#101010]' : 'border-neutral-200 bg-white'} ${selected ? 'border-cyan-500 ring-1 ring-cyan-500/30' : ''}`}>
         <div className={`flex items-center justify-between border-b px-4 py-3 ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}>
-          <div className="flex items-center gap-2 font-semibold"><WandSparkles size={17} className="text-cyan-400" />产品场景替换</div>
-          <span className="text-[11px] text-neutral-500">场景反推 · 全新人物</span>
+          <div className="flex items-center gap-2 font-semibold"><WandSparkles size={17} className="text-cyan-400" />产品短视频生成</div>
+          <span className="text-[11px] text-neutral-500">替换图 → 视频队列</span>
         </div>
 
         <div className="space-y-3 p-3" onPointerDown={event => event.stopPropagation()}>
@@ -139,6 +173,19 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
             {referenceCard('场景参考', sceneId, 'scene', <ImageIcon size={14} className="text-blue-400" />)}
             {referenceCard('我方产品', productId, 'product', <PackageCheck size={14} className="text-emerald-400" />)}
           </div>
+
+          <label className={`block rounded-xl border p-3 ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-200 bg-neutral-50'}`}>
+            <span className="mb-2 flex items-center gap-1.5 text-xs font-semibold"><FileText size={14} className="text-cyan-400" />短视频提示词来源</span>
+            <select
+              value={promptSourceId}
+              onChange={event => onUpdate(data.id, { productSceneVideoPromptSourceId: event.target.value || undefined })}
+              className={`w-full rounded-lg border px-2.5 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#242424]' : 'border-neutral-300 bg-white'}`}
+            >
+              <option value="">未连接文本节点（仍可只生成图片）</option>
+              {connectedTextNodes.map((node, index) => <option key={node.id} value={node.id}>{node.title || `短视频提示词 ${index + 1}`}</option>)}
+            </select>
+            {promptNode?.prompt && <p className="mt-2 line-clamp-2 text-[11px] text-neutral-500">{promptNode.prompt}</p>}
+          </label>
 
           <label className={`block rounded-xl border p-3 ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-200 bg-neutral-50'}`}>
             <span className="mb-2 flex items-center gap-1.5 text-xs font-semibold">
@@ -207,42 +254,110 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
           </div>
 
           <div className={`rounded-lg px-3 py-2 text-[11px] ${isDark ? 'bg-neutral-900 text-neutral-400' : 'bg-neutral-100 text-neutral-600'}`}>
-            <div>识图：{data.productSceneRecognitionModel || 'Codex CLI · gpt-5.6-sol'}</div>
-            <div className="mt-0.5">生图：{IMAGE_MODELS.find(model => model.id === data.imageModel)?.label || 'Google Flow · Nano Banana Pro'}</div>
+            <div>识图：{data.productSceneRecognitionModel || (data.productSceneRecognitionProvider === 'gemini-web' ? 'Gemini Web' : 'Codex CLI · gpt-5.6-sol')}</div>
+            <div className="mt-0.5">生图：{imageProvider.name} · {imageCount} 张</div>
+            {data.productSceneAutoGenerateVideo && <div className="mt-0.5">视频：{videoProvider.name}</div>}
             {data.status === NodeStatus.LOADING && (
-              <div className="mt-1 font-medium text-cyan-400">当前阶段：{data.productSceneStageLabel || (data.productSceneStage === 'generating' ? 'Google Flow 正在生成图片' : 'Codex 正在识别两张图片')}</div>
+              <div className="mt-1 font-medium text-cyan-400">当前阶段：{data.productSceneStageLabel || '正在处理'}</div>
             )}
           </div>
 
-          <div className="flex gap-2">
+          <div className="grid grid-cols-2 gap-2">
+            <select
+              aria-label="识图模型"
+              value={data.productSceneRecognitionProvider || 'codex-cli'}
+              onChange={event => onUpdate(data.id, { productSceneRecognitionProvider: event.target.value as 'codex-cli' | 'gemini-web' })}
+              className={`rounded-xl border px-3 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}
+            >
+              <option value="codex-cli">Codex CLI 识图</option>
+              <option value="gemini-web">Gemini Web 识图</option>
+            </select>
             <select
               value={data.imageModel || 'google-flow-nano-banana-pro'}
-              onChange={event => onUpdate(data.id, { imageModel: event.target.value })}
-              className={`min-w-0 flex-1 rounded-xl border px-3 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}
+              onChange={event => {
+                const next = getImageGenerationProvider(event.target.value)!;
+                onUpdate(data.id, {
+                  imageModel: next.id,
+                  productSceneImageCount: Math.min(data.productSceneImageCount || 1, next.maxOutputCount),
+                  aspectRatio: next.supportedAspectRatios.includes(data.aspectRatio) ? data.aspectRatio : next.supportedAspectRatios[0],
+                });
+              }}
+              className={`min-w-0 rounded-xl border px-3 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}
             >
-              {IMAGE_MODELS.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}
+              {IMAGE_GENERATION_PROVIDERS.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
             </select>
             <select
               aria-label="输出画幅"
-              value={PRODUCT_SCENE_ASPECT_RATIOS.includes(data.aspectRatio) ? data.aspectRatio : inferProductSceneAspectRatio(sceneNode?.resultAspectRatio || sceneNode?.aspectRatio, '1:1')}
+              value={imageProvider.supportedAspectRatios.includes(data.aspectRatio) ? data.aspectRatio : imageProvider.supportedAspectRatios[0]}
               onChange={event => onUpdate(data.id, { aspectRatio: event.target.value })}
-              className={`w-[82px] rounded-xl border px-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}
+              className={`rounded-xl border px-2 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}
               title="默认匹配场景参考图，也可以手动修改"
             >
-              {PRODUCT_SCENE_ASPECT_RATIOS.map(ratio => <option key={ratio} value={ratio}>{ratio}</option>)}
+              {imageProvider.supportedAspectRatios.filter(ratio => ratio !== 'Auto').map(ratio => <option key={ratio} value={ratio}>{ratio}</option>)}
             </select>
+            {imageCounts.length > 1 ? (
+              <select
+                aria-label="生成图片数量"
+                value={imageCount}
+                onChange={event => onUpdate(data.id, { productSceneImageCount: Number(event.target.value) })}
+                className={`rounded-xl border px-2 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}
+              >
+                {imageCounts.map(count => <option key={count} value={count}>{count} 张图片</option>)}
+              </select>
+            ) : <div className="flex items-center rounded-xl border border-neutral-800 px-3 text-xs text-neutral-500">单张输出</div>}
+          </div>
+
+          <div className={`rounded-xl border p-3 ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-200 bg-neutral-50'}`}>
+            <label className="flex items-center justify-between text-xs font-semibold">
+              <span className="flex items-center gap-1.5"><Film size={14} className="text-violet-400" />自动生成视频</span>
+              <input type="checkbox" checked={data.productSceneAutoGenerateVideo === true} onChange={event => onUpdate(data.id, { productSceneAutoGenerateVideo: event.target.checked })} />
+            </label>
+            {data.productSceneAutoGenerateVideo && (
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                <select
+                  aria-label="视频模型"
+                  value={videoProvider.id}
+                  onChange={event => {
+                    const next = getVideoGenerationProvider(event.target.value)!;
+                    onUpdate(data.id, {
+                      productSceneVideoModel: next.id,
+                      productSceneVideoAspectRatio: next.supportedAspectRatios[0],
+                      productSceneVideoDuration: next.supportedDurations[0],
+                      productSceneVideoGenerateAudio: next.supportsNativeAudio,
+                    });
+                  }}
+                  className={`col-span-3 rounded-lg border px-2 py-2 text-xs ${isDark ? 'border-neutral-700 bg-[#242424]' : 'border-neutral-300 bg-white'}`}
+                >
+                  {VIDEO_GENERATION_PROVIDERS.filter(model => model.supportsImageToVideo).map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+                </select>
+                <select value={data.productSceneVideoAspectRatio || videoRatios[0]} onChange={event => onUpdate(data.id, { productSceneVideoAspectRatio: event.target.value })} className={`rounded-lg border px-2 py-2 text-xs ${isDark ? 'border-neutral-700 bg-[#242424]' : 'border-neutral-300 bg-white'}`}>
+                  {videoRatios.map(ratio => <option key={ratio} value={ratio}>{ratio}</option>)}
+                </select>
+                {videoDurations.length > 0 && <select value={data.productSceneVideoDuration || videoDurations[0]} onChange={event => onUpdate(data.id, { productSceneVideoDuration: Number(event.target.value) })} className={`rounded-lg border px-2 py-2 text-xs ${isDark ? 'border-neutral-700 bg-[#242424]' : 'border-neutral-300 bg-white'}`}>
+                  {videoDurations.map(duration => <option key={duration} value={duration}>{duration} 秒</option>)}
+                </select>}
+                {videoProvider.supportsNativeAudio && <label className="flex items-center gap-1.5 text-[11px]"><input type="checkbox" checked={data.productSceneVideoGenerateAudio !== false} onChange={event => onUpdate(data.id, { productSceneVideoGenerateAudio: event.target.checked })} />原生音频</label>}
+              </div>
+            )}
+            {missingVideoPrompt && <p className="mt-2 text-[11px] text-amber-400">自动视频已开启，请连接包含短视频提示词的文本节点。</p>}
+          </div>
+
+          <div className="flex gap-2">
             <button
               type="button"
               disabled={!canGenerate}
               onClick={() => onGenerate(data.id)}
               className="flex h-11 items-center gap-2 rounded-xl bg-cyan-500 px-4 text-sm font-bold text-black transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
-              title={!sceneNode || !productNode ? '请连接并指定两张图片' : dimensionError || '分析并生成'}
+              title={!sceneNode || !productNode ? '请连接并指定两张图片' : dimensionError || (missingVideoPrompt ? '请连接短视频提示词文本节点' : '分析并生成')}
             >
               {data.status === NodeStatus.LOADING ? <Loader2 size={16} className="animate-spin" /> : <Box size={16} />}
               {data.status === NodeStatus.LOADING
-                ? (data.productSceneStage === 'generating' ? '生成中' : '分析中')
-                : (data.productSceneJobStatus === 'failed' ? '从失败阶段重试' : '一键替换生成')}
+                ? '生成中'
+                : (data.productSceneJobStatus === 'failed' || data.productSceneJobStatus === 'partial_failed' ? '从失败阶段重试' : '一键生成')}
             </button>
+            {data.status === NodeStatus.LOADING && data.productSceneJobId && (
+              <button type="button" onClick={() => void handleCancel()} className="flex h-11 items-center gap-1.5 rounded-xl border border-red-400/30 px-3 text-xs text-red-400 hover:bg-red-400/10"><X size={13} />取消队列</button>
+            )}
           </div>
 
           {data.errorMessage && <div className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-400">{data.errorMessage}</div>}

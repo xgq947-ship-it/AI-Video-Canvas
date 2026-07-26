@@ -7,6 +7,7 @@ const guide = fs.readFileSync(
   new URL('../src/components/modals/StartupSetupGuideModal.tsx', import.meta.url),
   'utf8'
 );
+const server = fs.readFileSync(new URL('../server/index.js', import.meta.url), 'utf8');
 
 test('每次桌面界面启动时主动显示服务连接指南，并可从设置再次打开', () => {
   assert.match(topBar, /useState\(true\)/);
@@ -14,9 +15,11 @@ test('每次桌面界面启动时主动显示服务连接指南，并可从设�
   assert.match(topBar, /setShowSetupGuide\(true\)/);
 });
 
-test('启动指南包含两个浏览器平台、DeepSeek 和 ChatGPT Codex 的真实配置入口', () => {
+test('启动指南包含三个浏览器平台、DeepSeek 和 ChatGPT Codex 的真实配置入口', () => {
   assert.match(guide, /https:\/\/jimeng\.jianying\.com\/ai-tool\/generate\?type=image/);
   assert.match(guide, /https:\/\/labs\.google\/fx\/tools\/flow/);
+  assert.match(guide, /https:\/\/gemini\.google\.com\/app/);
+  assert.match(guide, /providers: \['jimeng', 'google-flow', 'gemini-web'\]/);
   assert.match(guide, /https:\/\/platform\.deepseek\.com\/api_keys/);
   assert.match(guide, /右上角「设置 → 配置 API 密钥 → Codex 服务」/);
   assert.match(guide, /api\/browser-sessions\/\$\{provider\}\/reauthenticate/);
@@ -24,6 +27,7 @@ test('启动指南包含两个浏览器平台、DeepSeek 和 ChatGPT Codex 的�
   assert.match(guide, /打开登录页/);
   assert.match(guide, /检查登录状态/);
   assert.match(guide, /window\.evanDesktop\.openExternal/);
+  assert.match(server, /\['google-flow', 'jimeng', 'gemini-web'\]\.includes\(provider\)/);
 });
 
 test('启动指南读取真实登录、密钥与 Codex 状态而不是展示固定完成状态', () => {

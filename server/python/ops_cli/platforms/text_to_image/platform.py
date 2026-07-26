@@ -12,6 +12,7 @@ import typer
 from ops_cli.capabilities import CapabilitySpec
 from ops_cli.cli_helpers import _execute
 from ops_cli.platforms.text_to_image.providers.google_flow import run_image_generate
+from ops_cli.platforms.text_to_image.providers.gemini_web import run_image_generate as run_gemini_web_image_generate
 from ops_cli.platforms.text_to_image.providers.jimeng import (
     DEFAULT_MODEL as JIMENG_DEFAULT_MODEL,
 )
@@ -26,6 +27,7 @@ def register(app: typer.Typer, capabilities: dict[str, CapabilitySpec]) -> None:
     )
     google_flow_app = typer.Typer(help="Google Flow text-to-image (Nano Banana 2).", no_args_is_help=True)
     jimeng_app = typer.Typer(help="即梦 图片 5.0 text-to-image.", no_args_is_help=True)
+    gemini_web_app = typer.Typer(help="Gemini Apps web text-to-image.", no_args_is_help=True)
 
     @google_flow_app.command("generate")
     def google_flow_generate(
@@ -103,8 +105,28 @@ def register(app: typer.Typer, capabilities: dict[str, CapabilitySpec]) -> None:
             handler=lambda: run_jimeng_image_generate(**params),
         )
 
+    @gemini_web_app.command("generate")
+    def gemini_web_generate(
+        ctx: typer.Context,
+        prompt: str = typer.Option(..., "--prompt"),
+        reference_image: list[str] = typer.Option([], "--reference-image"),
+        aspect_ratio: str = typer.Option("1:1", "--aspect-ratio"),
+        count: int = typer.Option(1, "--count"),
+        output_dir: str | None = typer.Option(None, "--output-dir"),
+        timeout_minutes: int = typer.Option(10, "--timeout-minutes"),
+        dry_run: bool = typer.Option(False, "--dry-run"),
+        execute: bool = typer.Option(False, "--execute"),
+    ) -> None:
+        params = {
+            "prompt": prompt, "reference_images": list(reference_image), "aspect_ratio": aspect_ratio,
+            "count": count, "output_dir": output_dir, "timeout_minutes": timeout_minutes,
+            "dry_run": dry_run, "execute": execute,
+        }
+        _execute(ctx, command_name="ops gemini_web text-to-image generate", params=params, handler=lambda: run_gemini_web_image_generate(**params))
+
     text_to_image_app.add_typer(google_flow_app, name="google-flow")
     text_to_image_app.add_typer(jimeng_app, name="jimeng")
+    text_to_image_app.add_typer(gemini_web_app, name="gemini-web")
     app.add_typer(text_to_image_app, name="text-to-image")
 
     capabilities["text_to_image.google_flow.generate"] = CapabilitySpec(
@@ -124,4 +146,9 @@ def register(app: typer.Typer, capabilities: dict[str, CapabilitySpec]) -> None:
         recovery_policy="interactive_if_tty",
         dry_run_policy="no_browser",
         artifact_types=("image", "png"),
+    )
+    capabilities["text_to_image.gemini_web.generate"] = CapabilitySpec(
+        id="text_to_image.gemini_web.generate", platform="gemini_web", command="text-to-image generate",
+        scenes=("gemini_web/image_generate",), recovery_policy="interactive_if_tty",
+        dry_run_policy="no_browser", artifact_types=("image", "png"),
     )

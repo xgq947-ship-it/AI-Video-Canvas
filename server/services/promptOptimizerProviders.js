@@ -22,6 +22,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { resolveClaudeBin, resolveCodexBin } from './cliPaths.js';
 import { decodeProcessOutput } from '../utils/processOutput.js';
+import { runGeminiWebTextTask } from './geminiWebWorkflow.js';
 
 const CLI_TIMEOUT_MS = 180000;
 // 与 codexImageAutomation.js 一致：优先 ChatGPT.app 内置 codex，未安装再退回 PATH 里的 codex。
@@ -188,6 +189,16 @@ async function runCodexCli({ systemInstruction, userPrompt, model, effort, image
     }
 }
 
+async function runGeminiWeb({ systemInstruction, userPrompt, imageDataUrl, imageDataUrls, libraryDir }) {
+    const references = (Array.isArray(imageDataUrls) ? imageDataUrls : [imageDataUrl]).filter(Boolean);
+    return runGeminiWebTextTask({
+        prompt: `${systemInstruction}\n\n【待处理内容】\n${userPrompt}`,
+        referenceImageInputs: references,
+        libraryDir,
+        timeoutMinutes: 5
+    });
+}
+
 // ---------------------------------------------------------------------------
 // 注册表
 // ---------------------------------------------------------------------------
@@ -216,6 +227,14 @@ export const PROMPT_OPTIMIZER_PROVIDERS = {
         defaultModel: 'gpt-5.6-sol',
         defaultEffort: 'medium',       // model_reasoning_effort：low/medium/high
         run: runCodexCli
+    },
+    'gemini-web': {
+        label: 'Gemini Web（网页）',
+        supportsImage: true,
+        apiKeyField: null,
+        defaultModel: 'Gemini Web',
+        defaultEffort: '',
+        run: runGeminiWeb
     }
 };
 

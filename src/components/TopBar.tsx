@@ -257,7 +257,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                                         : <Globe2 size={16} className="shrink-0 text-cyan-400" />}
                                     <span>
                                         <span className="block font-medium">打开 Evan 专属 Chrome</span>
-                                        <span className="mt-0.5 block text-[10px] text-neutral-500">查看即梦与 Google Flow 页面</span>
+                                        <span className="mt-0.5 block text-[10px] text-neutral-500">查看即梦、Google Flow 与 Gemini 页面</span>
                                     </span>
                                 </button>
                                 <button

@@ -69,6 +69,7 @@ import { CanvasMinimap } from './components/canvas/CanvasMinimap';
 import { CanvasZoomControl } from './components/canvas/CanvasZoomControl';
 import { collectNodeReferences, type NodeReference } from './utils/nodeReferences.js';
 import { upsertProductSceneResultNode } from './utils/productSceneResult.js';
+import { getImageGenerationProvider } from '@/shared/generationProviders.js';
 
 // ============================================================================
 // MAIN COMPONENT
@@ -2141,7 +2142,7 @@ export default function App() {
 
           // Flow / 即梦原生支持一次返回多张图。纯文生图仍向右横排且不连线；
           // 带参考素材时改为纵向排列，并让每张结果都连接同一组参考节点。
-          if (imageModel.startsWith('jimeng-image-') || imageModel.startsWith('google-flow-')) {
+          if (getImageGenerationProvider(imageModel)?.supportsMultipleOutputs) {
             updateNode(sourceId, {
               prompt,
               imageModel,
@@ -2192,7 +2193,7 @@ export default function App() {
               ).map((placement, index) => ({
                 id: crypto.randomUUID(),
                 type: NodeType.IMAGE,
-                title: `${imageModel.startsWith('google-flow-') ? 'Flow' : '即梦'}图片 ${index + 2}`,
+                title: `${getImageGenerationProvider(imageModel)?.name || '生成'} ${index + 2}`,
                 x: placement.x,
                 y: placement.y,
                 prompt,

@@ -18,6 +18,8 @@ from ops_cli.browser import (
 )
 from ops_cli.capabilities import CapabilitySpec, register_capabilities
 from ops_cli.cli_helpers import _execute
+from ops_cli.output import CommandResponse
+from ops_cli.platforms._gemini_web_common import run_text_task
 
 
 app = typer.Typer(help="Ecommerce operations CLI.", no_args_is_help=True)
@@ -79,7 +81,7 @@ def browser_cleanup(
 @browser_app.command("login")
 def browser_login(
     ctx: typer.Context,
-    provider: str = typer.Option(..., "--provider", help="google-flow or jimeng"),
+    provider: str = typer.Option(..., "--provider", help="google-flow, jimeng, or gemini-web"),
 ) -> None:
     _execute(
         ctx,
@@ -92,7 +94,7 @@ def browser_login(
 @browser_app.command("check-login")
 def browser_check_login(
     ctx: typer.Context,
-    provider: list[str] | None = typer.Option(None, "--provider", help="google-flow or jimeng; repeatable"),
+    provider: list[str] | None = typer.Option(None, "--provider", help="google-flow, jimeng, or gemini-web; repeatable"),
 ) -> None:
     _execute(
         ctx,
@@ -136,6 +138,30 @@ register_capabilities(
 )
 
 app.add_typer(browser_app, name="browser")
+
+gemini_web_app = typer.Typer(help="Gemini Apps web text tasks.", no_args_is_help=True)
+
+
+@gemini_web_app.command("ask")
+def gemini_web_ask(
+    ctx: typer.Context,
+    prompt: str = typer.Option(..., "--prompt"),
+    reference_image: list[str] = typer.Option([], "--reference-image"),
+    timeout_minutes: int = typer.Option(5, "--timeout-minutes"),
+) -> None:
+    params = {"prompt": prompt, "reference_images": list(reference_image), "timeout_minutes": timeout_minutes}
+
+    def handler() -> CommandResponse:
+        text = run_text_task(**params)
+        return CommandResponse(success=True, platform="gemini_web", command="ask", data={"text": text})
+
+    _execute(ctx, command_name="ops gemini_web ask", params=params, handler=handler)
+
+
+register_capabilities([
+    CapabilitySpec(id="gemini_web.ask", platform="gemini_web", command="ask", recovery_policy="interactive_if_tty")
+])
+app.add_typer(gemini_web_app, name="gemini-web")
 
 # Discover and register all platforms
 _discover_and_register_platforms(app)

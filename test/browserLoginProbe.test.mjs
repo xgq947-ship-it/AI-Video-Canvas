@@ -127,6 +127,66 @@ print(json.dumps({name: _probe_jimeng_login(FakePage(result)) for name, result i
     assert.equal(results.unknown.reason, 'unconfirmed');
 });
 
+test('Gemini 探针按重定向判定，不再依赖 Gemini 页面 DOM', { skip: !ready }, () => {
+    // 回归：原实现要求 gemini.google.com 上「输入框」与「账号态控件」同时可见才算登录。
+    // 账号头像由 One Google Bar 以 iframe 注入，主文档选不到 —— 已登录用户也永远落到
+    // unconfirmed，界面上就是那句「Gemini 页面结构异常，未获得可用登录证据」。
+    const script = `
+import json, sys
+sys.path.insert(0, '.')
+from ops_cli.platforms._gemini_web_common import probe_gemini_login
+
+class FakePage:
+    def __init__(self, landing):
+        self.url = 'about:blank'
+        self._landing = landing
+    def goto(self, url, **kwargs):
+        self.url = self._landing
+    def wait_for_timeout(self, ms):
+        pass
+
+cases = {
+    'signed-in': 'https://myaccount.google.com/?pli=1',
+    'redirect-to-accounts': 'https://accounts.google.com/ServiceLogin?continue=x',
+    'redirect-to-google': 'https://www.google.com/',
+}
+print(json.dumps({name: probe_gemini_login(FakePage(landing)) for name, landing in cases.items()}))
+`;
+    const results = runPython(script);
+    assert.equal(results['signed-in'].authenticated, true);
+    assert.equal(results['signed-in'].reason, 'authenticated');
+
+    for (const key of ['redirect-to-accounts', 'redirect-to-google']) {
+        assert.equal(results[key].authenticated, false, key);
+        // 明确未登录，而不是含糊的 unconfirmed —— 用户看到的才是可操作的提示。
+        assert.equal(results[key].reason, 'not-authenticated', key);
+        assert.equal(results[key].evidence, 'redirected-to-signin', key);
+    }
+});
+
+test('Gemini 探针不会因页面结构判 unconfirmed，且确认后回到 Gemini 页面', () => {
+    // 静态守卫：不需要 venv。
+    const source = fs.readFileSync(
+        path.join(PYTHON_ROOT, 'ops_cli', 'platforms', '_gemini_web_common.py'),
+        'utf8'
+    );
+    const probe = source.slice(
+        source.indexOf('def probe_gemini_login'),
+        source.indexOf('def _single_visible')
+    );
+    assert.ok(probe.length > 0, '没找到 probe_gemini_login');
+
+    // DOM 形状不能再参与判定，unconfirmed 只能来自探针超时。
+    assert.doesNotMatch(probe, /contenteditable/);
+    assert.doesNotMatch(probe, /gemini-page-unrecognized/);
+    assert.match(probe, /probe_google_account_login/);
+
+    // 探针停在 myaccount.google.com，_ensure_authenticated 必须导航回 Gemini，
+    // 否则后续找输入框/边栏会落在错误的站点上。
+    const ensure = probe.slice(probe.indexOf('def _ensure_authenticated'));
+    assert.match(ensure, /page\.goto\(GEMINI_HOME_URL/);
+});
+
 test('登录检查支持 Profile 缺失快速失败和进程内短期缓存', () => {
     const pythonSource = fs.readFileSync(path.join(PYTHON_ROOT, 'ops_cli', 'browser.py'), 'utf8');
     assert.match(pythonSource, /if not PROFILE_DIR\.exists\(\)/);

@@ -63,7 +63,7 @@ const NODE_TYPE_LABELS: Record<NodeType, string> = {
   [NodeType.VIDEO_EDITOR]: '视频编辑器',
   [NodeType.STORYBOARD]: '分镜管理',
   [NodeType.CAMERA_ANGLE]: '镜头角度',
-  [NodeType.PRODUCT_SCENE_REPLACE]: '产品场景替换',
+  [NodeType.PRODUCT_SCENE_REPLACE]: '产品短视频生成',
   [NodeType.SFX]: '音效',
   [NodeType.BGM]: '背景音乐',
   [NodeType.SUBTITLE]: '字幕',
@@ -244,6 +244,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   if (data.type === NodeType.PRODUCT_SCENE_REPLACE) {
     return (
       <ProductSceneReplaceNode
+        workflowId={workflowId}
         data={data}
         allNodes={allNodes || []}
         selected={selected}

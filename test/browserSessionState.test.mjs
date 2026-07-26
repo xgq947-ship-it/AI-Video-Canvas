@@ -48,6 +48,8 @@ test('应用重启后不沿用历史 authenticated，必须重新做真实页面
 test('browser provider is inferred from ops cli arguments', () => {
     assert.equal(inferBrowserProvider(['image-to-video', 'jimeng', 'generate']), 'jimeng');
     assert.equal(inferBrowserProvider(['text-to-image', 'google-flow', 'generate']), 'google-flow');
+    assert.equal(inferBrowserProvider(['text-to-image', 'gemini-web', 'generate']), 'gemini-web');
+    assert.equal(inferBrowserProvider(['gemini-web', 'ask']), 'gemini-web');
     assert.equal(inferBrowserProvider(['unrelated']), null);
 });
 

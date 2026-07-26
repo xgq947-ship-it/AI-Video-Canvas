@@ -1213,7 +1213,9 @@ app.get('/api/capabilities', (req, res) => {
                 'jimeng-seedance-2-0-fast-standard',
                 'jimeng-seedance-2-0-standard',
                 'jimeng-seedance-2-0',
-                'jimeng-seedance-2-0-fast'
+                'jimeng-seedance-2-0-fast',
+                'gemini-web-image',
+                'gemini-web-video'
             ],
             setupCommand: null,
             hint: BROWSER_MODELS_SETUP_HINT
@@ -1224,7 +1226,7 @@ app.get('/api/capabilities', (req, res) => {
 
 app.post('/api/browser-sessions/:provider/reauthenticate', async (req, res) => {
     const provider = String(req.params.provider || '');
-    if (!['google-flow', 'jimeng'].includes(provider)) {
+    if (!['google-flow', 'jimeng', 'gemini-web'].includes(provider)) {
         return res.status(400).json({ error: '不支持的浏览器登录平台' });
     }
     try {
@@ -1252,9 +1254,9 @@ app.post('/api/browser-sessions/:provider/reauthenticate', async (req, res) => {
 
 app.post('/api/browser-sessions/check', async (req, res) => {
     const requested = Array.isArray(req.body?.providers) ? req.body.providers.map(String) : [];
-    const providers = requested.length ? requested : ['jimeng', 'google-flow'];
+    const providers = requested.length ? requested : ['jimeng', 'google-flow', 'gemini-web'];
     const force = req.body?.force === true;
-    if (providers.some(provider => !['google-flow', 'jimeng'].includes(provider))) {
+    if (providers.some(provider => !['google-flow', 'jimeng', 'gemini-web'].includes(provider))) {
         return res.status(400).json({ error: '包含不支持的浏览器登录平台' });
     }
     const cacheTtlMs = 2 * 60_000;
@@ -1557,7 +1559,8 @@ app.post('/api/prompt/describe-image', async (req, res) => {
                 model,
                 effort: provider.defaultEffort || '',
                 temperature: 0.2,
-                maxTokens: 2500
+                maxTokens: 2500,
+                libraryDir: req.app.locals.LIBRARY_DIR
             });
         } catch (upstreamError) {
             return res.status(upstreamError.status || 502).json({ error: upstreamError.message });
@@ -1617,7 +1620,8 @@ const optimizePromptHandler = async (req, res) => {
                 model,
                 effort,
                 temperature: 0.25,
-                maxTokens: 2500
+                maxTokens: 2500,
+                libraryDir: req.app.locals.LIBRARY_DIR
             });
         } catch (upstreamError) {
             return res.status(upstreamError.status || 502).json({ error: upstreamError.message });

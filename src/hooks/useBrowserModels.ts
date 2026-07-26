@@ -35,7 +35,9 @@ const FALLBACK_MODELS = [
     'jimeng-seedance-2-0-fast-standard',
     'jimeng-seedance-2-0-standard',
     'jimeng-seedance-2-0',
-    'jimeng-seedance-2-0-fast'
+    'jimeng-seedance-2-0-fast',
+    'gemini-web-image',
+    'gemini-web-video'
 ];
 
 const DEFAULT_HINT = '请安装或更新 Google Chrome，并登录对应账号';

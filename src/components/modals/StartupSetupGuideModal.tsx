@@ -17,8 +17,9 @@ import {
 const DEEPSEEK_API_KEYS_URL = 'https://platform.deepseek.com/api_keys';
 const JIMENG_LOGIN_URL = 'https://jimeng.jianying.com/ai-tool/generate?type=image';
 const FLOW_LOGIN_URL = 'https://labs.google/fx/tools/flow';
+const GEMINI_LOGIN_URL = 'https://gemini.google.com/app';
 
-type BrowserProvider = 'jimeng' | 'google-flow';
+type BrowserProvider = 'jimeng' | 'google-flow' | 'gemini-web';
 type Theme = 'dark' | 'light';
 
 interface BrowserSession {
@@ -114,13 +115,14 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                     ...previous,
                     sessions: {
                         jimeng: { state: 'checking' },
-                        'google-flow': { state: 'checking' }
+                        'google-flow': { state: 'checking' },
+                        'gemini-web': { state: 'checking' }
                     }
                 }));
                 const probeResponse = await fetch('/api/browser-sessions/check', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ providers: ['jimeng', 'google-flow'] })
+                    body: JSON.stringify({ providers: ['jimeng', 'google-flow', 'gemini-web'] })
                 });
                 const probe = await probeResponse.json().catch(() => ({}));
                 if (!probeResponse.ok) probeError = probe.error || '浏览器登录状态检查失败';
@@ -170,6 +172,7 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
     const completedCount = useMemo(() => [
         status.sessions.jimeng?.state === 'authenticated',
         status.sessions['google-flow']?.state === 'authenticated',
+        status.sessions['gemini-web']?.state === 'authenticated',
         status.deepseekConfigured || status.codexAuthenticated
     ].filter(Boolean).length, [status]);
 
@@ -262,7 +265,7 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                                     </div>
                                     <h2 className="text-2xl font-semibold tracking-tight md:text-[28px]">连接你的 AI 创作服务</h2>
                                     <p className={`mt-2 max-w-2xl text-sm leading-6 ${muted}`}>
-                                        即梦和 Google Flow 需要在 Evan 专属 Chrome 登录；提示词优化可选择 DeepSeek API Key，或连接已登录 ChatGPT 的 Codex。
+                                        即梦、Google Flow 与 Gemini Web 使用 Evan 专属 Chrome 登录；提示词优化可选择 DeepSeek、Codex 或 Gemini Web。
                                     </p>
                                 </div>
                             </div>
@@ -276,9 +279,9 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                         </div>
                         <div className="mt-5 flex items-center gap-3">
                             <div className={`h-1.5 flex-1 overflow-hidden rounded-full ${isDark ? 'bg-white/10' : 'bg-neutral-200'}`}>
-                                <div className="h-full rounded-full bg-gradient-to-r from-blue-500 via-cyan-400 to-emerald-400 transition-all" style={{ width: `${completedCount / 3 * 100}%` }} />
+                                <div className="h-full rounded-full bg-gradient-to-r from-blue-500 via-cyan-400 to-emerald-400 transition-all" style={{ width: `${completedCount / 4 * 100}%` }} />
                             </div>
-                            <span className={`whitespace-nowrap text-xs font-medium ${muted}`}>{completedCount} / 3 已就绪</span>
+                            <span className={`whitespace-nowrap text-xs font-medium ${muted}`}>{completedCount} / 4 已就绪</span>
                         </div>
                     </header>
 
@@ -327,6 +330,23 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                                     <button onClick={() => void checkProviderLogin('google-flow')} disabled={Boolean(busyProvider) || isLoading} className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold transition-colors disabled:opacity-50 ${isDark ? 'border-blue-400/25 text-blue-300 hover:bg-blue-400/10' : 'border-blue-300 text-blue-700 hover:bg-blue-50'}`}>
                                         {busyProvider === 'google-flow' && busyAction === 'check' ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}检查登录状态
                                     </button>
+                                </div>
+                            </section>
+
+                            <section className={`group rounded-2xl border p-5 transition-colors ${card}`}>
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="flex items-center gap-3">
+                                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-fuchsia-400/10 text-fuchsia-400"><Sparkles size={19} /></div>
+                                        <div><p className="text-sm font-semibold">Gemini Web</p><p className={`mt-0.5 text-[11px] ${muted}`}>图片、视频、识图与提示词优化</p></div>
+                                    </div>
+                                    <StatusBadge complete={status.sessions['gemini-web']?.state === 'authenticated'} label={sessionLabel(status.sessions['gemini-web'])} />
+                                </div>
+                                <p className={`mt-4 text-xs leading-5 ${muted}`}>与 Flow 共用 Evan 专属 browser-profile；Gemini 没有独立授权步骤，登录态与 Google 账号一致。</p>
+                                {sessionDetail(status.sessions['gemini-web']) && <p className="mt-2 text-[11px] leading-5 text-amber-400">{sessionDetail(status.sessions['gemini-web'])}</p>}
+                                <div className={`mt-3 truncate rounded-lg border px-3 py-2 font-mono text-[10px] ${isDark ? 'border-white/[0.08] bg-black/20 text-neutral-500' : 'border-neutral-200 bg-white text-neutral-500'}`} title={GEMINI_LOGIN_URL}>{GEMINI_LOGIN_URL}</div>
+                                <div className="mt-4 grid grid-cols-2 gap-2">
+                                    <button onClick={() => void openProviderLogin('gemini-web')} disabled={Boolean(busyProvider) || isLoading} className="flex items-center justify-center gap-2 rounded-xl bg-fuchsia-500 px-3 py-2.5 text-xs font-semibold text-white hover:bg-fuchsia-400 disabled:opacity-50">{busyProvider === 'gemini-web' && busyAction === 'open' ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}打开登录页</button>
+                                    <button onClick={() => void checkProviderLogin('gemini-web')} disabled={Boolean(busyProvider) || isLoading} className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold disabled:opacity-50 ${isDark ? 'border-fuchsia-400/25 text-fuchsia-300 hover:bg-fuchsia-400/10' : 'border-fuchsia-300 text-fuchsia-700'}`}>{busyProvider === 'gemini-web' && busyAction === 'check' ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}检查登录状态</button>
                                 </div>
                             </section>
 

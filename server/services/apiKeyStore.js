@@ -8,12 +8,14 @@ import path from 'path';
 
 export const API_KEY_FIELDS = [
     { name: 'DEEPSEEK_API_KEY', provider: 'DeepSeek', label: 'DeepSeek API Key（提示词优化）', secret: true },
-    { name: 'GEMINI_API_KEY', provider: 'Google', label: 'Gemini / Veo API Key', secret: true },
-    { name: 'OPENAI_API_KEY', provider: 'OpenAI', label: 'OpenAI API Key', secret: true },
+    // 仅保留旧故事板/旧项目运行兼容，不再暴露给设置页；新生成能力统一走 Gemini Web / Codex。
+    { name: 'GEMINI_API_KEY', provider: 'Google', label: 'Gemini legacy', secret: true, exposed: false },
+    { name: 'OPENAI_API_KEY', provider: 'OpenAI', label: 'OpenAI legacy', secret: true, exposed: false },
     { name: 'ARK_API_KEY', provider: 'Seedance 2.0', label: '火山方舟 ARK API Key（中国区）', secret: true }
 ];
 
 const ALLOWED_FIELDS = new Set(API_KEY_FIELDS.map(field => field.name));
+const EDITABLE_FIELDS = new Set(API_KEY_FIELDS.filter(field => field.exposed !== false).map(field => field.name));
 
 export function getApiKeyConfigPath(libraryDir) {
     return path.join(libraryDir, 'config', 'api-keys.json');
@@ -38,13 +40,13 @@ export function saveApiKeyOverrides(libraryDir, current, values = {}, clear = []
     const next = { ...current };
 
     for (const [name, value] of Object.entries(values)) {
-        if (!ALLOWED_FIELDS.has(name) || typeof value !== 'string') continue;
+        if (!EDITABLE_FIELDS.has(name) || typeof value !== 'string') continue;
         const trimmed = value.trim();
         if (trimmed) next[name] = trimmed;
     }
 
     for (const name of clear) {
-        if (ALLOWED_FIELDS.has(name)) delete next[name];
+        if (EDITABLE_FIELDS.has(name)) delete next[name];
     }
 
     const filePath = getApiKeyConfigPath(libraryDir);
@@ -73,7 +75,7 @@ function maskSecret(value) {
 }
 
 export function describeApiKeySettings(environment, overrides) {
-    return API_KEY_FIELDS.map(field => {
+    return API_KEY_FIELDS.filter(field => field.exposed !== false).map(field => {
         const manualValue = overrides[field.name];
         const environmentValue = environment[field.name];
         const value = manualValue || environmentValue || '';

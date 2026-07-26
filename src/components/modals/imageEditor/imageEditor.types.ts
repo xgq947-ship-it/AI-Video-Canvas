@@ -3,6 +3,7 @@
  * 
  * Shared types and constants for the Image Editor modal.
  */
+import { IMAGE_GENERATION_PROVIDERS } from '../../../../shared/generationProviders.js';
 
 // ============================================================================
 // TYPES
@@ -88,7 +89,7 @@ export interface ImageEditorModalProps {
 export interface ImageModel {
     id: string;
     name: string;
-    provider: 'codex' | 'workflow' | 'kling';
+    provider: string;
     supportsImageToImage: boolean;
     supportsMultiImage: boolean;
     resolutions: string[];
@@ -103,14 +104,15 @@ export interface ImageModel {
  * Available image generation models
  * Browser workflow models support reference images through Google Flow or 即梦.
  */
-export const IMAGE_MODELS: ImageModel[] = [
-    { id: 'codex-imagegen', name: 'Codex 生图', provider: 'codex', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["Auto"], aspectRatios: ["Auto", "1:1", "9:16", "16:9", "3:4", "4:3", "3:2", "2:3", "5:4", "4:5", "21:9"] },
-    { id: 'google-flow-nano-banana-pro', name: 'Google Flow · Nano Banana Pro', provider: 'workflow', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["自动"], aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"] },
-    { id: 'google-flow-nano-banana-2', name: 'Google Flow · Nano Banana 2', provider: 'workflow', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["自动"], aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"] },
-    { id: 'google-flow-nano-banana-2-lite', name: 'Google Flow · Nano Banana 2 Lite', provider: 'workflow', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["自动"], aspectRatios: ["1:1", "16:9", "4:3", "3:4", "9:16"] },
-    { id: 'jimeng-image-5-0-pro', name: '即梦 · 图片 5.0 Pro', provider: 'workflow', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["2K", "4K"], aspectRatios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"] },
-    { id: 'jimeng-image-5-0-lite', name: '即梦 · 图片 5.0 Lite', provider: 'workflow', supportsImageToImage: true, supportsMultiImage: true, resolutions: ["2K", "4K"], aspectRatios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"] },
-];
+export const IMAGE_MODELS: ImageModel[] = IMAGE_GENERATION_PROVIDERS.map(model => ({
+    id: model.id,
+    name: model.name,
+    provider: model.provider,
+    supportsImageToImage: model.supportsImageToImage,
+    supportsMultiImage: model.supportsMultipleReferenceImages,
+    resolutions: [...model.resolutions],
+    aspectRatios: [...model.supportedAspectRatios],
+}));
 
 /**
  * Preset brush colors

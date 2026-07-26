@@ -17,7 +17,14 @@ import { generateJimengWorkflowImage, isJimengImageWorkflowModel } from '../serv
 import { generateOpenAIImage } from '../services/openai.js';
 import { resolveAudioToBase64, resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
 import { resolveProjectMediaTarget } from '../utils/projectAssets.js';
-import { createProductSceneJob, getLatestProductSceneJob, getProductSceneJob } from '../services/productSceneJobs.js';
+import { cancelProductSceneJob, createProductSceneJob, getLatestProductSceneJob, getProductSceneJob } from '../services/productSceneJobs.js';
+import {
+    generateGeminiWebImage,
+    generateGeminiWebVideo,
+    isGeminiWebImageModel,
+    isGeminiWebVideoModel
+} from '../services/geminiWebWorkflow.js';
+import { getVideoGenerationProvider } from '../../shared/generationProviders.js';
 
 const router = express.Router();
 
@@ -27,6 +34,9 @@ const productSceneContext = appLocals => ({
         projectsDir: appLocals.PROJECTS_DIR
     },
     libraryDir: appLocals.LIBRARY_DIR,
+    codexJobsDir: appLocals.CODEX_IMAGE_JOBS_DIR,
+    codexAutomation: appLocals.CODEX_IMAGE_AUTOMATION,
+    arkApiKey: appLocals.ARK_API_KEY,
     recognitionModel: appLocals.PROMPT_OPTIMIZER_PROVIDER === 'codex-cli'
         ? (appLocals.PROMPT_OPTIMIZER_MODEL || 'gpt-5.6-sol')
         : 'gpt-5.6-sol'
@@ -34,8 +44,10 @@ const productSceneContext = appLocals => ({
 
 router.post('/product-scene-jobs', (req, res) => {
     try {
+        const usesCodexRecognition = req.body?.recognitionProvider !== 'gemini-web';
+        const usesCodexImage = req.body?.imageModel === 'codex-imagegen';
         const codexStatus = req.app.locals.CODEX_INTEGRATION?.getStatus();
-        if (!codexStatus?.available || !codexStatus.authenticated) {
+        if ((usesCodexRecognition || usesCodexImage) && (!codexStatus?.available || !codexStatus.authenticated)) {
             return res.status(codexStatus?.available ? 401 : 503).json({
                 error: codexStatus?.available
                     ? 'Codex 尚未登录，请先在设置 → Codex 服务中登录 ChatGPT'
@@ -46,6 +58,18 @@ router.post('/product-scene-jobs', (req, res) => {
         return res.status(202).json(job);
     } catch (error) {
         return res.status(400).json({ error: error.message || '无法创建产品场景替换任务' });
+    }
+});
+
+router.post('/product-scene-jobs/:jobId/cancel', (req, res) => {
+    try {
+        const workflowId = String(req.body?.workflowId || '');
+        if (!workflowId) return res.status(400).json({ error: '缺少 workflowId' });
+        const job = cancelProductSceneJob(req.params.jobId, workflowId, productSceneContext(req.app.locals));
+        if (!job) return res.status(404).json({ error: '产品短视频任务不存在' });
+        return res.json(job);
+    } catch (error) {
+        return res.status(400).json({ error: error.message || '取消任务失败' });
     }
 });
 
@@ -104,6 +128,7 @@ router.post('/generate-image', async (req, res) => {
         const isOpenAIModel = imageModel && imageModel.startsWith('gpt-image-');
         const isGoogleFlowWorkflowModel = isGoogleFlowImageWorkflowModel(imageModel);
         const isJimengWorkflowModel = isJimengImageWorkflowModel(imageModel);
+        const isGeminiWebWorkflowModel = isGeminiWebImageModel(imageModel);
         const requestedCount = rawCount === undefined ? 1 : Number(rawCount);
         if (!Number.isInteger(requestedCount) || requestedCount < 1) {
             return res.status(400).json({ error: '图片生成数量必须是正整数' });
@@ -111,7 +136,10 @@ router.post('/generate-image', async (req, res) => {
         if ((isJimengWorkflowModel || isGoogleFlowWorkflowModel) && requestedCount > 4) {
             return res.status(400).json({ error: '浏览器图片模型单次生成数量最多为 4 张' });
         }
-        if (!isJimengWorkflowModel && !isGoogleFlowWorkflowModel && requestedCount !== 1) {
+        if (isGeminiWebWorkflowModel && requestedCount !== 1) {
+            return res.status(400).json({ error: 'Gemini Web 网页单次只支持生成 1 张图片' });
+        }
+        if (!isJimengWorkflowModel && !isGoogleFlowWorkflowModel && !isGeminiWebWorkflowModel && requestedCount !== 1) {
             return res.status(400).json({ error: '当前图片模型暂不支持单次多图生成' });
         }
 
@@ -119,8 +147,8 @@ router.post('/generate-image', async (req, res) => {
         let imageFormat = 'png';
         let workflowImages = null;
 
-        if (isGoogleFlowWorkflowModel || isJimengWorkflowModel) {
-            // --- LOCAL BROWSER TEXT-TO-IMAGE WORKFLOW (FLOW / 即梦) ---
+        if (isGoogleFlowWorkflowModel || isJimengWorkflowModel || isGeminiWebWorkflowModel) {
+            // --- LOCAL BROWSER TEXT-TO-IMAGE WORKFLOW (FLOW / 即梦 / GEMINI WEB) ---
             const referenceImages = rawImageBase64
                 ? (Array.isArray(rawImageBase64) ? rawImageBase64 : [rawImageBase64]).filter(Boolean)
                 : [];
@@ -128,7 +156,9 @@ router.post('/generate-image', async (req, res) => {
             console.log(`Using browser workflow for image: ${imageModel}`);
             const workflow = isJimengWorkflowModel
                 ? generateJimengWorkflowImage
-                : generateGoogleFlowWorkflowImage;
+                : isGeminiWebWorkflowModel
+                    ? generateGeminiWebImage
+                    : generateGoogleFlowWorkflowImage;
             const result = await workflow({
                 prompt,
                 aspectRatio: aspectRatio || '1:1',
@@ -245,8 +275,18 @@ router.post('/generate-video', async (req, res) => {
         const isSeedanceModel = videoModel && videoModel.startsWith('seedance-');
         const isGoogleFlowWorkflowModel = isGoogleFlowWorkflowModelId(videoModel);
         const isJimengWorkflowModel = isJimengWorkflowModelId(videoModel);
+        const isGeminiWebWorkflowModel = isGeminiWebVideoModel(videoModel);
+        const videoProvider = getVideoGenerationProvider(videoModel);
+        const providedVisualCount = Array.isArray(rawReferenceImages)
+            ? rawReferenceImages.filter(Boolean).length
+            : [rawImageBase64, rawLastFrameBase64].filter(Boolean).length;
+        if (videoProvider && providedVisualCount > videoProvider.maxReferenceImages) {
+            return res.status(400).json({
+                error: `${videoProvider.name} 最多支持 ${videoProvider.maxReferenceImages} 张参考图`
+            });
+        }
         // 两个 provider 都走 Evan 专属 Chrome workflow：输入是真实文件路径而非 base64。
-        const isBrowserWorkflowModel = isGoogleFlowWorkflowModel || isJimengWorkflowModel;
+        const isBrowserWorkflowModel = isGoogleFlowWorkflowModel || isJimengWorkflowModel || isGeminiWebWorkflowModel;
 
         // 页面 workflow 需要真实首帧路径；其他供应商继续使用 base64 输入。
         const imageBase64 = isBrowserWorkflowModel ? null : resolveImageToBase64(rawImageBase64);
@@ -262,7 +302,24 @@ router.post('/generate-video', async (req, res) => {
         let videoExtension = 'mp4';
         let workflowRunId;
 
-        if (isGoogleFlowWorkflowModel) {
+        if (isGeminiWebWorkflowModel) {
+            const referenceImageInputs = Array.isArray(rawReferenceImages)
+                ? rawReferenceImages.filter(Boolean)
+                : rawImageBase64 ? [rawImageBase64] : [];
+            const workflowResult = await generateGeminiWebVideo({
+                prompt,
+                referenceImageInputs,
+                aspectRatio: aspectRatio || '16:9',
+                duration: duration || 8,
+                libraryDir: LIBRARY_DIR,
+                timeoutMinutes: 15,
+                cameraMovement: req.body.cameraMovement || '',
+                nativeAudio: req.body.generateAudio !== false
+            });
+            videoBuffer = workflowResult.buffer;
+            videoExtension = workflowResult.extension;
+            workflowRunId = workflowResult.runId;
+        } else if (isGoogleFlowWorkflowModel) {
             // 连 2 张以上图片 → Ingredients 多参考图模式；否则用单张首帧。
             const referenceImageInputs = Array.isArray(rawReferenceImages)
                 ? rawReferenceImages.filter(Boolean)

@@ -43,6 +43,7 @@ import { useGenerationRecovery } from './hooks/useGenerationRecovery';
 import { useVideoFrameExtraction } from './hooks/useVideoFrameExtraction';
 import { extractVideoLastFrame } from './utils/videoHelpers';
 import { createAdditionalImagePlacements } from './utils/imageBatchLayout';
+import { readApiResponse } from './utils/apiResponse';
 import { SelectionBoundingBox } from './components/canvas/SelectionBoundingBox';
 import { WorkflowPanel } from './components/WorkflowPanel';
 import { HistoryPanel } from './components/HistoryPanel';
@@ -287,8 +288,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nodeIds: uniqueIds, nodes })
       });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || '移入回收站失败');
+      await readApiResponse(response, '移入回收站失败');
       deleteNodes(uniqueIds);
     } catch (error) {
       console.error('Failed to move canvas image to trash:', error);

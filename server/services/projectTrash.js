@@ -4,7 +4,7 @@ import path from 'path';
 
 export const PROJECT_TRASH_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
-const TRASH_INDEX_VERSION = 1;
+const TRASH_INDEX_VERSION = 2;
 const TRASHABLE_IMAGE_NODE_TYPES = new Set(['Image', 'Image Editor', 'Camera Angle']);
 
 function trashRoot(projectRoot) {
@@ -120,6 +120,30 @@ function sidecarPath(filePath) {
     return extension ? filePath.slice(0, -extension.length) + '.json' : `${filePath}.json`;
 }
 
+function findImageMetadataRelativePaths(projectRoot, filename) {
+    const imagesDir = resolveWithin(projectRoot, 'images');
+    if (!fs.existsSync(imagesDir)) return [];
+
+    const matches = new Set();
+    const canonicalPath = sidecarPath(path.join(imagesDir, filename));
+    if (fs.existsSync(canonicalPath)) {
+        matches.add(path.relative(projectRoot, canonicalPath));
+    }
+
+    for (const candidate of fs.readdirSync(imagesDir).filter(name => name.endsWith('.json'))) {
+        const candidatePath = path.join(imagesDir, candidate);
+        try {
+            const metadata = JSON.parse(fs.readFileSync(candidatePath, 'utf8'));
+            if (metadata?.filename === filename) {
+                matches.add(path.relative(projectRoot, candidatePath));
+            }
+        } catch {
+            // A malformed or unrelated JSON file is not owned by this image.
+        }
+    }
+    return [...matches];
+}
+
 function removeIfExists(filePath) {
     if (fs.existsSync(filePath)) fs.rmSync(filePath, { force: true });
 }
@@ -196,22 +220,29 @@ export function trashWorkflowNodes(workflow, currentNodes, nodeIds, projectRoot,
         const originalPath = resolveWithin(projectRoot, originalRelativePath);
         const backupRelativePath = `files/${id}/images/${file.filename}`;
         const backupPath = resolveWithin(trashRoot(projectRoot), backupRelativePath);
-        const originalSidecarPath = sidecarPath(originalPath);
-        const backupSidecarPath = sidecarPath(backupPath);
+        const metadataFiles = findImageMetadataRelativePaths(projectRoot, file.filename)
+            .map(originalMetadataRelativePath => {
+                const backupMetadataRelativePath = `files/${id}/${originalMetadataRelativePath}`;
+                const originalMetadataPath = resolveWithin(projectRoot, originalMetadataRelativePath);
+                const backupMetadataPath = resolveWithin(trashRoot(projectRoot), backupMetadataRelativePath);
+                fs.mkdirSync(path.dirname(backupMetadataPath), { recursive: true });
+                fs.copyFileSync(originalMetadataPath, backupMetadataPath);
+                return {
+                    originalRelativePath: originalMetadataRelativePath,
+                    backupRelativePath: backupMetadataRelativePath
+                };
+            });
 
         if (fs.existsSync(originalPath)) {
             fs.mkdirSync(path.dirname(backupPath), { recursive: true });
             fs.copyFileSync(originalPath, backupPath);
         }
-        if (fs.existsSync(originalSidecarPath)) {
-            fs.mkdirSync(path.dirname(backupSidecarPath), { recursive: true });
-            fs.copyFileSync(originalSidecarPath, backupSidecarPath);
-        }
 
         files.push({
             key: file.key,
             originalRelativePath,
-            backupRelativePath: fs.existsSync(backupPath) ? backupRelativePath : null
+            backupRelativePath: fs.existsSync(backupPath) ? backupRelativePath : null,
+            metadataFiles
         });
     }
 
@@ -224,7 +255,9 @@ export function trashWorkflowNodes(workflow, currentNodes, nodeIds, projectRoot,
         if (activeFileKeys.has(file.key)) continue;
         const originalPath = resolveWithin(projectRoot, file.originalRelativePath);
         removeIfExists(originalPath);
-        removeIfExists(sidecarPath(originalPath));
+        for (const metadata of file.metadataFiles || []) {
+            removeIfExists(resolveWithin(projectRoot, metadata.originalRelativePath));
+        }
     }
 
     return { entry: publicEntry(entry, workflow.id), deletedNodes, remainingNodes };
@@ -247,10 +280,19 @@ export function restoreProjectTrashEntry(workflow, projectRoot, entryId) {
             fs.mkdirSync(path.dirname(originalPath), { recursive: true });
             fs.copyFileSync(backupPath, originalPath);
         }
-        const backupSidecarPath = sidecarPath(backupPath);
-        const originalSidecarPath = sidecarPath(originalPath);
-        if (fs.existsSync(backupSidecarPath) && !fs.existsSync(originalSidecarPath)) {
-            fs.copyFileSync(backupSidecarPath, originalSidecarPath);
+        // Version 1 entries stored only the canonical same-basename sidecar.
+        const legacyBackupSidecarPath = sidecarPath(backupPath);
+        const legacyOriginalSidecarPath = sidecarPath(originalPath);
+        if (fs.existsSync(legacyBackupSidecarPath) && !fs.existsSync(legacyOriginalSidecarPath)) {
+            fs.copyFileSync(legacyBackupSidecarPath, legacyOriginalSidecarPath);
+        }
+        for (const metadata of file.metadataFiles || []) {
+            const backupMetadataPath = resolveWithin(trashRoot(projectRoot), metadata.backupRelativePath);
+            const originalMetadataPath = resolveWithin(projectRoot, metadata.originalRelativePath);
+            if (fs.existsSync(backupMetadataPath) && !fs.existsSync(originalMetadataPath)) {
+                fs.mkdirSync(path.dirname(originalMetadataPath), { recursive: true });
+                fs.copyFileSync(backupMetadataPath, originalMetadataPath);
+            }
         }
     }
 

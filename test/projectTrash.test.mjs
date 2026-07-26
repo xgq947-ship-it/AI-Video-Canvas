@@ -21,8 +21,10 @@ const createFixture = (t) => {
     const filename = 'generated.png';
     const imagePath = path.join(projectRoot, 'images', filename);
     const sidecarPath = path.join(projectRoot, 'images', 'generated.json');
+    const nodeMetadataPath = path.join(projectRoot, 'images', 'image-1.json');
     fs.writeFileSync(imagePath, Buffer.from('image-bytes'));
     fs.writeFileSync(sidecarPath, JSON.stringify({ filename }));
+    fs.writeFileSync(nodeMetadataPath, JSON.stringify({ id: 'image-1', filename }));
     const resultUrl = '/library/projects/TestProject/images/generated.png?t=1';
     const node = {
         id: 'image-1',
@@ -38,7 +40,7 @@ const createFixture = (t) => {
         projectDirName: 'TestProject',
         nodes: [node]
     };
-    return { projectRoot, imagePath, sidecarPath, resultUrl, node, workflow };
+    return { projectRoot, imagePath, sidecarPath, nodeMetadataPath, resultUrl, node, workflow };
 };
 
 test('删除最后一个图片引用时把本地文件移入项目回收站并可完整恢复', (t) => {
@@ -56,6 +58,7 @@ test('删除最后一个图片引用时把本地文件移入项目回收站并�
     assert.equal(result.entry.expiresAt, new Date(now + PROJECT_TRASH_RETENTION_MS).toISOString());
     assert.equal(fs.existsSync(fixture.imagePath), false);
     assert.equal(fs.existsSync(fixture.sidecarPath), false);
+    assert.equal(fs.existsSync(fixture.nodeMetadataPath), false);
     assert.ok(getProjectTrashPreviewPath(fixture.projectRoot, result.entry.id));
     assert.equal(listProjectTrash(fixture.workflow, fixture.projectRoot, now).length, 1);
 
@@ -63,6 +66,10 @@ test('删除最后一个图片引用时把本地文件移入项目回收站并�
     assert.deepEqual(restored.map(node => node.id), ['image-1']);
     assert.equal(fs.readFileSync(fixture.imagePath, 'utf8'), 'image-bytes');
     assert.deepEqual(JSON.parse(fs.readFileSync(fixture.sidecarPath, 'utf8')), {
+        filename: 'generated.png'
+    });
+    assert.deepEqual(JSON.parse(fs.readFileSync(fixture.nodeMetadataPath, 'utf8')), {
+        id: 'image-1',
         filename: 'generated.png'
     });
     assert.equal(listProjectTrash(fixture.workflow, fixture.projectRoot, now).length, 0);

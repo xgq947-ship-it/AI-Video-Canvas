@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Image as ImageIcon, Loader2, RotateCcw, Trash2, X } from 'lucide-react';
 import { NodeData } from '../../types';
+import { readApiResponse } from '../../utils/apiResponse';
 
 interface TrashEntry {
     id: string;
@@ -49,8 +50,7 @@ export const TrashModal: React.FC<TrashModalProps> = ({
             const response = await fetch(`/api/projects/${encodeURIComponent(workflowId)}/trash`, {
                 cache: 'no-store'
             });
-            const result = await response.json().catch(() => []);
-            if (!response.ok) throw new Error(result?.error || '读取回收站失败');
+            const result = await readApiResponse<TrashEntry[]>(response, '读取回收站失败');
             setEntries(Array.isArray(result) ? result : []);
         } catch (loadError) {
             setError(loadError instanceof Error ? loadError.message : '读取回收站失败');
@@ -72,9 +72,8 @@ export const TrashModal: React.FC<TrashModalProps> = ({
                 `/api/projects/${encodeURIComponent(workflowId)}/trash/${encodeURIComponent(entry.id)}/restore`,
                 { method: 'POST' }
             );
-            const result = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(result.error || '恢复失败');
-            const restoredNodes = Array.isArray(result.restoredNodes) ? result.restoredNodes : [];
+            const result = await readApiResponse<{ restoredNodes?: NodeData[] }>(response, '恢复失败');
+            const restoredNodes = Array.isArray(result?.restoredNodes) ? result.restoredNodes : [];
             onRestoreNodes(restoredNodes);
             setEntries(current => current.filter(candidate => candidate.id !== entry.id));
         } catch (restoreError) {
@@ -94,8 +93,7 @@ export const TrashModal: React.FC<TrashModalProps> = ({
                 `/api/projects/${encodeURIComponent(workflowId)}/trash/${encodeURIComponent(entry.id)}`,
                 { method: 'DELETE' }
             );
-            const result = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(result.error || '永久删除失败');
+            await readApiResponse(response, '永久删除失败');
             setEntries(current => current.filter(candidate => candidate.id !== entry.id));
         } catch (deleteError) {
             setError(deleteError instanceof Error ? deleteError.message : '永久删除失败');

@@ -52,7 +52,7 @@ const EMPTY_STATUS: GuideStatus = {
 
 function StatusBadge({ complete, label }: { complete: boolean; label: string }) {
     return (
-        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold ${
+        <span className={`inline-flex w-[68px] shrink-0 items-center justify-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold ${
             complete
                 ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-400'
                 : 'border-amber-400/25 bg-amber-400/10 text-amber-400'
@@ -62,6 +62,24 @@ function StatusBadge({ complete, label }: { complete: boolean; label: string }) 
         </span>
     );
 }
+
+/** 三个浏览器登录平台只有图标配色和文案不同，行结构完全一致。 */
+const BROWSER_ROWS: Array<{
+    id: BrowserProvider; name: string; hint: string; url: string; icon: React.ReactNode; iconClass: string;
+}> = [
+    {
+        id: 'jimeng', name: '即梦 Dreamina', hint: '图片与视频生成',
+        url: JIMENG_LOGIN_URL, icon: <LogIn size={16} />, iconClass: 'bg-cyan-400/10 text-cyan-400'
+    },
+    {
+        id: 'google-flow', name: 'Google Flow', hint: 'Nano Banana 与 Veo',
+        url: FLOW_LOGIN_URL, icon: <LogIn size={16} />, iconClass: 'bg-blue-400/10 text-blue-400'
+    },
+    {
+        id: 'gemini-web', name: 'Gemini Web', hint: '图片、视频、识图与提示词优化',
+        url: GEMINI_LOGIN_URL, icon: <Sparkles size={16} />, iconClass: 'bg-fuchsia-400/10 text-fuchsia-400'
+    }
+];
 
 /**
  * 状态说明。检查完仍没结论时必须把原因摆出来 —— 只显示「无法确认」而不给理由，
@@ -149,7 +167,14 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
             });
             if (probeError) setMessage(probeError);
         } catch (error) {
-            setMessage(error instanceof Error ? error.message : '配置状态读取失败');
+            // 读取失败时必须把乐观写入的「检查中」收回来：否则三个平台会永远停在
+            // 检查中，看起来像探针卡死。同时不要把 fetch 的英文异常原样丢给用户
+            //（后端还没起来时是 "Unexpected end of JSON input"，读不懂也没法处理）。
+            setStatus(previous => ({ ...previous, sessions: {} }));
+            const raw = error instanceof Error ? error.message : '';
+            setMessage(raw.includes('JSON') || !raw
+                ? '后台服务还没准备好，请点右下角「重新检查」重试。'
+                : raw);
         } finally {
             setIsLoading(false);
         }
@@ -235,10 +260,39 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
     const panel = isDark
         ? 'border-white/10 bg-[#111318] text-white'
         : 'border-neutral-200 bg-white text-neutral-950';
-    const card = isDark
-        ? 'border-white/[0.08] bg-white/[0.035] hover:border-white/15'
-        : 'border-neutral-200 bg-neutral-50 hover:border-neutral-300';
+    const rowSurface = isDark ? 'border-white/[0.07] bg-white/[0.03]' : 'border-neutral-200 bg-neutral-50';
     const muted = isDark ? 'text-neutral-400' : 'text-neutral-500';
+    const divider = isDark ? 'border-white/[0.08]' : 'border-neutral-200';
+    const primaryAction = 'flex h-8 items-center justify-center gap-1.5 rounded-lg bg-blue-500 px-3 text-[11px] font-semibold text-white transition-colors hover:bg-blue-400 disabled:opacity-40';
+    const secondaryAction = `flex h-8 items-center justify-center gap-1.5 rounded-lg border px-3 text-[11px] font-medium transition-colors disabled:opacity-40 ${
+        isDark ? 'border-white/10 text-neutral-300 hover:bg-white/10' : 'border-neutral-300 text-neutral-700 hover:bg-neutral-100'
+    }`;
+    const actionsBusy = Boolean(busyProvider) || isLoading;
+
+    /** 所有条目共用同一条行结构：图标 · 名称/说明 · 状态 · 操作。说明位在有异常时换成原因。 */
+    const row = (
+        key: string,
+        icon: React.ReactNode,
+        iconClass: string,
+        name: string,
+        hint: string,
+        detail: string,
+        badge: React.ReactNode,
+        actions: React.ReactNode,
+        title?: string
+    ) => (
+        // 窄窗口下让操作区整体换行，而不是把平台名压成「即梦 Dre…」——
+        // 名字和状态是这一屏唯一需要一眼看懂的东西。
+        <div key={key} className={`flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-3.5 py-2.5 ${rowSurface}`} title={title}>
+            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${iconClass}`}>{icon}</div>
+            <div className="min-w-[168px] flex-1">
+                <p className="truncate text-[13px] font-semibold leading-tight">{name}</p>
+                <p className={`mt-1 truncate text-[11px] leading-tight ${detail ? 'text-amber-400' : muted}`}>{detail || hint}</p>
+            </div>
+            {badge}
+            <div className="flex shrink-0 items-center gap-2">{actions}</div>
+        </div>
+    );
 
     return (
         <div
@@ -247,150 +301,124 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                 if (event.target === event.currentTarget) onClose();
             }}
         >
-            <div className={`relative max-h-[92vh] w-full max-w-[980px] overflow-hidden rounded-[28px] border shadow-[0_40px_120px_rgba(0,0,0,0.65)] ${panel}`}>
-                <div className="pointer-events-none absolute -left-24 -top-28 h-80 w-80 rounded-full bg-blue-500/20 blur-[90px]" />
-                <div className="pointer-events-none absolute right-0 top-12 h-72 w-72 rounded-full bg-violet-500/15 blur-[100px]" />
+            <div className={`relative flex max-h-[92vh] w-full max-w-[820px] flex-col overflow-hidden rounded-2xl border shadow-[0_30px_90px_rgba(0,0,0,0.6)] ${panel}`}>
+                <header className={`flex items-center gap-3 border-b px-5 py-3.5 ${divider}`}>
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-400/20 bg-blue-500/15 text-blue-300">
+                        <Sparkles size={18} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                        <h2 className="text-[15px] font-semibold leading-tight">连接你的 AI 创作服务</h2>
+                        <p className={`mt-1 truncate text-[11px] leading-tight ${muted}`}>
+                            前三项用 Evan 专属 Chrome 登录；后两项是提示词优化后端，二选一即可。
+                        </p>
+                    </div>
+                    <div className="hidden shrink-0 items-center gap-2 sm:flex">
+                        <div className={`h-1.5 w-24 overflow-hidden rounded-full ${isDark ? 'bg-white/10' : 'bg-neutral-200'}`}>
+                            <div className="h-full rounded-full bg-emerald-400 transition-all" style={{ width: `${completedCount / 4 * 100}%` }} />
+                        </div>
+                        <span className={`whitespace-nowrap text-[11px] font-medium ${muted}`}>{completedCount} / 4 已就绪</span>
+                    </div>
+                    <button
+                        onClick={onClose}
+                        className={`shrink-0 rounded-lg border p-2 transition-colors ${isDark ? 'border-white/10 text-neutral-400 hover:bg-white/10 hover:text-white' : 'border-neutral-200 text-neutral-500 hover:bg-neutral-100'}`}
+                        aria-label="关闭启动配置指南"
+                    >
+                        <X size={16} />
+                    </button>
+                </header>
 
-                <div className="relative max-h-[92vh] overflow-y-auto">
-                    <header className={`border-b px-7 pb-6 pt-7 md:px-9 ${isDark ? 'border-white/[0.08]' : 'border-neutral-200'}`}>
-                        <div className="flex items-start justify-between gap-5">
-                            <div className="flex min-w-0 items-start gap-4">
-                                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-blue-400/20 bg-gradient-to-br from-blue-500/25 to-violet-500/20 text-blue-300 shadow-lg shadow-blue-950/30">
-                                    <Sparkles size={23} />
-                                </div>
-                                <div>
-                                    <div className="mb-2 flex flex-wrap items-center gap-2">
-                                        <span className="rounded-full border border-blue-400/20 bg-blue-400/10 px-2.5 py-1 text-[10px] font-bold tracking-[0.18em] text-blue-400">START HERE</span>
-                                        <span className={`text-xs ${muted}`}>启动前 1 分钟配置</span>
-                                    </div>
-                                    <h2 className="text-2xl font-semibold tracking-tight md:text-[28px]">连接你的 AI 创作服务</h2>
-                                    <p className={`mt-2 max-w-2xl text-sm leading-6 ${muted}`}>
-                                        即梦、Google Flow 与 Gemini Web 使用 Evan 专属 Chrome 登录；提示词优化可选择 DeepSeek、Codex 或 Gemini Web。
-                                    </p>
-                                </div>
-                            </div>
+                <main className="flex flex-col gap-2 overflow-y-auto px-5 py-4">
+                    {BROWSER_ROWS.map(item => row(
+                        item.id,
+                        item.icon,
+                        item.iconClass,
+                        item.name,
+                        item.hint,
+                        sessionDetail(status.sessions[item.id]),
+                        <StatusBadge complete={status.sessions[item.id]?.state === 'authenticated'} label={sessionLabel(status.sessions[item.id])} />,
+                        <>
                             <button
-                                onClick={onClose}
-                                className={`shrink-0 rounded-xl border p-2.5 transition-colors ${isDark ? 'border-white/10 text-neutral-400 hover:bg-white/10 hover:text-white' : 'border-neutral-200 text-neutral-500 hover:bg-neutral-100'}`}
-                                aria-label="关闭启动配置指南"
+                                onClick={() => void openProviderLogin(item.id)}
+                                disabled={actionsBusy}
+                                className={primaryAction}
                             >
-                                <X size={18} />
+                                {busyProvider === item.id && busyAction === 'open' ? <Loader2 size={13} className="animate-spin" /> : <LogIn size={13} />}打开登录页
                             </button>
-                        </div>
-                        <div className="mt-5 flex items-center gap-3">
-                            <div className={`h-1.5 flex-1 overflow-hidden rounded-full ${isDark ? 'bg-white/10' : 'bg-neutral-200'}`}>
-                                <div className="h-full rounded-full bg-gradient-to-r from-blue-500 via-cyan-400 to-emerald-400 transition-all" style={{ width: `${completedCount / 4 * 100}%` }} />
-                            </div>
-                            <span className={`whitespace-nowrap text-xs font-medium ${muted}`}>{completedCount} / 4 已就绪</span>
-                        </div>
-                    </header>
+                            <button
+                                onClick={() => void checkProviderLogin(item.id)}
+                                disabled={actionsBusy}
+                                className={secondaryAction}
+                            >
+                                {busyProvider === item.id && busyAction === 'check' ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />}检查登录状态
+                            </button>
+                        </>,
+                        item.url
+                    ))}
 
-                    <main className="relative px-7 py-6 md:px-9">
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <section className={`group rounded-2xl border p-5 transition-colors ${card}`}>
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="flex items-center gap-3">
-                                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-400/10 text-cyan-400"><LogIn size={19} /></div>
-                                        <div><p className="text-sm font-semibold">即梦 Dreamina</p><p className={`mt-0.5 text-[11px] ${muted}`}>图片与视频生成</p></div>
-                                    </div>
-                                    <StatusBadge complete={status.sessions.jimeng?.state === 'authenticated'} label={sessionLabel(status.sessions.jimeng)} />
-                                </div>
-                                <p className={`mt-4 text-xs leading-5 ${muted}`}>登录态保存在 Evan 专用 browser-profile；不会读取日常 Chrome 数据，状态由真实任务验证。</p>
-                                {sessionDetail(status.sessions['jimeng']) && (
-                                    <p className="mt-2 text-[11px] leading-5 text-amber-400">{sessionDetail(status.sessions['jimeng'])}</p>
-                                )}
-                                <div className={`mt-3 truncate rounded-lg border px-3 py-2 font-mono text-[10px] ${isDark ? 'border-white/[0.08] bg-black/20 text-neutral-500' : 'border-neutral-200 bg-white text-neutral-500'}`} title={JIMENG_LOGIN_URL}>{JIMENG_LOGIN_URL}</div>
-                                <div className="mt-4 grid grid-cols-2 gap-2">
-                                    <button onClick={() => void openProviderLogin('jimeng')} disabled={Boolean(busyProvider) || isLoading} className="flex items-center justify-center gap-2 rounded-xl bg-cyan-500 px-3 py-2.5 text-xs font-semibold text-black transition-colors hover:bg-cyan-400 disabled:opacity-50">
-                                        {busyProvider === 'jimeng' && busyAction === 'open' ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}打开登录页
-                                    </button>
-                                    <button onClick={() => void checkProviderLogin('jimeng')} disabled={Boolean(busyProvider) || isLoading} className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold transition-colors disabled:opacity-50 ${isDark ? 'border-cyan-400/25 text-cyan-300 hover:bg-cyan-400/10' : 'border-cyan-300 text-cyan-700 hover:bg-cyan-50'}`}>
-                                        {busyProvider === 'jimeng' && busyAction === 'check' ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}检查登录状态
-                                    </button>
-                                </div>
-                            </section>
+                    {row(
+                        'deepseek',
+                        <KeyRound size={16} />,
+                        'bg-violet-400/10 text-violet-400',
+                        'DeepSeek API Key',
+                        '高速提示词优化（可选）',
+                        '',
+                        <StatusBadge complete={status.deepseekConfigured} label={status.deepseekConfigured ? '已配置' : '可选'} />,
+                        <>
+                            <button onClick={() => void openDeepSeek()} className={secondaryAction}>
+                                <ExternalLink size={13} />获取 API Key
+                            </button>
+                            <button onClick={onOpenSettings} className={primaryAction}>
+                                <KeyRound size={13} />前往配置
+                            </button>
+                        </>,
+                        DEEPSEEK_API_KEYS_URL
+                    )}
 
-                            <section className={`group rounded-2xl border p-5 transition-colors ${card}`}>
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="flex items-center gap-3">
-                                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-400/10 text-blue-400"><LogIn size={19} /></div>
-                                        <div><p className="text-sm font-semibold">Google Flow</p><p className={`mt-0.5 text-[11px] ${muted}`}>Nano Banana 与 Veo</p></div>
-                                    </div>
-                                    <StatusBadge complete={status.sessions['google-flow']?.state === 'authenticated'} label={sessionLabel(status.sessions['google-flow'])} />
-                                </div>
-                                <p className={`mt-4 text-xs leading-5 ${muted}`}>请使用可访问 Flow 的 Google 账号完成登录；登录完成后回到 Evan 重试任务。</p>
-                                {sessionDetail(status.sessions['google-flow']) && (
-                                    <p className="mt-2 text-[11px] leading-5 text-amber-400">{sessionDetail(status.sessions['google-flow'])}</p>
-                                )}
-                                <div className={`mt-3 truncate rounded-lg border px-3 py-2 font-mono text-[10px] ${isDark ? 'border-white/[0.08] bg-black/20 text-neutral-500' : 'border-neutral-200 bg-white text-neutral-500'}`} title={FLOW_LOGIN_URL}>{FLOW_LOGIN_URL}</div>
-                                <div className="mt-4 grid grid-cols-2 gap-2">
-                                    <button onClick={() => void openProviderLogin('google-flow')} disabled={Boolean(busyProvider) || isLoading} className="flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-3 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-blue-400 disabled:opacity-50">
-                                        {busyProvider === 'google-flow' && busyAction === 'open' ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}打开登录页
-                                    </button>
-                                    <button onClick={() => void checkProviderLogin('google-flow')} disabled={Boolean(busyProvider) || isLoading} className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold transition-colors disabled:opacity-50 ${isDark ? 'border-blue-400/25 text-blue-300 hover:bg-blue-400/10' : 'border-blue-300 text-blue-700 hover:bg-blue-50'}`}>
-                                        {busyProvider === 'google-flow' && busyAction === 'check' ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}检查登录状态
-                                    </button>
-                                </div>
-                            </section>
+                    {row(
+                        'codex',
+                        <Bot size={16} />,
+                        'bg-emerald-400/10 text-emerald-400',
+                        'ChatGPT / Codex',
+                        '无需 API Key 的可选连接，Evan 会自动检测',
+                        '',
+                        <StatusBadge complete={status.codexAuthenticated} label={status.codexAuthenticated ? '已连接' : status.codexAvailable ? '待登录' : '未检测到'} />,
+                        <button onClick={onOpenSettings} className={secondaryAction}>
+                            <Bot size={13} />打开设置<ArrowRight size={13} />
+                        </button>,
+                        '路径：右上角「设置 → 配置 API 密钥 → Codex 服务」。未找到时点击「选择 Codex」，再登录 ChatGPT。'
+                    )}
 
-                            <section className={`group rounded-2xl border p-5 transition-colors ${card}`}>
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="flex items-center gap-3">
-                                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-fuchsia-400/10 text-fuchsia-400"><Sparkles size={19} /></div>
-                                        <div><p className="text-sm font-semibold">Gemini Web</p><p className={`mt-0.5 text-[11px] ${muted}`}>图片、视频、识图与提示词优化</p></div>
-                                    </div>
-                                    <StatusBadge complete={status.sessions['gemini-web']?.state === 'authenticated'} label={sessionLabel(status.sessions['gemini-web'])} />
-                                </div>
-                                <p className={`mt-4 text-xs leading-5 ${muted}`}>与 Flow 共用 Evan 专属 browser-profile；Gemini 没有独立授权步骤，登录态与 Google 账号一致。</p>
-                                {sessionDetail(status.sessions['gemini-web']) && <p className="mt-2 text-[11px] leading-5 text-amber-400">{sessionDetail(status.sessions['gemini-web'])}</p>}
-                                <div className={`mt-3 truncate rounded-lg border px-3 py-2 font-mono text-[10px] ${isDark ? 'border-white/[0.08] bg-black/20 text-neutral-500' : 'border-neutral-200 bg-white text-neutral-500'}`} title={GEMINI_LOGIN_URL}>{GEMINI_LOGIN_URL}</div>
-                                <div className="mt-4 grid grid-cols-2 gap-2">
-                                    <button onClick={() => void openProviderLogin('gemini-web')} disabled={Boolean(busyProvider) || isLoading} className="flex items-center justify-center gap-2 rounded-xl bg-fuchsia-500 px-3 py-2.5 text-xs font-semibold text-white hover:bg-fuchsia-400 disabled:opacity-50">{busyProvider === 'gemini-web' && busyAction === 'open' ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}打开登录页</button>
-                                    <button onClick={() => void checkProviderLogin('gemini-web')} disabled={Boolean(busyProvider) || isLoading} className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold disabled:opacity-50 ${isDark ? 'border-fuchsia-400/25 text-fuchsia-300 hover:bg-fuchsia-400/10' : 'border-fuchsia-300 text-fuchsia-700'}`}>{busyProvider === 'gemini-web' && busyAction === 'check' ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}检查登录状态</button>
-                                </div>
-                            </section>
+                    {message && (
+                        <div className={`rounded-xl border px-3.5 py-2.5 text-[11px] leading-5 ${
+                            message.includes('失败') || message.includes('无法')
+                                ? 'border-red-400/20 bg-red-400/10 text-red-400'
+                                : 'border-blue-400/20 bg-blue-400/10 text-blue-400'
+                        }`}>{message}</div>
+                    )}
+                </main>
 
-                            <section className={`rounded-2xl border p-5 transition-colors ${card}`}>
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="flex items-center gap-3">
-                                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-400/10 text-violet-400"><KeyRound size={19} /></div>
-                                        <div><p className="text-sm font-semibold">DeepSeek API Key</p><p className={`mt-0.5 text-[11px] ${muted}`}>高速提示词优化</p></div>
-                                    </div>
-                                    <StatusBadge complete={status.deepseekConfigured} label={status.deepseekConfigured ? '已配置' : '可选'} />
-                                </div>
-                                <p className={`mt-4 text-xs leading-5 ${muted}`}>先在 DeepSeek 开放平台创建密钥，再到「右上角设置 → 配置 API 密钥 → DeepSeek」粘贴并保存。</p>
-                                <div className="mt-4 flex gap-2">
-                                    <button onClick={() => void openDeepSeek()} className={`flex flex-1 items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-medium transition-colors ${isDark ? 'border-white/10 hover:bg-white/10' : 'border-neutral-300 hover:bg-neutral-100'}`}><ExternalLink size={14} />获取 API Key</button>
-                                    <button onClick={onOpenSettings} className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-violet-500 px-3 py-2.5 text-xs font-semibold text-white hover:bg-violet-400"><KeyRound size={14} />前往配置</button>
-                                </div>
-                            </section>
-
-                            <section className={`rounded-2xl border p-5 transition-colors ${card}`}>
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="flex items-center gap-3">
-                                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-400/10 text-emerald-400"><Bot size={19} /></div>
-                                        <div><p className="text-sm font-semibold">ChatGPT / Codex</p><p className={`mt-0.5 text-[11px] ${muted}`}>无需 API Key 的可选连接</p></div>
-                                    </div>
-                                    <StatusBadge complete={status.codexAuthenticated} label={status.codexAuthenticated ? '已连接' : status.codexAvailable ? '待登录' : '未检测到'} />
-                                </div>
-                                <p className={`mt-4 text-xs leading-5 ${muted}`}>路径：右上角「设置 → 配置 API 密钥 → Codex 服务」。Evan 会自动检测；未找到时点击「选择 Codex」，再登录 ChatGPT。</p>
-                                <button onClick={onOpenSettings} className={`mt-4 flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-semibold transition-colors ${isDark ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/15' : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}><Bot size={14} />打开 Codex 服务设置<ArrowRight size={14} /></button>
-                            </section>
-                        </div>
-
-                        <div className={`mt-5 flex flex-col gap-3 rounded-2xl border px-5 py-4 sm:flex-row sm:items-center sm:justify-between ${isDark ? 'border-white/[0.08] bg-black/20' : 'border-neutral-200 bg-neutral-50'}`}>
-                            <div className="flex items-start gap-3">
-                                <ShieldCheck size={18} className="mt-0.5 shrink-0 text-emerald-400" />
-                                <p className={`text-xs leading-5 ${muted}`}>密钥、登录资料和浏览器配置只保存在本机。关闭此窗口不会阻止使用，之后可从右上角设置再次打开。</p>
-                            </div>
-                            <div className="flex shrink-0 items-center gap-2">
-                                <button onClick={() => void loadStatus(true)} disabled={isLoading} className={`rounded-xl border p-2.5 transition-colors disabled:opacity-50 ${isDark ? 'border-white/10 text-neutral-400 hover:bg-white/10' : 'border-neutral-200 text-neutral-500 hover:bg-white'}`} title="重新检查真实登录状态"><RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} /></button>
-                                <button onClick={onClose} className="flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-xs font-bold text-black transition-transform hover:scale-[1.02]"><Check size={15} />进入画布</button>
-                            </div>
-                        </div>
-                        {message && <div className={`mt-3 rounded-xl border px-4 py-3 text-xs ${message.includes('失败') || message.includes('无法') ? 'border-red-400/20 bg-red-400/10 text-red-400' : 'border-blue-400/20 bg-blue-400/10 text-blue-400'}`}>{message}</div>}
-                    </main>
-                </div>
+                <footer className={`flex items-center gap-3 border-t px-5 py-3 ${divider}`}>
+                    <ShieldCheck size={15} className="shrink-0 text-emerald-400" />
+                    <p className={`min-w-0 flex-1 truncate text-[11px] ${muted}`}>
+                        密钥与登录资料只保存在本机。关闭窗口不影响使用，之后可从右上角设置再次打开。
+                    </p>
+                    <button
+                        onClick={() => void loadStatus(true)}
+                        disabled={isLoading}
+                        className={secondaryAction}
+                    >
+                        <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} />重新检查
+                    </button>
+                    <button
+                        onClick={onClose}
+                        // 浅色主题下不能用白底：白底白面板等于没有按钮。
+                        className={`flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-4 text-[11px] font-bold transition-colors ${
+                            isDark ? 'bg-white text-black hover:bg-neutral-200' : 'bg-neutral-900 text-white hover:bg-neutral-700'
+                        }`}
+                    >
+                        <Check size={14} />进入画布
+                    </button>
+                </footer>
             </div>
         </div>
     );

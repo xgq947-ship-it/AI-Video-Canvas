@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+    buildWindowsScriptInvocation,
     createCodexIntegration,
     loadCodexConfig,
     resolveUnpackedResourcePath,
@@ -93,14 +94,19 @@ exit 1
     assert.equal(integration.getStatus({ force: true }).authenticated, true);
 
     const queue = process.platform === 'win32'
-        ? spawnSync(
-            process.env.ComSpec || 'cmd.exe',
-            ['/d', '/s', '/c', `"${integration.runtime.runnerPath}" list`],
-            {
+        ? (() => {
+            const environment = integration.commandEnvironment();
+            const invocation = buildWindowsScriptInvocation(
+                integration.runtime.runnerPath,
+                ['list'],
+                environment
+            );
+            return spawnSync(invocation.command, invocation.args, {
                 encoding: 'utf8',
-                env: integration.commandEnvironment()
-            }
-        )
+                env: environment,
+                windowsVerbatimArguments: invocation.windowsVerbatimArguments
+            });
+        })()
         : spawnSync(integration.runtime.runnerPath, ['list'], {
             encoding: 'utf8',
             env: integration.commandEnvironment()

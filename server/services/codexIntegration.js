@@ -9,6 +9,30 @@ const STATUS_CACHE_MS = 5_000;
 const PROBE_TIMEOUT_MS = 15_000;
 
 const quoteShell = value => `'${String(value).replaceAll("'", "'\\''")}'`;
+const WINDOWS_CMD_META_CHARS = /([()\][%!^"`<>&|;, *?])/g;
+
+const escapeWindowsCommand = value =>
+    String(value).replace(WINDOWS_CMD_META_CHARS, '^$1');
+
+const escapeWindowsArgument = value => {
+    let escaped = String(value);
+    escaped = escaped.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
+    escaped = escaped.replace(/(?=(\\+?)?)\1$/, '$1$1');
+    escaped = `"${escaped}"`;
+    return escaped.replace(WINDOWS_CMD_META_CHARS, '^$1');
+};
+
+export function buildWindowsScriptInvocation(command, args, environment = process.env) {
+    const shellCommand = [
+        escapeWindowsCommand(command),
+        ...args.map(escapeWindowsArgument)
+    ].join(' ');
+    return {
+        command: environment.ComSpec || environment.COMSPEC || 'cmd.exe',
+        args: ['/d', '/s', '/c', `"${shellCommand}"`],
+        windowsVerbatimArguments: true
+    };
+}
 
 export function resolveUnpackedResourcePath(resourcePath, exists = fs.existsSync) {
     const asarSegment = `${path.sep}app.asar${path.sep}`;
@@ -55,17 +79,15 @@ export function saveCodexConfig(libraryDir, { cliPath = '' } = {}) {
 
 function runProbe(command, args, environment, platform = process.platform) {
     const isWindowsScript = platform === 'win32' && /\.(?:cmd|bat)$/i.test(command);
-    const result = isWindowsScript
-        ? spawnSync(
-            environment.ComSpec || 'cmd.exe',
-            ['/d', '/s', '/c', `"${command}" ${args.map(arg => `"${String(arg).replaceAll('"', '""')}"`).join(' ')}`],
-            { timeout: PROBE_TIMEOUT_MS, windowsHide: true, env: environment }
-        )
-        : spawnSync(command, args, {
-            timeout: PROBE_TIMEOUT_MS,
-            windowsHide: true,
-            env: environment
-        });
+    const invocation = isWindowsScript
+        ? buildWindowsScriptInvocation(command, args, environment)
+        : { command, args, windowsVerbatimArguments: false };
+    const result = spawnSync(invocation.command, invocation.args, {
+        timeout: PROBE_TIMEOUT_MS,
+        windowsHide: true,
+        windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+        env: environment
+    });
     return {
         ok: !result.error && result.status === 0,
         status: result.status,
@@ -221,11 +243,15 @@ export function createCodexIntegration({
             lastError: null
         };
         loginProcess = isWindowsScript
-            ? spawn(
-                env.ComSpec || 'cmd.exe',
-                ['/d', '/s', '/c', `"${resolvedPath}" login`],
-                { env, windowsHide: false, stdio: 'ignore' }
-            )
+            ? (() => {
+                const invocation = buildWindowsScriptInvocation(resolvedPath, ['login'], env);
+                return spawn(invocation.command, invocation.args, {
+                    env,
+                    windowsHide: false,
+                    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+                    stdio: 'ignore'
+                });
+            })()
             : spawn(resolvedPath, ['login'], {
                 env,
                 windowsHide: false,

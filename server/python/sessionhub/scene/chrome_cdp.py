@@ -91,6 +91,7 @@ def check_cdp() -> tuple[bool, str]:
 def chrome_start_command() -> str:
     return (
         f'"{CHROME_BIN}" '
+        "--enable-automation "
         f"--remote-debugging-port={CDP_PORT} "
         f'--user-data-dir="{PROFILE_DIR}" '
         "--lang=en-US --no-first-run --no-default-browser-check --new-window about:blank"
@@ -252,6 +253,12 @@ def _instance_is_headless(pid: int) -> bool:
         except Exception:
             return False
     return "--headless" in _instance_command(pid)
+
+
+def _instance_supports_playwright(pid: int) -> bool:
+    """Chromium 149+ 需要显式开启自动化上下文管理才能被 Playwright 接管。"""
+    command = _instance_command(pid).lower()
+    return "--enable-automation" in command or "--remote-allow-origins" in command
 
 
 def _system_events(*statements: str) -> bool:
@@ -461,7 +468,13 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
                 f"{CDP_PORT} 端口已被其他浏览器或程序占用；"
                 f"没有复用它，以免把自动化任务发送到错误的浏览器资料。"
             )
-        if headless and pid is not None and not _instance_is_headless(pid):
+        if pid is not None and not _instance_supports_playwright(pid):
+            # 升级后的首次运行可能仍残留旧参数实例。保留 profile，重启进程即可，
+            # 否则 connect_over_cdp 会报 Browser.setDownloadBehavior 协议错误。
+            _debug_log("start_chrome.restart_for_playwright", pid=pid)
+            stop_chrome()
+            ok = False
+        elif headless and pid is not None and not _instance_is_headless(pid):
             _debug_log("start_chrome.restart_for_headless", pid=pid)
             stop_chrome()
             ok = False
@@ -488,6 +501,16 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
     if not CHROME_BIN.exists():
         return False, f"找不到 Chrome：{CHROME_BIN}"
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    low_memory_args = [
+        "--enable-automation",
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--disable-default-apps",
+        "--disable-extensions",
+        "--disable-sync",
+        "--metrics-recording-only",
+        "--no-service-autorun",
+    ]
     # 默认无头：真正要新拉起实例时，若无人坐在终端前且未显式要求前台，
     # 则静默启动。需要登录或开启调试模式时再使用可见窗口。
     if not headless and not foreground and not _foreground_allowed():
@@ -496,6 +519,7 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
     if headless:
         launch_cmd = [
             str(CHROME_BIN),
+            *low_memory_args,
             "--headless=new",
             "--lang=en-US",
             f"--remote-debugging-port={CDP_PORT}",
@@ -513,6 +537,7 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
         # avoids macOS `open -a`, which can only address installed app names.
         launch_cmd = [
             str(CHROME_BIN),
+            *low_memory_args,
             "--lang=en-US",
             f"--remote-debugging-port={CDP_PORT}",
             f"--user-data-dir={PROFILE_DIR}",

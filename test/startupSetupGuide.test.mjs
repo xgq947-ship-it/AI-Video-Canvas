@@ -28,6 +28,8 @@ test('启动指南读取真实登录、密钥与 Codex 状态而不是展示固�
   assert.match(guide, /fetch\('\/api\/settings\/api-keys'/);
   assert.match(guide, /fetch\('\/api\/settings\/codex'/);
   assert.match(guide, /state === 'authenticated'/);
+  assert.match(guide, /登录失效/);
+  assert.match(guide, /待验证/);
   assert.match(guide, /DEEPSEEK_API_KEY/);
   assert.match(guide, /codex\.authenticated/);
 });

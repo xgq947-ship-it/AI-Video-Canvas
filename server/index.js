@@ -1163,9 +1163,15 @@ app.post('/api/browser-sessions/:provider/reauthenticate', async (req, res) => {
             args: ['browser', 'login', '--provider', provider],
             timeoutMs: 90_000,
             label: `${provider} 登录`,
-            initialSessionState: 'reauthenticating',
-            successSessionState: 'reauthenticating'
+            // 打开/关闭登录浏览器不是登出动作，不能覆盖最近一次真实任务验证出的
+            // authenticated 状态。登录有效性由实际生成成功或 AUTH_REQUIRED 判定。
+            trackSessionState: false
         });
+        if (data.authenticated) {
+            browserSessionState.transition(provider, 'authenticated', {
+                message: '已通过内置浏览器页面验证登录状态'
+            });
+        }
         res.json({
             success: true,
             provider,

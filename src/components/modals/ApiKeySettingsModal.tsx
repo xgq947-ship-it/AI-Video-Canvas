@@ -154,6 +154,10 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
     const hasChanges = apiKeyDirty || optimizerDirty;
     const selectedOptimizer = optimizerProviders.find(provider => provider.id === optimizerProvider);
     const isDark = canvasTheme === 'dark';
+    const configuredKeyCount = fields.filter(field => field.configured).length;
+    const sectionSurface = isDark
+        ? 'border-white/[0.08] bg-white/[0.035] shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]'
+        : 'border-neutral-200 bg-neutral-50/80 shadow-sm';
 
     const handleValueChange = (name: string, value: string) => {
         setValues(current => ({ ...current, [name]: value }));
@@ -269,33 +273,47 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
 
     return (
         <div
-            className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
+            className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 px-5 py-6 backdrop-blur-xl"
             onMouseDown={(event) => {
                 if (event.target === event.currentTarget) onClose();
             }}
         >
-            <div className={`w-full max-w-[720px] max-h-[82vh] overflow-hidden rounded-2xl border shadow-2xl ${isDark ? 'border-neutral-700 bg-[#181818] text-white' : 'border-neutral-200 bg-white text-neutral-900'}`}>
-                <div className={`flex items-start justify-between border-b px-6 py-5 ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}>
-                    <div className="flex items-start gap-3">
-                        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${isDark ? 'bg-blue-500/15 text-blue-400' : 'bg-blue-50 text-blue-600'}`}>
-                            <KeyRound size={20} />
+            <div className={`relative flex max-h-[90vh] w-full max-w-[900px] flex-col overflow-hidden rounded-[28px] border shadow-[0_40px_120px_rgba(0,0,0,0.65)] ${isDark ? 'border-white/10 bg-[#111318] text-white' : 'border-neutral-200 bg-white text-neutral-900'}`}>
+                <div className="pointer-events-none absolute -left-24 -top-28 h-72 w-72 rounded-full bg-blue-500/20 blur-[90px]" />
+                <div className="pointer-events-none absolute right-0 top-0 h-64 w-64 rounded-full bg-violet-500/15 blur-[100px]" />
+                <div className={`relative flex shrink-0 items-start justify-between border-b px-8 py-7 ${isDark ? 'border-white/[0.08]' : 'border-neutral-200'}`}>
+                    <div className="flex items-start gap-4">
+                        <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border ${isDark ? 'border-blue-400/20 bg-gradient-to-br from-blue-500/25 to-violet-500/20 text-blue-300' : 'border-blue-100 bg-gradient-to-br from-blue-50 to-violet-50 text-blue-600'}`}>
+                            <KeyRound size={22} />
                         </div>
                         <div>
-                            <h2 className="text-lg font-semibold">配置 API 密钥</h2>
-                            <p className={`mt-1 text-xs ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>密钥仅保存在本机，不会写入项目文件或返回完整明文。</p>
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                                <span className="rounded-full border border-blue-400/20 bg-blue-400/10 px-2.5 py-1 text-[10px] font-bold tracking-[0.16em] text-blue-400">LOCAL CONNECTIONS</span>
+                                <span className={`text-[11px] ${isDark ? 'text-neutral-500' : 'text-neutral-500'}`}>本机安全配置中心</span>
+                            </div>
+                            <h2 className="text-2xl font-semibold tracking-tight">AI 服务与密钥</h2>
+                            <p className={`mt-1.5 text-xs leading-5 ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>统一管理 Codex、提示词后端和云端 API；密钥不会写入项目文件。</p>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                                <span className={`rounded-full border px-2.5 py-1 text-[10px] ${codexStatus?.authenticated ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-400' : 'border-white/10 text-neutral-500'}`}>
+                                    Codex {codexStatus?.authenticated ? '已连接' : '未连接'}
+                                </span>
+                                <span className={`rounded-full border px-2.5 py-1 text-[10px] ${configuredKeyCount ? 'border-blue-400/25 bg-blue-400/10 text-blue-400' : 'border-white/10 text-neutral-500'}`}>
+                                    {configuredKeyCount} 项 API 密钥已配置
+                                </span>
+                            </div>
                         </div>
                     </div>
-                    <button onClick={onClose} className={`rounded-lg p-2 transition-colors ${isDark ? 'text-neutral-500 hover:bg-neutral-800 hover:text-white' : 'text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900'}`} aria-label="关闭 API 配置">
+                    <button onClick={onClose} className={`rounded-xl border p-2.5 transition-colors ${isDark ? 'border-white/10 text-neutral-500 hover:bg-white/10 hover:text-white' : 'border-neutral-200 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900'}`} aria-label="关闭 API 配置">
                         <X size={18} />
                     </button>
                 </div>
 
-                <div className="max-h-[calc(82vh-150px)] overflow-y-auto px-6 py-5">
+                <div className="relative min-h-0 flex-1 overflow-y-auto px-8 py-6">
                     {isLoading ? (
                         <div className="flex h-48 items-center justify-center gap-2 text-sm text-neutral-500"><Loader2 size={18} className="animate-spin" />正在读取配置</div>
                     ) : (
                         <div className="space-y-4">
-                            <section className={`rounded-xl border p-4 ${isDark ? 'border-neutral-800 bg-[#202020]' : 'border-neutral-200 bg-neutral-50'}`}>
+                            <section className={`rounded-2xl border p-5 transition-colors ${sectionSurface}`}>
                                 <div className="mb-1 flex items-center justify-between gap-3">
                                     <div className="flex items-center gap-2">
                                         <TerminalSquare size={14} className={isDark ? 'text-blue-400' : 'text-blue-600'} />
@@ -317,7 +335,7 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                 <p className={`mb-3 text-[11px] ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
                                     Evan 使用电脑上持续更新的 Codex CLI，不内置固定版本。登录资料和项目 Skill 保存在 Evan 专用目录。
                                 </p>
-                                <div className={`rounded-lg border px-3 py-2 text-[11px] ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-200 bg-white'}`}>
+                                <div className={`rounded-xl border px-4 py-3 text-[11px] ${isDark ? 'border-white/[0.08] bg-black/20' : 'border-neutral-200 bg-white'}`}>
                                     <div className="truncate" title={codexStatus?.resolvedPath || ''}>
                                         路径：{codexStatus?.resolvedPath || '正在检测…'}
                                     </div>
@@ -368,7 +386,7 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                             </section>
 
                             {/* 提示词优化后端选择 */}
-                            <section className={`rounded-xl border p-4 ${isDark ? 'border-neutral-800 bg-[#202020]' : 'border-neutral-200 bg-neutral-50'}`}>
+                            <section className={`rounded-2xl border p-5 transition-colors ${sectionSurface}`}>
                                 <div className="mb-1 flex items-center gap-2">
                                     <Wand2 size={14} className={isDark ? 'text-purple-400' : 'text-purple-600'} />
                                     <h3 className="text-sm font-medium">提示词优化后端</h3>
@@ -383,7 +401,7 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                             id="optimizer-provider"
                                             value={optimizerProvider}
                                             onChange={event => { setOptimizerProvider(event.target.value); setSaved(false); }}
-                                            className={`h-10 w-full rounded-lg border bg-transparent px-3 text-sm outline-none transition-colors ${isDark ? 'border-neutral-700 text-white focus:border-blue-500' : 'border-neutral-300 text-neutral-900 focus:border-blue-500'}`}
+                                            className={`h-11 w-full rounded-xl border bg-transparent px-3 text-sm outline-none transition-colors ${isDark ? 'border-white/10 text-white focus:border-blue-500 focus:bg-white/[0.03]' : 'border-neutral-300 text-neutral-900 focus:border-blue-500'}`}
                                         >
                                             {optimizerProviders.map(provider => (
                                                 <option
@@ -411,7 +429,7 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                             autoComplete="off"
                                             spellCheck={false}
                                             placeholder={selectedOptimizer?.defaultModel ? `默认：${selectedOptimizer.defaultModel}` : '留空用后端默认'}
-                                            className={`h-10 w-full rounded-lg border bg-transparent px-3 text-sm outline-none transition-colors ${isDark ? 'border-neutral-700 text-white placeholder-neutral-600 focus:border-blue-500' : 'border-neutral-300 text-neutral-900 placeholder-neutral-400 focus:border-blue-500'}`}
+                                            className={`h-11 w-full rounded-xl border bg-transparent px-3 text-sm outline-none transition-colors ${isDark ? 'border-white/10 text-white placeholder-neutral-600 focus:border-blue-500 focus:bg-white/[0.03]' : 'border-neutral-300 text-neutral-900 placeholder-neutral-400 focus:border-blue-500'}`}
                                         />
                                     </div>
                                 </div>
@@ -427,7 +445,7 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                             </section>
 
                             {groups.map(([provider, providerFields]) => (
-                                <section key={provider} className={`rounded-xl border p-4 ${isDark ? 'border-neutral-800 bg-[#202020]' : 'border-neutral-200 bg-neutral-50'}`}>
+                                <section key={provider} className={`rounded-2xl border p-5 transition-colors ${sectionSurface}`}>
                                     <div className="mb-3 flex items-center justify-between">
                                         <h3 className="text-sm font-medium">{provider}</h3>
                                         {providerFields.every(field => field.configured) && (
@@ -462,7 +480,7 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                                             autoComplete="off"
                                                             spellCheck={false}
                                                             placeholder={markedForClear ? '保存后清除手动配置' : field.configured ? '输入新值以替换当前配置' : '请输入密钥'}
-                                                            className={`h-10 w-full rounded-lg border bg-transparent px-3 pr-10 text-sm outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${isDark ? 'border-neutral-700 text-white placeholder-neutral-600 focus:border-blue-500' : 'border-neutral-300 text-neutral-900 placeholder-neutral-400 focus:border-blue-500'}`}
+                                                            className={`h-11 w-full rounded-xl border bg-transparent px-3 pr-10 text-sm outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${isDark ? 'border-white/10 text-white placeholder-neutral-600 focus:border-blue-500 focus:bg-white/[0.03]' : 'border-neutral-300 text-neutral-900 placeholder-neutral-400 focus:border-blue-500'}`}
                                                         />
                                                         {field.secret && (
                                                             <button
@@ -490,14 +508,14 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                     )}
                 </div>
 
-                <div className={`flex items-center justify-between border-t px-6 py-4 ${isDark ? 'border-neutral-800 bg-[#151515]' : 'border-neutral-200 bg-neutral-50'}`}>
+                <div className={`relative flex shrink-0 items-center justify-between border-t px-8 py-4 backdrop-blur-xl ${isDark ? 'border-white/[0.08] bg-[#111318]/95' : 'border-neutral-200 bg-neutral-50/95'}`}>
                     <div className="min-h-5 text-xs">
                         {error && <span className="text-red-400">{error}</span>}
                         {saved && <span className="flex items-center gap-1 text-emerald-400"><ShieldCheck size={14} />已保存并立即生效</span>}
                     </div>
                     <div className="flex gap-2">
-                        <button onClick={onClose} className={`rounded-lg px-4 py-2 text-sm transition-colors ${isDark ? 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700' : 'bg-white text-neutral-600 hover:bg-neutral-100'}`}>关闭</button>
-                        <button onClick={handleSave} disabled={!hasChanges || isSaving} className="flex min-w-24 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40">
+                        <button onClick={onClose} className={`rounded-xl border px-4 py-2.5 text-sm transition-colors ${isDark ? 'border-white/10 bg-white/[0.04] text-neutral-300 hover:bg-white/10' : 'border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-100'}`}>关闭</button>
+                        <button onClick={handleSave} disabled={!hasChanges || isSaving} className="flex min-w-28 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-950/20 transition-all hover:from-blue-500 hover:to-indigo-400 disabled:cursor-not-allowed disabled:opacity-35">
                             {isSaving && <Loader2 size={14} className="animate-spin" />}
                             {isSaving ? '保存中' : '保存修改'}
                         </button>

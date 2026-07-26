@@ -151,12 +151,8 @@ def _existing_project_page(context: Any, project_url: str) -> Any | None:
 
 @contextmanager
 def _project_work_page(context: Any, project_url: str, owner: str = "google-flow.generate"):
-    """复用长期运行浏览器中的 Flow 项目页；仅在缺失时创建临时页。"""
-    existing = _existing_project_page(context, project_url)
-    if existing is not None:
-        yield existing
-        return
-    with managed_work_page(context, owner) as page:
+    """每个任务使用独立临时页，结束后立即关闭，避免长期堆积标签与渲染进程。"""
+    with managed_work_page(context, owner, cleanup_before=True) as page:
         yield page
 
 

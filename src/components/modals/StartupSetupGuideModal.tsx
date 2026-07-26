@@ -59,6 +59,21 @@ function StatusBadge({ complete, label }: { complete: boolean; label: string }) 
     );
 }
 
+function sessionLabel(session?: BrowserSession) {
+    if (session?.state === 'authenticated') return '已验证';
+    if (session?.state === 'expired') return '登录失效';
+    if (session?.state === 'checking' || session?.state === 'reauthenticating') return '检查中';
+    return '待验证';
+}
+
+function friendlyBrowserError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error || '');
+    if (message.includes('Browser.setDownloadBehavior') || message.includes('connect_over_cdp')) {
+        return '内置浏览器连接没有准备好，Evan 正在重新初始化。请关闭内置浏览器后再点一次。';
+    }
+    return message || '登录页面打开失败';
+}
+
 export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
     isOpen,
     onClose,
@@ -133,7 +148,7 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
             await loadStatus();
             setMessage('登录页已在 Evan 内置浏览器中打开。完成登录后回到这里刷新状态。');
         } catch (error) {
-            setMessage(error instanceof Error ? error.message : '登录页面打开失败');
+            setMessage(friendlyBrowserError(error));
         } finally {
             setBusyProvider(null);
         }
@@ -211,12 +226,12 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                                         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-400/10 text-cyan-400"><LogIn size={19} /></div>
                                         <div><p className="text-sm font-semibold">即梦 Dreamina</p><p className={`mt-0.5 text-[11px] ${muted}`}>图片与视频生成</p></div>
                                     </div>
-                                    <StatusBadge complete={status.sessions.jimeng?.state === 'authenticated'} label={status.sessions.jimeng?.state === 'authenticated' ? '已登录' : '待登录'} />
+                                    <StatusBadge complete={status.sessions.jimeng?.state === 'authenticated'} label={sessionLabel(status.sessions.jimeng)} />
                                 </div>
-                                <p className={`mt-4 text-xs leading-5 ${muted}`}>登录态保存在 Evan 专用 browser-profile；普通浏览器中的登录不会同步到应用。</p>
+                                <p className={`mt-4 text-xs leading-5 ${muted}`}>登录态保存在 Evan 专用 browser-profile；关闭内置浏览器不会退出账号，状态由真实任务验证。</p>
                                 <div className={`mt-3 truncate rounded-lg border px-3 py-2 font-mono text-[10px] ${isDark ? 'border-white/[0.08] bg-black/20 text-neutral-500' : 'border-neutral-200 bg-white text-neutral-500'}`} title={JIMENG_LOGIN_URL}>{JIMENG_LOGIN_URL}</div>
                                 <button onClick={() => void openProviderLogin('jimeng')} disabled={Boolean(busyProvider)} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-2.5 text-xs font-semibold text-black transition-colors hover:bg-cyan-400 disabled:opacity-50">
-                                    {busyProvider === 'jimeng' ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}在 Evan 内置浏览器登录
+                                    {busyProvider === 'jimeng' ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}打开并检查即梦登录
                                 </button>
                             </section>
 
@@ -226,12 +241,12 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                                         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-400/10 text-blue-400"><LogIn size={19} /></div>
                                         <div><p className="text-sm font-semibold">Google Flow</p><p className={`mt-0.5 text-[11px] ${muted}`}>Nano Banana 与 Veo</p></div>
                                     </div>
-                                    <StatusBadge complete={status.sessions['google-flow']?.state === 'authenticated'} label={status.sessions['google-flow']?.state === 'authenticated' ? '已登录' : '待登录'} />
+                                    <StatusBadge complete={status.sessions['google-flow']?.state === 'authenticated'} label={sessionLabel(status.sessions['google-flow'])} />
                                 </div>
                                 <p className={`mt-4 text-xs leading-5 ${muted}`}>请使用可访问 Flow 的 Google 账号完成登录，并保持内置浏览器窗口开启直到登录完成。</p>
                                 <div className={`mt-3 truncate rounded-lg border px-3 py-2 font-mono text-[10px] ${isDark ? 'border-white/[0.08] bg-black/20 text-neutral-500' : 'border-neutral-200 bg-white text-neutral-500'}`} title={FLOW_LOGIN_URL}>{FLOW_LOGIN_URL}</div>
                                 <button onClick={() => void openProviderLogin('google-flow')} disabled={Boolean(busyProvider)} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-blue-400 disabled:opacity-50">
-                                    {busyProvider === 'google-flow' ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}在 Evan 内置浏览器登录
+                                    {busyProvider === 'google-flow' ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}打开并检查 Flow 登录
                                 </button>
                             </section>
 

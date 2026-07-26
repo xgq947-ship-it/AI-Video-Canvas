@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ops_cli.output import CommandResponse
+from ops_cli.browser import managed_work_page
 from ops_cli.platforms._google_flow_common import _download_media, _import_browser_runtime
 from ops_cli.platforms.image_to_video.providers.jimeng import (
     CREDITS_MARKERS,
@@ -445,11 +446,7 @@ def _execute_generation(
         with sync_playwright() as playwright:
             browser = playwright.chromium.connect_over_cdp(cdp_url)
             context = browser.contexts[0] if browser.contexts else browser.new_context()
-            page = _existing_jimeng_page(context)
-            created_page = page is None
-            if page is None:
-                page = context.new_page()
-            try:
+            with managed_work_page(context, "jimeng.image.generate", cleanup_before=True) as page:
                 try:
                     page.goto(_generate_url(), wait_until="domcontentloaded", timeout=60_000)
                 except (PlaywrightError, PlaywrightTimeoutError) as exc:
@@ -503,12 +500,6 @@ def _execute_generation(
                 except Exception:
                     screenshot_path = None
                 return images, screenshot_path
-            finally:
-                try:
-                    if created_page and not page.is_closed():
-                        page.close()
-                except Exception:
-                    pass
     except JimengError:
         raise
     except Exception as exc:

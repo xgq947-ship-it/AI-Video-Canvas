@@ -17,15 +17,55 @@ from ops_cli.config import get_config
 
 MANAGED_WINDOW_PREFIX = "ops-cli:"
 KEEPALIVE_WINDOW_NAME = f"{MANAGED_WINDOW_PREFIX}keepalive"
-MANAGED_RESIDUE_MIN_AGE_SECONDS = 300
+# 正常任务会在 finally 立即关闭自己的页面。这里只兜底清理由异常崩溃留下的旧 marker；
+# 设为两小时，避免用户在另一个 10~30 分钟生成任务进行中打开登录页时误关活跃任务。
+MANAGED_RESIDUE_MIN_AGE_SECONDS = 2 * 60 * 60
 PAGE_SNAPSHOT_TIMEOUT_MS = 2000
 PAGE_DEFAULT_TIMEOUT_MS = 30000
 
-_DEDUP_HOSTS: set[str] = set()
+_DEDUP_HOSTS: set[str] = {"labs.google", "jimeng.jianying.com"}
 LOGIN_URLS = {
     "google-flow": "https://labs.google/fx/tools/flow",
     "jimeng": "https://jimeng.jianying.com/ai-tool/generate?type=video",
 }
+
+
+def _login_page_authenticated(provider: str, page: Any) -> bool:
+    """只读页面可见状态确认登录，不读取或复制 cookie/token。"""
+    try:
+        current_url = str(getattr(page, "url", "") or "")
+        if provider == "jimeng":
+            composer = page.locator("div.tiptap[contenteditable='true']")
+            return any(composer.nth(index).is_visible() for index in range(composer.count()))
+        if provider == "google-flow":
+            if "/fx/tools/flow/project/" in current_url:
+                return True
+            account = page.locator(
+                "[aria-label*='Google Account'], [aria-label*='Google 账号'], "
+                "[aria-label*='Google 帳戶']"
+            )
+            return any(account.nth(index).is_visible() for index in range(account.count()))
+    except Exception:
+        return False
+    return False
+
+
+def _wait_login_page_authenticated(
+    provider: str,
+    page: Any,
+    *,
+    timeout_seconds: float = 8.0,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        if _login_page_authenticated(provider, page):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        try:
+            page.wait_for_timeout(500)
+        except Exception:
+            return False
 
 
 def browser_status() -> CommandResponse:
@@ -102,12 +142,26 @@ def open_browser_login(provider: str) -> CommandResponse:
         )
 
     def _open(context: Any) -> dict[str, Any]:
-        page = context.new_page()
+        cleanup_playwright_context(context)
+        parsed_login = urlparse(login_url)
+        page = next(
+            (
+                candidate
+                for candidate in reversed(list(getattr(context, "pages", []) or []))
+                if not _page_is_closed(candidate)
+                and (urlparse(str(getattr(candidate, "url", "") or "")).hostname or "").lower()
+                == (parsed_login.hostname or "").lower()
+            ),
+            None,
+        )
+        if page is None:
+            page = context.new_page()
         page.goto(login_url, wait_until="domcontentloaded", timeout=60_000)
         return {
             "provider": provider,
             "url": login_url,
             "port": CDP_PORT,
+            "authenticated": _wait_login_page_authenticated(provider, page),
             "message": "内置浏览器已打开，请完成登录后回到 Evan 重试任务。",
         }
 
@@ -379,6 +433,13 @@ def ensure_keepalive_page(context: Any) -> Any:
         if _page_window_name(page) == KEEPALIVE_WINDOW_NAME:
             return page
 
+    # Chromium 启动时自带一个 about:blank。直接把它提升为锚点，避免每次任务
+    # 再额外创建一个空白标签页。
+    for page in pages:
+        if not _page_is_closed(page) and _is_blank_url(str(getattr(page, "url", "") or "")):
+            _set_page_window_name(page, KEEPALIVE_WINDOW_NAME)
+            return page
+
     page = context.new_page()
     try:
         if getattr(page, "url", "") != "about:blank":
@@ -404,6 +465,9 @@ def managed_work_page(context: Any, owner: str, *, cleanup_before: bool = False)
             if not _page_is_closed(page):
                 page.close()
         finally:
+            cleanup_playwright_context(
+                context,
+            )
             ensure_keepalive_page(context)
 
 

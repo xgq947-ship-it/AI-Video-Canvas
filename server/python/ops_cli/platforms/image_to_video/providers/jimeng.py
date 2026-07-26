@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from ops_cli.output import CommandResponse
+from ops_cli.browser import managed_work_page
 from ops_cli.platforms._google_flow_common import (
     _bring_login_browser_to_front,
     _download_media,
@@ -995,8 +996,7 @@ def _execute_generation(
             context = browser.contexts[0] if browser.contexts else browser.new_context()
             # 每次生成独占一个新标签页（= 一个新对话），不抢用户正在编辑的会话；
             # 会话本身由即梦服务端保存，关掉标签页不丢结果。
-            page = context.new_page()
-            try:
+            with managed_work_page(context, "jimeng.video.generate", cleanup_before=True) as page:
                 try:
                     page.goto(_generate_url(), wait_until="domcontentloaded", timeout=60_000)
                 except (PlaywrightError, PlaywrightTimeoutError) as exc:
@@ -1052,12 +1052,6 @@ def _execute_generation(
                     media_label="视频",
                 )
                 return videos, screenshot_path
-            finally:
-                try:
-                    if not page.is_closed():
-                        page.close()
-                except Exception:
-                    pass
     except JimengError:
         raise
     except Exception as exc:

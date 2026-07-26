@@ -113,7 +113,7 @@
         "to": "media-tools"
       }
     ],
-    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "artifactName": "Evan-AI-Video-Canvas-${version}-${os}-${arch}.${ext}",
     "publish": [
       {
         "provider": "github",

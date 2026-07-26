@@ -189,3 +189,16 @@ test('build 配置能通过 electron-builder 自己的 schema 校验', async () 
   // 反向确认这道防线真的有效，而不是永远返回 true。
   assert.equal(validate({ ...pkg.build, '//note': '注释' }), false);
 });
+
+test('安装包文件名不含空格，否则更新源里的地址会 404', () => {
+  // productName 是「Evan AI Video Canvas」，带空格。用 ${productName} 做 artifactName
+  // 会让同一个文件出现三种名字：
+  //   electron-builder 本地写盘  → "Evan AI Video Canvas-0.1.1-win-x64.exe"（空格）
+  //   latest.yml 里的 url        → "Evan-AI-Video-Canvas-0.1.1-win-x64.exe"（连字符）
+  //   GitHub 上传后的资产名       → "Evan.AI.Video.Canvas-0.1.1-win-x64.exe"（点号）
+  // electron-updater 按 latest.yml 去下载，必然 404 —— v0.1.1 实测复现过。
+  assert.doesNotMatch(pkg.build.artifactName, /\$\{productName\}/);
+  assert.doesNotMatch(pkg.build.artifactName, / /);
+  assert.match(pkg.build.artifactName, /\$\{version\}/);
+  assert.match(pkg.build.artifactName, /\$\{ext\}$/);
+});

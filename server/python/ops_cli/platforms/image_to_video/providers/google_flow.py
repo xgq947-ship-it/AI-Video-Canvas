@@ -16,6 +16,7 @@ from typing import Any
 from ops_cli.output import CommandResponse
 from ops_cli.platforms._google_flow_common import (
     GoogleFlowError,
+    ligature_text,
     _attach_reference_images,
     _bring_login_browser_to_front,
     _clear_existing_prompt,
@@ -162,7 +163,7 @@ def _configure_video(page: Any, *, duration: int, aspect_ratio: str, model: str,
     settings, menu = _open_settings_menu(page)
     try:
         video_tab = menu.get_by_role("tab").filter(
-            has_text=re.compile(r"(^|\s)play_circle(\s|$)", re.IGNORECASE)
+            has_text=ligature_text("play_circle")
         )
         video_tab = _exact_count(video_tab, "PAGE_NAVIGATION_FAILED", "未找到 Video 模式。")
         video_tab.click()
@@ -171,7 +172,7 @@ def _configure_video(page: Any, *, duration: int, aspect_ratio: str, model: str,
         # 否则 crop_free Frames（首帧/首尾帧）。两个子模式的比例/时长/模型选项一致。
         if mode == MODE_INGREDIENTS:
             ingredients_tab = menu.get_by_role("tab").filter(
-                has_text=re.compile(r"(^|\s)chrome_extension(\s|$)", re.IGNORECASE)
+                has_text=ligature_text("chrome_extension")
             )
             ingredients_tab = _exact_count(
                 ingredients_tab,
@@ -181,7 +182,7 @@ def _configure_video(page: Any, *, duration: int, aspect_ratio: str, model: str,
             ingredients_tab.click()
         else:
             frames_tab = menu.get_by_role("tab").filter(
-                has_text=re.compile(r"(^|\s)crop_free(\s|$)", re.IGNORECASE)
+                has_text=ligature_text("crop_free")
             )
             frames_tab = _exact_count(
                 frames_tab,
@@ -380,7 +381,7 @@ def _execute_generation(
                     previous_urls = set(_video_urls(page))
                     previous_failure_count = _generation_failure_count(page)
                     create = page.get_by_role("button").filter(
-                        has_text=re.compile(r"(^|\s)arrow_forward(\s|$)", re.IGNORECASE)
+                        has_text=ligature_text("arrow_forward")
                     )
                     create = _exact_count(create, "GENERATE_BUTTON_NOT_FOUND", "未找到生成按钮。")
                     if not create.is_enabled():

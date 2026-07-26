@@ -226,21 +226,48 @@ def _import_browser_runtime():
     return CDP_URL, PlaywrightError, PlaywrightTimeoutError, sync_playwright
 
 
-def _exact_count(locator: Any, error_code: str, message: str) -> Any:
-    count = locator.count()
-    if count == 1:
-        return locator
-    visible: list[Any] = []
-    for index in range(count):
-        node = locator.nth(index)
-        try:
-            if node.is_visible():
-                visible.append(node)
-        except Exception:
-            continue
-    if len(visible) == 1:
-        return visible[0]
-    raise GoogleFlowError(error_code, message)
+def ligature_text(*names: str) -> "re.Pattern[str]":
+    r"""匹配以 Material Symbols 连字开头的控件文本。
+
+    Flow 把图标连字和文案渲染成相邻的两个元素。浏览器 innerText 里它们之间有换行
+    （块级布局产生的），但 **Playwright 的 has_text 传正则时匹配的是 textContent**，
+    那里没有任何分隔符：
+
+        innerText   = "play_circle\nVideo"
+        textContent = "play_circleVideo"     ← 实测
+
+    所以绝不能写 ``(^|\s)play_circle(\s|$)``：它要求连字后面是空白或字符串结尾，
+    而实际紧跟的是标签首字母，永远匹配不上 —— 这正是「未找到 Video 模式」的根因，
+    同一写法还打断了提交按钮、Frames/Ingredients 子模式和上传控件的定位。
+
+    这里只锚定「开头或空白之后」，不再对结尾做任何要求。
+    """
+    alternatives = "|".join(re.escape(name) for name in names)
+    return re.compile(rf"(?:^|\s)(?:{alternatives})", re.IGNORECASE)
+
+
+def _exact_count(locator: Any, error_code: str, message: str, *, timeout_ms: int = 5_000) -> Any:
+    # locator.count() 是快照，不会等待。这些调用紧跟在一次 click() 之后，菜单/子模式
+    # 往往还没渲染完（实测设置菜单要 ~1.5s 才出现），直接取 count 就会偶发判「没找到」。
+    # Playwright 的自动等待只作用在动作上，这里必须自己轮询。
+    deadline = time.monotonic() + timeout_ms / 1000
+    while True:
+        count = locator.count()
+        if count == 1:
+            return locator
+        visible: list[Any] = []
+        for index in range(count):
+            node = locator.nth(index)
+            try:
+                if node.is_visible():
+                    visible.append(node)
+            except Exception:
+                continue
+        if len(visible) == 1:
+            return visible[0]
+        if time.monotonic() >= deadline:
+            raise GoogleFlowError(error_code, message)
+        time.sleep(0.2)
 
 
 def _locator_visible(locator: Any) -> bool:
@@ -660,7 +687,7 @@ def _first_option_selected(options: Any) -> bool:
 
 def _clear_existing_prompt(page: Any) -> None:
     """清理上一次运行残留的提示词和参考图，避免跨任务累积。"""
-    clear = page.get_by_role("button").filter(has_text=re.compile(r"(^|\s)close(\s|$)", re.IGNORECASE))
+    clear = page.get_by_role("button").filter(has_text=ligature_text("close"))
     if clear.count() == 1 and clear.is_visible():
         clear.click()
         page.wait_for_timeout(500)
@@ -691,10 +718,7 @@ def _upload_reference_file(page: Any, ref: Path) -> Any:
                 )
                 if add.count() == 0:
                     add = composer.locator("button, [role='button']").filter(
-                        has_text=re.compile(
-                            r"(^|\s)(add_2|add|upload|media|ingredient|添加|上传|素材|参考)(\s|$)",
-                            re.IGNORECASE,
-                        )
+                        has_text=ligature_text("add_2", "add", "upload", "media", "ingredient", "添加", "上传", "素材", "参考")
                     )
                 add = _exact_count(add, "REFERENCE_IMAGE_ADD_FAILED", "未找到添加参考图按钮。")
                 add.click()

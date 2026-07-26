@@ -116,3 +116,57 @@ test('登录窗口优雅退出落盘 Profile，超时后才强杀', () => {
   assert.match(stopBlock, /Chrome 会自行通知 Helper 退出并刷新 Cookie 数据库/);
   assert.ok(stopBlock.indexOf('signal.SIGTERM') < stopBlock.indexOf('signal.SIGKILL'));
 });
+
+// ---------------------------------------------------------------------------
+// Material Symbols 连字定位
+// ---------------------------------------------------------------------------
+
+test('连字匹配用的是 textContent 的实际形态，不能要求尾部空白', () => {
+  // 实测 Flow 的控件：
+  //   innerText   = "play_circle\nVideo"   （换行来自 CSS 块级布局）
+  //   textContent = "play_circleVideo"     ← Playwright 传正则时匹配的是这个
+  // 旧写法 (^|\s)play_circle(\s|$) 要求连字后面是空白或结尾，而实际紧跟标签首字母，
+  // 于是永远匹配不上 —— 这就是「未找到 Video 模式」的根因，同一写法还打断了
+  // 提交按钮、Frames/Ingredients 子模式和上传控件的定位。
+  const common = fs.readFileSync(
+    new URL('../server/python/ops_cli/platforms/_google_flow_common.py', import.meta.url), 'utf8'
+  );
+  assert.match(common, /def ligature_text/);
+
+  // 整个 platforms 目录都不允许再出现这种带尾部边界的连字正则。
+  for (const relative of [
+    '../server/python/ops_cli/platforms/_google_flow_common.py',
+    '../server/python/ops_cli/platforms/image_to_video/providers/google_flow.py',
+    '../server/python/ops_cli/platforms/text_to_image/providers/google_flow.py'
+  ]) {
+    const source = fs.readFileSync(new URL(relative, import.meta.url), 'utf8');
+    // 只看真正构造正则的地方；ligature_text 的 docstring 里把旧写法当反面例子引用了。
+    assert.doesNotMatch(
+      source,
+      /re\.compile\(\s*\n?\s*r?"\(\^\|\\s\)[^"]*\(\\s\|\$\)"/,
+      `${relative} 仍在用会失效的 (^|\\s)…(\\s|$) 连字正则`
+    );
+  }
+
+  // 四个关键控件都改用 ligature_text 定位。
+  const video = fs.readFileSync(
+    new URL('../server/python/ops_cli/platforms/image_to_video/providers/google_flow.py', import.meta.url), 'utf8'
+  );
+  for (const ligature of ['play_circle', 'crop_free', 'chrome_extension', 'arrow_forward']) {
+    assert.match(video, new RegExp(`ligature_text\\("${ligature}"`), `${ligature} 没有改用 ligature_text`);
+  }
+});
+
+test('_exact_count 会等待，而不是对刚点开的菜单取快照', () => {
+  // locator.count() 是快照。这些调用紧跟在 click() 之后，菜单往往还没渲染完，
+  // 直接取 count 就会偶发判「没找到」——正是「时好时坏」的来源。
+  const common = fs.readFileSync(
+    new URL('../server/python/ops_cli/platforms/_google_flow_common.py', import.meta.url), 'utf8'
+  );
+  const block = common.slice(common.indexOf('def _exact_count'), common.indexOf('def _exact_count') + 1400);
+  assert.match(block, /timeout_ms: int = /);
+  assert.match(block, /deadline = time\.monotonic\(\)/);
+  assert.match(block, /time\.sleep\(/);
+  // 超时后仍要如实抛错，不能无限等下去。
+  assert.match(block, /raise GoogleFlowError\(error_code, message\)/);
+});

@@ -21,6 +21,7 @@ from typing import Any
 from ops_cli.output import CommandResponse
 from ops_cli.platforms._google_flow_common import (
     GoogleFlowError,
+    ligature_text,
     _attach_reference_images,
     _capture_editor_diagnostics,
     _clear_existing_prompt,
@@ -67,9 +68,8 @@ _RATIO_TAB_NAMES = {
     "9:16": "crop_9_16 9:16",
 }
 
-_CREATE_BUTTON_LABEL = re.compile(
-    r"(^|\s)(arrow_forward|arrow_right_alt|send|create|generate|创建|生成)(\s|$)",
-    re.IGNORECASE,
+_CREATE_BUTTON_LABEL = ligature_text(
+    "arrow_forward", "arrow_right_alt", "send", "create", "generate", "创建", "生成"
 )
 _NON_SUBMIT_LABEL = re.compile(
     r"add_2|attach|upload|settings|tune|more_vert|添加|上传|设置",
@@ -174,7 +174,7 @@ def _configure_image(page: Any, *, aspect_ratio: str, count: int, model: str) ->
         # 已经处于 Image 模式时，新版页面甚至会省略切换器，只保留香蕉模型。不能再把
         # role=tab 当成唯一页面识别信号。
         image_mode = None
-        image_label = re.compile(r"(^|\s)(image|图片)(\s|$)", re.IGNORECASE)
+        image_label = ligature_text("image", "图片")
         for selector in ('[role="tab"]', 'button', '[role="menuitem"]'):
             candidates = menu.locator(selector).filter(has_text=image_label)
             try:

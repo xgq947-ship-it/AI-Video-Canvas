@@ -10,6 +10,7 @@ image-to-video 与 text-to-image 两个能力都通过内置浏览器驱动 Goog
 from __future__ import annotations
 
 import mimetypes
+import os
 import re
 import sys
 import time
@@ -45,11 +46,19 @@ class GoogleFlowError(RuntimeError):
         *,
         retryable: bool = False,
         recovery_hint: str | None = None,
+        submitted: bool = False,
     ) -> None:
         super().__init__(f"{error_code}：{message}")
         self.error_code = error_code
         self.retryable = retryable
         self.recovery_hint = recovery_hint
+        # 生成请求是否已经提交给平台。
+        #
+        # retryable 单独不足以决定能不能重试：_execute_generation 末尾的兜底
+        # `except Exception` 把提交之后的失败也标成了 retryable 的
+        # PAGE_NAVIGATION_FAILED。照着重试会二次提交 —— 配额扣两次、产出重复。
+        # 上层只在 submitted 为 False 时才允许重试。
+        self.submitted = submitted
 
 
 def _is_flow_project_url(value: str) -> bool:
@@ -354,10 +363,23 @@ def _capture_editor_diagnostics(page: Any, tag: str) -> None:
         pass
 
 
+def _editor_ready_timeout_ms(default_ms: int) -> int:
+    """编辑器等待窗口。见 EVAN_EDITOR_READY_TIMEOUT_S：Node 侧重试时会调大它，
+    第一次用默认值让真正的故障尽快暴露，重试时才照顾冷启动。"""
+    raw = str(os.environ.get("EVAN_EDITOR_READY_TIMEOUT_S", "")).strip()
+    if not raw:
+        return default_ms
+    try:
+        seconds = float(raw)
+    except ValueError:
+        return default_ms
+    return int(seconds * 1000) if seconds > 0 else default_ms
+
+
 def _ensure_editor(
     page: Any,
     *,
-    timeout_ms: int = 30_000,
+    timeout_ms: int | None = None,
     poll_interval_ms: int = 500,
     reload_attempts: int = 2,
 ) -> str:
@@ -375,6 +397,7 @@ def _ensure_editor(
       冷启动 / 渲染慢，抛「可重试的非 auth」错误 EDITOR_NOT_READY（不触发交互式登录
       恢复，前端 / 上层直接重试即可）；已跳到登录页 / 公开介绍页才报 AUTH_REQUIRED。
     """
+    timeout_ms = _editor_ready_timeout_ms(30_000 if timeout_ms is None else timeout_ms)
     editor = page.locator('[role="textbox"][contenteditable="true"][data-slate-editor="true"]')
     for attempt in range(reload_attempts + 1):
         project_navigation_attempted = False

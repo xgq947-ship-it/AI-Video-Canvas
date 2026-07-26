@@ -441,6 +441,8 @@ def _execute_generation(
     timeout_minutes: int,
 ) -> tuple[list[dict[str, str | None]], str | None]:
     cdp_url, PlaywrightError, PlaywrightTimeoutError, sync_playwright = _import_browser_runtime()
+    # 提交阶段标记：提交之前失败可以安全重试，提交之后不行（配额已经花掉）。
+    submitted = False
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
         with sync_playwright() as playwright:
@@ -468,7 +470,10 @@ def _execute_generation(
                 _fill_prompt(page, _prompt_for_image_composer(prompt, len(reference_paths)))
 
                 previous_urls = set(_image_urls(page))
+                # 从这一行往后，平台已经开始扣配额。任何后续失败都必须带上
+                # submitted=True，上层据此拒绝重试，避免二次提交、重复扣费。
                 _submit(page)
+                submitted = True
                 image_urls = _wait_for_images(
                     page,
                     previous_urls=previous_urls,
@@ -500,10 +505,18 @@ def _execute_generation(
                 except Exception:
                     screenshot_path = None
                 return images, screenshot_path
-    except JimengError:
+    except JimengError as exc:
+        # 提交后抛出的结构化错误同样要打上标记（下载失败、等待超时等）。
+        if submitted:
+            exc.submitted = True
         raise
     except Exception as exc:
-        raise JimengError("PAGE_NAVIGATION_FAILED", f"即梦图片页面自动化失败：{exc}", retryable=True) from exc
+        raise JimengError(
+            "PAGE_NAVIGATION_FAILED",
+            f"即梦图片页面自动化失败：{exc}",
+            retryable=True,
+            submitted=submitted,
+        ) from exc
 
 
 def run_image_generate(

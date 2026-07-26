@@ -52,7 +52,16 @@ export function isBrowserModelsReady() {
 export const BROWSER_MODELS_SETUP_HINT =
     '浏览器自动化模型（Google Flow / 即梦）尚未配置。请先运行：npm run setup:browser-models';
 
-const BROWSER_IDLE_CLOSE_MS = Number(process.env.EVAN_BROWSER_IDLE_CLOSE_MS) || 120_000;
+// 空闲多久关掉常驻浏览器。
+//
+// 这里是「内存占用」和「冷启动」的取舍点。原来是 120 秒 —— 用户生成一张图、看三
+// 分钟、再生成一张，浏览器已经被关了，第二次要完整重吃一遍冷启动（Chromium 启动
+// + 即梦/Flow 前端拉 chunk + 编辑器挂载），也就是 EDITOR_NOT_READY 最常见的来源。
+// 这不是首次运行才有的问题，是每次隔几分钟再操作都会复现。
+//
+// 放宽到 10 分钟：连续创作期间不再反复冷启动，代价是这段时间里 Chromium 常驻。
+// 上限是可控的 —— 退出 Evan 时会主动关掉（见 closeBrowserForShutdown）。
+const BROWSER_IDLE_CLOSE_MS = Number(process.env.EVAN_BROWSER_IDLE_CLOSE_MS) || 10 * 60_000;
 const BROWSER_LOGIN_IDLE_CLOSE_MS =
     Number(process.env.EVAN_BROWSER_LOGIN_IDLE_CLOSE_MS) || 15 * 60_000;
 
@@ -253,6 +262,40 @@ function deriveRunId(data) {
 }
 
 /**
+ * 允许自动重试的失败码。
+ *
+ * 刻意用白名单而不是 Python 给的 retryable 字段：retryable 的语义太宽，
+ * AUTH_REQUIRED 也是 retryable=true，但重试它毫无意义（用户不去登录，重试一百次
+ * 也一样），只会让「请先登录」这条提示晚三分钟才到用户眼前。
+ *
+ * 这里的两个码都只可能在**提交之前**产生：
+ * - EDITOR_NOT_READY：编辑器没挂载，多为冷启动慢。
+ * - PAGE_NAVIGATION_FAILED：打开页面失败。
+ * 但 PAGE_NAVIGATION_FAILED 同时也是 provider 兜底 except 的标签，提交之后崩了
+ * 也叫这个名字，所以**必须**再叠一层 submitted 判断，见 shouldRetryOpsFailure。
+ */
+const RETRYABLE_ERROR_CODES = new Set(['EDITOR_NOT_READY', 'PAGE_NAVIGATION_FAILED']);
+
+const MAX_OPS_ATTEMPTS = Math.max(1, Number(process.env.EVAN_OPS_MAX_ATTEMPTS) || 3);
+/** 第 N 次重试前等待多久。冷启动需要时间预热，退避比立刻重试有效得多。 */
+const RETRY_BACKOFF_MS = [4_000, 12_000];
+
+/**
+ * 这次失败能不能安全地自动重试。
+ *
+ * submitted 是硬闸门：生成请求一旦提交出去，平台就已经开始扣配额了。这时重试
+ * 等于二次提交 —— 用户被扣两次费、拿到两份结果，比直接报错还糟。
+ */
+export function shouldRetryOpsFailure(error, { attempt, maxAttempts }) {
+    if (attempt >= maxAttempts) return false;
+    if (error?.submitted === true) return false;
+    return RETRYABLE_ERROR_CODES.has(error?.code);
+}
+
+// 不 unref：调用方正在 await 这个退避，unref 之后事件循环一空就再也不会被唤醒。
+const delay = (ms) => new Promise(resolve => { setTimeout(resolve, ms); });
+
+/**
  * 调用 ops_cli 并返回 { data, runId }。
  *
  * @param {string[]} params.args   `--json` 之后的完整参数，如
@@ -268,7 +311,10 @@ export function runOpsCli({
     successSessionState = 'authenticated',
     trackSessionState = true,
     spawnProcess = spawn,
-    sessionStateStore = browserSessionState
+    sessionStateStore = browserSessionState,
+    // 可注入，让测试不必真的等完整退避。
+    retryBackoffMs = RETRY_BACKOFF_MS,
+    maxAttempts = MAX_OPS_ATTEMPTS
 }) {
     const provider = inferBrowserProvider(args);
     const tracksBrowser = Boolean(provider) || args[0] === 'browser';
@@ -297,18 +343,17 @@ export function runOpsCli({
         ? BROWSER_LOGIN_IDLE_CLOSE_MS
         : BROWSER_IDLE_CLOSE_MS;
 
-    return new Promise((resolve, reject) => {
-        if (tracksBrowser) beginBrowserOperation();
-        let browserOperationFinished = false;
-        const finishTrackedBrowserOperation = () => {
-            if (!tracksBrowser || browserOperationFinished) return;
-            browserOperationFinished = true;
-            finishBrowserOperation(idleDelayMs);
-        };
-        if (provider && trackSessionState) sessionStateStore.transition(provider, initialSessionState);
+    // 一次尝试。刻意不在这里做 begin/finishBrowserOperation，也不写 session 状态：
+    // 那些只能由 runOpsCli 在整轮重试的首尾各做一次。
+    const runAttempt = (attempt) => new Promise((resolve, reject) => {
         const child = spawnProcess(command, commandArgs, {
             cwd: PYTHON_ROOT,
-            env: opsEnvironment(),
+            env: {
+                ...opsEnvironment(),
+                // 第一次用默认等待窗口，让真正的故障尽快报出来；重试时才放宽，
+                // 给冷启动更多时间。这样「慢」和「坏」不会被同一个超时糊在一起。
+                EVAN_EDITOR_READY_TIMEOUT_S: attempt === 1 ? '' : '180'
+            },
             stdio: ['ignore', 'pipe', 'pipe']
         });
 
@@ -322,13 +367,7 @@ export function runOpsCli({
             child.kill('SIGTERM');
             const error = new Error(`${label}执行超时`);
             error.code = 'OPS_TIMEOUT';
-            if (provider && trackSessionState) {
-                sessionStateStore.transition(provider, 'unknown', {
-                    errorCode: error.code,
-                    message: error.message
-                });
-            }
-            finishTrackedBrowserOperation();
+            error.sessionState = 'unknown';
             reject(error);
         }, timeoutMs);
 
@@ -341,13 +380,7 @@ export function runOpsCli({
             clearTimeout(timer);
             const wrapped = new Error(`${label}无法启动 Python 进程：${error.message}`);
             wrapped.code = 'BROWSER_MODELS_NOT_READY';
-            if (provider && trackSessionState) {
-                sessionStateStore.transition(provider, 'browser_unavailable', {
-                    errorCode: wrapped.code,
-                    message: wrapped.message
-                });
-            }
-            finishTrackedBrowserOperation();
+            wrapped.sessionState = 'browser_unavailable';
             reject(wrapped);
         });
 
@@ -364,13 +397,8 @@ export function runOpsCli({
             } catch (error) {
                 const detail = stderr.trim() || `进程退出码 ${code}`;
                 const wrapped = new Error(`${label}失败：${detail}`);
-                if (provider && trackSessionState) {
-                    sessionStateStore.transition(provider, 'unknown', {
-                        errorCode: 'INVALID_CLI_RESPONSE',
-                        message: wrapped.message
-                    });
-                }
-                finishTrackedBrowserOperation();
+                wrapped.code = 'INVALID_CLI_RESPONSE';
+                wrapped.sessionState = 'unknown';
                 reject(wrapped);
                 return;
             }
@@ -383,28 +411,52 @@ export function runOpsCli({
                 if (data.recovery_hint) parts.push(data.recovery_hint);
                 const error = new Error(`${label}失败：${parts.join('　')}`);
                 if (data.error_code) error.code = data.error_code;
-                const state = browserStateForError(error);
-                if (provider && trackSessionState && state) {
-                    sessionStateStore.transition(provider, state, {
-                        errorCode: error.code,
-                        message: error.message
-                    });
-                } else if (provider && trackSessionState) {
-                    sessionStateStore.transition(provider, 'unknown', {
-                        errorCode: error.code || 'OPS_FAILED',
-                        message: error.message
-                    });
-                }
-                finishTrackedBrowserOperation();
+                // 提交阶段决定能不能重试；Python 拿不准时会给 true，这里从严处理。
+                error.submitted = data.submitted !== false;
+                error.sessionState = browserStateForError(error) || 'unknown';
                 reject(error);
                 return;
             }
 
-            if (provider && trackSessionState) sessionStateStore.transition(provider, successSessionState);
-            finishTrackedBrowserOperation();
             resolve({ data, runId: deriveRunId(data) });
         });
     });
+
+    // 整轮重试共用一次 begin/finish。若把重试放在 runOpsCli 之外，第一次尝试的
+    // finish 会 arm 空闲关闭定时器，退避期间浏览器可能被关掉，第二次尝试就要再吃
+    // 一次冷启动——正好是这里要修的问题。
+    if (tracksBrowser) beginBrowserOperation();
+    if (provider && trackSessionState) sessionStateStore.transition(provider, initialSessionState);
+
+    const finalize = (state, detail) => {
+        if (provider && trackSessionState) sessionStateStore.transition(provider, state, detail);
+        if (tracksBrowser) finishBrowserOperation(idleDelayMs);
+    };
+
+    return (async () => {
+        let lastError;
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            try {
+                const result = await runAttempt(attempt);
+                finalize(successSessionState);
+                return result;
+            } catch (error) {
+                lastError = error;
+                if (!shouldRetryOpsFailure(error, { attempt, maxAttempts })) break;
+                // 重试途中不写失败态，否则画布会闪一下「登录失效」之类的错误提示。
+                console.warn(
+                    `[ops-cli] ${label} 第 ${attempt} 次失败（${error.code}），准备重试：${error.message}`
+                );
+                await delay(retryBackoffMs[attempt - 1] ?? retryBackoffMs[retryBackoffMs.length - 1] ?? 0);
+            }
+        }
+
+        finalize(lastError?.sessionState || 'unknown', {
+            errorCode: lastError?.code || 'OPS_FAILED',
+            message: lastError?.message
+        });
+        throw lastError;
+    })();
 }
 
 // If the previous app session was interrupted while the dedicated browser was

@@ -332,6 +332,8 @@ def _execute_generation(
     timeout_minutes: int,
 ) -> tuple[list[dict[str, str | None]], str | None]:
     cdp_url, PlaywrightError, PlaywrightTimeoutError, sync_playwright = _import_browser_runtime()
+    # 提交阶段标记：提交之前失败可以安全重试，提交之后不行（配额已经花掉）。
+    submitted = False
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
         with sync_playwright() as playwright:
@@ -368,7 +370,10 @@ def _execute_generation(
                         raise GoogleFlowError("GENERATE_BUTTON_NOT_FOUND", "未找到生成按钮。")
                     if not create.is_enabled():
                         raise GoogleFlowError("GENERATE_BUTTON_NOT_FOUND", "生成按钮不可用，请检查提示词。")
+                    # 从这一行往后，平台已经开始扣配额。任何后续失败都必须带上
+                    # submitted=True，上层据此拒绝重试，避免二次提交、重复扣费。
                     create.click()
+                    submitted = True
 
                     result_page, image_urls = wait_for_new_media(
                         page,
@@ -413,10 +418,18 @@ def _execute_generation(
                             extra.close()
                     except Exception:
                         pass
-    except GoogleFlowError:
+    except GoogleFlowError as exc:
+        # 提交后抛出的结构化错误同样要打上标记（下载失败、等待超时等）。
+        if submitted:
+            exc.submitted = True
         raise
     except Exception as exc:
-        raise GoogleFlowError("PAGE_NAVIGATION_FAILED", f"Google Flow 页面自动化失败：{exc}", retryable=True) from exc
+        raise GoogleFlowError(
+            "PAGE_NAVIGATION_FAILED",
+            f"Google Flow 页面自动化失败：{exc}",
+            retryable=True,
+            submitted=submitted,
+        ) from exc
 
 
 def run_image_generate(

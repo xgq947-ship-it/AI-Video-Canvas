@@ -54,6 +54,9 @@ def _decorate_success(
     if not response.success:
         data.setdefault("error_code", "PLATFORM_REQUEST_FAILED")
         data.setdefault("retryable", True)
+        # 无法判断提交阶段时按「已提交」处理：上层据此拒绝重试。
+        # 宁可让用户手动点一次重新生成，也不能自动二次提交、重复扣配额。
+        data.setdefault("submitted", True)
         data.setdefault("required_scenes", list(spec.scenes))
         data.setdefault("recovery_hint", None)
     recovery = execution.recovery.as_dict()
@@ -145,6 +148,8 @@ def capability_failure_response(
         "session_recovery": recovery,
         "error_code": code,
         "retryable": retryable,
+        # 只有确定「还没提交」的失败才允许上层自动重试，见 provider 里的 submitted 标记。
+        "submitted": bool(getattr(exc, "submitted", True)),
         "required_scenes": list(spec.scenes),
         "recovery_hint": recovery_hint,
     }

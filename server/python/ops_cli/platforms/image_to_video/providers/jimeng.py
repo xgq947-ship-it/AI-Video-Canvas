@@ -108,11 +108,19 @@ class JimengError(RuntimeError):
         *,
         retryable: bool = False,
         recovery_hint: str | None = None,
+        submitted: bool = False,
     ) -> None:
         super().__init__(f"{error_code}：{message}")
         self.error_code = error_code
         self.retryable = retryable
         self.recovery_hint = recovery_hint
+        # 生成请求是否已经提交给平台。
+        #
+        # retryable 单独不足以决定能不能重试：_execute_generation 末尾的兜底
+        # `except Exception` 把提交之后的失败也标成了 retryable 的
+        # PAGE_NAVIGATION_FAILED。照着重试会二次提交 —— 配额扣两次、产出重复。
+        # 上层只在 submitted 为 False 时才允许重试。
+        self.submitted = submitted
 
 
 def _default_output_dir() -> Path:
@@ -240,12 +248,30 @@ def _raise_auth_required(message: str) -> None:
     )
 
 
-def _ensure_composer(page: Any, *, timeout_seconds: int = 90) -> None:
+def _editor_ready_timeout_seconds(default_seconds: int) -> int:
+    """编辑器等待窗口。
+
+    Node 侧重试时会把 EVAN_EDITOR_READY_TIMEOUT_S 调大：第一次用默认值让真正的
+    故障尽快报出来，重试时才给冷启动更多时间。这样「慢」和「坏」不会被同一个
+    超时糊在一起。
+    """
+    raw = str(os.environ.get("EVAN_EDITOR_READY_TIMEOUT_S", "")).strip()
+    if not raw:
+        return default_seconds
+    try:
+        value = int(float(raw))
+    except ValueError:
+        return default_seconds
+    return value if value > 0 else default_seconds
+
+
+def _ensure_composer(page: Any, *, timeout_seconds: int | None = None) -> None:
     """等待 composer（提示词输入框 + 工具条）挂载。
 
     冷启动时即梦前端要拉一大堆 chunk，编辑器迟迟不挂载并不等于掉登录。同时，
     新版游客页也会渲染完整编辑器，因此必须先检查登录框/登录菜单，再接受 composer。
     """
+    timeout_seconds = _editor_ready_timeout_seconds(90 if timeout_seconds is None else timeout_seconds)
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         current = (page.url or "").lower()
@@ -989,6 +1015,8 @@ def _execute_generation(
     timeout_minutes: int,
 ) -> tuple[list[dict[str, Any]], str | None]:
     cdp_url, PlaywrightError, PlaywrightTimeoutError, sync_playwright = _import_browser_runtime()
+    # 提交阶段标记：提交之前失败可以安全重试，提交之后不行（配额已经花掉）。
+    submitted = False
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
         with sync_playwright() as playwright:
@@ -1030,7 +1058,10 @@ def _execute_generation(
                 _fill_prompt(page, prompt)
 
                 previous_urls = set(_video_urls(page))
+                # 从这一行往后，平台已经开始扣配额。任何后续失败都必须带上
+                # submitted=True，上层据此拒绝重试，避免二次提交、重复扣费。
                 _submit(page)
+                submitted = True
                 video_urls = _wait_for_videos(
                     page, previous_urls=previous_urls, expected=count, timeout_minutes=timeout_minutes
                 )
@@ -1052,10 +1083,18 @@ def _execute_generation(
                     media_label="视频",
                 )
                 return videos, screenshot_path
-    except JimengError:
+    except JimengError as exc:
+        # 提交后抛出的结构化错误同样要打上标记（下载失败、等待超时等）。
+        if submitted:
+            exc.submitted = True
         raise
     except Exception as exc:
-        raise JimengError("PAGE_NAVIGATION_FAILED", f"即梦页面自动化失败：{exc}", retryable=True) from exc
+        raise JimengError(
+            "PAGE_NAVIGATION_FAILED",
+            f"即梦页面自动化失败：{exc}",
+            retryable=True,
+            submitted=submitted,
+        ) from exc
 
 
 def run_video_generate(

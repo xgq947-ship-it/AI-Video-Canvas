@@ -113,3 +113,36 @@ test('已经是无头 CDP 实例时不重启浏览器', () => {
     // 跳过会读到没写盘的状态，报出「刚登录成功却显示未登录」。
     assert.match(block, /stop_chrome\(\)/);
 });
+
+test('没有环境变量时也落在同一个 Evan 专属 Profile 上', { skip: !ready }, () => {
+    // 回归：此前回退到 ~/.sessionhub/evan-browser，于是任何没带
+    // SESSIONHUB_CHROME_PROFILE 的调用都会另起一个全新的空 Chrome，还占住 19222。
+    // 应用按自己的路径匹配不到进程 → 直接判「端口被占用」硬失败 →
+    // 用户明明登录过，界面却永远停在「无法确认」。本机实测复现过。
+    const script = `
+import json, os, sys
+for key in ('SESSIONHUB_CHROME_PROFILE', 'EVAN_BROWSER_PROFILE_DIR'):
+    os.environ.pop(key, None)
+sys.path.insert(0, 'sessionhub')
+from scene.chrome_cdp import PROFILE_DIR
+print(json.dumps({'dir': str(PROFILE_DIR)}))
+`;
+    const { dir } = runPython(script);
+
+    // 必须与 Electron 的 app.getPath('userData') 同源，绝不能再落到 ~/.sessionhub。
+    assert.doesNotMatch(dir, /\.sessionhub/);
+    assert.match(dir, /Evan AI Video Canvas/);
+    assert.match(dir, /browser-profile$/);
+});
+
+test('环境变量优先级：显式配置压过默认位置', { skip: !ready }, () => {
+    const script = `
+import json, os, sys
+os.environ['SESSIONHUB_CHROME_PROFILE'] = '/tmp/evan-explicit-profile'
+os.environ.pop('EVAN_BROWSER_PROFILE_DIR', None)
+sys.path.insert(0, 'sessionhub')
+from scene.chrome_cdp import PROFILE_DIR
+print(json.dumps({'dir': str(PROFILE_DIR)}))
+`;
+    assert.equal(runPython(script).dir, '/tmp/evan-explicit-profile');
+});

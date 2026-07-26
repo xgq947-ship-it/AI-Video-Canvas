@@ -55,11 +55,33 @@ def _default_chrome_bin() -> Path:
 
 CHROME_BIN = _default_chrome_bin()
 _DEFAULT_PROFILE_NAME = "evan-browser"
+
+
+def _default_profile_dir() -> Path:
+    """没有显式配置时的 Evan 专属 Profile 位置。
+
+    必须和 Electron 的 userData 落在同一处。此前回退到 ~/.sessionhub/evan-browser，
+    于是任何没带 SESSIONHUB_CHROME_PROFILE 的调用都会**另起一个全新的空 Chrome**，
+    还会占住 19222 —— 应用那边按自己的路径匹配不到进程，直接判「端口被占用」硬失败，
+    登录检查永远停在「无法确认」，而用户明明已经在专属浏览器里登录过了。
+    专属实例只能有一个，所以这里对齐 Electron 的 app.getPath('userData')。
+    """
+    app_name = "Evan AI Video Canvas"
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support" / app_name
+    elif os.name == "nt":
+        appdata = os.environ.get("APPDATA")
+        base = Path(appdata) / app_name if appdata else Path.home() / "AppData" / "Roaming" / app_name
+    else:
+        config_home = os.environ.get("XDG_CONFIG_HOME")
+        base = (Path(config_home) if config_home else Path.home() / ".config") / app_name
+    return base / "data" / "browser-profile"
+
+
 PROFILE_DIR = Path(
-    os.environ.get(
-        "SESSIONHUB_CHROME_PROFILE",
-        str(Path.home() / ".sessionhub" / _DEFAULT_PROFILE_NAME),
-    )
+    os.environ.get("SESSIONHUB_CHROME_PROFILE")
+    or os.environ.get("EVAN_BROWSER_PROFILE_DIR")
+    or str(_default_profile_dir())
 )
 
 
@@ -517,8 +539,9 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
         pid = _instance_pid()
         if pid is None:
             return False, (
-                f"{CDP_PORT} 端口已被其他浏览器或程序占用；"
-                f"没有复用它，以免把自动化任务发送到错误的浏览器资料。"
+                f"{CDP_PORT} 端口被另一个浏览器实例占用，且它用的不是 Evan 专属 Profile"
+                f"（{PROFILE_DIR}）。没有复用它，以免把任务发到错误的浏览器资料上。"
+                f"请退出 Evan、结束占用该端口的浏览器进程后重新打开 Evan。"
             )
         if pid is not None and not _instance_supports_playwright(pid):
             # 升级后的首次运行可能仍残留旧参数实例。保留 profile，重启进程即可，

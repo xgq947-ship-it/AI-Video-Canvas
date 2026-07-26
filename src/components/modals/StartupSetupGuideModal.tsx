@@ -24,6 +24,8 @@ type Theme = 'dark' | 'light';
 interface BrowserSession {
     state?: string;
     message?: string;
+    /** 只有真正跑完探针仍拿不到结论时才有值；重启后的「本次未验证」是 null。 */
+    errorCode?: string | null;
 }
 
 interface GuideStatus {
@@ -60,11 +62,25 @@ function StatusBadge({ complete, label }: { complete: boolean; label: string }) 
     );
 }
 
+/**
+ * 状态说明。检查完仍没结论时必须把原因摆出来 —— 只显示「无法确认」而不给理由，
+ * 用户既不知道该重登还是重试，也没法把问题描述清楚。
+ */
+function sessionDetail(session?: BrowserSession) {
+    if (!session?.message) return '';
+    if (session.state === 'authenticated') return '';
+    return session.message;
+}
+
 function sessionLabel(session?: BrowserSession) {
     if (session?.state === 'authenticated') return '已验证';
     if (session?.state === 'expired') return '未登录';
     if (session?.state === 'checking' || session?.state === 'reauthenticating') return '检查中';
-    return session?.message ? '无法确认' : '待验证';
+    // 不能用「有没有 message」来判断。应用重启时会把历史「已验证」重置成 unknown，
+    // 并写入一句说明（'等待本次启动重新验证登录状态'）——那是「还没验证」，
+    // 却因为 message 非空被显示成「无法确认」，看起来像验证失败。
+    // 真正跑完探针仍无结论时才会带 errorCode，用它区分。
+    return session?.errorCode ? '无法确认' : '待验证';
 }
 
 function friendlyBrowserError(error: unknown) {
@@ -277,6 +293,9 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                                     <StatusBadge complete={status.sessions.jimeng?.state === 'authenticated'} label={sessionLabel(status.sessions.jimeng)} />
                                 </div>
                                 <p className={`mt-4 text-xs leading-5 ${muted}`}>登录态保存在 Evan 专用 browser-profile；不会读取日常 Chrome 数据，状态由真实任务验证。</p>
+                                {sessionDetail(status.sessions['jimeng']) && (
+                                    <p className="mt-2 text-[11px] leading-5 text-amber-400">{sessionDetail(status.sessions['jimeng'])}</p>
+                                )}
                                 <div className={`mt-3 truncate rounded-lg border px-3 py-2 font-mono text-[10px] ${isDark ? 'border-white/[0.08] bg-black/20 text-neutral-500' : 'border-neutral-200 bg-white text-neutral-500'}`} title={JIMENG_LOGIN_URL}>{JIMENG_LOGIN_URL}</div>
                                 <div className="mt-4 grid grid-cols-2 gap-2">
                                     <button onClick={() => void openProviderLogin('jimeng')} disabled={Boolean(busyProvider) || isLoading} className="flex items-center justify-center gap-2 rounded-xl bg-cyan-500 px-3 py-2.5 text-xs font-semibold text-black transition-colors hover:bg-cyan-400 disabled:opacity-50">
@@ -297,6 +316,9 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                                     <StatusBadge complete={status.sessions['google-flow']?.state === 'authenticated'} label={sessionLabel(status.sessions['google-flow'])} />
                                 </div>
                                 <p className={`mt-4 text-xs leading-5 ${muted}`}>请使用可访问 Flow 的 Google 账号完成登录；登录完成后回到 Evan 重试任务。</p>
+                                {sessionDetail(status.sessions['google-flow']) && (
+                                    <p className="mt-2 text-[11px] leading-5 text-amber-400">{sessionDetail(status.sessions['google-flow'])}</p>
+                                )}
                                 <div className={`mt-3 truncate rounded-lg border px-3 py-2 font-mono text-[10px] ${isDark ? 'border-white/[0.08] bg-black/20 text-neutral-500' : 'border-neutral-200 bg-white text-neutral-500'}`} title={FLOW_LOGIN_URL}>{FLOW_LOGIN_URL}</div>
                                 <div className="mt-4 grid grid-cols-2 gap-2">
                                     <button onClick={() => void openProviderLogin('google-flow')} disabled={Boolean(busyProvider) || isLoading} className="flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-3 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-blue-400 disabled:opacity-50">

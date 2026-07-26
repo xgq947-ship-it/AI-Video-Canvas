@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import time
 import base64
 from datetime import datetime
@@ -23,6 +24,62 @@ VIDEO_ASPECT_RATIOS = ("16:9", "9:16")
 VIDEO_DURATIONS = (8,)
 MAX_IMAGE_REFERENCES = 5
 MAX_VIDEO_REFERENCES = 3
+
+# 上传后附件进入服务端处理，期间发送按钮已渲染但 disabled；实测两张 512×512 小图约 2 秒，
+# 真实产品图会更久。这里给足余量，真正的放行信号是「发送按钮可用」而不是这个上限。
+ATTACHMENT_READY_TIMEOUT_SECONDS = 90
+SEND_ENABLED_TIMEOUT_SECONDS = 20
+# 点击发送后确认请求真的落地（输入框清空 / 出现新回答 / 停止按钮出现）的观察窗口。
+SUBMISSION_CONFIRM_TIMEOUT_SECONDS = 12
+# 回答被判定为「写完了」需要的静默时长：文本连续不变且停止按钮消失。
+RESPONSE_STABLE_SECONDS = 2.8
+
+# Gemini DOM 变化时只维护这张表，其余函数不得内联选择器。
+# 候选按优先级排列，取第一个真的命中的那组（不是逗号并集 —— 并集会让 count() 混进
+# 用户消息，也无法分辨到底命中了哪一层包装）。
+SELECTORS: dict[str, tuple[str, ...]] = {
+    "prompt_input": (
+        '[contenteditable="true"][role="textbox"]',
+        'rich-textarea [contenteditable="true"]',
+        'textarea[aria-label*="prompt" i]',
+    ),
+    "file_input": (
+        'input[type="file"]',
+        'input[accept*="image"]',
+    ),
+    "upload_button": (
+        'button[aria-label*="upload" i]',
+        'button[aria-label*="上传"]',
+        'button[aria-label*="Add files" i]',
+    ),
+    "upload_menu_item": (
+        '[role="menuitem"][aria-label^="Upload files" i]',
+        '[role="menuitem"][aria-label*="上传文件"]',
+    ),
+    "send_button": (
+        'button[aria-label*="send" i]',
+        'button[aria-label*="发送"]',
+        'button[aria-label*="提交"]',
+    ),
+    "stop_button": (
+        'button[aria-label*="stop" i]',
+        'button[aria-label*="停止"]',
+    ),
+    # 只匹配模型回答的容器。绝不能放进 message-content 这类同时包住用户提问的选择器，
+    # 否则「新增消息」会先命中我们自己刚发出去的提示词，把提示词当成识别结果返回。
+    "assistant_messages": (
+        'model-response',
+        '[data-message-author-role="assistant"]',
+        '[data-message-author-role="model"]',
+        '.model-response-text',
+        'assistant-messages-primary message-content',
+    ),
+    "attachment": (
+        'gem-media-attachment',
+        'uploader-file-preview-container uploader-file-preview',
+        '[aria-label*="close attachment" i]',
+    ),
+}
 
 
 class GeminiWebError(RuntimeError):
@@ -123,15 +180,161 @@ def _ensure_authenticated(page: Any) -> None:
     page.wait_for_timeout(1500)
 
 
+def _visible_nodes(locator: Any) -> list[Any]:
+    try:
+        return [locator.nth(index) for index in range(locator.count()) if locator.nth(index).is_visible()]
+    except Exception:
+        return []
+
+
 def _single_visible(candidates: list[Any], code: str, message: str) -> Any:
     for locator in candidates:
+        visible = _visible_nodes(locator)
+        if len(visible) == 1:
+            return visible[0]
+    raise GeminiWebError(code, message)
+
+
+def _candidates(page: Any, group: str, *, require_enabled: bool = False) -> list[Any]:
+    """第一个有命中的候选选择器下的全部可见节点（可选再筛掉 disabled 的）。
+
+    刻意不要求「恰好一个命中」：Gemini 的输入区经常同时存在隐藏镜像节点，
+    原来的唯一性判定会因此整组作废，把发送退化成 Enter —— 而 Enter 在附件
+    仍在处理时会被页面吞掉，最终表现为「提交成功但一直等不到结果」。
+
+    require_enabled 用于工具栏按钮：页面水合期间 Gemini 会先渲染一个 disabled 的
+    占位按钮（aria-label="Add files"，class 含 menu-placeholder-button），随后整个
+    替换成真正的「Upload & tools」。点占位按钮只会卡满 30 秒再报元素已从 DOM 脱离。
+    """
+    for value in SELECTORS[group]:
+        nodes = _visible_nodes(page.locator(value))
+        if not require_enabled:
+            if nodes:
+                return nodes
+            continue
+        enabled = []
+        for node in nodes:
+            try:
+                if node.is_enabled():
+                    enabled.append(node)
+            except Exception:
+                continue
+        if enabled:
+            return enabled
+    return []
+
+
+def _first_visible(page: Any, group: str, *, require_enabled: bool = False) -> Any | None:
+    """按 SELECTORS 的优先级取第一个可见（可选可用）的节点。
+
+    取「第一个」而不是最后一个：视频界面上 button[aria-label*="upload"] 同时匹配 3 个
+    按钮，末尾那个 aria-label="File upload" 虽然可见可用，却被 input-container 盖住，
+    点它只会 intercepts pointer events 卡满 30 秒。
+    """
+    nodes = _candidates(page, group, require_enabled=require_enabled)
+    return nodes[0] if nodes else None
+
+
+def _click_any(page: Any, group: str, confirm: Any, timeout_seconds: int = 30) -> bool:
+    """依次尝试点击组内每个可用节点，直到 confirm() 成立。
+
+    单点一个节点是不够的：真正的入口可能排在后面，而排在前面的同名按钮会被浮层
+    盖住。逐个试 + 用结果确认，比猜哪一个是「正确的那一个」稳。
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        for node in _candidates(page, group, require_enabled=True):
+            try:
+                node.click(timeout=3000)
+            except Exception:
+                continue
+            page.wait_for_timeout(500)
+            if confirm():
+                return True
+        page.wait_for_timeout(400)
+    return False
+
+
+def _count_visible(page: Any, group: str) -> int:
+    for value in SELECTORS[group]:
+        visible = _visible_nodes(page.locator(value))
+        if visible:
+            return len(visible)
+    return 0
+
+
+def _assistant_messages(page: Any) -> Any | None:
+    """首个命中的模型回答容器（整组返回，用于计数与取最后一条）。"""
+    for value in SELECTORS["assistant_messages"]:
+        locator = page.locator(value)
         try:
-            visible = [locator.nth(index) for index in range(locator.count()) if locator.nth(index).is_visible()]
-            if len(visible) == 1:
-                return visible[0]
+            if locator.count() > 0:
+                return locator
         except Exception:
             continue
-    raise GeminiWebError(code, message)
+    return None
+
+
+def _assistant_message_count(page: Any) -> int:
+    locator = _assistant_messages(page)
+    try:
+        return locator.count() if locator is not None else 0
+    except Exception:
+        return 0
+
+
+def _enabled_send_button(page: Any) -> Any | None:
+    return _first_visible(page, "send_button", require_enabled=True)
+
+
+def _throw_if_human_verification(page: Any, *, scan_body: bool = True) -> None:
+    """Google 弹身份验证或用量见底时页面永远等不到回答，必须立刻停下让用户去处理。
+
+    scan_body=False 用于「已经拿到输出之后」的轮询：正文里出现「额度」「quota」完全
+    可能只是模型回答的内容，拿它去中断一次成功的生成是得不偿失的。URL 判定没有这个
+    风险，任何时候都查。
+    """
+    url = str(getattr(page, "url", "") or "")
+    if re.search(r"accounts\.google\.com|/challenge|captcha", url, re.I):
+        raise GeminiWebError(
+            "HUMAN_VERIFICATION",
+            "Gemini 要求人工验证身份",
+            recovery_hint="请在设置中打开 Gemini 登录窗口完成验证后重试。",
+        )
+    if not scan_body:
+        return
+    try:
+        text = page.locator("body").inner_text(timeout=1200)
+    except Exception:
+        return
+    if re.search(r"verify it.?s you|two-step verification|验证一下是你本人|请完成验证|验证码", text, re.I):
+        raise GeminiWebError(
+            "HUMAN_VERIFICATION",
+            "Gemini 要求人工验证身份",
+            recovery_hint="请在设置中打开 Gemini 登录窗口完成验证后重试。",
+        )
+    if re.search(r"quota|limit reached|额度|请求次数已达|已达到上限", text, re.I):
+        raise GeminiWebError(
+            "QUOTA_EXCEEDED",
+            "Gemini 账号用量已达上限",
+            recovery_hint="请稍后再试，或更换 Gemini 账号。",
+        )
+
+
+def _wait_composer_ready(page: Any) -> Any:
+    """等 Angular 把输入框挂上来再动手；页面没水合完时上传入口也不存在。"""
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        composer = _first_visible(page, "prompt_input")
+        if composer is not None:
+            return composer
+        _throw_if_human_verification(page)
+        page.wait_for_timeout(500)
+    raise GeminiWebError(
+        "PROMPT_INPUT_NOT_FOUND",
+        "未找到 Gemini 提示词输入框",
+        retryable=True,
+    )
 
 
 def _select_creation_surface(page: Any, kind: str) -> None:
@@ -160,56 +363,161 @@ def _select_creation_surface(page: Any, kind: str) -> None:
             continue
 
 
-def _upload_references(page: Any, paths: list[Path]) -> None:
+def _hidden_file_input(page: Any) -> Any | None:
+    for value in SELECTORS["file_input"]:
+        inputs = page.locator(value)
+        try:
+            if inputs.count():
+                return inputs.nth(inputs.count() - 1)
+        except Exception:
+            continue
+    return None
+
+
+def _upload_menu_item(page: Any) -> Any | None:
+    item = _first_visible(page, "upload_menu_item")
+    if item is not None:
+        return item
+    for locator in (
+        page.get_by_role("menuitem", name=re.compile(r"上传文件|upload files?", re.I)),
+        page.get_by_text(re.compile(r"上传文件|upload files?", re.I)),
+    ):
+        visible = _visible_nodes(locator)
+        if visible:
+            return visible[0]
+    return None
+
+
+def _upload_references(page: Any, paths: list[Path], *, timeout_seconds: int = ATTACHMENT_READY_TIMEOUT_SECONDS) -> None:
     if not paths:
         return
-    inputs = page.locator('input[type="file"]')
-    if inputs.count():
-        inputs.nth(inputs.count() - 1).set_input_files([str(path) for path in paths])
+    files = [str(path) for path in paths]
+    file_input = _hidden_file_input(page)
+    if file_input is not None:
+        file_input.set_input_files(files)
     else:
-        upload = _single_visible([
-            page.get_by_role("button", name=re.compile(r"上传和工具|upload and tools|add files?|upload", re.I)),
-            page.locator('button[aria-label*="上传"],button[aria-label*="upload" i]'),
-        ], "REFERENCE_UPLOAD_FAILED", "未找到 Gemini 上传入口")
-        upload.click()
-        page.wait_for_timeout(350)
-        file_item = _single_visible([
-            page.get_by_role("menuitem", name=re.compile(r"上传文件|upload files?", re.I)),
-            page.get_by_text(re.compile(r"上传文件|upload files?", re.I)),
-        ], "REFERENCE_UPLOAD_FAILED", "未找到 Gemini 上传文件菜单")
-        with page.expect_file_chooser(timeout=10_000) as chooser:
-            file_item.click()
-        chooser.value.set_files([str(path) for path in paths])
-    page.wait_for_timeout(1000)
+        # 实测当前 Gemini 主文档里根本没有 input[type=file]，上传只能走
+        # 「Upload & tools」→「Upload files」→ file chooser 这条路。
+        opened = _click_any(page, "upload_button", lambda: _upload_menu_item(page) is not None or _hidden_file_input(page) is not None)
+        if not opened:
+            raise GeminiWebError("REFERENCE_UPLOAD_FAILED", "无法打开 Gemini 上传入口", retryable=True)
+        file_input = _hidden_file_input(page)
+        if file_input is not None:
+            file_input.set_input_files(files)
+        else:
+            item = _upload_menu_item(page)
+            if item is None:
+                raise GeminiWebError("REFERENCE_UPLOAD_FAILED", "未找到 Gemini 上传文件菜单", retryable=True)
+            with page.expect_file_chooser(timeout=10_000) as chooser:
+                item.click()
+            chooser.value.set_files(files)
+
+    _wait_attachments_ready(page, len(paths), timeout_seconds)
+
+
+def _wait_attachments_ready(page: Any, expected: int, timeout_seconds: int) -> None:
+    """等到附件真的被 Gemini 收下为止。
+
+    这是原来最致命的一处：上传后只 wait_for_timeout(1000) 就去提交。附件处理期间
+    发送按钮已经渲染但是 disabled，于是提交逻辑找不到可用按钮、退回 Enter，而 Enter
+    在这个状态下会被页面直接吞掉 —— 请求从未发出，却要等满整个超时才报错。
+    页面上没有稳定的 loading 标记，可用的放行信号就是「附件已出现且发送按钮变为可用」。
+    """
+    deadline = time.monotonic() + timeout_seconds
+    seen = 0
+    while time.monotonic() < deadline:
+        _throw_if_human_verification(page)
+        seen = max(seen, _count_visible(page, "attachment"))
+        if seen >= expected and _enabled_send_button(page) is not None:
+            return
+        page.wait_for_timeout(500)
+    raise GeminiWebError(
+        "REFERENCE_UPLOAD_TIMEOUT",
+        f"Gemini 参考图上传未在 {timeout_seconds} 秒内就绪（已识别 {seen}/{expected} 张）",
+        retryable=True,
+    )
 
 
 def _composer(page: Any) -> Any:
-    return _single_visible([
-        page.locator('[role="textbox"][contenteditable="true"][aria-label]'),
-        page.locator('[role="textbox"][contenteditable="true"]'),
-        page.locator('textarea[placeholder]'),
-    ], "PROMPT_INPUT_NOT_FOUND", "未找到 Gemini 提示词输入框")
+    composer = _first_visible(page, "prompt_input")
+    if composer is None:
+        raise GeminiWebError("PROMPT_INPUT_NOT_FOUND", "未找到 Gemini 提示词输入框", retryable=True)
+    return composer
+
+
+def _fill_prompt(page: Any, prompt: str) -> Any:
+    box = _composer(page)
+    box.click()
+    try:
+        box.fill(prompt)
+    except Exception:
+        box.press("Meta+A" if sys.platform == "darwin" else "Control+A")
+        box.press_sequentially(prompt, delay=0)
+    page.wait_for_timeout(300)
+    try:
+        if not box.inner_text().strip():
+            box.press_sequentially(prompt, delay=0)
+            page.wait_for_timeout(300)
+    except Exception:
+        pass
+    return box
 
 
 def _submit(page: Any, prompt: str) -> None:
-    box = _composer(page)
-    box.fill(prompt)
-    submit = None
-    for locator in (
-        page.get_by_role("button", name=re.compile(r"提交|发送|submit|send", re.I)),
-        page.locator('button[aria-label*="提交"],button[aria-label*="发送"],button[aria-label*="submit" i],button[aria-label*="send" i]'),
-    ):
-        try:
-            visible = [locator.nth(index) for index in range(locator.count()) if locator.nth(index).is_visible() and locator.nth(index).is_enabled()]
-            if len(visible) == 1:
-                submit = visible[0]
-                break
-        except Exception:
-            continue
-    if submit is not None:
-        submit.click()
+    """填入提示词并确认请求真的发出去了。
+
+    确认才是重点：只有观察到输入框被清空（Gemini 发送后的固定行为）或模型回答条数
+    增加，才认为提交成功。没确认就抛 SUBMIT_FAILED —— 十几秒内可重试的明确错误，
+    好过空等到超时再报一个与真实原因无关的 GENERATION_TIMEOUT。
+    """
+    before = _assistant_message_count(page)
+    box = _fill_prompt(page, prompt)
+
+    deadline = time.monotonic() + SEND_ENABLED_TIMEOUT_SECONDS
+    send = None
+    while time.monotonic() < deadline:
+        send = _enabled_send_button(page)
+        if send is not None:
+            break
+        _throw_if_human_verification(page)
+        page.wait_for_timeout(400)
+
+    if send is not None:
+        send.click()
     else:
         box.press("Enter")
+
+    if _submission_landed(page, before):
+        return
+    # 按钮点击偶尔会被浮层吃掉，再补一次 Enter；仍未落地才判定失败。
+    try:
+        box.press("Enter")
+    except Exception:
+        pass
+    if _submission_landed(page, before):
+        return
+    raise GeminiWebError(
+        "SUBMIT_FAILED",
+        "Gemini 未接受本次提交（输入框未清空，也没有新的回答）",
+        retryable=True,
+    )
+
+
+def _submission_landed(page: Any, previous_messages: int, timeout_seconds: int | None = None) -> bool:
+    deadline = time.monotonic() + (SUBMISSION_CONFIRM_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds)
+    while time.monotonic() < deadline:
+        try:
+            composer = _first_visible(page, "prompt_input")
+            if composer is not None and not composer.inner_text().strip():
+                return True
+        except Exception:
+            pass
+        if _assistant_message_count(page) > previous_messages:
+            return True
+        if _first_visible(page, "stop_button") is not None:
+            return True
+        page.wait_for_timeout(400)
+    return False
 
 
 def _media_urls(page: Any, kind: str) -> list[str]:
@@ -232,12 +540,62 @@ def _page_failure_text(page: Any) -> str | None:
     return next((marker for marker in markers if marker in text), None)
 
 
+# model-response 容器的第一行是无障碍标签（实测为「Gemini said」），不是回答内容。
+# 不剥掉它，这行会被当成识别结果的一部分继续喂给下游生图提示词。
+_RESPONSE_LABEL = re.compile(r"^\s*(gemini\s*said|gemini\s*说|gemini\s*回答)\s*[:：]?\s*", re.I)
+
+
+def _latest_response_text(page: Any) -> str:
+    locator = _assistant_messages(page)
+    if locator is None:
+        return ""
+    try:
+        return _RESPONSE_LABEL.sub("", str(locator.last.inner_text() or "")).strip()
+    except Exception:
+        return ""
+
+
+def _wait_text_response(page: Any, previous_count: int, timeout_minutes: int) -> str:
+    """等回答写完，而不是抓到第一个字就走。
+
+    识图这类任务的价值全在完整段落里，取到流式输出的前几个字等于把结果截断。
+    判定「写完了」用两个信号：正文连续 RESPONSE_STABLE_SECONDS 不变，且停止按钮消失。
+    """
+    deadline = time.monotonic() + timeout_minutes * 60
+    last_text = ""
+    stable_since = 0.0
+    while time.monotonic() < deadline:
+        if page.is_closed():
+            raise GeminiWebError("BROWSER_CLOSED", "Gemini 回答期间浏览器已关闭", submitted=True)
+        _throw_if_human_verification(page, scan_body=not last_text)
+        text = _latest_response_text(page) if _assistant_message_count(page) > previous_count else ""
+        if text and text != last_text:
+            last_text = text
+            stable_since = time.monotonic()
+        streaming = _first_visible(page, "stop_button") is not None
+        if last_text and not streaming and stable_since and time.monotonic() - stable_since >= RESPONSE_STABLE_SECONDS:
+            return last_text
+        if not last_text:
+            failure = _page_failure_text(page)
+            if failure:
+                raise GeminiWebError("GENERATION_FAILED", f"Gemini 文本任务失败：{failure}", submitted=True)
+        page.wait_for_timeout(450)
+    # 超时就是超时：拿到一半的回答同样不能当结果返回。识图结论会被直接拼进下游生图
+    # 提示词，截断的版本比明确失败更难排查 —— 上层还可以「从失败阶段重试」。
+    raise GeminiWebError(
+        "GENERATION_TIMEOUT",
+        "Gemini 文本回答超时（回答已开始但迟迟没有写完）" if last_text else "Gemini 文本回答超时",
+        submitted=True,
+    )
+
+
 def _wait_new_media(page: Any, kind: str, previous: set[str], timeout_minutes: int) -> str:
     deadline = time.monotonic() + timeout_minutes * 60
     page_errors = 0
     while time.monotonic() < deadline:
         if page.is_closed():
             raise GeminiWebError("BROWSER_CLOSED", "Gemini 生成期间浏览器已关闭", submitted=True)
+        _throw_if_human_verification(page)
         try:
             urls = [url for url in _media_urls(page, kind) if url not in previous]
             page_errors = 0
@@ -343,6 +701,7 @@ def run_media_generation(
             with managed_work_page(context, f"gemini-web.{kind}", cleanup_before=True) as page:
                 _ensure_authenticated(page)
                 _select_creation_surface(page, kind)
+                _wait_composer_ready(page)
                 _upload_references(page, references)
                 previous = set(_media_urls(page, kind))
                 _submit(page, final_prompt)
@@ -369,23 +728,12 @@ def run_text_task(*, prompt: str, reference_images: list[str] | None = None, tim
             context = browser.contexts[0] if browser.contexts else browser.new_context()
             with managed_work_page(context, "gemini-web.text", cleanup_before=True) as page:
                 _ensure_authenticated(page)
+                _wait_composer_ready(page)
                 _upload_references(page, references)
-                responses = page.locator('[data-message-author-role="model"],model-response,message-content')
-                previous_count = responses.count()
+                previous_count = _assistant_message_count(page)
                 _submit(page, str(prompt).strip())
                 submitted = True
-                deadline = time.monotonic() + timeout_minutes * 60
-                while time.monotonic() < deadline:
-                    count = responses.count()
-                    if count > previous_count:
-                        text = responses.nth(count - 1).inner_text().strip()
-                        if text:
-                            return text
-                    failure = _page_failure_text(page)
-                    if failure:
-                        raise GeminiWebError("GENERATION_FAILED", f"Gemini 文本任务失败：{failure}", submitted=True)
-                    page.wait_for_timeout(1000)
-                raise GeminiWebError("GENERATION_TIMEOUT", "Gemini 文本回答超时", submitted=True)
+                return _wait_text_response(page, previous_count, timeout_minutes)
     except GeminiWebError as exc:
         if submitted:
             exc.submitted = True

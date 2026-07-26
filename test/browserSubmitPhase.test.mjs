@@ -17,7 +17,8 @@ const PROVIDERS = [
   ['text_to_image/providers/jimeng.py', 'JimengError'],
   ['text_to_image/providers/google_flow.py', 'GoogleFlowError'],
   ['image_to_video/providers/jimeng.py', 'JimengError'],
-  ['image_to_video/providers/google_flow.py', 'GoogleFlowError']
+  ['image_to_video/providers/google_flow.py', 'GoogleFlowError'],
+  ['_gemini_web_common.py', 'GeminiWebError']
 ];
 
 const read = (relative) =>

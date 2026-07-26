@@ -24,6 +24,22 @@ export function getInterruptedGenerationMessage(node) {
     return '生成任务已中断或超时，请重新生成。';
 }
 
+export function getBackendRestartedGenerationMessage(node) {
+    if (isBrowserWorkflowGeneration(node)) {
+        return '应用或本地后台在生成过程中被关闭或重启，本地已停止等待。平台任务可能仍在继续，请先到对应平台的历史记录检查；如果已经生成，请下载后拖回画布。确认平台没有任务后再重新生成，避免重复消耗额度。';
+    }
+    return '应用或本地后台在生成过程中被关闭或重启，本次本地任务已中断，请重新生成。';
+}
+
+export function wasGenerationInterruptedByBackendRestart(node, backendStartedAt) {
+    const generationStartedAt = Number(node?.generationStartTime);
+    const currentBackendStartedAt = Number(backendStartedAt);
+    return Number.isFinite(generationStartedAt)
+        && generationStartedAt > 0
+        && Number.isFinite(currentBackendStartedAt)
+        && currentBackendStartedAt > generationStartedAt;
+}
+
 // 内置浏览器 workflow（Google Flow / 即梦）：进程侧 timeout 是 15+2 分钟，
 // 前端恢复窗口取 18 分钟与之对齐，避免节点比后端更早被判超时。
 export function getGenerationRecoveryTimeoutMs(nodeOrVideoModel) {

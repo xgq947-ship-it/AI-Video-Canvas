@@ -19,6 +19,13 @@ export function isBrowserWorkflowGeneration(
 export function getInterruptedGenerationMessage(
     node?: GenerationRecoveryNode | null
 ): string;
+export function getBackendRestartedGenerationMessage(
+    node?: GenerationRecoveryNode | null
+): string;
+export function wasGenerationInterruptedByBackendRestart(
+    node: GenerationRecoveryNode | null | undefined,
+    backendStartedAt: number | string | null | undefined
+): boolean;
 export function getGenerationRecoveryTimeoutMs(
     nodeOrModel?: string | GenerationRecoveryNode | null
 ): number;

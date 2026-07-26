@@ -411,6 +411,10 @@ router.get('/generation-status/:nodeId', async (req, res) => {
     try {
         const { nodeId } = req.params;
         const { workflowId } = req.query;
+        const runtime = {
+            backendSessionId: req.app.locals.BACKEND_SESSION_ID,
+            backendStartedAt: req.app.locals.BACKEND_STARTED_AT
+        };
         const dirs = {
             workflowsDir: req.app.locals.WORKFLOWS_DIR,
             projectsDir: req.app.locals.PROJECTS_DIR
@@ -421,7 +425,7 @@ router.get('/generation-status/:nodeId', async (req, res) => {
         const imageMetaPath = path.join(imageTarget.targetDir, `${nodeId}.json`);
         if (fs.existsSync(imageMetaPath)) {
             const meta = JSON.parse(fs.readFileSync(imageMetaPath, 'utf8'));
-            return res.json({ status: 'success', resultUrl: `${imageTarget.urlPrefix}/${meta.filename}`, type: 'image', createdAt: meta.createdAt });
+            return res.json({ ...runtime, status: 'success', resultUrl: `${imageTarget.urlPrefix}/${meta.filename}`, type: 'image', createdAt: meta.createdAt });
         }
 
         // Check videos metadata
@@ -429,10 +433,10 @@ router.get('/generation-status/:nodeId', async (req, res) => {
         const videoMetaPath = path.join(videoTarget.targetDir, `${nodeId}.json`);
         if (fs.existsSync(videoMetaPath)) {
             const meta = JSON.parse(fs.readFileSync(videoMetaPath, 'utf8'));
-            return res.json({ status: 'success', resultUrl: `${videoTarget.urlPrefix}/${meta.filename}`, type: 'video', createdAt: meta.createdAt });
+            return res.json({ ...runtime, status: 'success', resultUrl: `${videoTarget.urlPrefix}/${meta.filename}`, type: 'video', createdAt: meta.createdAt });
         }
 
-        res.json({ status: 'pending' });
+        res.json({ ...runtime, status: 'pending' });
     } catch (error) {
         console.error("Status Check Error:", error);
         res.status(500).json({ error: error.message });

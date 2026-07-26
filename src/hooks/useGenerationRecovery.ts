@@ -10,8 +10,10 @@ import { NodeData, NodeStatus, NodeType } from '../types';
 import { extractVideoLastFrame } from '../utils/videoHelpers';
 import { getCodexImageJob, getLatestProductSceneJob, getProductSceneJob, type ProductSceneJob } from '../services/generationService';
 import {
+    getBackendRestartedGenerationMessage,
     getInterruptedGenerationMessage,
-    isGenerationRecoveryExpired
+    isGenerationRecoveryExpired,
+    wasGenerationInterruptedByBackendRestart
 } from '../utils/generationRecovery.js';
 
 interface UseGenerationRecoveryOptions {
@@ -33,21 +35,12 @@ export const useGenerationRecovery = ({
 
     const checkStatus = useCallback(async (nodeId: string) => {
         try {
-            const currentNode = nodesRef.current.find(n => n.id === nodeId);
-            if (currentNode && isGenerationRecoveryExpired(currentNode)) {
-                updateNode(nodeId, {
-                    status: currentNode.resultUrl ? NodeStatus.SUCCESS : NodeStatus.ERROR,
-                    errorMessage: getInterruptedGenerationMessage(currentNode),
-                    generationStartTime: undefined,
-                    productSceneStage: undefined
-                });
-                return;
-            }
-
             if (!workflowId) return;
             const response = await fetch(`/api/generation-status/${nodeId}?workflowId=${encodeURIComponent(workflowId)}`);
             if (response.ok) {
                 const data = await response.json();
+                const currentNode = nodesRef.current.find(n => n.id === nodeId);
+                if (!currentNode || currentNode.status !== NodeStatus.LOADING) return;
                 if (data.status === 'success' && data.resultUrl) {
                     // Access nodes via ref to avoid stale closure
                     const node = nodesRef.current.find(n => n.id === nodeId);
@@ -84,6 +77,26 @@ export const useGenerationRecovery = ({
                     }
 
                     updateNode(nodeId, updates);
+                    return;
+                }
+
+                if (wasGenerationInterruptedByBackendRestart(currentNode, data.backendStartedAt)) {
+                    updateNode(nodeId, {
+                        status: currentNode.resultUrl ? NodeStatus.SUCCESS : NodeStatus.ERROR,
+                        errorMessage: getBackendRestartedGenerationMessage(currentNode),
+                        generationStartTime: undefined,
+                        productSceneStage: undefined
+                    });
+                    return;
+                }
+
+                if (isGenerationRecoveryExpired(currentNode)) {
+                    updateNode(nodeId, {
+                        status: currentNode.resultUrl ? NodeStatus.SUCCESS : NodeStatus.ERROR,
+                        errorMessage: getInterruptedGenerationMessage(currentNode),
+                        generationStartTime: undefined,
+                        productSceneStage: undefined
+                    });
                 }
             }
         } catch (error) {

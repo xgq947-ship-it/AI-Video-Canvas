@@ -15,3 +15,11 @@ test('Electron 使用单实例锁，重复启动只聚焦现有窗口', () => {
     assert.match(electronMain, /app\.on\('second-instance'/);
     assert.match(electronMain, /mainWindow\.focus\(\)/);
 });
+
+test('Electron 后台异常退出时有限次自动重启并重新加载页面', () => {
+    assert.match(electronMain, /const BACKEND_RESTART_LIMIT = 3/);
+    assert.match(electronMain, /scheduleBackendRestart\(code\)/);
+    assert.match(electronMain, /if \(!shuttingDown && !backendProcess\) launchBackend\(\)/);
+    assert.match(electronMain, /loadBackendOrigin\(message\.origin\)/);
+    assert.match(electronMain, /backendCrashTimes\.length > BACKEND_RESTART_LIMIT/);
+});

@@ -66,6 +66,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
 const HOST = process.env.HOST || '127.0.0.1';
+const BACKEND_SESSION_ID = crypto.randomUUID();
+const BACKEND_STARTED_AT = Date.now();
 
 // Ensure library directories exist
 const LIBRARY_DIR = RUNTIME_PATHS.libraryDir;
@@ -145,6 +147,8 @@ app.locals.PROJECTS_DIR = PROJECTS_DIR;
 app.locals.WORKFLOWS_DIR = WORKFLOWS_DIR;
 app.locals.LIBRARY_DIR = LIBRARY_DIR;
 app.locals.CODEX_IMAGE_JOBS_DIR = CODEX_IMAGE_JOBS_DIR;
+app.locals.BACKEND_SESSION_ID = BACKEND_SESSION_ID;
+app.locals.BACKEND_STARTED_AT = BACKEND_STARTED_AT;
 app.locals.CODEX_INTEGRATION = createCodexIntegration({
     resourcesDir: RUNTIME_PATHS.resourcesDir,
     dataDir: RUNTIME_PATHS.dataDir,

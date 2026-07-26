@@ -11,6 +11,12 @@ let mainWindow = null;
 let backendProcess = null;
 let backendOrigin = null;
 let shuttingDown = false;
+let backendRestartTimer = null;
+let backendCrashTimes = [];
+let autoUpdatesConfigured = false;
+const BACKEND_RESTART_LIMIT = 3;
+const BACKEND_RESTART_WINDOW_MS = 60_000;
+const BACKEND_RESTART_DELAY_MS = 750;
 const desktopApiToken = randomUUID();
 const selectedProjectLocations = new Map();
 
@@ -217,11 +223,61 @@ function startBackend() {
     backendProcess.stderr?.on('data', chunk => process.stderr.write(chunk));
     backendProcess.on('exit', code => {
         backendProcess = null;
-        if (!shuttingDown && code !== 0) {
-            dialog.showErrorBox('Evan 后端已停止', `本地后端异常退出（代码 ${code}）。`);
+        if (!shuttingDown) {
+            scheduleBackendRestart(code);
         }
     });
     return backendProcess;
+}
+
+function loadBackendOrigin(origin) {
+    backendOrigin = origin;
+    if (!mainWindow) return;
+    void mainWindow.loadURL(origin).then(() => {
+        mainWindow?.show();
+        mainWindow?.focus();
+        app.focus({ steal: true });
+        if (!autoUpdatesConfigured) {
+            autoUpdatesConfigured = true;
+            configureAutoUpdates(mainWindow);
+        }
+    }).catch(error => {
+        dialog.showErrorBox('Evan 启动失败', `本地页面无法加载：${error.message}`);
+    });
+}
+
+function launchBackend() {
+    const backend = startBackend();
+    backend.on('message', message => {
+        if (message?.type !== 'backend-ready') return;
+        loadBackendOrigin(message.origin);
+    });
+    return backend;
+}
+
+function scheduleBackendRestart(code) {
+    const now = Date.now();
+    backendCrashTimes = backendCrashTimes
+        .filter(crashedAt => now - crashedAt < BACKEND_RESTART_WINDOW_MS);
+    backendCrashTimes.push(now);
+    backendOrigin = null;
+
+    if (backendCrashTimes.length > BACKEND_RESTART_LIMIT) {
+        dialog.showErrorBox(
+            'Evan 后端无法恢复',
+            `本地后端在 1 分钟内连续异常退出（最后代码 ${code}）。请完全退出 Evan 后重新打开。`
+        );
+        return;
+    }
+
+    if (mainWindow) {
+        void mainWindow.loadURL(LOADING_PAGE);
+    }
+    backendRestartTimer = setTimeout(() => {
+        backendRestartTimer = null;
+        if (!shuttingDown && !backendProcess) launchBackend();
+    }, BACKEND_RESTART_DELAY_MS);
+    backendRestartTimer.unref?.();
 }
 
 if (!hasSingleInstanceLock) {
@@ -239,21 +295,9 @@ if (!hasSingleInstanceLock) {
     });
 
     app.whenReady().then(() => {
-        const window = createWindow();
+        createWindow();
         app.focus({ steal: true });
-        const backend = startBackend();
-        backend.on('message', message => {
-            if (message?.type !== 'backend-ready') return;
-            backendOrigin = message.origin;
-            void window.loadURL(message.origin).then(() => {
-                window.show();
-                window.focus();
-                app.focus({ steal: true });
-                configureAutoUpdates(window);
-            }).catch(error => {
-                dialog.showErrorBox('Evan 启动失败', `本地页面无法加载：${error.message}`);
-            });
-        });
+        launchBackend();
 
         app.on('activate', () => {
             if (BrowserWindow.getAllWindows().length === 0 && mainWindow === null) {
@@ -263,6 +307,10 @@ if (!hasSingleInstanceLock) {
     });
 
     app.on('before-quit', event => {
+        if (backendRestartTimer) {
+            clearTimeout(backendRestartTimer);
+            backendRestartTimer = null;
+        }
         if (!backendProcess || shuttingDown) return;
         event.preventDefault();
         shuttingDown = true;

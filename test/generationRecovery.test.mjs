@@ -6,10 +6,12 @@ import {
     GOOGLE_FLOW_RECOVERY_TIMEOUT_MS,
     PRODUCT_SCENE_ANALYSIS_RECOVERY_TIMEOUT_MS,
     PRODUCT_SCENE_GENERATION_RECOVERY_TIMEOUT_MS,
+    getBackendRestartedGenerationMessage,
     getInterruptedGenerationMessage,
     getGenerationRecoveryTimeoutMs,
     isBrowserWorkflowGeneration,
-    isGenerationRecoveryExpired
+    isGenerationRecoveryExpired,
+    wasGenerationInterruptedByBackendRestart
 } from '../src/utils/generationRecovery.js';
 
 test('Google Flow 卡死任务使用 18 分钟恢复上限', () => {
@@ -74,4 +76,18 @@ test('超时生成自动判定为需要恢复，当前任务不会误判', () =>
         videoModel: 'google-flow-omni-flash',
         generationStartTime: now - GOOGLE_FLOW_RECOVERY_TIMEOUT_MS
     }, now), true);
+});
+
+test('后台启动时间晚于任务开始时间时立即判定本地等待已中断', () => {
+    const node = {
+        imageModel: 'google-flow-nano-banana-2',
+        generationStartTime: 1_000
+    };
+    assert.equal(wasGenerationInterruptedByBackendRestart(node, 999), false);
+    assert.equal(wasGenerationInterruptedByBackendRestart(node, 1_000), false);
+    assert.equal(wasGenerationInterruptedByBackendRestart(node, 1_001), true);
+    assert.equal(wasGenerationInterruptedByBackendRestart(node, undefined), false);
+    assert.match(getBackendRestartedGenerationMessage(node), /已停止等待/);
+    assert.match(getBackendRestartedGenerationMessage(node), /平台任务可能仍在继续/);
+    assert.match(getBackendRestartedGenerationMessage(node), /避免重复/);
 });

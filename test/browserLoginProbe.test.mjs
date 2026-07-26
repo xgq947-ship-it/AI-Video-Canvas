@@ -250,5 +250,8 @@ sys.path.insert(0, 'sessionhub')
 from scene.chrome_cdp import PROFILE_DIR
 print(json.dumps({'dir': str(PROFILE_DIR)}))
 `;
-    assert.equal(runPython(script).dir, '/tmp/evan-explicit-profile');
+    // Windows 上 pathlib 会把同一条路径渲染成 \tmp\evan-explicit-profile；
+    // 这条断言要验的是「显式配置被采纳」，不是路径分隔符长什么样。
+    // 直接比字面量会让 Windows 打包流水线卡在回归测试上（v0.2.0 首次发版实测）。
+    assert.equal(path.normalize(runPython(script).dir), path.normalize('/tmp/evan-explicit-profile'));
 });

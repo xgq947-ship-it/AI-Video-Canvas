@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 from ops_cli.output import CommandResponse
 from ops_cli.browser import managed_work_page
 from ops_cli.platforms._google_flow_common import _download_media, _import_browser_runtime
+from ops_cli.platforms._page_evidence import capture_page_evidence
 from ops_cli.platforms.image_to_video.providers.jimeng import (
     CREDITS_MARKERS,
     FAILURE_MARKERS,
@@ -314,11 +315,40 @@ def _attach_reference_images(page: Any, reference_paths: list[Path]) -> None:
             )
 
 
+RESULT_AREA_SELECTOR = "[class*='record-list']"
+
+
+def _page_disturbed(page: Any) -> str:
+    """等待期间工作页是否被换掉了。
+
+    实测事故：识图任务当时没有进队列，用户在生成刚提交时点了「打开 Evan 专属 Chrome」
+    与「检查登录状态」，这两个动作会重启 / 停掉 Chrome。即梦那边照常出图（历史里 4 张
+    都在），我们这边的页却已经不是那一页了，于是空轮询满 10 分钟才报「无法确认」。
+    页没了就立刻说清楚，不要再干等十分钟。
+    """
+    # 只认**确定**的信号。读不到状态不等于页面没了：那可能只是一次抖动，
+    # 而这时候误判会直接放弃一次已经扣过积分的生成。真正读不动的页面由
+    # 既有的「连续读取失败」计数兜底。
+    if _safe_call(lambda: page.is_closed()) is True:
+        return "工作页在生成期间被关闭"
+    host = _safe_call(lambda: (urlparse(str(page.url or "")).hostname or "").lower())
+    if host and JIMENG_HOST not in host:
+        return f"工作页在生成期间被导航到了 {host}"
+    return ""
+
+
+def _safe_call(action: Any) -> Any:
+    try:
+        return action()
+    except Exception:
+        return None
+
+
 def _image_urls(page: Any) -> list[str]:
     # 只从主结果记录区取图。上传参考图后，composer 缩略图会先用 blob:，提交后再
     # 换成带签名的 http URL；若扫描整页，它会被误判成新结果，导致参考图单张返回
     # 原图、参考图多张在第 2 张仍生成时提前成功。
-    result_area = page.locator("[class*='record-list']")
+    result_area = page.locator(RESULT_AREA_SELECTOR)
     root = result_area.first if result_area.count() > 0 else page
     candidates = root.locator("img").evaluate_all(
         """els => els.map(el => ({
@@ -365,6 +395,17 @@ def _wait_for_images(
     queue_message = ""
     while time.monotonic() < deadline:
         try:
+            disturbed = _page_disturbed(page)
+            if disturbed:
+                raise JimengError(
+                    "SUBMISSION_UNKNOWN",
+                    f"生成已提交，但{disturbed}，无法在原页面确认结果。",
+                    retryable=False,
+                    recovery_hint=(
+                        "生成期间不要打开浏览器窗口或检查登录状态（会重启 Chrome）。"
+                        "结果可能已经产出，请先在即梦历史会话中确认，避免重复消耗积分。"
+                    ),
+                )
             page_text = _result_area_text(page)
             queue_message = _queue_hint(page_text) or queue_message
             for marker in CREDITS_MARKERS:
@@ -418,6 +459,15 @@ def _wait_for_images(
                 ) from exc
             time.sleep(2)
     detail = f"页面提示：{queue_message}。" if queue_message else ""
+    # 超时是最难复盘的一类：平台可能已经出图，而我们只知道「没等到」。先把现场落盘
+    # （截图 + DOM + 各级筛选下的 img 计数），否则下次遇到还是只能靠猜。
+    evidence = capture_page_evidence(
+        page,
+        scene="jimeng_image_wait_timeout",
+        reason=f"等待 {timeout_minutes} 分钟未收到 {expected} 张结果",
+        container_selector=RESULT_AREA_SELECTOR,
+        extra={"collected": len(collected), "expected": expected, "queue_message": queue_message},
+    )
     raise JimengError(
         "SUBMISSION_UNKNOWN",
         f"等待即梦图片生成超过 {timeout_minutes} 分钟，无法确认任务最终状态。{detail}",
@@ -425,8 +475,74 @@ def _wait_for_images(
         recovery_hint=(
             "图片生成请求已经提交，请先在即梦历史会话中确认结果；"
             "确认没有任务后再重新生成，避免重复消耗积分。"
+            + (f"现场记录：{evidence}" if evidence else "")
         ),
     )
+
+
+def _deliver_results(
+    page: Any, image_urls: list[str], output_dir: Path
+) -> tuple[list[dict[str, str | None]], str | None]:
+    """下载结果并落盘。等待成功与超时后补收共用，避免两条路径的产物格式漂移。"""
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    images: list[dict[str, str | None]] = []
+    for index, url in enumerate(image_urls, start=1):
+        saved = _download_media(
+            page,
+            url,
+            output_dir,
+            f"{stamp}_{index}",
+            prefix="jimeng_img_",
+            default_ext=".png",
+        )
+        images.append({"path": saved, "url": url})
+    _ensure_result_delivery(images, error_code="IMAGE_DOWNLOAD_FAILED", media_label="图片")
+    screenshot = output_dir / f"jimeng_img_{stamp}.png"
+    try:
+        page.screenshot(path=str(screenshot), full_page=False, timeout=30_000)
+        return images, str(screenshot)
+    except Exception:
+        return images, None
+
+
+def _reclaim_images(
+    page: Any,
+    *,
+    previous_urls: set[str],
+    expected: int,
+    wait_seconds: int = 150,
+) -> list[str]:
+    """在一张全新的工作页上只读补收已经产出的结果。
+
+    等待失败不代表没生成 —— 实测事故里即梦已经出了 4 张图，只是我们那一页被别的
+    动作换掉了，白白丢掉一次已扣积分的结果。这里重新打开生成页、按和等待时完全
+    相同的规则扫描结果区，把不在提交前快照里的图收回来。
+
+    **严格只读**：只做 goto / 读 DOM / 下载。绝不点「再次生成」之类的按钮 ——
+    任务已经提交过，任何点击都可能造成二次生成和重复扣费。
+    """
+    try:
+        page.goto(_generate_url(), wait_until="domcontentloaded", timeout=60_000)
+    except Exception:
+        return []
+    previous_identities = {_image_identity(url) for url in previous_urls}
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline:
+        found: list[str] = []
+        seen: set[str] = set()
+        try:
+            for url in _image_urls(page):
+                identity = _image_identity(url)
+                if identity in previous_identities or identity in seen:
+                    continue
+                seen.add(identity)
+                found.append(url)
+        except Exception:
+            found = []
+        if len(found) >= expected:
+            return found[:expected]
+        page.wait_for_timeout(3000)
+    return []
 
 
 def _execute_generation(
@@ -474,37 +590,29 @@ def _execute_generation(
                 # submitted=True，上层据此拒绝重试，避免二次提交、重复扣费。
                 _submit(page)
                 submitted = True
-                image_urls = _wait_for_images(
-                    page,
-                    previous_urls=previous_urls,
-                    expected=count,
-                    timeout_minutes=timeout_minutes,
-                )
-
-                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                images: list[dict[str, str | None]] = []
-                for index, url in enumerate(image_urls, start=1):
-                    saved = _download_media(
-                        page,
-                        url,
-                        output_dir,
-                        f"{stamp}_{index}",
-                        prefix="jimeng_img_",
-                        default_ext=".png",
-                    )
-                    images.append({"path": saved, "url": url})
-                _ensure_result_delivery(
-                    images,
-                    error_code="IMAGE_DOWNLOAD_FAILED",
-                    media_label="图片",
-                )
-                screenshot = output_dir / f"jimeng_img_{stamp}.png"
                 try:
-                    page.screenshot(path=str(screenshot), full_page=False, timeout=30_000)
-                    screenshot_path: str | None = str(screenshot)
-                except Exception:
-                    screenshot_path = None
-                return images, screenshot_path
+                    image_urls = _wait_for_images(
+                        page,
+                        previous_urls=previous_urls,
+                        expected=count,
+                        timeout_minutes=timeout_minutes,
+                    )
+                except JimengError as wait_error:
+                    # 「没等到」不等于「没生成」。积分已经扣了，先去新页面只读补收一次，
+                    # 收得到就正常交付；收不到再把原始错误抛出去，绝不自动重新提交。
+                    if wait_error.error_code != "SUBMISSION_UNKNOWN":
+                        raise
+                    with managed_work_page(
+                        context, "jimeng.image.reclaim", cleanup_before=False
+                    ) as reclaim_page:
+                        image_urls = _reclaim_images(
+                            reclaim_page, previous_urls=previous_urls, expected=count
+                        )
+                        if not image_urls:
+                            raise
+                        return _deliver_results(reclaim_page, image_urls, output_dir)
+
+                return _deliver_results(page, image_urls, output_dir)
     except JimengError as exc:
         # 提交后抛出的结构化错误同样要打上标记（下载失败、等待超时等）。
         if submitted:

@@ -74,6 +74,10 @@ test('自定义项目路径只通过 Electron 原生选择器和桌面令牌提�
   assert.match(electronPreload, /selectProjectLocation/);
   assert.match(electronPreload, /selectCodexCli/);
   assert.match(electronMain, /codex:select-cli/);
+  assert.match(electronPreload, /openExternal/);
+  assert.match(electronMain, /external:open/);
+  assert.match(electronMain, /ALLOWED_EXTERNAL_HOSTS/);
+  assert.match(electronMain, /url\.protocol !== 'https:'/);
   assert.match(serverMain, /EVAN_DESKTOP_TOKEN/);
   assert.match(serverMain, /自定义项目路径必须通过桌面应用选择/);
 });

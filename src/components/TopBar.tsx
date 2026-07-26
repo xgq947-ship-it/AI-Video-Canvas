@@ -5,9 +5,10 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, Globe2, KeyRound, Loader2, Plus, Save, Settings, Trash2 } from 'lucide-react';
+import { ChevronDown, CircleHelp, Globe2, KeyRound, Loader2, Plus, Save, Settings, Trash2 } from 'lucide-react';
 import { NodeData } from '../types';
 import { ApiKeySettingsModal } from './modals/ApiKeySettingsModal';
+import { StartupSetupGuideModal } from './modals/StartupSetupGuideModal';
 import { TrashModal } from './modals/TrashModal';
 
 interface TopBarProps {
@@ -56,6 +57,7 @@ export const TopBar: React.FC<TopBarProps> = ({
     const [isSaving, setIsSaving] = useState(false);
     const [showSettingsMenu, setShowSettingsMenu] = useState(false);
     const [showApiSettings, setShowApiSettings] = useState(false);
+    const [showSetupGuide, setShowSetupGuide] = useState(true);
     const [showTrash, setShowTrash] = useState(false);
     const [isOpeningBrowser, setIsOpeningBrowser] = useState(false);
     const [browserOpenError, setBrowserOpenError] = useState<string | null>(null);
@@ -222,6 +224,19 @@ export const TopBar: React.FC<TopBarProps> = ({
                                 <button
                                     onClick={() => {
                                         setShowSettingsMenu(false);
+                                        setShowSetupGuide(true);
+                                    }}
+                                    className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${canvasTheme === 'dark' ? 'text-neutral-200 hover:bg-neutral-700' : 'text-neutral-700 hover:bg-neutral-100'}`}
+                                >
+                                    <CircleHelp size={16} className="text-violet-400" />
+                                    <span>
+                                        <span className="block font-medium">启动配置指南</span>
+                                        <span className="mt-0.5 block text-[10px] text-neutral-500">登录平台与连接 AI 服务</span>
+                                    </span>
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setShowSettingsMenu(false);
                                         setShowApiSettings(true);
                                     }}
                                     className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${canvasTheme === 'dark' ? 'text-neutral-200 hover:bg-neutral-700' : 'text-neutral-700 hover:bg-neutral-100'}`}
@@ -330,6 +345,15 @@ export const TopBar: React.FC<TopBarProps> = ({
             <ApiKeySettingsModal
                 isOpen={showApiSettings}
                 onClose={() => setShowApiSettings(false)}
+                canvasTheme={canvasTheme}
+            />
+            <StartupSetupGuideModal
+                isOpen={showSetupGuide}
+                onClose={() => setShowSetupGuide(false)}
+                onOpenSettings={() => {
+                    setShowSetupGuide(false);
+                    setShowApiSettings(true);
+                }}
                 canvasTheme={canvasTheme}
             />
             <TrashModal

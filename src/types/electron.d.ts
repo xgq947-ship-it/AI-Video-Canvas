@@ -11,6 +11,7 @@ declare global {
         | { canceled: true }
         | { canceled: false; path: string }
       >;
+      openExternal: (url: string) => Promise<void>;
       createProject: (input: {
         title: string;
         locationId?: string | null;

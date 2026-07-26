@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, utilityProcess } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess } from 'electron';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +19,9 @@ const BACKEND_RESTART_WINDOW_MS = 60_000;
 const BACKEND_RESTART_DELAY_MS = 750;
 const desktopApiToken = randomUUID();
 const selectedProjectLocations = new Map();
+const ALLOWED_EXTERNAL_HOSTS = new Set([
+    'platform.deepseek.com'
+]);
 
 app.setName('Evan AI Video Canvas');
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
@@ -205,6 +208,19 @@ ipcMain.handle('codex:select-cli', async () => {
         : await dialog.showOpenDialog(options);
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
     return { canceled: false, path: path.resolve(result.filePaths[0]) };
+});
+
+ipcMain.handle('external:open', async (_event, rawUrl) => {
+    try {
+        const url = new URL(String(rawUrl || ''));
+        if (url.protocol !== 'https:' || !ALLOWED_EXTERNAL_HOSTS.has(url.hostname)) {
+            return { ok: false, error: '该链接不在 Evan 的安全外链列表中' };
+        }
+        await shell.openExternal(url.toString());
+        return { ok: true };
+    } catch (error) {
+        return { ok: false, error: error.message || '无法打开外部链接' };
+    }
 });
 
 function startBackend() {

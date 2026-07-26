@@ -305,7 +305,7 @@ print(json.dumps({"confirmed": page.confirm.clicked}))
     assert.equal(result.confirmed, true);
 });
 
-test('即梦结果采集只读取主记录区并要求足够的显示尺寸', {
+test('即梦结果采集只读取主记录区，并按长边判定尺寸', {
     skip: ready ? false : '未配置 server/python/.venv'
 }, () => {
     const result = runPython(`
@@ -314,8 +314,11 @@ from ops_cli.platforms.text_to_image.providers import jimeng as j
 
 class Images:
     def evaluate_all(self, script):
-        assert "renderedWidth >= 96" in script
-        assert "renderedHeight >= 96" in script
+        # 尺寸判据必须走长边：结果区缩略图按长边 360 渲染，16:9 是 360x202，
+        # 要求「两边都 >=256」会把非正方形结果全部漏掉（本机实测收 0 张）。
+        assert "Math.max(item.width, item.height) >= 256" in script
+        assert "Math.min(item.width, item.height) >= 96" in script
+        assert "Math.max(item.renderedWidth, item.renderedHeight) >= 96" in script
         return ["https://p11-dreamina-sign.byteimg.com/result.webp"]
 
 class Area:

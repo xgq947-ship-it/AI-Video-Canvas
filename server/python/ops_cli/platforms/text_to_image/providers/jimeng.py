@@ -348,6 +348,14 @@ def _image_urls(page: Any) -> list[str]:
     # 只从主结果记录区取图。上传参考图后，composer 缩略图会先用 blob:，提交后再
     # 换成带签名的 http URL；若扫描整页，它会被误判成新结果，导致参考图单张返回
     # 原图、参考图多张在第 2 张仍生成时提前成功。
+    #
+    # 尺寸判据必须按**长边**，不能要求两边都 ≥256。即梦结果区缩略图统一按长边 360
+    # 渲染：1:1 是 360×360 两边都过，而 16:9 是 360×202 —— 短边 202 被卡掉，
+    # 于是 16:9 的结果一张也收不到，只能空等到超时。本机现场实测（evidence
+    # jimeng_image_wait_timeout_20260727_072406）：结果区 5 张 img 里 4 张真结果
+    # 全是 360×202、渲染 238×134，旧规则命中 0 张。
+    # 短边下限 96 与「渲染长边 ≥96」用来挡掉侧栏会话缩略图（100×56）和 composer
+    # 里的小预览（360×360 但只渲染 42×53）。
     result_area = page.locator(RESULT_AREA_SELECTOR)
     root = result_area.first if result_area.count() > 0 else page
     candidates = root.locator("img").evaluate_all(
@@ -359,8 +367,9 @@ def _image_urls(page: Any) -> list[str]:
              renderedHeight: el.getBoundingClientRect().height || 0,
            }))
            .filter(item => item.src.startsWith('http')
-             && item.width >= 256 && item.height >= 256
-             && item.renderedWidth >= 96 && item.renderedHeight >= 96)
+             && Math.max(item.width, item.height) >= 256
+             && Math.min(item.width, item.height) >= 96
+             && Math.max(item.renderedWidth, item.renderedHeight) >= 96)
            .map(item => item.src)"""
     )
     return [
@@ -510,7 +519,7 @@ def _reclaim_images(
     *,
     previous_urls: set[str],
     expected: int,
-    wait_seconds: int = 150,
+    wait_seconds: int = 60,
 ) -> list[str]:
     """在一张全新的工作页上只读补收已经产出的结果。
 

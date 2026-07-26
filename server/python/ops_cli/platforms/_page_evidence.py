@@ -48,8 +48,9 @@ def image_probe_counts(page: Any, container_selector: str | None = None) -> dict
         const box = el.getBoundingClientRect();
         return {
           http: (el.currentSrc || el.src || '').startsWith('http'),
-          natural: (el.naturalWidth || 0) >= 256 && (el.naturalHeight || 0) >= 256,
-          rendered: (box.width || 0) >= 96 && (box.height || 0) >= 96,
+          natural: Math.max(el.naturalWidth || 0, el.naturalHeight || 0) >= 256
+                   && Math.min(el.naturalWidth || 0, el.naturalHeight || 0) >= 96,
+          rendered: Math.max(box.width || 0, box.height || 0) >= 96,
         };
       });
       return {

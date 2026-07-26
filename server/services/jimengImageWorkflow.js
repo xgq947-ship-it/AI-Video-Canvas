@@ -108,7 +108,10 @@ async function executeJimengImageWorkflow({
         );
         const { data, runId } = await runOpsCli({
             label: '即梦图片生成',
-            timeoutMs: (timeoutMinutes + 2) * 60 * 1000,
+            // +4 而不是 +2：Python 侧在第 timeoutMinutes 分钟判超时后，还要留出
+            // 「只读补收」的时间把已经产出的结果收回来。余量给太紧的话，兜底刚开始
+            // 跑就被这里 kill 掉，用户拿到的还是「执行超时」（本机 07:13 那次实测）。
+            timeoutMs: (timeoutMinutes + 4) * 60 * 1000,
             args: [
                 'text-to-image', 'jimeng', 'generate',
                 ...buildJimengImageWorkflowArgs({

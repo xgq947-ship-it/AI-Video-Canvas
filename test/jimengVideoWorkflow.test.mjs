@@ -97,7 +97,7 @@ test('即梦与 Google Flow 共用本地 workflow 的恢复超时档位', () => 
     assert.notEqual(getGenerationRecoveryTimeoutMs('seedance-2-0'), GOOGLE_FLOW_RECOVERY_TIMEOUT_MS);
 });
 
-test('即梦与 Google Flow 共用同一个内置浏览器串行队列', async () => {
+test('即梦与 Google Flow 共用同一个 Evan 专属 Chrome 串行队列', async () => {
     const queue = await import('../server/services/googleFlowWorkflowQueue.js');
     assert.equal(queue.enqueueBrowserWorkflow, queue.enqueueGoogleFlowWorkflow);
 });
@@ -126,8 +126,7 @@ test('ARK Seedance 不受本地 workflow 参考素材判定影响', () => {
 
 
 test('参考素材名与图片一一对应地传给 workflow', () => {
-    // 这是「提示词里的 @参考图2 指到第 2 张图」的全部依据：
-    // 即梦用上传文件名当素材标签，名字必须跟着图一起、按同一顺序传下去。
+    // Python provider 会按同一顺序上传，并把 @素材名改写成「第 N 张参考图」。
     const args = buildJimengWorkflowArgs({
         prompt: '@肯豆 站在 @房间 里',
         referenceImages: ['/tmp/a.png', '/tmp/b.png'],

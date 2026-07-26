@@ -54,6 +54,11 @@ declare global {
         viewport: { x: number; y: number; zoom: number };
       }>;
       getAppInfo: () => Promise<AppInfo>;
+      chrome: {
+        getStatus: () => Promise<ChromeRuntimeStatus>;
+        openDownload: () => Promise<{ ok: boolean }>;
+        retry: () => Promise<ChromeRuntimeStatus>;
+      };
       updates: {
         getState: () => Promise<UpdateState>;
         check: () => Promise<UpdateState>;
@@ -65,4 +70,14 @@ declare global {
       };
     };
   }
+}
+
+export interface ChromeRuntimeStatus {
+  ready: boolean;
+  executable: string;
+  version: string | null;
+  major: number | null;
+  reason: string | null;
+  message: string;
+  downloadUrl: string;
 }

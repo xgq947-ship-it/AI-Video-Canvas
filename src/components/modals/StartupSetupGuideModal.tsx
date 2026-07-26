@@ -69,7 +69,7 @@ function sessionLabel(session?: BrowserSession) {
 function friendlyBrowserError(error: unknown) {
     const message = error instanceof Error ? error.message : String(error || '');
     if (message.includes('Browser.setDownloadBehavior') || message.includes('connect_over_cdp')) {
-        return '内置浏览器连接没有准备好，Evan 正在重新初始化。请关闭内置浏览器后再点一次。';
+        return 'Evan 专属 Chrome 连接没有准备好，正在重新初始化。请关闭该窗口后再点一次。';
     }
     return message || '登录页面打开失败';
 }
@@ -146,7 +146,7 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(result.error || '登录页面打开失败');
             await loadStatus();
-            setMessage('登录页已在 Evan 内置浏览器中打开。完成登录后回到这里刷新状态。');
+            setMessage('登录页已在 Evan 专属 Chrome 中打开。完成登录后回到这里重试任务。');
         } catch (error) {
             setMessage(friendlyBrowserError(error));
         } finally {
@@ -198,7 +198,7 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                                     </div>
                                     <h2 className="text-2xl font-semibold tracking-tight md:text-[28px]">连接你的 AI 创作服务</h2>
                                     <p className={`mt-2 max-w-2xl text-sm leading-6 ${muted}`}>
-                                        即梦和 Google Flow 需要在 Evan 内置浏览器登录；提示词优化可选择 DeepSeek API Key，或连接已登录 ChatGPT 的 Codex。
+                                        即梦和 Google Flow 需要在 Evan 专属 Chrome 登录；提示词优化可选择 DeepSeek API Key，或连接已登录 ChatGPT 的 Codex。
                                     </p>
                                 </div>
                             </div>
@@ -228,7 +228,7 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                                     </div>
                                     <StatusBadge complete={status.sessions.jimeng?.state === 'authenticated'} label={sessionLabel(status.sessions.jimeng)} />
                                 </div>
-                                <p className={`mt-4 text-xs leading-5 ${muted}`}>登录态保存在 Evan 专用 browser-profile；关闭内置浏览器不会退出账号，状态由真实任务验证。</p>
+                                <p className={`mt-4 text-xs leading-5 ${muted}`}>登录态保存在 Evan 专用 browser-profile；不会读取日常 Chrome 数据，状态由真实任务验证。</p>
                                 <div className={`mt-3 truncate rounded-lg border px-3 py-2 font-mono text-[10px] ${isDark ? 'border-white/[0.08] bg-black/20 text-neutral-500' : 'border-neutral-200 bg-white text-neutral-500'}`} title={JIMENG_LOGIN_URL}>{JIMENG_LOGIN_URL}</div>
                                 <button onClick={() => void openProviderLogin('jimeng')} disabled={Boolean(busyProvider)} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-2.5 text-xs font-semibold text-black transition-colors hover:bg-cyan-400 disabled:opacity-50">
                                     {busyProvider === 'jimeng' ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}打开并检查即梦登录
@@ -243,7 +243,7 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                                     </div>
                                     <StatusBadge complete={status.sessions['google-flow']?.state === 'authenticated'} label={sessionLabel(status.sessions['google-flow'])} />
                                 </div>
-                                <p className={`mt-4 text-xs leading-5 ${muted}`}>请使用可访问 Flow 的 Google 账号完成登录，并保持内置浏览器窗口开启直到登录完成。</p>
+                                <p className={`mt-4 text-xs leading-5 ${muted}`}>请使用可访问 Flow 的 Google 账号完成登录；登录完成后回到 Evan 重试任务。</p>
                                 <div className={`mt-3 truncate rounded-lg border px-3 py-2 font-mono text-[10px] ${isDark ? 'border-white/[0.08] bg-black/20 text-neutral-500' : 'border-neutral-200 bg-white text-neutral-500'}`} title={FLOW_LOGIN_URL}>{FLOW_LOGIN_URL}</div>
                                 <button onClick={() => void openProviderLogin('google-flow')} disabled={Boolean(busyProvider)} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-blue-400 disabled:opacity-50">
                                     {busyProvider === 'google-flow' ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}打开并检查 Flow 登录

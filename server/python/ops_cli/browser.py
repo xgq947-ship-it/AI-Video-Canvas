@@ -30,44 +30,6 @@ LOGIN_URLS = {
 }
 
 
-def _login_page_authenticated(provider: str, page: Any) -> bool:
-    """只读页面可见状态确认登录，不读取或复制 cookie/token。"""
-    try:
-        current_url = str(getattr(page, "url", "") or "")
-        if provider == "jimeng":
-            composer = page.locator("div.tiptap[contenteditable='true']")
-            return any(composer.nth(index).is_visible() for index in range(composer.count()))
-        if provider == "google-flow":
-            if "/fx/tools/flow/project/" in current_url:
-                return True
-            account = page.locator(
-                "[aria-label*='Google Account'], [aria-label*='Google 账号'], "
-                "[aria-label*='Google 帳戶']"
-            )
-            return any(account.nth(index).is_visible() for index in range(account.count()))
-    except Exception:
-        return False
-    return False
-
-
-def _wait_login_page_authenticated(
-    provider: str,
-    page: Any,
-    *,
-    timeout_seconds: float = 8.0,
-) -> bool:
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        if _login_page_authenticated(provider, page):
-            return True
-        if time.monotonic() >= deadline:
-            return False
-        try:
-            page.wait_for_timeout(500)
-        except Exception:
-            return False
-
-
 def browser_status() -> CommandResponse:
     return CommandResponse(
         success=True,
@@ -130,9 +92,9 @@ def open_browser_login(provider: str) -> CommandResponse:
     sessionhub_root = Path(get_config().sessionhub_root).expanduser().resolve()
     if str(sessionhub_root) not in sys.path:
         sys.path.insert(0, str(sessionhub_root))
-    from scene.chrome_cdp import CDP_PORT, start_chrome  # type: ignore
+    from scene.chrome_cdp import CDP_PORT, start_login_chrome  # type: ignore
 
-    ok, message = start_chrome(foreground=True)
+    ok, message = start_login_chrome(login_url)
     if not ok:
         return CommandResponse(
             success=False,
@@ -141,31 +103,15 @@ def open_browser_login(provider: str) -> CommandResponse:
             data={"provider": provider, "error": message},
         )
 
-    def _open(context: Any) -> dict[str, Any]:
-        cleanup_playwright_context(context)
-        parsed_login = urlparse(login_url)
-        page = next(
-            (
-                candidate
-                for candidate in reversed(list(getattr(context, "pages", []) or []))
-                if not _page_is_closed(candidate)
-                and (urlparse(str(getattr(candidate, "url", "") or "")).hostname or "").lower()
-                == (parsed_login.hostname or "").lower()
-            ),
-            None,
-        )
-        if page is None:
-            page = context.new_page()
-        page.goto(login_url, wait_until="domcontentloaded", timeout=60_000)
-        return {
-            "provider": provider,
-            "url": login_url,
-            "port": CDP_PORT,
-            "authenticated": _wait_login_page_authenticated(provider, page),
-            "message": "内置浏览器已打开，请完成登录后回到 Evan 重试任务。",
-        }
-
-    data = _with_cdp_context(CDP_PORT, _open)
+    data = {
+        "provider": provider,
+        "url": login_url,
+        "port": CDP_PORT,
+        # 登录模式刻意不开放 CDP，避免 Google 把凭据输入识别成自动化登录。
+        # 登录态在用户重试真实任务时由 provider 页面重新验证。
+        "authenticated": False,
+        "message": "Evan 专属 Chrome 已打开。完成登录后回到 Evan 重试任务。",
+    }
     return CommandResponse(success=True, platform="browser", command="login", data=data)
 
 
@@ -174,9 +120,10 @@ def open_browser() -> CommandResponse:
     sessionhub_root = Path(get_config().sessionhub_root).expanduser().resolve()
     if str(sessionhub_root) not in sys.path:
         sys.path.insert(0, str(sessionhub_root))
-    from scene.chrome_cdp import CDP_PORT, start_chrome  # type: ignore
+    from scene.chrome_cdp import start_login_chrome  # type: ignore
 
-    ok, message = start_chrome(foreground=True)
+    # 用户主动打开时同样使用无自动化参数的普通 Chrome，保证可以安全手动登录。
+    ok, message = start_login_chrome("about:blank")
     if not ok:
         return CommandResponse(
             success=False,
@@ -189,8 +136,7 @@ def open_browser() -> CommandResponse:
         platform="browser",
         command="open",
         data={
-            "port": CDP_PORT,
-            "message": "内置浏览器已打开。",
+            "message": "Evan 专属 Chrome 已打开。",
         },
     )
 
@@ -475,7 +421,7 @@ def _with_cdp_context(port: int, handler: Any) -> Any:
     try:
         from playwright.sync_api import sync_playwright  # type: ignore
     except ModuleNotFoundError as exc:
-        raise RuntimeError("缺少 Playwright，请先运行：npm run setup:browser-models") from exc
+        raise RuntimeError("缺少 Playwright，请先运行：npm run setup:automation-runtime") from exc
 
     cdp_url = f"http://127.0.0.1:{port}"
     with sync_playwright() as p:

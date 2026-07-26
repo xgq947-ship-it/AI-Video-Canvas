@@ -48,8 +48,8 @@ jobs:
       - name: 安装 Node 依赖
         run: npm ci
 
-      - name: 准备目标平台 Python 与 Chromium
-        run: npm run setup:browser-models
+      - name: 准备目标平台 Python 自动化运行时
+        run: npm run setup:automation-runtime
 
       - name: 回归测试
         run: npm test

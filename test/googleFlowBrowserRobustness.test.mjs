@@ -38,7 +38,7 @@ test('Flow 新账号不再使用固定项目 UUID，并支持从首页进入或�
   assert.match(common, /new\\s\+project\|新建项目/);
 });
 
-test('内置 Chromium 固定英文首选语言，Flow 生图关键操作使用图标结构定位', () => {
+test('Evan 专属 Chrome 固定英文首选语言，Flow 生图关键操作使用图标结构定位', () => {
   assert.match(chromeRuntime, /--lang=en-US/);
   assert.match(imageProvider, /arrow_forward/);
   assert.match(imageProvider, /has_text=re\.compile/);
@@ -54,8 +54,10 @@ test('Flow 与即梦生成强制复用同一资料的无头实例，只有用户
   assert.doesNotMatch(opsRunner, /process\.env\.EVAN_DESKTOP === '1'\s*\?\s*'1'/);
 });
 
-test('Chromium 149 使用可被 Playwright 接管的低后台开销启动参数', () => {
-  assert.match(chromeRuntime, /--enable-automation/);
+test('系统 Chrome 使用独立 Profile 和可被 Playwright 接管的低后台开销参数', () => {
+  assert.match(chromeRuntime, /EVAN_CHROME_EXECUTABLE/);
+  assert.match(chromeRuntime, /--remote-allow-origins=\*/);
+  assert.doesNotMatch(chromeRuntime, /--enable-automation/);
   assert.match(chromeRuntime, /--disable-background-networking/);
   assert.match(chromeRuntime, /--disable-component-update/);
   assert.match(chromeRuntime, /_instance_supports_playwright/);
@@ -69,9 +71,13 @@ test('每个 Flow 与即梦任务使用独立临时页并在结束后清理', ()
   assert.match(jimengVideo, /managed_work_page\(context, "jimeng\.video\.generate", cleanup_before=True\)/);
 });
 
-test('主动打开登录页不覆盖真实任务验证出的登录状态', () => {
-  assert.match(opsRunner, /trackSessionState = true/);
-  assert.match(serverMain, /trackSessionState: false/);
-  assert.match(serverMain, /if \(data\.authenticated\)/);
-  assert.match(serverMain, /transition\(provider, 'authenticated'/);
+test('主动登录使用普通 Chrome，且不把打开窗口误记为已认证', () => {
+  assert.match(chromeRuntime, /def start_login_chrome/);
+  const loginBlock = chromeRuntime.slice(
+    chromeRuntime.indexOf('def start_login_chrome'),
+    chromeRuntime.indexOf('def _system_events')
+  );
+  assert.doesNotMatch(loginBlock, /--remote-debugging-port|--enable-automation/);
+  assert.match(serverMain, /successSessionState: 'reauthenticating'/);
+  assert.doesNotMatch(serverMain, /trackSessionState: false/);
 });

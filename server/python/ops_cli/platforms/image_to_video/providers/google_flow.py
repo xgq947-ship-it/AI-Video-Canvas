@@ -1,6 +1,6 @@
 """Google Flow 首帧图生视频 provider（image-to-video 能力）。
 
-通过 Evan 内置浏览器驱动 Google Flow 页面 UI，不调用未公开 API，也不读取或持久化
+通过 Evan 专属 Chrome 驱动 Google Flow 页面 UI，不调用未公开 API，也不读取或持久化
 Google 的 cookie / token / storage。浏览器生命周期、登录恢复、页面接管与结果等待逻辑
 复用 `ops_cli.platforms._google_flow_common`。
 """

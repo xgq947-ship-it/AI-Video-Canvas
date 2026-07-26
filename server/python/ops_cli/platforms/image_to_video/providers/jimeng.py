@@ -1,6 +1,6 @@
 """即梦（jimeng.jianying.com）Seedance 视频生成 provider（image-to-video 能力）。
 
-通过 Evan 内置浏览器驱动即梦「视频生成」页面 UI，不调用未公开 API，也不读取或
+通过 Evan 专属 Chrome 驱动即梦「视频生成」页面 UI，不调用未公开 API，也不读取或
 持久化即梦的 cookie / token / storage。浏览器运行时与产物下载复用
 `ops_cli.platforms._google_flow_common` 中与站点无关的基座函数；页面 selector 与
 交互流程全部是即梦自己的，不与 Google Flow 共用。
@@ -46,9 +46,8 @@ MAX_DURATION = 15
 MIN_COUNT = 1
 MAX_COUNT = 4
 MAX_REFERENCE_IMAGES = 12
-# 参考素材在即梦页面上的名字 = **上传文件的文件名**（实测：上传 图片1.png 后，
-# 编辑器里 @ 出来的候选就叫「图片1」）。所以要让提示词里的 @xxx 指对素材，
-# 唯一可靠的做法是把每个参考素材按调用方给的名字重命名后再上传。
+# 参考素材按连接顺序逐个上传。即梦 2026-07 的视频编辑器不再稳定暴露 @ 候选，
+# 因此不能把「候选列表为空」当成上传失败；以 composer 缩略图实际增加为准。
 DEFAULT_REFERENCE_NAME_PREFIX = "图片"
 _UNSAFE_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
@@ -244,7 +243,7 @@ def _raise_auth_required(message: str) -> None:
         "AUTH_REQUIRED",
         message,
         retryable=True,
-        recovery_hint="请在应用打开的内置浏览器中登录 jimeng.jianying.com 后重试。",
+        recovery_hint="请在应用打开的 Evan 专属 Chrome 中登录 jimeng.jianying.com 后重试。",
     )
 
 
@@ -276,14 +275,14 @@ def _ensure_composer(page: Any, *, timeout_seconds: int | None = None) -> None:
     while time.monotonic() < deadline:
         current = (page.url or "").lower()
         if "login" in current or "passport" in current:
-            _raise_auth_required("即梦已跳转到登录页，当前内置浏览器未登录即梦。")
+            _raise_auth_required("即梦已跳转到登录页，当前 Evan 专属 Chrome 未登录即梦。")
         if JIMENG_HOST not in current:
             raise JimengError("PAGE_NAVIGATION_FAILED", f"页面已离开即梦域名：{page.url}", retryable=True)
         try:
             # 游客页同样会渲染提示词编辑器和工具条，不能把“编辑器可见”当成已登录。
             # 登录框也不能先被通用 overlay 清理吞掉，否则会一直拖到提交阶段才失败。
             if _login_dialog_visible(page) or _login_control_visible(page):
-                _raise_auth_required("即梦当前处于未登录状态，请先登录内置浏览器中的即梦。")
+                _raise_auth_required("即梦当前处于未登录状态，请先登录 Evan 专属 Chrome 中的即梦。")
             editor = _visible_prompt_editor(page)
             toolbar = page.locator(TOOLBAR_SELECT)
             toolbar_visible = False
@@ -652,37 +651,23 @@ def _resolve_reference_names(reference_paths: list[Path], reference_names: list[
     return resolved
 
 
-def _reference_option_labels(page: Any) -> list[str]:
-    """打开 @ 浮层，读出页面当前认得的参考素材名（顺序即编号顺序）。"""
-    editor = _visible_prompt_editor(page)
-    if editor is None:
-        raise JimengError("PROMPT_INPUT_NOT_FOUND", "未找到可见的提示词输入框。")
-    editor.focus()
-    page.keyboard.type("@")
-    page.wait_for_timeout(2500)
-    options = page.locator("li.lv-select-option")
-    labels: list[str] = []
-    for index in range(options.count()):
-        node = options.nth(index)
-        try:
-            if not node.is_visible():
-                continue
-            text = (node.inner_text() or "").strip()
-        except Exception:
-            continue
-        # 「创建主体」是浮层里的操作项，不是素材。
-        if text and text != "创建主体":
-            labels.append(text)
-    # 清掉刚输入的 @，否则它会留在提示词里。
-    page.keyboard.press("Escape")
-    page.wait_for_timeout(300)
-    page.keyboard.press("Backspace")
-    page.wait_for_timeout(500)
-    return labels
+def _prompt_for_video_composer(prompt: str, reference_names: list[str]) -> str:
+    """把画布 @ 标签改成当前即梦视频页可提交的顺序描述。
+
+    新版全能参考模式靠上传缩略图绑定素材，@ 浮层可能只有「创建主体」甚至完全为空。
+    保留字面 @ 会让编辑器把它当成未完成 mention；转换成「第 N 张参考图」既不阻断
+    提交，也保持多图指代顺序。
+    """
+    result = prompt
+    indexed = sorted(enumerate(reference_names, start=1), key=lambda item: len(item[1]), reverse=True)
+    for index, name in indexed:
+        if name:
+            result = result.replace(f"@{name}", f"第{index}张参考图")
+    return result
 
 
 def _attach_reference_images(page: Any, reference_paths: list[Path], reference_names: list[str]) -> None:
-    """逐个上传参考素材，并在提交前核对页面上的素材名与顺序。
+    """逐个上传参考素材，并以 composer 缩略图增加确认完成。
 
     必须**逐个**上传而不是一次 set_input_files 多文件：素材编号取决于页面收到它们的
     先后，一次多传的完成顺序不受控，一旦错位，提示词里的 @参考图2 就会指到别的图。
@@ -717,16 +702,6 @@ def _attach_reference_images(page: Any, reference_paths: list[Path], reference_n
                     f"参考素材「{name}」（第 {index} 个）3 分钟内未上传完成。",
                     retryable=True,
                 )
-
-    labels = _reference_option_labels(page)
-    if labels != reference_names:
-        raise JimengError(
-            "REFERENCE_NAME_MISMATCH",
-            "参考素材在即梦页面上的名字/顺序与预期不一致，已中止提交（未消耗积分）。"
-            f"预期 {reference_names}，页面实际 {labels}；提示词里的 @xxx 会指错素材。",
-            retryable=True,
-        )
-
 
 def _fill_prompt(page: Any, prompt: str) -> None:
     expected = prompt.replace("\n", "").strip()
@@ -928,11 +903,11 @@ def _wait_for_videos(
             if any(marker in str(exc) for marker in FATAL_PAGE_MARKERS):
                 raise JimengError(
                     "SUBMISSION_UNKNOWN",
-                    "等待生成结果期间，内置浏览器或即梦标签页被关闭了。",
+                    "等待生成结果期间，Evan 专属 Chrome 或即梦标签页被关闭了。",
                     retryable=False,
                     recovery_hint=(
                         "任务可能已提交到即梦，请先到即梦历史会话里确认结果，避免重复生成扣积分；"
-                        "重试前请保持内置浏览器和即梦标签页开着。"
+                        "重试前请保持 Evan 专属 Chrome 和即梦标签页开着。"
                     ),
                 ) from exc
             # 单次 DOM 读取抖动不应中断长任务（中断会导致重复提交、重复扣积分）。
@@ -1055,7 +1030,7 @@ def _execute_generation(
                 _configure_output(page, aspect_ratio=aspect_ratio, resolution=resolution, count=count)
                 _configure_duration(page, duration)
                 _attach_reference_images(page, reference_paths, reference_names)
-                _fill_prompt(page, prompt)
+                _fill_prompt(page, _prompt_for_video_composer(prompt, reference_names))
 
                 previous_urls = set(_video_urls(page))
                 # 从这一行往后，平台已经开始扣配额。任何后续失败都必须带上

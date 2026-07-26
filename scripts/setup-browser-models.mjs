@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 浏览器自动化模型（Google Flow / 即梦）一次性环境安装。
+ * 浏览器自动化模型（Google Flow / 即梦）Python 运行时安装。
  *
  * 只做机器能自动完成的部分：建 venv、装依赖。
  * 登录是人的事——脚本最后会把需要手动做的步骤打出来。
@@ -19,8 +19,6 @@ const IS_WINDOWS = process.platform === 'win32';
 const VENV_PYTHON = IS_WINDOWS
     ? path.join(PYTHON_ROOT, '.venv', 'Scripts', 'python.exe')
     : path.join(PYTHON_ROOT, '.venv', 'bin', 'python');
-const BROWSERS_DIR = path.join(PYTHON_ROOT, '.browsers');
-
 const MIN_PYTHON = [3, 11];
 
 function log(msg) { console.log(msg); }
@@ -67,7 +65,7 @@ function run(cmd, args, label, options = {}) {
     if (result.status !== 0) fail(`${label} 失败（退出码 ${result.status}）`);
 }
 
-log('=== 安装浏览器自动化模型运行环境（Google Flow / 即梦）===\n');
+log('=== 安装 Evan Chrome 自动化运行环境（Google Flow / 即梦）===\n');
 
 const python = findPython();
 if (!python) {
@@ -80,7 +78,7 @@ if (!python) {
         '  macOS   : brew install python@3.12',
         '            或 https://www.python.org/downloads/macos/',
         '',
-        '装好后重开一个终端，运行：npm run setup:browser-models'
+        '装好后重开一个终端，运行：npm run setup:automation-runtime'
     ].join('\n'));
 }
 
@@ -92,13 +90,6 @@ if (fs.existsSync(VENV_PYTHON)) {
 
 run(VENV_PYTHON, ['-m', 'pip', 'install', '--quiet', '--upgrade', 'pip'], '升级 pip');
 run(VENV_PYTHON, ['-m', 'pip', 'install', '--quiet', '-r', 'requirements.txt'], '安装 Python 依赖');
-run(
-    VENV_PYTHON,
-    ['-m', 'playwright', 'install', '--no-shell', 'chromium'],
-    '下载与 Playwright 匹配的内置 Chromium',
-    { env: { PLAYWRIGHT_BROWSERS_PATH: BROWSERS_DIR } }
-);
-
 // 自检：确认 CLI 能正常加载两个能力
 log('\n▶ 自检 ops_cli');
 const check = spawnSync(VENV_PYTHON, ['-m', 'ops_cli', '--help'], {
@@ -114,13 +105,13 @@ log(`
 ✅ 环境安装完成
 ========================================================
 
-内置 Chromium 已准备好，不再要求安装 Chrome Beta。
-首次使用或登录过期时，应用会打开这个专用浏览器。请分别登录：
+Evan 不再下载或打包 Chromium；运行时使用电脑现有的 Google Chrome，
+并自动创建独立 browser-profile。首次使用或登录过期时请分别登录：
    · 即梦        https://jimeng.jianying.com   —— 需要即梦 VIP 会员额度
    · Google Flow https://labs.google/fx/tools/flow —— 需要有 Flow 权限的 Google 账号
 
 ⚠️ 登录态只保存在你本机，不会也不能随项目分发。
-   应用更新不会覆盖专用浏览器的用户资料。
+   应用更新不会覆盖 Evan 专属 Chrome 的用户资料。
 
 不配置这一套也没关系：Gemini / OpenAI / Seedance(ARK)
 等官方 API 模型不依赖它，填好 .env 即可直接使用。

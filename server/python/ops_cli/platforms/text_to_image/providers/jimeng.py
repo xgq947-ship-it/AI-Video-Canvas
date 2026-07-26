@@ -1,6 +1,6 @@
 """即梦图片 5.0 生图 provider（text-to-image 能力）。
 
-通过 Evan 内置浏览器驱动即梦「图片生成」页面，不调用未公开 API。登录恢复、composer、
+通过 Evan 专属 Chrome 驱动即梦「图片生成」页面，不调用未公开 API。登录恢复、composer、
 参考素材上传、提示词写入与通用媒体下载复用即梦视频 provider 已验证的页面基座。
 
 当前只开放画板需要的两个模型：图片 5.0 Pro、图片 5.0 Lite。
@@ -401,7 +401,7 @@ def _wait_for_images(
             if any(marker in str(exc) for marker in FATAL_PAGE_MARKERS):
                 raise JimengError(
                     "SUBMISSION_UNKNOWN",
-                    "等待图片结果期间，内置浏览器或即梦标签页被关闭了。",
+                    "等待图片结果期间，Evan 专属 Chrome 或即梦标签页被关闭了。",
                     retryable=False,
                     recovery_hint="任务可能已提交，请先在即梦历史会话中确认，避免重复扣积分。",
                 ) from exc

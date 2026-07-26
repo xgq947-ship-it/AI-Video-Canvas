@@ -3,8 +3,8 @@
  *
  * 探测「浏览器自动化模型」（Google Flow / 即梦）是否可用。
  *
- * 这类模型不走官方 API，而是驱动 Evan 内置、由用户登录的 Chromium。
- * 源码开发需要先跑 `npm run setup:browser-models`，安装包已自带运行时。
+ * 这类模型不走官方 API，而是驱动系统 Google Chrome 的 Evan 专属 Profile。
+ * 源码开发需要先跑 `npm run setup:automation-runtime`，安装包已自带 Python 运行时。
  * 未安装时不应让用户点了才报错，而是直接在模型列表里置灰。
  *
  * 结果进程内缓存：能力在运行期不会变，多个下拉框共用一次请求。
@@ -38,7 +38,7 @@ const FALLBACK_MODELS = [
     'jimeng-seedance-2-0-fast'
 ];
 
-const DEFAULT_HINT = '需先运行 npm run setup:browser-models 并登录对应账号';
+const DEFAULT_HINT = '请安装或更新 Google Chrome，并登录对应账号';
 
 // 模块级缓存：整个会话只请求一次。
 let cache: BrowserModelsState | null = null;

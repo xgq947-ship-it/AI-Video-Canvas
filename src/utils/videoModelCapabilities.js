@@ -20,7 +20,7 @@ const JIMENG_VIDEO_MODELS = new Set([
     JIMENG_STANDARD_VIDEO_MODEL
 ]);
 
-// 走内置浏览器 workflow 的视频模型（相对 API 直连供应商）。
+// 走 Evan 专属 Chrome workflow 的视频模型（相对 API 直连供应商）。
 export const BROWSER_WORKFLOW_VIDEO_MODELS = new Set([
     GOOGLE_FLOW_VIDEO_MODEL,
     GOOGLE_FLOW_VEO_3_1_LITE_VIDEO_MODEL,

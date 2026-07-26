@@ -245,7 +245,7 @@ router.post('/generate-video', async (req, res) => {
         const isSeedanceModel = videoModel && videoModel.startsWith('seedance-');
         const isGoogleFlowWorkflowModel = isGoogleFlowWorkflowModelId(videoModel);
         const isJimengWorkflowModel = isJimengWorkflowModelId(videoModel);
-        // 两个 provider 都走内置浏览器 workflow：输入是真实文件路径而非 base64。
+        // 两个 provider 都走 Evan 专属 Chrome workflow：输入是真实文件路径而非 base64。
         const isBrowserWorkflowModel = isGoogleFlowWorkflowModel || isJimengWorkflowModel;
 
         // 页面 workflow 需要真实首帧路径；其他供应商继续使用 base64 输入。

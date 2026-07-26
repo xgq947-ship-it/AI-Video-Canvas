@@ -3,6 +3,10 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createUpdateController } from './updater.js';
+import {
+    CHROME_DOWNLOAD_URL,
+    probeSystemChromeCompatibility
+} from '../server/runtime/browserExecutable.js';
 
 const ELECTRON_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(ELECTRON_DIR, '..');
@@ -52,12 +56,62 @@ const LOADING_PAGE = `data:text/html;charset=utf-8,${encodeURIComponent(`
 </html>
 `)}`;
 
+function chromeRequiredPage(status) {
+    const message = status?.message || '未找到兼容的 Google Chrome。';
+    return `data:text/html;charset=utf-8,${encodeURIComponent(`
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>Evan 需要 Google Chrome</title>
+<style>
+    html, body { height: 100%; margin: 0; }
+    body { display: grid; place-items: center; color: #f5f5f7; background: #101116; font: 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { width: min(560px, calc(100vw - 64px)); padding: 42px; border: 1px solid #2d3140; border-radius: 26px; background: #181b23; box-shadow: 0 32px 100px rgba(0,0,0,.45); }
+    h1 { margin: 0 0 14px; font-size: 26px; }
+    p { margin: 0; color: #b8bdc9; line-height: 1.75; }
+    .reason { margin-top: 16px; color: #ffbd9d; }
+    .actions { display: flex; gap: 12px; margin-top: 28px; }
+    button { border: 0; border-radius: 12px; padding: 12px 18px; font: inherit; font-weight: 650; cursor: pointer; }
+    #download { color: white; background: #1478ff; }
+    #retry { color: #e7e9ef; background: #303543; }
+    #status { min-height: 24px; margin-top: 18px; font-size: 13px; }
+</style>
+<main>
+    <h1>需要安装 Google Chrome</h1>
+    <p>Evan 使用电脑上的 Google Chrome 创建独立的专属浏览器实例，用于 Flow、即梦和本地成片渲染。不会读取或影响你的日常 Chrome 登录资料。</p>
+    <p class="reason">${message.replace(/[<>&]/g, '')}</p>
+    <div class="actions">
+        <button id="download">下载 Google Chrome</button>
+        <button id="retry">安装完成，重新检测</button>
+    </div>
+    <p id="status"></p>
+</main>
+<script>
+    const status = document.getElementById('status');
+    document.getElementById('download').addEventListener('click', async () => {
+        await window.evanDesktop.chrome.openDownload();
+    });
+    document.getElementById('retry').addEventListener('click', async () => {
+        status.textContent = '正在检测…';
+        const result = await window.evanDesktop.chrome.retry();
+        if (!result.ready) status.textContent = result.message || '仍未检测到 Google Chrome';
+    });
+</script>
+</html>
+`)}`;
+}
+
+function currentChromeStatus() {
+    return probeSystemChromeCompatibility(process.env);
+}
+
 function runtimeEnvironment() {
     const resourcesDir = app.isPackaged ? app.getAppPath() : PROJECT_ROOT;
     const dataDir = path.join(app.getPath('userData'), 'data');
     const mediaToolsDir = app.isPackaged
         ? path.join(process.resourcesPath, 'media-tools')
         : path.join(PROJECT_ROOT, 'node_modules', 'ffmpeg-ffprobe-static');
+    const chrome = currentChromeStatus();
     return {
         ...process.env,
         NODE_ENV: app.isPackaged ? 'production' : (process.env.NODE_ENV || 'development'),
@@ -68,6 +122,8 @@ function runtimeEnvironment() {
         EVAN_LOGS_DIR: path.join(dataDir, 'logs'),
         EVAN_RUNTIME_DIR: path.join(dataDir, 'runtime'),
         EVAN_BROWSER_PROFILE_DIR: path.join(dataDir, 'browser-profile'),
+        EVAN_CHROME_EXECUTABLE: chrome.executable || '',
+        EVAN_BROWSER_EXECUTABLE: chrome.executable || '',
         EVAN_FFMPEG_PATH: path.join(
             mediaToolsDir,
             process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'
@@ -80,9 +136,6 @@ function runtimeEnvironment() {
         EVAN_ELECTRON_EXECUTABLE: process.execPath,
         EVAN_ELECTRON_RUN_AS_NODE: '1',
         SESSIONHUB_CDP_PORT: '19222',
-        PLAYWRIGHT_BROWSERS_PATH: app.isPackaged
-            ? path.join(process.resourcesPath, 'playwright-browsers')
-            : path.join(PROJECT_ROOT, 'server', 'python', '.browsers'),
         EVAN_OPS_EXECUTABLE: app.isPackaged
             ? path.join(
                 process.resourcesPath,
@@ -98,7 +151,7 @@ function runtimeEnvironment() {
     };
 }
 
-function createWindow() {
+function createWindow(initialUrl = null) {
     mainWindow = new BrowserWindow({
         width: 1440,
         height: 960,
@@ -136,7 +189,7 @@ function createWindow() {
             `无法打开本地页面（${code}: ${description}）。\n${url}`
         );
     });
-    void mainWindow.loadURL(backendOrigin || LOADING_PAGE);
+    void mainWindow.loadURL(initialUrl || backendOrigin || LOADING_PAGE);
     return mainWindow;
 }
 
@@ -231,6 +284,20 @@ ipcMain.handle('app:info', () => ({
     arch: process.arch,
     isPackaged: app.isPackaged
 }));
+
+ipcMain.handle('chrome:get-status', () => currentChromeStatus());
+ipcMain.handle('chrome:open-download', async () => {
+    await shell.openExternal(CHROME_DOWNLOAD_URL);
+    return { ok: true };
+});
+ipcMain.handle('chrome:retry', () => {
+    const status = currentChromeStatus();
+    if (!status.ready) return status;
+    if (!mainWindow) createWindow(LOADING_PAGE);
+    else void mainWindow.loadURL(LOADING_PAGE);
+    if (!backendProcess) launchBackend();
+    return status;
+});
 
 ipcMain.handle('update:get-state', () => updates.getState());
 ipcMain.handle('update:check', () => updates.check({ silent: false }));
@@ -343,13 +410,17 @@ if (!hasSingleInstanceLock) {
     });
 
     app.whenReady().then(() => {
-        createWindow();
+        const chrome = currentChromeStatus();
+        createWindow(chrome.ready ? null : chromeRequiredPage(chrome));
         app.focus({ steal: true });
-        launchBackend();
+        if (chrome.ready) launchBackend();
+        else void shell.openExternal(CHROME_DOWNLOAD_URL);
 
         app.on('activate', () => {
             if (BrowserWindow.getAllWindows().length === 0 && mainWindow === null) {
-                createWindow();
+                const current = currentChromeStatus();
+                createWindow(current.ready ? null : chromeRequiredPage(current));
+                if (current.ready && !backendProcess) launchBackend();
             }
         });
     });

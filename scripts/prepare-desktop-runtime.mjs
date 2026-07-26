@@ -66,7 +66,7 @@ function prepareMediaTools() {
 }
 
 if (!fs.existsSync(VENV_PYTHON)) {
-    fail('浏览器模型 Python 环境不存在，请先运行 npm run setup:browser-models');
+    fail('自动化 Python 环境不存在，请先运行 npm run setup:automation-runtime');
 }
 
 // Runtime artifacts are platform-specific. Always rebuild from a clean output

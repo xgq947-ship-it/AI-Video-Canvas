@@ -14,7 +14,7 @@ import { fileURLToPath } from 'url';
 import { validateManifestShape, computeTotalDurationSec } from '../../shared/manifest.js';
 import { findMissingAssets } from '../utils/manifestAssets.js';
 import { FFMPEG_PATH } from '../runtime/mediaTools.js';
-import { resolveBundledBrowserExecutable } from '../runtime/browserExecutable.js';
+import { resolveSystemChromeExecutable } from '../runtime/browserExecutable.js';
 import { decodeProcessOutput } from '../utils/processOutput.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -102,9 +102,9 @@ export const renderManifest = async ({
   // 3) 动态载入重依赖
   const { bundle } = await import('@remotion/bundler');
   const { selectComposition, renderMedia, ensureBrowser } = await import('@remotion/renderer');
-  const browserExecutable = resolveBundledBrowserExecutable();
+  const browserExecutable = resolveSystemChromeExecutable();
   if (!browserExecutable) {
-    throw new Error('未找到 Evan 内置 Chromium；源码开发请运行 npm run setup:browser-models');
+    throw new Error('未找到 Google Chrome；请先安装 Chrome 并重新打开 Evan');
   }
   const browserOptions = {
     browserExecutable,

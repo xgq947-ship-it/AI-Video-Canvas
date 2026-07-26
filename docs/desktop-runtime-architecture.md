@@ -5,14 +5,14 @@
 
 ## 1. 产品目标
 
-最终用户安装 Evan 后，不需要自行安装 Node.js、Python、ffmpeg、Chrome 或 Chrome Beta。
-首次打开即可使用画布、素材管理和本地渲染；即梦与 Google Flow 只要求用户在 Evan
-管理的专用浏览器中各登录一次。
+最终用户安装 Evan 后，不需要自行安装 Node.js、Python、ffmpeg 或 Chrome Beta，但电脑
+必须安装可自动更新的正式版 Google Chrome。首次打开即可使用画布、素材管理和本地渲染；
+即梦与 Google Flow 只要求用户在 Evan 管理的专属 Chrome Profile 中各登录一次。
 
 桌面版必须同时满足：
 
 - 应用升级不覆盖项目、素材、密钥、浏览器登录态和未完成任务。
-- 浏览器版本与 Playwright 版本锁定并作为一个兼容单元发布。
+- 启动时探测系统 Chrome 的安装路径和最低兼容版本，不符合条件时阻断并引导安装或更新。
 - 登录失效时进入可恢复状态，不把“需要登录”当成普通生成失败。
 - 无法确认任务是否已提交时，不自动重试，避免重复消耗额度。
 - `npm run dev` 保持可用，开发模式不强制安装 Electron 运行时。
@@ -26,7 +26,7 @@ Electron 主进程
   └─ Python Automation Engine
        └─ 当前：独立 Ops CLI + 应用专用 CDP 端口（迁移兼容层）
        └─ 目标：常驻 Worker + Playwright persistent context
-            └─ Evan 内置 Chromium
+            └─ 系统 Google Chrome + Evan 专属 Profile
 ```
 
 第一阶段允许 Node 后端继续以现有入口启动，但正式安装版不得依赖系统 `node` 命令。
@@ -60,7 +60,6 @@ Electron 主进程
 - `shared/`
 - `remotion/`
 - 内置 Python Worker
-- 内置浏览器
 - ffmpeg / ffprobe
 
 ### 用户数据
@@ -115,9 +114,9 @@ unknown
 
 ### 4.3 更新兼容
 
-- 浏览器可执行文件随应用更新，`browser-profile/` 永不打入安装包、永不被更新覆盖。
-- Playwright 与浏览器版本精确锁定，升级时作为一个 Automation Engine 发布。
-- 浏览器大版本升级前备份 profile 元数据；升级失败时允许回滚 Engine，不回滚用户数据。
+- 浏览器可执行文件由 Google Chrome 自身更新，`browser-profile/` 永不打入安装包、永不被更新覆盖。
+- Evan 启动时读取 Chrome 版本；低于最低兼容版本时阻断运行并引导更新。
+- macOS 缺少 Chrome 时显示阻断页并打开官方下载地址；Windows 安装器在安装前检查并阻止继续。
 - provider 选择器规则单独带 schema/version，可随应用补丁更新。
 
 当前兼容阶段使用应用专用端口 `19222` 并校验占用进程的 profile；不会再连接旧的
@@ -160,27 +159,27 @@ Chrome Beta 9222。常驻 Worker 完成后将不再暴露固定 CDP 端口。
 
 ## 8. 发布前硬性验收
 
-- 干净机器无 Node、Python、Chrome、ffmpeg 时可以安装启动。
+- 干净机器无 Node、Python、ffmpeg 时可以安装启动；Chrome 缺失时必须明确阻断并引导安装。
 - 首次本地渲染不联网下载浏览器。
 - 即梦/Flow 首次登录后，重启与应用升级仍保持登录。
 - 人为使登录失效后，应用能引导重新登录并安全恢复。
 - 在生成提交瞬间强制关闭浏览器，不会自动重复扣额度。
 - 升级不会删除或移动用户项目、素材、配置和登录 profile。
 - 后端仅绑定 loopback 随机端口，不依赖固定 3001。
-- Automation Engine 不连接系统 Chrome/Beta；CDP 兼容阶段仅使用并校验应用专用端口。
+- Automation Engine 只连接带 Evan `browser-profile` 的系统 Chrome 实例，不连接日常 Chrome Profile 或 Chrome Beta。
 
-## 9. 当前实施状态（0.1.0 架构基线）
+## 9. 当前实施状态（0.1.2 架构基线）
 
 已完成：
 
 - Electron 主进程管理后端 utility process，并使用随机 loopback 端口。
 - 程序资源和用户数据分离，浏览器 profile 与项目数据不会被升级覆盖。
-- Playwright `1.61.0` 与 Chrome for Testing `149.0.7827.55` 成对锁定并打包。
-- Ops CLI 通过 PyInstaller 冻结，安装机不要求 Node、Python 或 Chrome Beta。
+- 系统 Chrome 兼容性探针、macOS 启动阻断页和 Windows 安装前检查已配置。
+- Ops CLI 通过 PyInstaller 冻结，安装机不要求 Node、Python 或 Chrome Beta；正式版 Google Chrome 是唯一浏览器前置条件。
 - FFmpeg `6.1.1` 与 FFprobe `6.1.1` 按平台打入安装资源，视频处理不依赖系统 PATH。
-- Remotion 复用 Evan 内置 Chromium，首次本地渲染不再下载额外浏览器。
-- Flow/即梦自动任务强制使用同一 profile 的无头 Chromium，生成时不弹窗或抢焦点。
-- provider 登录状态持久化；认证过期只返回恢复提示，用户主动打开内置浏览器后登录。
+- Remotion 使用系统 Chrome 可执行文件，首次本地渲染不再下载额外浏览器。
+- Flow/即梦自动任务强制使用同一 Evan Profile 的无头 Chrome，生成时不弹窗或抢焦点。
+- provider 登录状态持久化；认证过期只返回恢复提示，用户主动打开无自动化参数的 Evan 专属 Chrome 后登录。
 - Flow 新账号可从首页进入已有项目或自动创建项目。
 - Flow/即梦生图支持 1—4 张批量结果；纯文生图水平排列，带参考素材时纵向排列并保留
   每张结果到参考素材的连接。
@@ -189,7 +188,7 @@ Chrome Beta 9222。常驻 Worker 完成后将不再暴露固定 CDP 端口。
 - macOS DMG/ZIP 与 Windows x64 NSIS 的原生构建脚本和 GitHub Actions 矩阵已配置。
 - 版本 Tag 会自动创建 GitHub Release；发布成功后删除重复的 Actions 临时产物，只保留
   Release 中供下载和更新使用的安装文件。
-- 构建前会清理并验收平台相关 Ops CLI、Chromium 和 FFmpeg/FFprobe，避免跨平台混装。
+- 构建前会清理并验收平台相关 Ops CLI 和 FFmpeg/FFprobe，避免跨平台混装。
 - 品牌图标会从 `public/TwitCanva-logo.png` 生成 ICNS/ICO。
 - 自动更新入口已接入，未配置发布源时安全禁用。
 - Codex 连接器支持自动发现/手动选择本机 CLI、独立 `CODEX_HOME`、登录状态检测、重新

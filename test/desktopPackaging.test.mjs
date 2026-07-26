@@ -18,6 +18,7 @@ const installerWorkflow = fs.readFileSync(
 const electronMain = fs.readFileSync(new URL('../electron/main.js', import.meta.url), 'utf8');
 const electronPreload = fs.readFileSync(new URL('../electron/preload.cjs', import.meta.url), 'utf8');
 const serverMain = fs.readFileSync(new URL('../server/index.js', import.meta.url), 'utf8');
+const installerInclude = fs.readFileSync(new URL('../build/installer.nsh', import.meta.url), 'utf8');
 
 test('桌面安装包按目标平台原生构建并在打包前验收运行时', () => {
   assert.match(pkg.scripts['desktop:dist:mac'], /electron-builder --mac/);
@@ -27,8 +28,9 @@ test('桌面安装包按目标平台原生构建并在打包前验收运行时',
   assert.match(pkg.scripts['desktop:prepare'], /desktop:icons.*desktop:runtime.*desktop:verify/);
   assert.match(runtimeBuilder, /fs\.rmSync\(OUTPUT_ROOT/);
   assert.match(runtimeBuilder, /\['ffmpeg\.README', 'README\.md'\]/);
-  assert.match(runtimeVerifier, /chrome-win64/);
-  assert.match(runtimeVerifier, /chrome-mac-arm64/);
+  assert.doesNotMatch(runtimeVerifier, /chrome-win64|chrome-mac-arm64|Chrome for Testing/);
+  assert.match(runtimeVerifier, /用户电脑上的 Google Chrome/);
+  assert.equal(pkg.build.extraResources.some(entry => entry.to === 'playwright-browsers'), false);
   assert.ok(pkg.build.files.includes('scripts/codex-image-queue.mjs'));
   assert.ok(pkg.build.files.includes('integrations/skills/twitcanva-codex-images/**/*'));
   assert.ok(pkg.build.asarUnpack.includes('integrations/skills/twitcanva-codex-images/**/*'));
@@ -41,6 +43,20 @@ test('Windows NSIS 保留用户数据并创建桌面和开始菜单快捷方式'
   assert.equal(pkg.build.nsis.deleteAppDataOnUninstall, false);
   assert.equal(pkg.build.nsis.createDesktopShortcut, 'always');
   assert.equal(pkg.build.nsis.createStartMenuShortcut, true);
+  assert.equal(pkg.build.nsis.include, 'build/installer.nsh');
+  assert.match(installerInclude, /App Paths\\chrome\.exe/);
+  assert.match(installerInclude, /google\.com\/chrome/);
+  assert.match(installerInclude, /Abort/);
+});
+
+test('macOS 首次启动缺少 Chrome 时显示阻断页并开放重试', () => {
+  for (const channel of ['chrome:get-status', 'chrome:open-download', 'chrome:retry']) {
+    assert.match(electronMain, new RegExp(`ipcMain\\.handle\\('${channel}'`));
+    assert.ok(electronPreload.includes(channel));
+  }
+  assert.match(electronMain, /chromeRequiredPage/);
+  assert.match(electronMain, /shell\.openExternal\(CHROME_DOWNLOAD_URL\)/);
+  assert.match(electronMain, /createWindow\(chrome\.ready \? null : chromeRequiredPage\(chrome\)\)/);
 });
 
 test('运行后端依赖属于 production，安装包不再显式收录整个 node_modules', () => {

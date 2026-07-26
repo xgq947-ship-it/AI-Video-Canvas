@@ -2,13 +2,13 @@
  * 即梦（Seedance）视频生成适配器。
  *
  * 调用内置的 server/python/ops_cli（image-to-video jimeng generate）
- * 驱动 Evan 内置 Chromium，不在 Node 层复制任何即梦页面自动化逻辑。
+ * 驱动 Evan 专属 Chrome，不在 Node 层复制任何即梦页面自动化逻辑。
  *
  * 与 Google Flow 适配器的差异：
  * - 即梦是「文字为主、参考素材可选」：节点不接图也能生成（纯文生视频）。
  * - 没有首帧概念，连进来的图一律作为参考素材（最多 12 个）。
  * - 多一个分辨率维度（720P/1080P/4K）。
- * 两个 provider 共用同一个内置浏览器串行队列。
+ * 两个 provider 共用同一个 Evan 专属 Chrome 串行队列。
  */
 
 import fs from 'node:fs';

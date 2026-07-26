@@ -132,10 +132,10 @@ export const TopBar: React.FC<TopBarProps> = ({
         try {
             const response = await fetch('/api/browser/open', { method: 'POST' });
             const result = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(result.error || '内置浏览器打开失败');
+            if (!response.ok) throw new Error(result.error || 'Evan 专属 Chrome 打开失败');
             setShowSettingsMenu(false);
         } catch (error) {
-            setBrowserOpenError(error instanceof Error ? error.message : '内置浏览器打开失败');
+            setBrowserOpenError(error instanceof Error ? error.message : 'Evan 专属 Chrome 打开失败');
         } finally {
             setIsOpeningBrowser(false);
         }
@@ -256,7 +256,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                                         ? <Loader2 size={16} className="shrink-0 animate-spin text-cyan-400" />
                                         : <Globe2 size={16} className="shrink-0 text-cyan-400" />}
                                     <span>
-                                        <span className="block font-medium">打开内置浏览器</span>
+                                        <span className="block font-medium">打开 Evan 专属 Chrome</span>
                                         <span className="mt-0.5 block text-[10px] text-neutral-500">查看即梦与 Google Flow 页面</span>
                                     </span>
                                 </button>

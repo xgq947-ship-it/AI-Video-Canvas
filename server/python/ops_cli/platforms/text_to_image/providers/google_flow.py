@@ -1,6 +1,6 @@
 """Google Flow 文生图 provider（text-to-image 能力，Image 模式）。
 
-通过 Evan 内置浏览器驱动 Google Flow 的 Image 生成 UI（默认模型 Nano Banana 2），
+通过 Evan 专属 Chrome 驱动 Google Flow 的 Image 生成 UI（默认模型 Nano Banana 2），
 不调用未公开 API，也不读取或持久化 Google 的 cookie / token / storage。浏览器生命周期、
 登录恢复、页面接管与结果等待逻辑复用 `ops_cli.platforms._google_flow_common`。
 

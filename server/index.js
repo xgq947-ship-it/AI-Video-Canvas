@@ -54,7 +54,11 @@ import {
 } from '../shared/promptOptimizationProfiles.js';
 import { getPromptOptimizerProvider } from './services/promptOptimizerProviders.js';
 import { applyOptimizerPreferenceToApp, loadOptimizerPreference } from './services/optimizerPreference.js';
-import { BROWSER_MODELS_SETUP_HINT, isBrowserModelsReady, runOpsCli } from './services/opsCliRunner.js';
+import {
+    BROWSER_MODELS_SETUP_HINT,
+    browserRuntimeStatus,
+    runOpsCli
+} from './services/opsCliRunner.js';
 import { browserSessionState } from './services/browserSessionState.js';
 import { resolveImageToBase64 } from './utils/imageHelpers.js';
 import { MASSAGE_EQUIPMENT_NAMES } from '../shared/massageEquipmentCategories.js';
@@ -1188,11 +1192,13 @@ app.delete('/api/workflows/:id', async (req, res) => {
 
 // 运行时能力探测：前端据此把「需本地配置」的模型置灰，而不是让用户点了才报错。
 app.get('/api/capabilities', (req, res) => {
+    const chrome = browserRuntimeStatus();
     res.json({
         // Google Flow / 即梦 依赖 server/python 下的浏览器自动化运行时，
         // 未安装时这些模型不可用，但其余官方 API 模型照常工作。
         browserModels: {
-            ready: isBrowserModelsReady(),
+            ready: chrome.ready,
+            chrome,
             sessions: browserSessionState.list(),
             models: [
                 'google-flow-omni-flash',
@@ -1208,7 +1214,7 @@ app.get('/api/capabilities', (req, res) => {
                 'jimeng-seedance-2-0',
                 'jimeng-seedance-2-0-fast'
             ],
-            setupCommand: 'npm run setup:browser-models',
+            setupCommand: null,
             hint: BROWSER_MODELS_SETUP_HINT
         },
         platform: process.platform
@@ -1225,15 +1231,9 @@ app.post('/api/browser-sessions/:provider/reauthenticate', async (req, res) => {
             args: ['browser', 'login', '--provider', provider],
             timeoutMs: 90_000,
             label: `${provider} 登录`,
-            // 打开/关闭登录浏览器不是登出动作，不能覆盖最近一次真实任务验证出的
-            // authenticated 状态。登录有效性由实际生成成功或 AUTH_REQUIRED 判定。
-            trackSessionState: false
+            initialSessionState: 'reauthenticating',
+            successSessionState: 'reauthenticating'
         });
-        if (data.authenticated) {
-            browserSessionState.transition(provider, 'authenticated', {
-                message: '已通过内置浏览器页面验证登录状态'
-            });
-        }
         res.json({
             success: true,
             provider,
@@ -1254,7 +1254,7 @@ app.post('/api/browser/open', async (_req, res) => {
         const { data } = await runOpsCli({
             args: ['browser', 'open'],
             timeoutMs: 30_000,
-            label: '打开内置浏览器'
+            label: '打开 Evan 专属 Chrome'
         });
         res.json({ success: true, ...data });
     } catch (error) {

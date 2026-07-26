@@ -1,6 +1,6 @@
 """Google Flow 浏览器公共基座（多能力共享）。
 
-image-to-video 与 text-to-image 两个能力都通过内置浏览器驱动 Google Flow
+image-to-video 与 text-to-image 两个能力都通过 Evan 专属 Chrome 驱动 Google Flow
 页面 UI，共享同一套浏览器生命周期、登录/恢复、页面接管与结果等待逻辑。本模块只放
 「与结果类型无关」的通用部分；结果类型相关的配置/采集/等待入口由各 provider 自带。
 
@@ -88,7 +88,7 @@ def _is_flow_home_url(value: str) -> bool:
 def _resolve_project_url(context: Any) -> str:
     """解析本次生成使用的 Flow 项目地址。
 
-    本机显式配置优先；其次复用内置浏览器已经打开的 Flow 项目；新账号或
+    本机显式配置优先；其次复用 Evan 专属 Chrome 已经打开的 Flow 项目；新账号或
     没有现成项目页时回到 Flow 首页，由 `_ensure_editor` 自动进入或创建项目。
     """
     import os
@@ -206,7 +206,7 @@ def _import_browser_runtime():
     try:
         from scene.chrome_cdp import CDP_URL, start_chrome  # type: ignore
     except Exception as exc:  # pragma: no cover - environment guard
-        raise GoogleFlowError("PAGE_NAVIGATION_FAILED", f"无法加载内置浏览器运行时：{exc}", retryable=True) from exc
+        raise GoogleFlowError("PAGE_NAVIGATION_FAILED", f"无法加载 Evan 专属 Chrome 运行时：{exc}", retryable=True) from exc
     # All automated Flow/Jimeng generation runs are explicitly headless. This
     # also replaces a browser that the user previously opened for login/debug
     # with a headless instance using the same persistent profile, so a later
@@ -294,7 +294,7 @@ def _bring_login_browser_to_front() -> None:
     # Server/workflow subprocesses have no interactive TTY: report
     # AUTH_REQUIRED to the canvas without surfacing a window. Direct
     # interactive CLI recovery (or an explicit force flag) may still show it.
-    # The app's "打开内置浏览器/登录" commands remain explicitly foregrounded.
+    # The app's "打开 Evan 专属 Chrome/登录" commands remain explicitly foregrounded.
     if foreground_allowed():
         start_chrome(foreground=True)
 
@@ -304,7 +304,7 @@ def _raise_auth_required(message: str, recovery_hint: str) -> None:
 
     交互终端可把同一个 19222 长期浏览器切到前台；workflow、定时任务
     和 Evan 服务端只返回结构化 AUTH_REQUIRED，必须由用户主动点击
-    「打开内置浏览器/登录」后才显示窗口。
+    「打开 Evan 专属 Chrome/登录」后才显示窗口。
     """
     try:
         _bring_login_browser_to_front()
@@ -406,8 +406,8 @@ def _ensure_editor(
             host = (urlparse(page.url).hostname or "").lower()
             if host == "accounts.google.com":
                 _raise_auth_required(
-                    "Google Flow 需要登录。请先在内置浏览器完成 Google 登录。",
-                    "请在当前内置浏览器完成 Google Flow 登录，然后点击重新生成。",
+                    "Google Flow 需要登录。请先在 Evan 专属 Chrome 完成 Google 登录。",
+                    "请在当前 Evan 专属 Chrome 完成 Google Flow 登录，然后点击重新生成。",
                 )
             try:
                 if editor.count() == 1:
@@ -444,18 +444,18 @@ def _ensure_editor(
             "Google Flow 项目编辑器在预期时间内未挂载（多为冷启动或页面渲染慢），"
             "已多次重载仍未就绪，请稍后点击重新生成。",
             retryable=True,
-            recovery_hint="通常稍等内置浏览器预热后重试即可，无需重新登录。",
+            recovery_hint="通常稍等 Evan 专属 Chrome 预热后重试即可，无需重新登录。",
         )
     if _is_flow_home_url(current_url):
         raise GoogleFlowError(
             "PROJECT_CREATION_FAILED",
             "已进入 Google Flow 首页，但未能自动进入或创建项目。",
             retryable=True,
-            recovery_hint="请在内置浏览器确认账号已完成 Flow 首次使用引导，然后重试。",
+            recovery_hint="请在 Evan 专属 Chrome 确认账号已完成 Flow 首次使用引导，然后重试。",
         )
     _raise_auth_required(
         "未进入 Google Flow 项目编辑器；当前是登录页或公开介绍页。",
-        "请在内置浏览器登录 Google Flow，进入目标项目后点击重新生成。",
+        "请在 Evan 专属 Chrome 登录 Google Flow，进入目标项目后点击重新生成。",
     )
 
 

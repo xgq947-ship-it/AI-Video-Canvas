@@ -2,7 +2,7 @@
  * Google Flow workflow 适配器。
  *
  * 调用内置的 server/python/ops_cli（image-to-video google-flow generate）
- * 驱动 Evan 内置 Chromium，不在 Node 层复制任何 Google Flow 页面自动化逻辑。
+ * 驱动 Evan 专属 Chrome，不在 Node 层复制任何 Google Flow 页面自动化逻辑。
  */
 
 import fs from 'node:fs';

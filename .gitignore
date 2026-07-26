@@ -51,14 +51,15 @@ models/
 .agent/
 .shared/
 
-# 浏览器自动化 Python 运行时（由 npm run setup:browser-models 生成）
+# 浏览器自动化 Python 运行时（由 npm run setup:automation-runtime 生成）
 server/python/.venv/
-# 与固定 Playwright 版本匹配的 Chromium，由 setup / 发布流水线下载后打包
+# 旧版曾下载 Chromium；保留忽略规则，防止本机遗留目录误提交
 server/python/.browsers/
 desktop-runtime/
 release/
-# 桌面图标由 scripts/generate-desktop-icons.mjs 从品牌 PNG 生成
-build/
+# 桌面图标由脚本生成；Windows 安装前置检查脚本需要入库
+build/*
+!build/installer.nsh
 server/python/logs/
 server/python/runtime/
 server/python/output/

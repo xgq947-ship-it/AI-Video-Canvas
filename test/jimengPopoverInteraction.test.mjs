@@ -246,6 +246,25 @@ print(json.dumps({
     assert.equal(result.withoutRefs, '保留@参考图1');
 });
 
+test('即梦视频模式不依赖已移除的 @ 候选列表，按上传顺序改写引用', {
+    skip: ready ? false : '未配置 server/python/.venv'
+}, () => {
+    const result = runPython(`
+import json
+from ops_cli.platforms.image_to_video.providers import jimeng as j
+
+print(json.dumps({
+    "plain": j._prompt_for_video_composer("人与动物快乐相处", ["参考图1"]),
+    "generic": j._prompt_for_video_composer("让@参考图1 看向 @参考图2", ["参考图1", "参考图2"]),
+    "named": j._prompt_for_video_composer("@肯豆 走进 @房间", ["肯豆", "房间"]),
+}, ensure_ascii=False))
+`);
+
+    assert.equal(result.plain, '人与动物快乐相处');
+    assert.equal(result.generic, '让第1张参考图 看向 第2张参考图');
+    assert.equal(result.named, '第1张参考图 走进 第2张参考图');
+});
+
 test('即梦上传参考图后的素材合规弹窗会点击特定确认按钮', {
     skip: ready ? false : '未配置 server/python/.venv'
 }, () => {

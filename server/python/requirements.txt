@@ -1,5 +1,5 @@
 # Google Flow / 即梦 浏览器自动化所需依赖。
-# 由 `npm run setup:browser-models` 安装到 server/python/.venv。
+# 由 `npm run setup:automation-runtime` 安装到 server/python/.venv。
 httpx>=0.28.0
 # Must stay pinned: the bundled Chromium revision and Playwright's CDP client
 # are released as a tested pair. An unbounded upgrade caused Chrome Beta 151

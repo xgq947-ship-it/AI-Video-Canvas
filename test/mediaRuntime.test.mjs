@@ -3,7 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { resolveBundledBrowserExecutable } from '../server/runtime/browserExecutable.js';
+import {
+    parseChromeVersion,
+    probeSystemChromeCompatibility,
+    resolveSystemChromeExecutable
+} from '../server/runtime/browserExecutable.js';
 import { resolveMediaToolPaths } from '../server/runtime/mediaTools.js';
 
 test('媒体工具优先使用桌面进程注入的内置路径', () => {
@@ -29,25 +33,57 @@ test('媒体工具缺失时仍指向项目依赖，不静默依赖系统 PATH', 
     assert.equal(paths.ffprobe, path.join(projectRoot, 'node_modules', 'ffmpeg-ffprobe-static', 'ffprobe.exe'));
 });
 
-test('Remotion 从 Playwright 资源目录发现 Evan 内置 Chromium', () => {
+test('运行时优先使用显式配置的系统 Google Chrome', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-browser-'));
-    const executable = path.join(
-        root,
-        'chromium-1228',
-        'chrome-mac-arm64',
-        'Google Chrome for Testing.app',
-        'Contents',
-        'MacOS',
-        'Google Chrome for Testing'
-    );
+    const executable = path.join(root, 'Google Chrome');
     fs.mkdirSync(path.dirname(executable), { recursive: true });
     fs.writeFileSync(executable, '');
     try {
-        assert.equal(resolveBundledBrowserExecutable(
-            { PLAYWRIGHT_BROWSERS_PATH: root },
+        assert.equal(resolveSystemChromeExecutable(
+            { EVAN_CHROME_EXECUTABLE: executable },
             { platform: 'darwin', projectRoot: '/checkout' }
         ), executable);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
+});
+
+test('Chrome 兼容性探针验证版本并给出安装阻断原因', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-chrome-probe-'));
+    const executable = path.join(root, 'chrome');
+    fs.writeFileSync(executable, '');
+    try {
+        const ready = probeSystemChromeCompatibility(
+            { EVAN_CHROME_EXECUTABLE: executable },
+            {
+                platform: 'darwin',
+                minMajor: 136,
+                spawnSyncImpl: () => ({ status: 0, stdout: 'Google Chrome 150.0.7871.182', stderr: '' })
+            }
+        );
+        assert.equal(ready.ready, true);
+        assert.equal(ready.major, 150);
+        assert.equal(ready.executable, executable);
+
+        const outdated = probeSystemChromeCompatibility(
+            { EVAN_CHROME_EXECUTABLE: executable },
+            {
+                platform: 'darwin',
+                minMajor: 151,
+                spawnSyncImpl: () => ({ status: 0, stdout: 'Google Chrome 150.0.7871.182', stderr: '' })
+            }
+        );
+        assert.equal(outdated.ready, false);
+        assert.equal(outdated.reason, 'unsupported-version');
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('Chrome 版本解析兼容标准输出', () => {
+    assert.deepEqual(parseChromeVersion('Google Chrome 150.0.7871.182'), {
+        version: '150.0.7871.182',
+        major: 150
+    });
+    assert.equal(parseChromeVersion('Chromium 150.0.1'), null);
 });

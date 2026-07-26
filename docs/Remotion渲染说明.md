@@ -74,5 +74,5 @@ node_modules/ffmpeg-ffprobe-static/ffprobe -v error \
 
 ## 首次渲染
 
-源码开发先执行 `npm run setup:browser-models`；Remotion 会复用 Evan 内置 Chromium。
+Remotion 使用电脑现有的正式版 Google Chrome，不下载或打包 Chromium。
 FFmpeg 与 FFprobe 由项目依赖提供，不需要系统安装。

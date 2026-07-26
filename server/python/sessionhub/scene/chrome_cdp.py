@@ -17,33 +17,40 @@ from pathlib import Path
 CDP_HOST = "127.0.0.1"
 CDP_PORT = int(os.environ.get("SESSIONHUB_CDP_PORT", "19222"))
 CDP_URL = f"http://{CDP_HOST}:{CDP_PORT}"
-# The desktop distribution bundles the Chromium revision matched to Playwright.
-# SESSIONHUB_CHROME_APP remains as an explicit development/diagnostic override.
+# Evan reuses the machine's Google Chrome binary with its own persistent profile.
+# The installer never reads or controls the user's daily Chrome profile.
 IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
 
 
 def _default_chrome_bin() -> Path:
-    """定位与当前 Playwright 版本成对分发的 Chromium。"""
-    override = os.environ.get("SESSIONHUB_CHROME_APP", "").strip()
+    """定位系统 Google Chrome；显式环境变量优先。"""
+    override = (
+        os.environ.get("EVAN_CHROME_EXECUTABLE", "").strip()
+        or os.environ.get("EVAN_BROWSER_EXECUTABLE", "").strip()
+        or os.environ.get("SESSIONHUB_CHROME_APP", "").strip()
+    )
     if override:
         return Path(override)
-
-    # Playwright calculates the revision-specific executable from
-    # PLAYWRIGHT_BROWSERS_PATH. Using the paired browser avoids protocol drift
-    # from independently updating system Chrome/Beta.
-    try:
-        from playwright.sync_api import sync_playwright  # type: ignore
-
-        playwright = sync_playwright().start()
-        try:
-            bundled = Path(playwright.chromium.executable_path)
-        finally:
-            playwright.stop()
-        return bundled
-    except Exception:
-        browser_root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "."))
-        return browser_root / "chromium-not-installed"
+    if IS_MACOS:
+        system = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        user = Path.home() / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        return system if system.exists() else user
+    if IS_WINDOWS:
+        roots = [
+            os.environ.get("PROGRAMFILES", ""),
+            os.environ.get("PROGRAMFILES(X86)", ""),
+            os.environ.get("LOCALAPPDATA", ""),
+        ]
+        for root in roots:
+            candidate = Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe"
+            if root and candidate.exists():
+                return candidate
+        return Path("chrome.exe")
+    for candidate in (Path("/usr/bin/google-chrome-stable"), Path("/usr/bin/google-chrome")):
+        if candidate.exists():
+            return candidate
+    return Path("google-chrome")
 
 
 CHROME_BIN = _default_chrome_bin()
@@ -77,7 +84,7 @@ def is_port_open(host: str = CDP_HOST, port: int = CDP_PORT, timeout: float = 0.
 
 def check_cdp() -> tuple[bool, str]:
     if not is_port_open():
-        return False, f"{CDP_PORT} 端口未开启，内置浏览器 CDP 未启动。"
+        return False, f"{CDP_PORT} 端口未开启，Evan 专属 Chrome CDP 未启动。"
     try:
         with urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=2) as resp:
             info = json.loads(resp.read().decode("utf-8"))
@@ -91,7 +98,7 @@ def check_cdp() -> tuple[bool, str]:
 def chrome_start_command() -> str:
     return (
         f'"{CHROME_BIN}" '
-        "--enable-automation "
+        "--remote-allow-origins=* "
         f"--remote-debugging-port={CDP_PORT} "
         f'--user-data-dir="{PROFILE_DIR}" '
         "--lang=en-US --no-first-run --no-default-browser-check --new-window about:blank"
@@ -99,7 +106,7 @@ def chrome_start_command() -> str:
 
 
 def _foreground_allowed() -> bool:
-    """是否允许把内置浏览器切到前台（弹窗）。
+    """是否允许把 Evan 专属 Chrome 切到前台（弹窗）。
 
     仅当有人正坐在终端前（stdin 是 tty）才允许弹窗：终端直跑 ops / learn 登录时正常弹。
     launchd 定时、Hermes、workflow 子进程都经 osascript 空环境启动，无 tty → 静默不弹，
@@ -142,7 +149,7 @@ def _debug_log(event: str, **details: object) -> None:
 
 
 def _instance_pid() -> int | None:
-    """使用 Evan profile 的内置浏览器顶层进程 PID。
+    """使用 Evan profile 的专属 Chrome 顶层进程 PID。
 
     按 ``--user-data-dir=<PROFILE_DIR>`` 精确匹配，只锁定 Evan 实例，
     绝不误伤用户日常浏览器。
@@ -256,9 +263,47 @@ def _instance_is_headless(pid: int) -> bool:
 
 
 def _instance_supports_playwright(pid: int) -> bool:
-    """Chromium 149+ 需要显式开启自动化上下文管理才能被 Playwright 接管。"""
+    """生成实例必须带 Evan 指定的 CDP 跨源参数，登录实例不会命中。"""
     command = _instance_command(pid).lower()
-    return "--enable-automation" in command or "--remote-allow-origins" in command
+    return "--remote-allow-origins" in command
+
+
+def start_login_chrome(url: str) -> tuple[bool, str]:
+    """用普通 Chrome 模式打开登录页，不暴露 CDP/自动化参数。
+
+    登录完成后的站点状态写入 Evan 专属 profile。后续生成会关闭这个可见实例，
+    再以无头 CDP 模式启动同一个 profile，因此不会触碰日常 Chrome 数据。
+    """
+    stop_chrome()
+    if not CHROME_BIN.exists():
+        return False, f"找不到 Google Chrome：{CHROME_BIN}"
+    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    launch_cmd = [
+        str(CHROME_BIN),
+        "--lang=zh-CN",
+        f"--user-data-dir={PROFILE_DIR}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--new-window",
+        url,
+    ]
+    subprocess.Popen(
+        launch_cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        **_detached_popen_kwargs(),
+    )
+    for _ in range(30):
+        pid = _instance_pid()
+        if pid is not None:
+            # 这是用户明确触发的登录动作，不受后台任务的前台弹窗开关限制。
+            if IS_MACOS:
+                _system_events(
+                    f'tell application "System Events" to set frontmost of first process whose unix id is {pid} to true'
+                )
+            return True, "Evan 专属 Chrome 登录窗口已打开"
+        time.sleep(0.25)
+    return False, "已启动 Google Chrome，但未检测到 Evan 专属实例"
 
 
 def _system_events(*statements: str) -> bool:
@@ -342,7 +387,7 @@ def bring_chrome_to_front() -> tuple[bool, str]:
         # 不影响生成本身，故静默降级。**绝不能抛异常**：调用方会把异常归类成
         # AUTH_REQUIRED，用户会看到莫名其妙的「请重新登录」。
         _debug_log("bring_chrome_to_front.skip", reason="not_macos")
-        return False, "当前平台不支持自动切前台，请手动切到内置浏览器窗口"
+        return False, "当前平台不支持自动切前台，请手动切到 Evan 专属 Chrome 窗口"
     if not _foreground_allowed():
         # 非交互式（后台/定时/Hermes）运行：静默跳过切前台，调用方仍会抛出登录错误。
         _debug_log("bring_chrome_to_front.skip", reason="foreground_not_allowed")
@@ -350,16 +395,16 @@ def bring_chrome_to_front() -> tuple[bool, str]:
     pid = _instance_pid()
     if pid is None:
         _debug_log("bring_chrome_to_front.skip", reason="no_pid")
-        return False, "未找到内置浏览器实例，跳过切前台"
+        return False, "未找到 Evan 专属 Chrome 实例，跳过切前台"
     ok = _system_events(
         f"tell application \"System Events\" to set visible of (first process whose unix id is {pid}) to true",
         f"tell application \"System Events\" to set frontmost of (first process whose unix id is {pid}) to true",
     )
     if ok:
         _debug_log("bring_chrome_to_front.ok", pid=pid)
-        return True, "已将内置浏览器切到前台"
+        return True, "已将 Evan 专属 Chrome 切到前台"
     _debug_log("bring_chrome_to_front.failed", pid=pid)
-    return False, "切换内置浏览器到前台失败"
+    return False, "切换 Evan 专属 Chrome 到前台失败"
 
 
 def hide_chrome(*, max_wait_seconds: float = 2.0, poll_interval: float = 0.1) -> tuple[bool, str]:
@@ -371,24 +416,24 @@ def hide_chrome(*, max_wait_seconds: float = 2.0, poll_interval: float = 0.1) ->
     if pid is None:
         # 找不到专用实例时什么都不做，避免误伤用户日常 Chrome。
         _debug_log("hide_chrome.skip", reason="no_pid")
-        return False, "未找到内置浏览器实例，跳过隐藏"
+        return False, "未找到 Evan 专属 Chrome 实例，跳过隐藏"
     ok = _system_events(
         f"tell application \"System Events\" to set visible of (first process whose unix id is {pid}) to false",
     )
     if ok and _wait_until_hidden(pid, max_wait_seconds=max_wait_seconds, poll_interval=poll_interval):
         _debug_log("hide_chrome.ok", pid=pid)
-        return True, "已将内置浏览器隐藏到后台"
+        return True, "已将 Evan 专属 Chrome 隐藏到后台"
     if ok:
         _debug_log("hide_chrome.unconfirmed", pid=pid)
-        return False, "隐藏内置浏览器命令已发送，但未确认隐藏"
+        return False, "隐藏 Evan 专属 Chrome 命令已发送，但未确认隐藏"
     _debug_log("hide_chrome.failed", pid=pid)
-    return False, "隐藏内置浏览器失败"
+    return False, "隐藏 Evan 专属 Chrome 失败"
 
 
 def surface_for_login(reason: str) -> None:
-    """统一的「需要登录」出口：把内置浏览器切到前台让用户手动登录，并抛错中断。
+    """统一的「需要登录」出口：把 Evan 专属 Chrome 切到前台让用户手动登录，并抛错中断。
 
-    这是内置浏览器唯一允许主动弹窗的场景。其余自动化行为一律静默（后台运行）。
+    这是专属 Chrome 唯一允许主动弹窗的场景。其余自动化行为一律静默（后台运行）。
     """
     _debug_log("surface_for_login", reason=reason)
     bring_chrome_to_front()
@@ -434,7 +479,14 @@ def stop_chrome() -> tuple[bool, str]:
         except ProcessLookupError:
             pass
     for _ in range(20):
-        if not is_port_open():
+        alive = []
+        for pid in pids:
+            try:
+                os.kill(pid, 0)
+                alive.append(pid)
+            except ProcessLookupError:
+                pass
+        if not alive and not is_port_open():
             return True, "已关闭专用 Chrome"
         time.sleep(0.25)
     for pid in pids:
@@ -502,7 +554,7 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
         return False, f"找不到 Chrome：{CHROME_BIN}"
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     low_memory_args = [
-        "--enable-automation",
+        "--remote-allow-origins=*",
         "--disable-background-networking",
         "--disable-component-update",
         "--disable-default-apps",
@@ -533,8 +585,8 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
             "about:blank",
         ]
     else:
-        # Direct execution works for bundled Chromium on all platforms and
-        # avoids macOS `open -a`, which can only address installed app names.
+        # Direct execution with a dedicated user-data-dir creates a separate
+        # Chrome process and never joins the user's daily Chrome profile.
         launch_cmd = [
             str(CHROME_BIN),
             *low_memory_args,

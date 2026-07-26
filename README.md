@@ -9,8 +9,8 @@ Evan 是一个本地优先的 AI 图片、视频与漫剧生产桌面应用。�
 
 ## 普通用户
 
-安装版已经内置 Electron 后端、Chromium、FFmpeg/FFprobe 和独立自动化运行时，不要求
-用户安装 Node.js、Python、Chrome 或 Chrome Beta。普通画布、Flow/即梦和本地渲染也不
+安装版已经内置 Electron 后端、FFmpeg/FFprobe 和独立自动化运行时，不要求用户安装
+Node.js、Python 或 Chrome Beta，但电脑必须安装可自动更新的正式版 Google Chrome。普通画布、Flow/即梦和本地渲染不
 依赖 Codex；只有选择“Codex 生图”等可选高级能力时，才需要用户单独安装并登录最新版
 Codex CLI。Evan 不捆绑固定 Codex 版本。
 
@@ -18,8 +18,9 @@ Codex CLI。Evan 不捆绑固定 Codex 版本。
 - [Windows 首次安装与使用](docs/首次安装使用-Windows.md)
 - [当前项目说明](docs/项目说明.md)
 
-首次使用 Google Flow 或即梦时，只需从应用设置中打开内置浏览器，分别登录自己的账号。
+首次使用 Google Flow 或即梦时，只需从应用设置中打开 Evan 专属 Chrome，分别登录自己的账号。
 之后生图和生视频默认在后台无头运行；登录过期时画布会提示重新登录，不会自动抢占前台。
+这个实例使用独立 `browser-profile`，不会读取或占用用户日常 Chrome 的 Profile。
 
 新建项目时可以保留 Evan 默认位置，也可以用系统文件夹选择器将完整项目放到桌面、其他
 工作目录或其他磁盘。项目文件夹包含画布 `project.json` 及图片、视频、音频素材。
@@ -29,7 +30,7 @@ Codex CLI。Evan 不捆绑固定 Codex 版本。
 ```bash
 npm install
 npm run setup
-npm run setup:browser-models
+npm run setup:automation-runtime
 npm start
 ```
 

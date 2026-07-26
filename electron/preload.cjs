@@ -13,6 +13,11 @@ contextBridge.exposeInMainWorld('evanDesktop', {
         return result.data;
     },
     getAppInfo: () => ipcRenderer.invoke('app:info'),
+    chrome: {
+        getStatus: () => ipcRenderer.invoke('chrome:get-status'),
+        openDownload: () => ipcRenderer.invoke('chrome:open-download'),
+        retry: () => ipcRenderer.invoke('chrome:retry')
+    },
     updates: {
         getState: () => ipcRenderer.invoke('update:get-state'),
         check: () => ipcRenderer.invoke('update:check'),

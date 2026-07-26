@@ -191,7 +191,7 @@ export function runSetup({
 
     if (withBrowserModels && !checkOnly) {
         log('→', '安装 Google Flow / 即梦浏览器自动化环境…');
-        runRequired(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'setup:browser-models'], projectRoot);
+        runRequired(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'setup:automation-runtime'], projectRoot);
     }
 
     process.stdout.write('\n');

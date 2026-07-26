@@ -1,5 +1,5 @@
 /**
- * 内置浏览器自动化 CLI（server/python 下的 ops_cli）的统一调用层。
+ * Evan 专属 Chrome 自动化 CLI（server/python 下的 ops_cli）的统一调用层。
  *
  * 历史上 Google Flow / 即梦 要跨项目调用桌面上的「运营自动化工具」，再由它
  * 转调 Ops-Cli。现在 provider 代码已内置到 server/python，这里直接
@@ -13,6 +13,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { RUNTIME_PATHS } from '../runtime/paths.js';
+import { probeSystemChromeCompatibility } from '../runtime/browserExecutable.js';
 import {
     browserSessionState,
     browserStateForError,
@@ -43,14 +44,27 @@ export function resolveOpsExecutable() {
     return configured ? path.resolve(RUNTIME_PATHS.resourcesDir, configured) : null;
 }
 
+export function browserRuntimeStatus() {
+    const executable = resolveOpsExecutable();
+    const opsReady = executable ? fs.existsSync(executable) : fs.existsSync(resolveOpsPython());
+    const chrome = probeSystemChromeCompatibility(process.env);
+    return {
+        ...chrome,
+        ready: opsReady && chrome.ready,
+        opsReady,
+        message: !opsReady
+            ? 'Evan 自动化运行时缺失，请重新安装 Evan。'
+            : chrome.message
+    };
+}
+
 /** 浏览器自动化环境是否已就绪（未就绪时相关模型应置灰而非报 500）。 */
 export function isBrowserModelsReady() {
-    const executable = resolveOpsExecutable();
-    return executable ? fs.existsSync(executable) : fs.existsSync(resolveOpsPython());
+    return browserRuntimeStatus().ready;
 }
 
 export const BROWSER_MODELS_SETUP_HINT =
-    '浏览器自动化模型（Google Flow / 即梦）尚未配置。请先运行：npm run setup:browser-models';
+    '未找到兼容的 Google Chrome。请先安装或更新 Chrome，然后重新打开 Evan。';
 
 // 空闲多久关掉常驻浏览器。
 //
@@ -69,6 +83,7 @@ let activeBrowserOperations = 0;
 let browserIdleTimer = null;
 
 export function opsEnvironment() {
+    const chrome = probeSystemChromeCompatibility(process.env);
     return {
         ...withUtf8PythonEnvironment(process.env),
         PYTHONUNBUFFERED: '1',
@@ -76,10 +91,10 @@ export function opsEnvironment() {
         EVAN_DATA_DIR: RUNTIME_PATHS.dataDir,
         EVAN_RUNTIME_DIR: RUNTIME_PATHS.runtimeDir,
         EVAN_BROWSER_PROFILE_DIR: RUNTIME_PATHS.browserProfileDir,
+        EVAN_CHROME_EXECUTABLE: chrome.executable || '',
+        EVAN_BROWSER_EXECUTABLE: chrome.executable || '',
         SESSIONHUB_CHROME_PROFILE: RUNTIME_PATHS.browserProfileDir,
         SESSIONHUB_CDP_PORT: process.env.SESSIONHUB_CDP_PORT || '19222',
-        PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH
-            || path.join(PYTHON_ROOT, '.browsers'),
         // Automated desktop generation must stay silent. Foreground browser
         // commands (`browser open` / `browser login`) already request a visible
         // window explicitly, so the backend must not globally force auth
@@ -110,7 +125,7 @@ function closeIdleBrowser() {
     // 运行时没装就没有浏览器需要关。这个检查同时是崩溃防线：spawn 一个不存在的
     // 可执行文件会让子进程发出 'error' 事件，而 ChildProcess 的 'error' 没有监听器时
     // 会直接把整个后端进程带走 —— 模块加载时 armed 的兜底定时器意味着，
-    // 任何没跑过 setup:browser-models 的机器上，后端都会在启动 120 秒后猝死。
+    // 任何缺少自动化运行时的机器上，后端都会在启动 120 秒后猝死。
     if (!isBrowserModelsReady()) return;
 
     const { command, commandArgs } = browserCloseCommand();
@@ -132,7 +147,7 @@ function closeIdleBrowser() {
 }
 
 /**
- * 退出前回收常驻的无头浏览器。
+ * 退出前回收使用 Evan 专属 Profile 的 Chrome。
  *
  * Chromium 是刻意 detached 启动的（chrome_cdp.py 的 start_new_session /
  * DETACHED_PROCESS），所以后端进程退出时它不会跟着走。退出路径上不主动关掉的话，
@@ -320,7 +335,7 @@ export function runOpsCli({
     const tracksBrowser = Boolean(provider) || args[0] === 'browser';
     // ensureReady() 检查的是本机 venv/可执行文件是否存在，只对真实 spawn 有意义。
     // 调用方注入自己的 spawnProcess 时（测试替身）不该被本机环境左右，否则
-    // 干净 checkout 上的 `npm test` 会因为没跑 setup:browser-models 而失败。
+    // 干净 checkout 上的 `npm test` 会因为没跑 setup:automation-runtime 而失败。
     const usesRealProcess = spawnProcess === spawn;
     try {
         if (usesRealProcess) ensureReady();
@@ -406,7 +421,7 @@ export function runOpsCli({
             const data = payload?.data || {};
             if (code !== 0 || payload?.success !== true) {
                 // Python 侧已把登录失效等归类成结构化 error_code + recovery_hint，
-                // 这里原样透出，让用户打开内置浏览器登录，而不是看到一串堆栈。
+                // 这里原样透出，让用户打开 Evan 专属 Chrome 登录，而不是看到一串堆栈。
                 const parts = [data.error || stderr.trim() || `进程退出码 ${code}`];
                 if (data.recovery_hint) parts.push(data.recovery_hint);
                 const error = new Error(`${label}失败：${parts.join('　')}`);

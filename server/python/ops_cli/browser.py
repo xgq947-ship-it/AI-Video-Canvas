@@ -29,6 +29,154 @@ LOGIN_URLS = {
     "jimeng": "https://jimeng.jianying.com/ai-tool/generate?type=video",
 }
 
+LOGIN_PROBE_TIMEOUT_SECONDS = 25
+
+
+def _visible(locator: Any) -> bool:
+    try:
+        return any(locator.nth(index).is_visible() for index in range(locator.count()))
+    except Exception:
+        return False
+
+
+def _probe_flow_login(page: Any) -> dict[str, Any]:
+    """只读确认 Flow 登录；公开首页和单纯打开页面绝不算已登录。"""
+    page.goto(LOGIN_URLS["google-flow"], wait_until="domcontentloaded", timeout=60_000)
+    account = page.locator(
+        "[aria-label*='Google Account'], [aria-label*='Google 账号'], "
+        "[aria-label*='Google 帳戶']"
+    )
+    editor = page.locator('[role="textbox"][contenteditable="true"][data-slate-editor="true"]')
+    sign_in = page.get_by_text("Sign in", exact=True).or_(page.get_by_text("登录", exact=True))
+    deadline = time.monotonic() + LOGIN_PROBE_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        current_url = str(getattr(page, "url", "") or "")
+        host = (urlparse(current_url).hostname or "").lower()
+        if host == "accounts.google.com" or _visible(sign_in):
+            return {
+                "authenticated": False,
+                "reason": "not-authenticated",
+                "evidence": "login-control",
+                "message": "Google Flow 当前未登录",
+            }
+        if host == "labs.google" and (_visible(editor) or _visible(account)):
+            return {
+                "authenticated": True,
+                "reason": "authenticated",
+                "evidence": "flow-editor" if _visible(editor) else "google-account-control",
+                "message": "已在真实 Flow 页面确认 Google 账号登录",
+            }
+        page.wait_for_timeout(500)
+    return {
+        "authenticated": False,
+        "reason": "unconfirmed",
+        "evidence": "no-auth-evidence",
+        "message": "Flow 页面已打开，但未发现足够的登录证据",
+    }
+
+
+def _probe_jimeng_login(page: Any) -> dict[str, Any]:
+    """只读确认即梦登录；游客页即使渲染完整 composer 也不能通过。"""
+    from ops_cli.platforms.image_to_video.providers.jimeng import (  # type: ignore
+        JimengError,
+        _ensure_composer,
+    )
+
+    page.goto(LOGIN_URLS["jimeng"], wait_until="domcontentloaded", timeout=60_000)
+    try:
+        _ensure_composer(page, timeout_seconds=LOGIN_PROBE_TIMEOUT_SECONDS)
+    except JimengError as exc:
+        if exc.error_code == "AUTH_REQUIRED":
+            return {
+                "authenticated": False,
+                "reason": "not-authenticated",
+                "evidence": "login-control",
+                "message": "即梦当前未登录",
+            }
+        return {
+            "authenticated": False,
+            "reason": "unconfirmed",
+            "evidence": exc.error_code,
+            "message": f"即梦登录状态无法确认：{exc}",
+        }
+    return {
+        "authenticated": True,
+        "reason": "authenticated",
+        "evidence": "authenticated-composer",
+        "message": "已在真实即梦页面确认账号登录",
+    }
+
+
+def check_browser_logins(providers: list[str] | None = None) -> CommandResponse:
+    """关闭登录窗口并用同一 Profile 无头做真实页面只读探针。"""
+    selected = providers or list(LOGIN_URLS)
+    invalid = [provider for provider in selected if provider not in LOGIN_URLS]
+    if invalid:
+        return CommandResponse(
+            success=False,
+            platform="browser",
+            command="check-login",
+            data={"error": f"不支持的浏览器登录平台：{', '.join(invalid)}"},
+        )
+
+    sessionhub_root = Path(get_config().sessionhub_root).expanduser().resolve()
+    if str(sessionhub_root) not in sys.path:
+        sys.path.insert(0, str(sessionhub_root))
+    from scene.chrome_cdp import CDP_PORT, start_chrome, stop_chrome  # type: ignore
+
+    # 可见登录实例没有 CDP；先优雅退出以落盘 Cookie，再用同一个 Profile 无头接管。
+    stop_chrome()
+    ok, message = start_chrome(headless=True)
+    if not ok:
+        return CommandResponse(
+            success=False,
+            platform="browser",
+            command="check-login",
+            data={"error": message, "error_code": "BROWSER_CLOSED"},
+        )
+
+    def _check(context: Any) -> dict[str, Any]:
+        cleanup_playwright_context(context)
+        results: dict[str, Any] = {}
+        for provider in selected:
+            page = context.new_page()
+            try:
+                results[provider] = (
+                    _probe_flow_login(page)
+                    if provider == "google-flow"
+                    else _probe_jimeng_login(page)
+                )
+            except Exception as exc:
+                results[provider] = {
+                    "authenticated": False,
+                    "reason": "unconfirmed",
+                    "evidence": "probe-error",
+                    "message": f"登录探针执行失败：{exc}",
+                }
+            finally:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+        ensure_keepalive_page(context)
+        return results
+
+    try:
+        results = _with_cdp_context(CDP_PORT, _check)
+    except Exception as exc:
+        return CommandResponse(
+            success=False,
+            platform="browser",
+            command="check-login",
+            data={"error": str(exc), "error_code": "BROWSER_CLOSED"},
+        )
+    return CommandResponse(
+        success=True,
+        platform="browser",
+        command="check-login",
+        data={"providers": results},
+    )
+
 
 def browser_status() -> CommandResponse:
     return CommandResponse(

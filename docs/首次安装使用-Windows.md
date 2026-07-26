@@ -49,7 +49,7 @@ Evan AI Video Canvas-<版本>-win-x64.exe
 3. 登录：
    - Google Flow：`https://labs.google/fx/tools/flow`
    - 即梦：`https://jimeng.jianying.com`
-4. 登录完成后关闭浏览器窗口，返回 Evan。
+4. 登录完成后返回 Evan，点击“检查登录状态”。探针通过后才会显示“已验证”。
 
 自动生成统一使用相同 profile 的后台无头浏览器。登录过期时应用只显示提示，不会突然
 弹出窗口；请主动从设置再次打开 Evan 专属 Chrome 完成登录。
@@ -94,6 +94,7 @@ Evan 安装版使用 `%APPDATA%\Evan AI Video Canvas\data\codex-home\` 保存独
 ## 7. 更新与卸载
 
 - 更新：运行新版安装器覆盖安装，项目和浏览器登录状态保留。
+- 关闭 Evan 主窗口会同时关闭 Evan 专属 Chrome，不影响日常 Chrome。
 - 卸载：Windows“设置 → 应用 → 已安装的应用”中卸载 Evan。
 - 完全删除数据：卸载后手动删除
   `%APPDATA%\Evan AI Video Canvas\`。

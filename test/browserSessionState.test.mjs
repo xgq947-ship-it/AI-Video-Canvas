@@ -34,6 +34,17 @@ test('browser session states persist without storing credentials', () => {
     assert.equal(JSON.stringify(restored.list()).includes('cookie'), false);
 });
 
+test('应用重启后不沿用历史 authenticated，必须重新做真实页面探针', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-browser-state-stale-'));
+    const filePath = path.join(directory, 'sessions.json');
+    const store = new BrowserSessionStateStore({ filePath });
+    store.transition('google-flow', 'authenticated', { message: '上一次验证成功' });
+
+    const restored = new BrowserSessionStateStore({ filePath });
+    assert.equal(restored.get('google-flow').state, 'unknown');
+    assert.match(restored.get('google-flow').message, /本次启动重新验证/);
+});
+
 test('browser provider is inferred from ops cli arguments', () => {
     assert.equal(inferBrowserProvider(['image-to-video', 'jimeng', 'generate']), 'jimeng');
     assert.equal(inferBrowserProvider(['text-to-image', 'google-flow', 'generate']), 'google-flow');

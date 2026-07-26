@@ -30,15 +30,15 @@ const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
 
-    // 常驻的无头 Chromium 是 detached 启动的（chrome_cdp.py 的 start_new_session /
+    // 常驻的无头 Chrome 是 detached 启动的（chrome_cdp.py 的 start_new_session /
     // DETACHED_PROCESS），不会随后端进程一起退出。不在这里主动关掉，用户退出 Evan 后
     // 它会一直占着内存，直到下次启动 Evan 再过一个 idle 周期才被回收。
     // closeBrowserForShutdown 不抛错也不会挂住，最坏情况按 timeout 兜底。
     const finish = () => server.close(() => process.exit(0));
-    closeBrowserForShutdown({ timeoutMs: 3_000 }).then(finish, finish);
+    closeBrowserForShutdown({ timeoutMs: 8_000 }).then(finish, finish);
 
-    // Electron 主进程只给 5.5 秒，这里必须先于它自行了断。
-    setTimeout(() => process.exit(1), 4_500).unref();
+    // Electron 主进程只给 10.5 秒，这里必须先于它自行了断。
+    setTimeout(() => process.exit(1), 9_500).unref();
 };
 
 process.parentPort?.on('message', event => {

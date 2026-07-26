@@ -18,7 +18,8 @@ Codex CLI。Evan 不捆绑固定 Codex 版本。
 - [Windows 首次安装与使用](docs/首次安装使用-Windows.md)
 - [当前项目说明](docs/项目说明.md)
 
-首次使用 Google Flow 或即梦时，只需从应用设置中打开 Evan 专属 Chrome，分别登录自己的账号。
+首次使用 Google Flow 或即梦时，从应用设置中打开 Evan 专属 Chrome 登录，完成后点击
+“检查登录状态”。只有真实页面探针确认账号已登录，界面才显示“已验证”。
 之后生图和生视频默认在后台无头运行；登录过期时画布会提示重新登录，不会自动抢占前台。
 这个实例使用独立 `browser-profile`，不会读取或占用用户日常 Chrome 的 Profile。
 

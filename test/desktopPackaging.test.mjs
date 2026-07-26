@@ -59,6 +59,15 @@ test('macOS 首次启动缺少 Chrome 时显示阻断页并开放重试', () => 
   assert.match(electronMain, /createWindow\(chrome\.ready \? null : chromeRequiredPage\(chrome\)\)/);
 });
 
+test('关闭最后一个 Evan 窗口会退出应用并触发专属 Chrome 回收', () => {
+  const block = electronMain.slice(electronMain.indexOf("app.on('window-all-closed'"));
+  assert.match(block, /app\.quit\(\)/);
+  assert.doesNotMatch(block, /process\.platform !== 'darwin'/);
+  assert.match(electronMain, /backendProcess\.postMessage\(\{ type: 'shutdown' \}\)/);
+  assert.match(electronMain, /closeDedicatedChromeFallback/);
+  assert.match(electronMain, /后端已崩溃时也不能遗留 detached/);
+});
+
 test('运行后端依赖属于 production，安装包不再显式收录整个 node_modules', () => {
   for (const dependency of ['express', 'cors', 'dotenv']) {
     assert.ok(pkg.dependencies[dependency], `${dependency} 应属于 dependencies`);

@@ -35,9 +35,8 @@ Electron 主进程
 
 ### 2.1 关闭应用与生成中断
 
-- macOS 只关闭最后一个窗口时 Electron 进程和本地后端继续运行；从 Dock 退出、按
-  `Command+Q`、安装更新或强制结束进程才会停止后台。
-- Windows 关闭最后一个窗口会退出 Electron，并同时请求本地后端优雅关闭。
+- macOS 与 Windows 关闭最后一个 Evan 窗口都会退出 Electron，并请求本地后端优雅关闭
+  Evan 专属 Chrome；日常 Chrome 不受影响。
 - 后台异常退出但 Electron 仍存活时，主进程会在一分钟窗口内最多自动重启三次，并让
   页面连接新的随机 loopback 地址；连续崩溃超过上限后才要求用户完整重启应用。
 - 本地后端退出不会暂停远程平台任务。Flow/即梦已经提交的任务可能继续在平台生成，
@@ -93,7 +92,8 @@ unknown
 任何执行中状态 -> submission_unknown
 ```
 
-- `authenticated`：provider 专用探针确认已进入编辑器，而不只是 Cookie 文件存在。
+- `authenticated`：本次应用进程内的 provider 专用探针确认已进入编辑器或出现明确账号
+  控件；历史状态、Cookie 文件存在或打开过登录页都不算。
 - `expired`：明确跳转登录页、出现登录弹窗或 provider 返回认证失败。
 - `browser_unavailable`：浏览器进程、运行时或 profile 不可用。
 - `submission_unknown`：点击生成后连接中断，无法确认平台是否已接单。
@@ -104,7 +104,8 @@ unknown
 
 1. 任务持久化为 `auth_required`，保存 provider、阶段、输入摘要和提交边界。
 2. Electron 显示“重新登录”入口；只有用户主动操作时才打开同一个持久化 profile。
-3. 用户完成登录后重新提交，provider 探针确认恢复并更新为 `authenticated`。
+3. 用户完成登录后点击“检查登录状态”；探针关闭可见窗口、用同一 Profile 无头访问真实
+   页面，只有取得 provider 明确登录证据才更新为 `authenticated`。
 4. 仅在任务尚未进入提交边界时允许自动续跑。
 5. 已点击生成但结果未知时进入 `submission_unknown`，必须先检查平台历史记录；
    未确认前不自动再次提交。

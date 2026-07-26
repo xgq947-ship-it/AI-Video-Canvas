@@ -176,7 +176,8 @@ def _instance_pid() -> int | None:
         candidates.append(pid)
     if not candidates:
         return None
-    # 顶层主进程：命令行含 remote-debugging-port 且不是 Helper 子进程。
+    # 顶层主进程：没有 --type=，也不是 Helper。登录实例不开放 CDP，不能只按
+    # remote-debugging-port 判断，否则可能误把渲染/GPU 子进程当成主进程。
     for pid in candidates:
         try:
             cmd = subprocess.run(
@@ -187,7 +188,7 @@ def _instance_pid() -> int | None:
             ).stdout
         except Exception:
             cmd = ""
-        if "remote-debugging-port" in cmd and "Helper" not in cmd:
+        if "Helper" not in cmd and "--type=" not in cmd:
             return pid
     return candidates[0]
 
@@ -222,8 +223,8 @@ def _instance_pid_windows() -> int | None:
             continue
         if marker not in cmdline:
             continue
-        if "--remote-debugging-port" in cmdline and "--type=" not in cmdline:
-            return pid  # 顶层主进程（--type= 的是渲染/GPU 子进程）
+        if "--type=" not in cmdline:
+            return pid  # 顶层主进程；可见登录实例没有 remote-debugging-port
         if fallback is None:
             fallback = pid
     return fallback
@@ -265,7 +266,7 @@ def _instance_is_headless(pid: int) -> bool:
 def _instance_supports_playwright(pid: int) -> bool:
     """生成实例必须带 Evan 指定的 CDP 跨源参数，登录实例不会命中。"""
     command = _instance_command(pid).lower()
-    return "--remote-allow-origins" in command
+    return "--remote-allow-origins" in command and "--enable-automation" in command
 
 
 def start_login_chrome(url: str) -> tuple[bool, str]:
@@ -445,17 +446,39 @@ def stop_chrome() -> tuple[bool, str]:
         pid = _instance_pid_windows()
         if pid is None:
             return True, "未找到专用 Chrome，无需关闭"
-        # /T 连子进程一起结束；Windows 的 os.kill 没有 SIGKILL 可用。
+        # 先不带 /F 请求正常退出，让 Chrome 有机会完整落盘 Cookie/Profile；超时才强杀。
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T"],
+            capture_output=True,
+            check=False,
+        )
+        for _ in range(20):
+            if _instance_pid_windows() is None and not is_port_open():
+                return True, "已关闭专用 Chrome"
+            time.sleep(0.25)
         subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
             capture_output=True,
             check=False,
         )
-        for _ in range(20):
-            if not is_port_open():
-                return True, "已关闭专用 Chrome"
-            time.sleep(0.25)
         return True, "已强制关闭专用 Chrome"
+
+    main_pid = _instance_pid()
+    if main_pid is None:
+        return True, "未找到专用 Chrome，无需关闭"
+    # 只给主进程 SIGTERM。Chrome 会自行通知 Helper 退出并刷新 Cookie 数据库；旧实现
+    # 同时 SIGTERM 全部 Helper，登录刚完成就切换无头时可能来不及持久化登录态。
+    try:
+        os.kill(main_pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True, "已关闭专用 Chrome"
+
+    for _ in range(30):
+        if _instance_pid() is None and not is_port_open():
+            return True, "已关闭专用 Chrome"
+        time.sleep(0.2)
+
+    # 正常退出超时后，只强杀仍属于 Evan Profile 的进程，绝不触碰日常 Chrome。
     try:
         result = subprocess.run(
             ["pgrep", "-f", str(PROFILE_DIR)],
@@ -463,32 +486,9 @@ def stop_chrome() -> tuple[bool, str]:
             capture_output=True,
             check=False,
         )
+        pids = [int(line) for line in result.stdout.splitlines() if line.strip().isdigit()]
     except Exception as exc:
         return False, f"查找专用 Chrome 失败：{exc}"
-    pids = []
-    for line in result.stdout.splitlines():
-        try:
-            pid = int(line.strip())
-        except ValueError:
-            continue
-        if pid != os.getpid():
-            pids.append(pid)
-    for pid in pids:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-    for _ in range(20):
-        alive = []
-        for pid in pids:
-            try:
-                os.kill(pid, 0)
-                alive.append(pid)
-            except ProcessLookupError:
-                pass
-        if not alive and not is_port_open():
-            return True, "已关闭专用 Chrome"
-        time.sleep(0.25)
     for pid in pids:
         try:
             os.kill(pid, signal.SIGKILL)
@@ -554,6 +554,9 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
         return False, f"找不到 Chrome：{CHROME_BIN}"
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     low_memory_args = [
+        # 只用于无头探针/生成实例。手动登录走 start_login_chrome，不带此参数。
+        # Chrome 149+ 缺少它时，CDP 虽可连接但 Target.createTarget 会拒绝新标签页。
+        "--enable-automation",
         "--remote-allow-origins=*",
         "--disable-background-networking",
         "--disable-component-update",

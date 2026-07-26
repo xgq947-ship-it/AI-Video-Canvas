@@ -49,7 +49,7 @@ Evan AI Video Canvas-<版本>-mac-arm64.dmg
 3. 在该浏览器中访问并登录：
    - Google Flow：`https://labs.google/fx/tools/flow`
    - 即梦：`https://jimeng.jianying.com`
-4. 登录完成后可以直接关闭浏览器窗口，回到画布生成。
+4. 登录完成后回到 Evan，点击“检查登录状态”。探针通过后才会显示“已验证”。
 
 登录资料只保存在 Evan 独立 Profile，不读取日常 Chrome 登录资料。日常生图、生视频使用
 同一 Profile 的后台无头实例；如果登录过期，再从设置中打开 Evan 专属 Chrome。
@@ -90,6 +90,7 @@ Evan 为安装版创建独立的 `CODEX_HOME`，登录资料和画布 Skill 保�
 ## 6. 卸载和更新
 
 - 更新：安装新版并覆盖“应用程序”中的旧版，用户数据和登录资料保留。
+- 关闭 Evan 主窗口会退出应用并关闭 Evan 专属 Chrome，不会关闭日常 Chrome。
 - 卸载程序：删除“应用程序”中的 Evan。
 - 完全删除数据：卸载后再手动删除
   `~/Library/Application Support/Evan AI Video Canvas/`。

@@ -161,7 +161,7 @@ function closeIdleBrowser() {
  */
 export function closeBrowserForShutdown({
     spawnProcess = spawn,
-    timeoutMs = 3_000
+    timeoutMs = 8_000
 } = {}) {
     clearBrowserIdleTimer();
 

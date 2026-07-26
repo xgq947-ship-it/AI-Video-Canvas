@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess } from 'electron';
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createUpdateController } from './updater.js';
@@ -103,6 +104,47 @@ function chromeRequiredPage(status) {
 
 function currentChromeStatus() {
     return probeSystemChromeCompatibility(process.env);
+}
+
+function closeDedicatedChromeFallback() {
+    const environment = runtimeEnvironment();
+    const command = app.isPackaged
+        ? environment.EVAN_OPS_EXECUTABLE
+        : path.join(
+            PROJECT_ROOT,
+            'server',
+            'python',
+            '.venv',
+            process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'
+        );
+    const args = app.isPackaged
+        ? ['--json', 'browser', 'close']
+        : ['-m', 'ops_cli', '--json', 'browser', 'close'];
+    return new Promise(resolve => {
+        let settled = false;
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve();
+        };
+        let child;
+        const timer = setTimeout(() => {
+            try { child?.kill('SIGKILL'); } catch { /* ignore */ }
+            finish();
+        }, 8_000);
+        try {
+            child = spawn(command, args, {
+                cwd: app.isPackaged ? path.dirname(command) : path.join(PROJECT_ROOT, 'server', 'python'),
+                env: environment,
+                stdio: 'ignore'
+            });
+            child.once('error', finish);
+            child.once('close', finish);
+        } catch {
+            finish();
+        }
+    });
 }
 
 function runtimeEnvironment() {
@@ -430,15 +472,21 @@ if (!hasSingleInstanceLock) {
             clearTimeout(backendRestartTimer);
             backendRestartTimer = null;
         }
-        if (!backendProcess || shuttingDown) return;
+        if (shuttingDown) return;
         event.preventDefault();
         shuttingDown = true;
-        backendProcess.postMessage({ type: 'shutdown' });
-        setTimeout(() => app.quit(), 5_500).unref();
-        backendProcess.once('exit', () => app.quit());
+        setTimeout(() => app.quit(), 10_500).unref();
+        if (backendProcess) {
+            backendProcess.postMessage({ type: 'shutdown' });
+            backendProcess.once('exit', () => app.quit());
+        } else {
+            // 后端已崩溃时也不能遗留 detached 的 Evan 专属 Chrome。
+            void closeDedicatedChromeFallback().finally(() => app.quit());
+        }
     });
 
     app.on('window-all-closed', () => {
-        if (process.platform !== 'darwin') app.quit();
+        // 用户关闭 Evan 主窗口就视为退出应用，并同步回收 Evan 专属 Chrome。
+        app.quit();
     });
 }

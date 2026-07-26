@@ -20,6 +20,9 @@ test('启动指南包含两个浏览器平台、DeepSeek 和 ChatGPT Codex 的�
   assert.match(guide, /https:\/\/platform\.deepseek\.com\/api_keys/);
   assert.match(guide, /右上角「设置 → 配置 API 密钥 → Codex 服务」/);
   assert.match(guide, /api\/browser-sessions\/\$\{provider\}\/reauthenticate/);
+  assert.match(guide, /api\/browser-sessions\/check/);
+  assert.match(guide, /打开登录页/);
+  assert.match(guide, /检查登录状态/);
   assert.match(guide, /window\.evanDesktop\.openExternal/);
 });
 
@@ -28,8 +31,9 @@ test('启动指南读取真实登录、密钥与 Codex 状态而不是展示固�
   assert.match(guide, /fetch\('\/api\/settings\/api-keys'/);
   assert.match(guide, /fetch\('\/api\/settings\/codex'/);
   assert.match(guide, /state === 'authenticated'/);
-  assert.match(guide, /登录失效/);
+  assert.match(guide, /未登录/);
   assert.match(guide, /待验证/);
+  assert.match(guide, /loadStatus\(true\)/);
   assert.match(guide, /DEEPSEEK_API_KEY/);
   assert.match(guide, /codex\.authenticated/);
 });

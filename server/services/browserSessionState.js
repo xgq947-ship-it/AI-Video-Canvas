@@ -59,10 +59,16 @@ export class BrowserSessionStateStore {
             for (const provider of PROVIDERS) {
                 const saved = parsed?.providers?.[provider];
                 if (saved && VALID_STATES.has(saved.state)) {
+                    // “已验证”只能代表本次进程内真实页面探针的结果。应用重启后必须
+                    // 重新验证，不能把上次任务的历史成功状态直接展示成当前已登录。
+                    const staleSuccess = ['authenticated', 'checking', 'reauthenticating'].includes(saved.state);
                     document.providers[provider] = {
                         ...initialProviderState(provider),
                         ...saved,
-                        provider
+                        provider,
+                        state: staleSuccess ? 'unknown' : saved.state,
+                        errorCode: staleSuccess ? null : saved.errorCode,
+                        message: staleSuccess ? '等待本次启动重新验证登录状态' : saved.message
                     };
                 }
             }

@@ -60,6 +60,7 @@ import {
     runOpsCli
 } from './services/opsCliRunner.js';
 import { browserSessionState } from './services/browserSessionState.js';
+import { enqueueBrowserWorkflow } from './services/googleFlowWorkflowQueue.js';
 import { resolveImageToBase64 } from './utils/imageHelpers.js';
 import { MASSAGE_EQUIPMENT_NAMES } from '../shared/massageEquipmentCategories.js';
 import { RUNTIME_PATHS } from './runtime/paths.js';
@@ -1227,13 +1228,13 @@ app.post('/api/browser-sessions/:provider/reauthenticate', async (req, res) => {
         return res.status(400).json({ error: '不支持的浏览器登录平台' });
     }
     try {
-        const { data } = await runOpsCli({
+        const { data } = await enqueueBrowserWorkflow(() => runOpsCli({
             args: ['browser', 'login', '--provider', provider],
             timeoutMs: 90_000,
             label: `${provider} 登录`,
             initialSessionState: 'reauthenticating',
             successSessionState: 'reauthenticating'
-        });
+        }));
         res.json({
             success: true,
             provider,
@@ -1249,13 +1250,64 @@ app.post('/api/browser-sessions/:provider/reauthenticate', async (req, res) => {
     }
 });
 
+app.post('/api/browser-sessions/check', async (req, res) => {
+    const requested = Array.isArray(req.body?.providers) ? req.body.providers.map(String) : [];
+    const providers = requested.length ? requested : ['jimeng', 'google-flow'];
+    if (providers.some(provider => !['google-flow', 'jimeng'].includes(provider))) {
+        return res.status(400).json({ error: '包含不支持的浏览器登录平台' });
+    }
+    for (const provider of providers) browserSessionState.transition(provider, 'checking');
+    try {
+        const providerArgs = providers.flatMap(provider => ['--provider', provider]);
+        const { data } = await enqueueBrowserWorkflow(() => runOpsCli({
+            args: ['browser', 'check-login', ...providerArgs],
+            timeoutMs: 90_000,
+            label: '浏览器登录状态检查',
+            trackSessionState: false,
+            maxAttempts: 1
+        }));
+        const results = data.providers || {};
+        for (const provider of providers) {
+            const result = results[provider] || {};
+            if (result.authenticated === true) {
+                browserSessionState.transition(provider, 'authenticated', {
+                    message: result.message || '已通过真实页面确认登录状态'
+                });
+            } else if (result.reason === 'not-authenticated') {
+                browserSessionState.transition(provider, 'expired', {
+                    errorCode: 'AUTH_REQUIRED',
+                    message: result.message || '当前未登录'
+                });
+            } else {
+                browserSessionState.transition(provider, 'unknown', {
+                    errorCode: 'LOGIN_PROBE_UNCONFIRMED',
+                    message: result.message || '未获得足够证据，不能确认已登录'
+                });
+            }
+        }
+        res.json({ success: true, results, sessions: browserSessionState.list() });
+    } catch (error) {
+        for (const provider of providers) {
+            browserSessionState.transition(provider, 'unknown', {
+                errorCode: error.code || 'LOGIN_PROBE_FAILED',
+                message: error.message
+            });
+        }
+        res.status(500).json({
+            error: error.message,
+            code: error.code || 'LOGIN_PROBE_FAILED',
+            sessions: browserSessionState.list()
+        });
+    }
+});
+
 app.post('/api/browser/open', async (_req, res) => {
     try {
-        const { data } = await runOpsCli({
+        const { data } = await enqueueBrowserWorkflow(() => runOpsCli({
             args: ['browser', 'open'],
             timeoutMs: 30_000,
             label: '打开 Evan 专属 Chrome'
-        });
+        }));
         res.json({ success: true, ...data });
     } catch (error) {
         res.status(500).json({

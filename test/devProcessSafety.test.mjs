@@ -49,5 +49,5 @@ test('退出时会主动关掉常驻的无头浏览器', () => {
     const desktopEntry = fs.readFileSync(new URL('../server/desktop-entry.js', import.meta.url), 'utf8');
     assert.match(desktopEntry, /closeBrowserForShutdown/);
     // 关闭浏览器不能拖死退出流程：Electron 主进程只给 5.5 秒。
-    assert.match(desktopEntry, /setTimeout\(\(\) => process\.exit\(1\), 4_500\)/);
+    assert.match(desktopEntry, /setTimeout\(\(\) => process\.exit\(1\), 9_500\)/);
 });

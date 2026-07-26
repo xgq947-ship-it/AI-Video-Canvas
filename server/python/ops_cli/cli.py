@@ -9,6 +9,7 @@ import typer
 
 from ops_cli.browser import (
     check_browser_port,
+    check_browser_logins,
     cleanup_browser_tabs,
     close_browser,
     list_browser_tabs,
@@ -88,6 +89,19 @@ def browser_login(
     )
 
 
+@browser_app.command("check-login")
+def browser_check_login(
+    ctx: typer.Context,
+    provider: list[str] | None = typer.Option(None, "--provider", help="google-flow or jimeng; repeatable"),
+) -> None:
+    _execute(
+        ctx,
+        command_name="ops browser check-login",
+        params={"providers": provider or []},
+        handler=lambda: check_browser_logins(provider),
+    )
+
+
 @browser_app.command("open")
 def browser_open(ctx: typer.Context) -> None:
     _execute(
@@ -116,6 +130,7 @@ register_capabilities(
         CapabilitySpec(id="browser.cleanup", platform="browser", command="cleanup", recovery_policy="never"),
         CapabilitySpec(id="browser.open", platform="browser", command="open", recovery_policy="never"),
         CapabilitySpec(id="browser.login", platform="browser", command="login", recovery_policy="never"),
+        CapabilitySpec(id="browser.check-login", platform="browser", command="check-login", recovery_policy="never"),
         CapabilitySpec(id="browser.close", platform="browser", command="close", recovery_policy="never"),
     ]
 )

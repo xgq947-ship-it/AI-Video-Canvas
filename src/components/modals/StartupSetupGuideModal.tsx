@@ -23,6 +23,7 @@ type Theme = 'dark' | 'light';
 
 interface BrowserSession {
     state?: string;
+    message?: string;
 }
 
 interface GuideStatus {
@@ -61,9 +62,9 @@ function StatusBadge({ complete, label }: { complete: boolean; label: string }) 
 
 function sessionLabel(session?: BrowserSession) {
     if (session?.state === 'authenticated') return '已验证';
-    if (session?.state === 'expired') return '登录失效';
+    if (session?.state === 'expired') return '未登录';
     if (session?.state === 'checking' || session?.state === 'reauthenticating') return '检查中';
-    return '待验证';
+    return session?.message ? '无法确认' : '待验证';
 }
 
 function friendlyBrowserError(error: unknown) {
@@ -83,13 +84,31 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
     const [status, setStatus] = useState<GuideStatus>(EMPTY_STATUS);
     const [isLoading, setIsLoading] = useState(false);
     const [busyProvider, setBusyProvider] = useState<BrowserProvider | null>(null);
+    const [busyAction, setBusyAction] = useState<'open' | 'check' | null>(null);
     const [message, setMessage] = useState('');
     const isDark = canvasTheme === 'dark';
 
-    const loadStatus = async () => {
+    const loadStatus = async (verifyBrowsers = false) => {
         setIsLoading(true);
         setMessage('');
+        let probeError = '';
         try {
+            if (verifyBrowsers) {
+                setStatus(previous => ({
+                    ...previous,
+                    sessions: {
+                        jimeng: { state: 'checking' },
+                        'google-flow': { state: 'checking' }
+                    }
+                }));
+                const probeResponse = await fetch('/api/browser-sessions/check', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ providers: ['jimeng', 'google-flow'] })
+                });
+                const probe = await probeResponse.json().catch(() => ({}));
+                if (!probeResponse.ok) probeError = probe.error || '浏览器登录状态检查失败';
+            }
             const [capabilitiesResponse, keysResponse, codexResponse] = await Promise.all([
                 fetch('/api/capabilities', { cache: 'no-store' }),
                 fetch('/api/settings/api-keys', { cache: 'no-store' }),
@@ -110,6 +129,7 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                 codexAvailable: Boolean(codex.available),
                 codexAuthenticated: Boolean(codex.authenticated)
             });
+            if (probeError) setMessage(probeError);
         } catch (error) {
             setMessage(error instanceof Error ? error.message : '配置状态读取失败');
         } finally {
@@ -119,7 +139,7 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
 
     useEffect(() => {
         if (!isOpen) return;
-        void loadStatus();
+        void loadStatus(true);
     }, [isOpen]);
 
     useEffect(() => {
@@ -140,17 +160,45 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
     const openProviderLogin = async (provider: BrowserProvider) => {
         if (busyProvider) return;
         setBusyProvider(provider);
+        setBusyAction('open');
         setMessage('');
         try {
             const response = await fetch(`/api/browser-sessions/${provider}/reauthenticate`, { method: 'POST' });
             const result = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(result.error || '登录页面打开失败');
             await loadStatus();
-            setMessage('登录页已在 Evan 专属 Chrome 中打开。完成登录后回到这里重试任务。');
+            setMessage('登录页已打开。完成登录后，请点击“检查登录状态”。');
         } catch (error) {
             setMessage(friendlyBrowserError(error));
         } finally {
             setBusyProvider(null);
+            setBusyAction(null);
+        }
+    };
+
+    const checkProviderLogin = async (provider: BrowserProvider) => {
+        if (busyProvider) return;
+        setBusyProvider(provider);
+        setBusyAction('check');
+        setMessage('');
+        try {
+            const response = await fetch('/api/browser-sessions/check', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ providers: [provider] })
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || '登录状态检查失败');
+            await loadStatus();
+            const session = result.sessions?.[provider];
+            setMessage(session?.state === 'authenticated'
+                ? (session.message || '已确认登录')
+                : (session?.message || '没有获得真实登录证据，当前不会显示“已验证”'));
+        } catch (error) {
+            setMessage(friendlyBrowserError(error));
+        } finally {
+            setBusyProvider(null);
+            setBusyAction(null);
         }
     };
 
@@ -230,9 +278,14 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                                 </div>
                                 <p className={`mt-4 text-xs leading-5 ${muted}`}>登录态保存在 Evan 专用 browser-profile；不会读取日常 Chrome 数据，状态由真实任务验证。</p>
                                 <div className={`mt-3 truncate rounded-lg border px-3 py-2 font-mono text-[10px] ${isDark ? 'border-white/[0.08] bg-black/20 text-neutral-500' : 'border-neutral-200 bg-white text-neutral-500'}`} title={JIMENG_LOGIN_URL}>{JIMENG_LOGIN_URL}</div>
-                                <button onClick={() => void openProviderLogin('jimeng')} disabled={Boolean(busyProvider)} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-500 px-4 py-2.5 text-xs font-semibold text-black transition-colors hover:bg-cyan-400 disabled:opacity-50">
-                                    {busyProvider === 'jimeng' ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}打开并检查即梦登录
-                                </button>
+                                <div className="mt-4 grid grid-cols-2 gap-2">
+                                    <button onClick={() => void openProviderLogin('jimeng')} disabled={Boolean(busyProvider) || isLoading} className="flex items-center justify-center gap-2 rounded-xl bg-cyan-500 px-3 py-2.5 text-xs font-semibold text-black transition-colors hover:bg-cyan-400 disabled:opacity-50">
+                                        {busyProvider === 'jimeng' && busyAction === 'open' ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}打开登录页
+                                    </button>
+                                    <button onClick={() => void checkProviderLogin('jimeng')} disabled={Boolean(busyProvider) || isLoading} className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold transition-colors disabled:opacity-50 ${isDark ? 'border-cyan-400/25 text-cyan-300 hover:bg-cyan-400/10' : 'border-cyan-300 text-cyan-700 hover:bg-cyan-50'}`}>
+                                        {busyProvider === 'jimeng' && busyAction === 'check' ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}检查登录状态
+                                    </button>
+                                </div>
                             </section>
 
                             <section className={`group rounded-2xl border p-5 transition-colors ${card}`}>
@@ -245,9 +298,14 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                                 </div>
                                 <p className={`mt-4 text-xs leading-5 ${muted}`}>请使用可访问 Flow 的 Google 账号完成登录；登录完成后回到 Evan 重试任务。</p>
                                 <div className={`mt-3 truncate rounded-lg border px-3 py-2 font-mono text-[10px] ${isDark ? 'border-white/[0.08] bg-black/20 text-neutral-500' : 'border-neutral-200 bg-white text-neutral-500'}`} title={FLOW_LOGIN_URL}>{FLOW_LOGIN_URL}</div>
-                                <button onClick={() => void openProviderLogin('google-flow')} disabled={Boolean(busyProvider)} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-blue-400 disabled:opacity-50">
-                                    {busyProvider === 'google-flow' ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}打开并检查 Flow 登录
-                                </button>
+                                <div className="mt-4 grid grid-cols-2 gap-2">
+                                    <button onClick={() => void openProviderLogin('google-flow')} disabled={Boolean(busyProvider) || isLoading} className="flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-3 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-blue-400 disabled:opacity-50">
+                                        {busyProvider === 'google-flow' && busyAction === 'open' ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}打开登录页
+                                    </button>
+                                    <button onClick={() => void checkProviderLogin('google-flow')} disabled={Boolean(busyProvider) || isLoading} className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold transition-colors disabled:opacity-50 ${isDark ? 'border-blue-400/25 text-blue-300 hover:bg-blue-400/10' : 'border-blue-300 text-blue-700 hover:bg-blue-50'}`}>
+                                        {busyProvider === 'google-flow' && busyAction === 'check' ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}检查登录状态
+                                    </button>
+                                </div>
                             </section>
 
                             <section className={`rounded-2xl border p-5 transition-colors ${card}`}>
@@ -284,7 +342,7 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                                 <p className={`text-xs leading-5 ${muted}`}>密钥、登录资料和浏览器配置只保存在本机。关闭此窗口不会阻止使用，之后可从右上角设置再次打开。</p>
                             </div>
                             <div className="flex shrink-0 items-center gap-2">
-                                <button onClick={() => void loadStatus()} disabled={isLoading} className={`rounded-xl border p-2.5 transition-colors disabled:opacity-50 ${isDark ? 'border-white/10 text-neutral-400 hover:bg-white/10' : 'border-neutral-200 text-neutral-500 hover:bg-white'}`} title="刷新配置状态"><RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} /></button>
+                                <button onClick={() => void loadStatus(true)} disabled={isLoading} className={`rounded-xl border p-2.5 transition-colors disabled:opacity-50 ${isDark ? 'border-white/10 text-neutral-400 hover:bg-white/10' : 'border-neutral-200 text-neutral-500 hover:bg-white'}`} title="重新检查真实登录状态"><RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} /></button>
                                 <button onClick={onClose} className="flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-xs font-bold text-black transition-transform hover:scale-[1.02]"><Check size={15} />进入画布</button>
                             </div>
                         </div>

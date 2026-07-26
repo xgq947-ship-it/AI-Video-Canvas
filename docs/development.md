@@ -96,6 +96,10 @@ FFmpeg `6.1.1` 与 FFprobe `6.1.1` 由锁定的 `ffmpeg-ffprobe-static` 平台�
 自动生成显式启动无头 Chrome。用户主动执行“打开 Evan 专属 Chrome/登录”才会切换成无自动化参数的可见实例；
 后端不设置全局强制弹窗变量。
 
+登录检查会先让可见实例正常退出并刷新 `browser-profile`，再以同一 Profile 无头执行
+只读页面探针。退出时先终止 Chrome 主进程，让 Cookie 数据库正常落盘；超时才按
+Profile 精确强杀残留进程，禁止同时结束全部 Helper 造成登录态丢失。
+
 ## 可选 AI CLI / MCP
 
 Codex 和 Claude 不属于安装版的必需依赖。Evan 不把 Codex CLI 打入安装包，而是在运行

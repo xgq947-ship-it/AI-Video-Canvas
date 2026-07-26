@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { RUNTIME_PATHS } from '../runtime/paths.js';
-import { probeSystemChromeCompatibility } from '../runtime/browserExecutable.js';
+import { getChromeCompatibility } from '../runtime/browserExecutable.js';
 import {
     browserSessionState,
     browserStateForError,
@@ -47,7 +47,7 @@ export function resolveOpsExecutable() {
 export function browserRuntimeStatus() {
     const executable = resolveOpsExecutable();
     const opsReady = executable ? fs.existsSync(executable) : fs.existsSync(resolveOpsPython());
-    const chrome = probeSystemChromeCompatibility(process.env);
+    const chrome = getChromeCompatibility(process.env);
     return {
         ...chrome,
         ready: opsReady && chrome.ready,
@@ -83,7 +83,7 @@ let activeBrowserOperations = 0;
 let browserIdleTimer = null;
 
 export function opsEnvironment() {
-    const chrome = probeSystemChromeCompatibility(process.env);
+    const chrome = getChromeCompatibility(process.env);
     return {
         ...withUtf8PythonEnvironment(process.env),
         PYTHONUNBUFFERED: '1',
@@ -184,7 +184,7 @@ export function closeBrowserForShutdown({
         let child;
         // 这个定时器刻意不 unref：调用方正在 await 这个 Promise，如果事件循环
         // 因为没有别的句柄而直接排空，超时就永远不会触发，Promise 也就永不落定。
-        // 退出流程的最终兜底是 desktop-entry.js 里那个 4.5 秒的硬退出。
+        // 退出流程的最终兜底是 desktop-entry.js 里那个 9.5 秒的硬退出。
         const timer = setTimeout(() => {
             try { child?.kill('SIGKILL'); } catch { /* ignore */ }
             settle({ closed: false, reason: 'timeout' });

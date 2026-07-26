@@ -227,3 +227,20 @@ test('安装包文件名不含空格，否则更新源里的地址会 404', () =
   assert.match(pkg.build.artifactName, /\$\{version\}/);
   assert.match(pkg.build.artifactName, /\$\{ext\}$/);
 });
+
+test('AGENTS.md 的前置条件约束与实际实现一致', () => {
+  // AGENTS.md 是下一个接手会话读的规则文件。这批改动把系统 Chrome 变成了硬性前置
+  // 条件（macOS 阻断页 + Windows 安装器 Abort），规则文件必须同步，
+  // 否则它会禁止 main 已经在做的事。
+  const agents = fs.readFileSync(new URL('../AGENTS.md', import.meta.url), 'utf8');
+  assert.doesNotMatch(agents, /不得重新引入系统 Chrome/);
+  assert.doesNotMatch(agents, /内置 Chromium/);
+  assert.match(agents, /正式版 Google Chrome/);
+  assert.match(agents, /MIN_SUPPORTED_CHROME_MAJOR/);
+
+  // README 与两份安装文档同样不能再宣称「不需要 Chrome」。
+  for (const doc of ['../README.md', '../docs/首次安装使用-macOS.md', '../docs/首次安装使用-Windows.md']) {
+    const text = fs.readFileSync(new URL(doc, import.meta.url), 'utf8');
+    assert.match(text, /Google Chrome/, `${doc} 没有说明 Chrome 前置条件`);
+  }
+});

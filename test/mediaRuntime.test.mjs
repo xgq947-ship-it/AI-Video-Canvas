@@ -5,6 +5,8 @@ import path from 'node:path';
 import test from 'node:test';
 import {
     parseChromeVersion,
+    getChromeCompatibility,
+    invalidateChromeCompatibility,
     probeSystemChromeCompatibility,
     resolveSystemChromeExecutable
 } from '../server/runtime/browserExecutable.js';
@@ -86,4 +88,101 @@ test('Chrome 版本解析兼容标准输出', () => {
         major: 150
     });
     assert.equal(parseChromeVersion('Chromium 150.0.1'), null);
+});
+
+// ---------------------------------------------------------------------------
+// Chrome 探针缓存
+// ---------------------------------------------------------------------------
+
+test('Chrome 探针结果会被缓存，不在热路径上反复同步启动 Chrome', () => {
+    // probeSystemChromeCompatibility 内部是 spawnSync(chrome, ['--version'])，
+    // 会同步阻塞整个事件循环（超时上限 5 秒）。它被挂在 opsEnvironment() 和
+    // ensureReady() 上，一次生成要付 2~4 次；退出路径上还会挤占关闭浏览器的预算。
+    invalidateChromeCompatibility();
+    let probes = 0;
+    const options = {
+        platform: 'darwin',
+        homeDir: '/Users/tester',
+        spawnSyncImpl: () => {
+            probes += 1;
+            return { status: 0, stdout: 'Google Chrome 150.0.7871.182', stderr: '' };
+        },
+        existsSyncImpl: () => true
+    };
+    const environment = { EVAN_CHROME_EXECUTABLE: process.execPath };
+
+    let clock = 1_000;
+    const read = (extra = {}) => getChromeCompatibility(environment, { now: () => clock, ...options, ...extra });
+
+    assert.equal(read().ready, true);
+    assert.equal(probes, 1);
+
+    for (let i = 0; i < 20; i += 1) read();
+    assert.equal(probes, 1, '缓存期内不应重复探测');
+
+    // 可用结论缓存 5 分钟。
+    clock += 4 * 60_000;
+    read();
+    assert.equal(probes, 1);
+    clock += 2 * 60_000;
+    read();
+    assert.equal(probes, 2, '超过 TTL 后应重新探测');
+
+    invalidateChromeCompatibility();
+});
+
+test('用户点「重新检测」时必须绕开缓存', () => {
+    // chrome:retry 存在的意义就是「刚装完 Chrome，再看一次」。
+    // 缓存不给 force 出口的话，这个按钮会永远读到旧结论。
+    invalidateChromeCompatibility();
+    let probes = 0;
+    const options = {
+        platform: 'darwin',
+        homeDir: '/Users/tester',
+        spawnSyncImpl: () => {
+            probes += 1;
+            return { status: 0, stdout: 'Google Chrome 150.0.7871.182', stderr: '' };
+        }
+    };
+    const environment = { EVAN_CHROME_EXECUTABLE: process.execPath };
+
+    getChromeCompatibility(environment, options);
+    getChromeCompatibility(environment, options);
+    assert.equal(probes, 1);
+
+    getChromeCompatibility(environment, { ...options, force: true });
+    assert.equal(probes, 2);
+
+    invalidateChromeCompatibility();
+});
+
+test('探测失败只短暂缓存，不会把模型平白置灰几分钟', () => {
+    // Windows 杀软拖慢一次 --version 就可能撞 5 秒超时。把这种瞬时失败
+    // 按「可用」的 TTL 缓存，会让 Flow/即梦所有模型灰掉一整段时间。
+    invalidateChromeCompatibility();
+    let probes = 0;
+    let clock = 1_000;
+    const options = {
+        platform: 'darwin',
+        homeDir: '/Users/tester',
+        spawnSyncImpl: () => {
+            probes += 1;
+            return { status: 1, stdout: '', stderr: '' }; // 探测失败
+        }
+    };
+    const environment = { EVAN_CHROME_EXECUTABLE: process.execPath };
+
+    const first = getChromeCompatibility(environment, { now: () => clock, ...options });
+    assert.equal(first.ready, false);
+    assert.equal(probes, 1);
+
+    clock += 1_000; // 仍在短 TTL 内
+    getChromeCompatibility(environment, { now: () => clock, ...options });
+    assert.equal(probes, 1);
+
+    clock += 5_000; // 超过 3 秒短 TTL
+    getChromeCompatibility(environment, { now: () => clock, ...options });
+    assert.equal(probes, 2, '失败结论不应被长时间缓存');
+
+    invalidateChromeCompatibility();
 });

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createUpdateController } from './updater.js';
 import {
     CHROME_DOWNLOAD_URL,
-    probeSystemChromeCompatibility
+    getChromeCompatibility
 } from '../server/runtime/browserExecutable.js';
 
 const ELECTRON_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -102,8 +102,14 @@ function chromeRequiredPage(status) {
 `)}`;
 }
 
-function currentChromeStatus() {
-    return probeSystemChromeCompatibility(process.env);
+/**
+ * Chrome 兼容性状态。
+ *
+ * 探针内部是同步的 spawnSync(chrome, ['--version'])，会阻塞主进程，所以默认走缓存。
+ * 用户「刚装完 Chrome，点重新检测」的场景必须 force，否则那个按钮会永远读到旧结论。
+ */
+function currentChromeStatus({ force = false } = {}) {
+    return getChromeCompatibility(process.env, { force });
 }
 
 function closeDedicatedChromeFallback() {
@@ -327,13 +333,14 @@ ipcMain.handle('app:info', () => ({
     isPackaged: app.isPackaged
 }));
 
-ipcMain.handle('chrome:get-status', () => currentChromeStatus());
+ipcMain.handle('chrome:get-status', () => currentChromeStatus({ force: true }));
 ipcMain.handle('chrome:open-download', async () => {
     await shell.openExternal(CHROME_DOWNLOAD_URL);
     return { ok: true };
 });
 ipcMain.handle('chrome:retry', () => {
-    const status = currentChromeStatus();
+    // 用户刚装好 Chrome 才会点这里，必须绕开缓存重新探测。
+    const status = currentChromeStatus({ force: true });
     if (!status.ready) return status;
     if (!mainWindow) createWindow(LOADING_PAGE);
     else void mainWindow.loadURL(LOADING_PAGE);

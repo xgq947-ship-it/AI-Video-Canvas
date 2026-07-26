@@ -158,11 +158,13 @@ export function closeBrowserForShutdown({
         };
 
         let child;
+        // 这个定时器刻意不 unref：调用方正在 await 这个 Promise，如果事件循环
+        // 因为没有别的句柄而直接排空，超时就永远不会触发，Promise 也就永不落定。
+        // 退出流程的最终兜底是 desktop-entry.js 里那个 4.5 秒的硬退出。
         const timer = setTimeout(() => {
             try { child?.kill('SIGKILL'); } catch { /* ignore */ }
             settle({ closed: false, reason: 'timeout' });
         }, timeoutMs);
-        timer.unref?.();
 
         try {
             child = spawnProcess(command, commandArgs, {

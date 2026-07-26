@@ -166,3 +166,26 @@ test('Release 只上传更新源需要的 yml，不带构建调试文件', () =>
   assert.match(installerWorkflow, /release\/latest\*\.yml/);
   assert.doesNotMatch(installerWorkflow, /release\/\*\.yml/);
 });
+
+test('build 配置能通过 electron-builder 自己的 schema 校验', async () => {
+  // electron-builder 严格校验配置，任何未知属性都会让打包直接失败 ——
+  // 包括 "//xxx" 这种注释键（npm 容忍，electron-builder 不容忍）。
+  // 这类错误只在打 Tag 触发发布构建时才暴露，代价太高，所以在这里提前拦住。
+  const { createRequire } = await import('node:module');
+  const require = createRequire(import.meta.url);
+  const Ajv = require('ajv');
+  const schema = JSON.parse(
+    fs.readFileSync(new URL('../node_modules/app-builder-lib/scheme.json', import.meta.url), 'utf8')
+  );
+
+  const ajv = new Ajv({ allErrors: true, strict: false, allowUnionTypes: true });
+  const validate = ajv.compile(schema);
+
+  assert.ok(
+    validate(pkg.build),
+    `build 配置不合法：${JSON.stringify(validate.errors?.slice(0, 3))}`
+  );
+
+  // 反向确认这道防线真的有效，而不是永远返回 true。
+  assert.equal(validate({ ...pkg.build, '//note': '注释' }), false);
+});

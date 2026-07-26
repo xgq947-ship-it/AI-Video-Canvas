@@ -114,7 +114,6 @@
       }
     ],
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
-    "//publish": "打包时据此生成 app-update.yml 与 latest*.yml；electron-updater 会自动读取，无需额外配置文件。CI 用 --publish never，产物仍由 workflow 上传到 Release。",
     "publish": [
       {
         "provider": "github",

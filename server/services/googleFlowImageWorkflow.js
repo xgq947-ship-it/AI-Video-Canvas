@@ -270,5 +270,5 @@ async function executeGoogleFlowImageWorkflow({
 }
 
 export function generateGoogleFlowWorkflowImage(options) {
-    return enqueueGoogleFlowWorkflow(() => executeGoogleFlowImageWorkflow(options));
+    return enqueueGoogleFlowWorkflow(() => executeGoogleFlowImageWorkflow(options), { label: 'Google Flow 图片生成' });
 }

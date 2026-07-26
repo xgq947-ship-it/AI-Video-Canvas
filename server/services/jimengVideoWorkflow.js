@@ -198,5 +198,5 @@ async function executeJimengWorkflow({
 }
 
 export function generateJimengWorkflowVideo(options) {
-    return enqueueBrowserWorkflow(() => executeJimengWorkflow(options));
+    return enqueueBrowserWorkflow(() => executeJimengWorkflow(options), { label: '即梦视频生成' });
 }

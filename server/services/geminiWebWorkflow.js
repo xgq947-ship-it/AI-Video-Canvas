@@ -83,10 +83,23 @@ async function executeVideo({ prompt, referenceImageInputs = [], aspectRatio = '
   } finally { cleanupTaskDir(taskDir); }
 }
 
-export const generateGeminiWebImage = options => enqueueBrowserWorkflow(() => executeImage(options));
-export const generateGeminiWebVideo = options => enqueueBrowserWorkflow(() => executeVideo(options));
+export const generateGeminiWebImage = options => enqueueBrowserWorkflow(() => executeImage(options), { label: 'Gemini Web 图片生成' });
+export const generateGeminiWebVideo = options => enqueueBrowserWorkflow(() => executeVideo(options), { label: 'Gemini Web 视频生成' });
 
-export async function runGeminiWebTextTask({ prompt, referenceImageInputs = [], libraryDir, timeoutMinutes = 5 }) {
+/**
+ * 识图 / 提示词优化同样在驱动那一个 Evan 专属 Chrome，必须和生成走同一条串行队列。
+ *
+ * 之前它是唯一没入队的浏览器任务：产品短视频节点先用 Gemini 识图（未入队）、再排队生图，
+ * 识图期间任何入队任务或界面上的「打开浏览器 / 检查登录」都会同时操作同一个 Chrome，
+ * 而 ops-cli 的工作页是 cleanup_before=True —— 后来者会直接关掉正在用的页面。
+ *
+ * 调用方（optimize-prompt、reverse-image-prompt、产品短视频识图）都不在队列任务内部，
+ * 因此这里入队不会产生嵌套死锁。
+ */
+export const runGeminiWebTextTask = options =>
+  enqueueBrowserWorkflow(() => executeTextTask(options), { label: 'Gemini Web 识图' });
+
+async function executeTextTask({ prompt, referenceImageInputs = [], libraryDir, timeoutMinutes = 5 }) {
   const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-gemini-web-text-'));
   try {
     const references = await resolveBrowserReferenceImages(referenceImageInputs, libraryDir, taskDir, { providerName: 'Gemini Web' });

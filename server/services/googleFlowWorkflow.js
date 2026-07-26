@@ -207,5 +207,5 @@ export function buildGoogleFlowWorkflowArgs({
 }
 
 export function generateGoogleFlowWorkflowVideo(options) {
-    return enqueueGoogleFlowWorkflow(() => executeGoogleFlowWorkflow(options));
+    return enqueueGoogleFlowWorkflow(() => executeGoogleFlowWorkflow(options), { label: 'Google Flow 视频生成' });
 }

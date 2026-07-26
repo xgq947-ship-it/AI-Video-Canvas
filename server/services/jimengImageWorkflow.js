@@ -138,5 +138,5 @@ async function executeJimengImageWorkflow({
 }
 
 export function generateJimengWorkflowImage(options) {
-    return enqueueBrowserWorkflow(() => executeJimengImageWorkflow(options));
+    return enqueueBrowserWorkflow(() => executeJimengImageWorkflow(options), { label: '即梦图片生成' });
 }

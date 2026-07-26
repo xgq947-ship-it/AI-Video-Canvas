@@ -242,7 +242,9 @@ async function executeJob(job, context) {
     }
 
     job.stage = 'generating_images';
-    job.stageLabel = `正在生成替换图 0 / ${job.imageCount}`;
+    // 不写「0 / N」：浏览器图片模型是一次调用返回整批，计数只能在整批落地后才动，
+    // 用户会盯着 0 / 4 看好几分钟，以为卡住了。
+    job.stageLabel = `正在生成 ${job.imageCount} 张替换图`;
     job.prompt = buildProductScenePrompt({
       sceneAnalysis: job.sceneAnalysis,
       personaAnalysis: job.personaAnalysis,
@@ -290,7 +292,7 @@ async function executeJob(job, context) {
       job.resultUrls = imageResults.map(item => item.resultUrl);
       job.resultUrl = job.resultUrls[0];
       job.resultNodeId = job.resultNodeIds[0];
-      job.stageLabel = `正在生成替换图 ${index + 1} / ${job.imageCount}`;
+      job.stageLabel = `已完成替换图 ${index + 1} / ${job.imageCount}`;
       writeJob(job, dirs);
     }
 

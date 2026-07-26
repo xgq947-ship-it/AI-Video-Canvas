@@ -60,7 +60,7 @@ import {
     runOpsCli
 } from './services/opsCliRunner.js';
 import { browserSessionState } from './services/browserSessionState.js';
-import { enqueueBrowserWorkflow } from './services/googleFlowWorkflowQueue.js';
+import { assertBrowserWorkflowIdle, enqueueBrowserWorkflow } from './services/googleFlowWorkflowQueue.js';
 import { resolveImageToBase64 } from './utils/imageHelpers.js';
 import { MASSAGE_EQUIPMENT_NAMES } from '../shared/massageEquipmentCategories.js';
 import { RUNTIME_PATHS } from './runtime/paths.js';
@@ -1230,13 +1230,14 @@ app.post('/api/browser-sessions/:provider/reauthenticate', async (req, res) => {
         return res.status(400).json({ error: '不支持的浏览器登录平台' });
     }
     try {
+        assertBrowserWorkflowIdle('打开登录窗口');
         const { data } = await enqueueBrowserWorkflow(() => runOpsCli({
             args: ['browser', 'login', '--provider', provider],
             timeoutMs: 90_000,
             label: `${provider} 登录`,
             initialSessionState: 'reauthenticating',
             successSessionState: 'reauthenticating'
-        }));
+        }), { label: `${provider} 登录` });
         res.json({
             success: true,
             provider,
@@ -1244,7 +1245,7 @@ app.post('/api/browser-sessions/:provider/reauthenticate', async (req, res) => {
             ...data
         });
     } catch (error) {
-        res.status(500).json({
+        res.status(error.status || 500).json({
             error: error.message,
             code: error.code || 'BROWSER_LOGIN_FAILED',
             session: browserSessionState.get(provider)
@@ -1277,7 +1278,6 @@ app.post('/api/browser-sessions/check', async (req, res) => {
         }
         return true;
     });
-    for (const provider of providersToProbe) browserSessionState.transition(provider, 'checking');
     if (providersToProbe.length === 0) {
         return res.json({
             success: true,
@@ -1286,6 +1286,18 @@ app.post('/api/browser-sessions/check', async (req, res) => {
             sessions: browserSessionState.list()
         });
     }
+    // 忙碌判定必须在写入 checking 之前：一旦写了再拒绝，三个平台会永远停在「检查中」，
+    // 界面上和探针卡死一模一样。缓存能直接答的请求上面已经返回，不受影响。
+    try {
+        assertBrowserWorkflowIdle('检查登录状态');
+    } catch (error) {
+        return res.status(error.status || 409).json({
+            error: error.message,
+            code: error.code,
+            sessions: browserSessionState.list()
+        });
+    }
+    for (const provider of providersToProbe) browserSessionState.transition(provider, 'checking');
     try {
         const providerArgs = providersToProbe.flatMap(provider => ['--provider', provider]);
         const { data } = await enqueueBrowserWorkflow(() => runOpsCli({
@@ -1294,7 +1306,7 @@ app.post('/api/browser-sessions/check', async (req, res) => {
             label: '浏览器登录状态检查',
             trackSessionState: false,
             maxAttempts: 1
-        }));
+        }), { label: '浏览器登录状态检查' });
         const results = { ...cachedResults, ...(data.providers || {}) };
         for (const provider of providersToProbe) {
             const result = results[provider] || {};
@@ -1332,14 +1344,17 @@ app.post('/api/browser-sessions/check', async (req, res) => {
 
 app.post('/api/browser/open', async (_req, res) => {
     try {
+        // 生成期间直接拒绝，不排队：排队会让按钮一直转到生成结束（队列没有等待超时），
+        // 真排到了又会把 Chrome 切成有头模式，打断正在跑的生成。
+        assertBrowserWorkflowIdle('打开浏览器窗口');
         const { data } = await enqueueBrowserWorkflow(() => runOpsCli({
             args: ['browser', 'open'],
             timeoutMs: 30_000,
             label: '打开 Evan 专属 Chrome'
-        }));
+        }), { label: '打开 Evan 专属 Chrome' });
         res.json({ success: true, ...data });
     } catch (error) {
-        res.status(500).json({
+        res.status(error.status || 500).json({
             error: error.message,
             code: error.code || 'BROWSER_OPEN_FAILED'
         });

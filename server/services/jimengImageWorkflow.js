@@ -126,7 +126,14 @@ async function executeJimengImageWorkflow({
         const images = await loadBrowserImageResults(data, { providerName: '即梦图片生成' });
         return { images, runId };
     } finally {
-        fs.rmSync(taskDir, { recursive: true, force: true });
+        // Windows 上子进程可能还持着任务目录里的句柄，rmSync 会抛 EBUSY/EPERM。
+        // 这里在 finally 里，抛出去会把真正的失败原因整个盖掉（生成配额已经花了，
+        // 用户却只看到一条删临时目录的错）。清理失败不影响结果，记一条日志即可。
+        try {
+            fs.rmSync(taskDir, { recursive: true, force: true });
+        } catch (cleanupError) {
+            console.warn(`[workflow] 无法清理临时目录 ${taskDir}：${cleanupError.message}`);
+        }
     }
 }
 

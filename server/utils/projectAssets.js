@@ -256,17 +256,40 @@ const IMAGE_EXTENSION_BY_MIME = {
     'image/avif': 'avif'
 };
 
-/** Save a pasted/dropped image directly into the active project's image folder. */
-export function saveProjectImageUpload(workflow, payload, { projectsDir }) {
-    const dataUrl = String(payload?.data || '');
-    const match = dataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif|avif));base64,([A-Za-z0-9+/=\r\n]+)$/);
-    if (!match) {
-        const error = new Error('只支持 PNG、JPEG、WebP、GIF 或 AVIF 图片');
-        error.code = 'UNSUPPORTED_IMAGE';
-        throw error;
+const SUPPORTED_IMAGE_MIME_RE = /^image\/(?:png|jpeg|webp|gif|avif)$/;
+
+function unsupportedImageError() {
+    const error = new Error('只支持 PNG、JPEG、WebP、GIF 或 AVIF 图片');
+    error.code = 'UNSUPPORTED_IMAGE';
+    return error;
+}
+
+/**
+ * 取出待写盘的图片字节。
+ *
+ * 支持两种入参：
+ * - `payload.buffer` + `payload.mimeType`：二进制直传（推荐）。浏览器直接把 File 作为
+ *   请求体发过来，全程零 base64 —— 一张 100MB 的图不会在前端产生 133MB 的 base64
+ *   字符串、再产生一份等大的 JSON 拷贝，后端也不用再解析出同样大的字符串。
+ * - `payload.data`：旧的 data URL 形式，保留兼容。
+ */
+function readUploadImageBytes(payload) {
+    if (Buffer.isBuffer(payload?.buffer)) {
+        const mimeType = String(payload?.mimeType || '').toLowerCase();
+        if (!SUPPORTED_IMAGE_MIME_RE.test(mimeType)) throw unsupportedImageError();
+        return { buffer: payload.buffer, mimeType };
     }
 
-    const buffer = Buffer.from(match[2], 'base64');
+    const dataUrl = String(payload?.data || '');
+    const match = dataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif|avif));base64,([A-Za-z0-9+/=\r\n]+)$/);
+    if (!match) throw unsupportedImageError();
+    return { buffer: Buffer.from(match[2], 'base64'), mimeType: match[1] };
+}
+
+/** Save a pasted/dropped image directly into the active project's image folder. */
+export function saveProjectImageUpload(workflow, payload, { projectsDir }) {
+    const { buffer, mimeType } = readUploadImageBytes(payload);
+
     if (buffer.length === 0) {
         const error = new Error('图片文件为空');
         error.code = 'UNSUPPORTED_IMAGE';
@@ -280,7 +303,7 @@ export function saveProjectImageUpload(workflow, payload, { projectsDir }) {
 
     ensureProjectFolder(workflow, { projectsDir });
     const id = crypto.randomUUID();
-    const extension = IMAGE_EXTENSION_BY_MIME[match[1]];
+    const extension = IMAGE_EXTENSION_BY_MIME[mimeType];
     const filename = `img_${Date.now()}_${id.slice(0, 8)}.${extension}`;
     const imageDir = path.join(projectsDir, workflow.projectDirName, 'images');
     const imagePath = path.join(imageDir, filename);
@@ -290,7 +313,7 @@ export function saveProjectImageUpload(workflow, payload, { projectsDir }) {
         filename,
         prompt: String(payload?.prompt || payload?.originalFilename || ''),
         originalFilename: payload?.originalFilename || undefined,
-        mimeType: match[1],
+        mimeType,
         createdAt: new Date().toISOString(),
         type: 'images'
     };

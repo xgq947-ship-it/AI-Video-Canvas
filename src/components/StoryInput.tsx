@@ -9,7 +9,7 @@ interface StoryInputProps {
     className?: string;
     onBlur?: () => void;
     onKeyDown?: (e: React.KeyboardEvent) => void;
-    inputRef?: React.RefObject<HTMLDivElement>;
+    inputRef?: React.RefObject<HTMLDivElement | null>;
     readOnly?: boolean;
 }
 

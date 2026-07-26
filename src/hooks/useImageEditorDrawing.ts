@@ -15,8 +15,8 @@ import { PRESET_COLORS } from '../components/modals/imageEditor/imageEditor.type
 export type DrawingTool = 'brush' | 'eraser';
 
 interface UseImageEditorDrawingProps {
-    canvasRef: React.RefObject<HTMLCanvasElement>;
-    imageRef: React.RefObject<HTMLImageElement>;
+    canvasRef: React.RefObject<HTMLCanvasElement | null>;
+    imageRef: React.RefObject<HTMLImageElement | null>;
     saveState: () => void;
 }
 

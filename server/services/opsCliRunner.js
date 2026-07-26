@@ -86,20 +86,100 @@ function clearBrowserIdleTimer() {
     browserIdleTimer = null;
 }
 
+function browserCloseCommand() {
+    const executable = resolveOpsExecutable();
+    return {
+        command: executable || resolveOpsPython(),
+        commandArgs: executable
+            ? ['--json', 'browser', 'close']
+            : ['-m', 'ops_cli', '--json', 'browser', 'close']
+    };
+}
+
 function closeIdleBrowser() {
     if (activeBrowserOperations > 0) return;
-    const executable = resolveOpsExecutable();
-    const command = executable || resolveOpsPython();
-    const commandArgs = executable
-        ? ['--json', 'browser', 'close']
-        : ['-m', 'ops_cli', '--json', 'browser', 'close'];
-    const child = spawn(command, commandArgs, {
-        cwd: PYTHON_ROOT,
-        env: opsEnvironment(),
-        detached: true,
-        stdio: 'ignore'
+    // 运行时没装就没有浏览器需要关。这个检查同时是崩溃防线：spawn 一个不存在的
+    // 可执行文件会让子进程发出 'error' 事件，而 ChildProcess 的 'error' 没有监听器时
+    // 会直接把整个后端进程带走 —— 模块加载时 armed 的兜底定时器意味着，
+    // 任何没跑过 setup:browser-models 的机器上，后端都会在启动 120 秒后猝死。
+    if (!isBrowserModelsReady()) return;
+
+    const { command, commandArgs } = browserCloseCommand();
+    try {
+        const child = spawn(command, commandArgs, {
+            cwd: PYTHON_ROOT,
+            env: opsEnvironment(),
+            detached: true,
+            stdio: 'ignore'
+        });
+        // detached + unref 的子进程同样需要 error 监听器，否则同上。
+        child.on('error', error => {
+            console.warn('[ops-cli] 关闭空闲浏览器失败：', error?.message || error);
+        });
+        child.unref();
+    } catch (error) {
+        console.warn('[ops-cli] 无法启动关闭浏览器的进程：', error?.message || error);
+    }
+}
+
+/**
+ * 退出前回收常驻的无头浏览器。
+ *
+ * Chromium 是刻意 detached 启动的（chrome_cdp.py 的 start_new_session /
+ * DETACHED_PROCESS），所以后端进程退出时它不会跟着走。退出路径上不主动关掉的话，
+ * 用户关掉 Evan 之后它会一直占着几百 MB —— 唯一的回收点是本模块加载时 armed 的
+ * 兜底 idle 定时器，也就是要等到"下次启动 Evan 再过一个 idle 周期"。
+ *
+ * 关闭失败、超时、运行时没装：都只是解析成 closed:false，绝不抛错也绝不挂住，
+ * 退出流程不能被这一步拖死。
+ *
+ * @returns {Promise<{ closed: boolean, reason?: string }>}
+ */
+export function closeBrowserForShutdown({
+    spawnProcess = spawn,
+    timeoutMs = 3_000
+} = {}) {
+    clearBrowserIdleTimer();
+
+    if (spawnProcess === spawn && !isBrowserModelsReady()) {
+        // 运行时都没装，自然也没有浏览器需要关。
+        return Promise.resolve({ closed: false, reason: 'not-ready' });
+    }
+
+    const { command, commandArgs } = browserCloseCommand();
+
+    return new Promise(resolve => {
+        let settled = false;
+        const settle = (result) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(result);
+        };
+
+        let child;
+        const timer = setTimeout(() => {
+            try { child?.kill('SIGKILL'); } catch { /* ignore */ }
+            settle({ closed: false, reason: 'timeout' });
+        }, timeoutMs);
+        timer.unref?.();
+
+        try {
+            child = spawnProcess(command, commandArgs, {
+                cwd: PYTHON_ROOT,
+                env: opsEnvironment(),
+                stdio: 'ignore'
+            });
+        } catch (error) {
+            settle({ closed: false, reason: error?.message || 'spawn-failed' });
+            return;
+        }
+
+        child.on('error', error => settle({ closed: false, reason: error?.message || 'spawn-failed' }));
+        child.on('close', code => settle(
+            code === 0 ? { closed: true } : { closed: false, reason: `exit-${code}` }
+        ));
     });
-    child.unref();
 }
 
 function beginBrowserOperation() {
@@ -190,8 +270,12 @@ export function runOpsCli({
 }) {
     const provider = inferBrowserProvider(args);
     const tracksBrowser = Boolean(provider) || args[0] === 'browser';
+    // ensureReady() 检查的是本机 venv/可执行文件是否存在，只对真实 spawn 有意义。
+    // 调用方注入自己的 spawnProcess 时（测试替身）不该被本机环境左右，否则
+    // 干净 checkout 上的 `npm test` 会因为没跑 setup:browser-models 而失败。
+    const usesRealProcess = spawnProcess === spawn;
     try {
-        ensureReady();
+        if (usesRealProcess) ensureReady();
     } catch (error) {
         const state = browserStateForError(error);
         if (provider && trackSessionState && state) {

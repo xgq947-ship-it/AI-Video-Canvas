@@ -14,7 +14,7 @@ import { dataUrlToBlob, snapshotImageSource } from '@/shared/canvasSnapshots.js'
 // ============================================================================
 
 interface UseImageEditorHistoryProps {
-    canvasRef: React.RefObject<HTMLCanvasElement>;
+    canvasRef: React.RefObject<HTMLCanvasElement | null>;
     elements: EditorElement[];
     setElements: React.Dispatch<React.SetStateAction<EditorElement[]>>;
     setSelectedElementId: React.Dispatch<React.SetStateAction<string | null>>;

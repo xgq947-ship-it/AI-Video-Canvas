@@ -12,7 +12,7 @@ import { COLLAPSED_SIDEBAR_WIDTH, EXPANDED_SIDEBAR_WIDTH, ProjectSidebar, type S
 import { CanvasNode } from './components/canvas/CanvasNode';
 import { ConnectionsLayer } from './components/canvas/ConnectionsLayer';
 import { ContextMenu } from './components/ContextMenu';
-import { ContextMenuState, NodeData, NodeStatus, NodeType } from './types';
+import { ContextMenuState, isMangaNode, NodeData, NodeStatus, NodeType } from './types';
 import {
   generateImage,
   generateImageBatch,
@@ -38,6 +38,8 @@ import { useImageNodeHandlers } from './hooks/useImageNodeHandlers';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { isSupportedImageFile, useCanvasImageImport } from './hooks/useCanvasImageImport';
 import { useContextMenuHandlers } from './hooks/useContextMenuHandlers';
+import { useToasts } from './hooks/useToasts';
+import { ToastStack } from './components/ToastStack';
 import { useAutoSave } from './hooks/useAutoSave';
 import { useGenerationRecovery } from './hooks/useGenerationRecovery';
 import { useVideoFrameExtraction } from './hooks/useVideoFrameExtraction';
@@ -65,12 +67,19 @@ import { getCanvasRect } from './utils/canvasRect';
 import { MapPinned } from 'lucide-react';
 import { CanvasMinimap } from './components/canvas/CanvasMinimap';
 import { CanvasZoomControl } from './components/canvas/CanvasZoomControl';
-import { collectNodeReferences } from './utils/nodeReferences.js';
+import { collectNodeReferences, type NodeReference } from './utils/nodeReferences.js';
 import { upsertProductSceneResultNode } from './utils/productSceneResult.js';
 
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
+
+// 只有这几类节点会把 allNodes 传下去（漫剧成片/产品场景替换要用全量节点组装 manifest）。
+// 其余节点不该拿到这个每帧都变的数组，否则 CanvasNode 的 memo 形同虚设。
+const NODE_TYPES_NEEDING_ALL_NODES = new Set<NodeType>([
+  NodeType.PRODUCT_SCENE_REPLACE,
+  ...Object.values(NodeType).filter(isMangaNode)
+]);
 
 type CanvasHistoryState = { nodes: NodeData[]; groups: ReturnType<typeof useGroupManagement>['groups'] };
 
@@ -135,7 +144,18 @@ export default function App() {
     openAssetLibraryModal
   } = usePanelState();
 
-  const [canvasHoveredNodeId, setCanvasHoveredNodeId] = useState<string | null>(null);
+  const { toasts, showToast, dismissToast } = useToasts();
+
+  // 悬停节点只被滚轮缩放用来定位光标下的节点，没有任何 UI 依赖它。
+  // 放在 state 里意味着"鼠标划过画布"就会重渲染整个 App 和全部节点，
+  // 所以这里用 ref：hover 变化不产生 render。
+  const canvasHoveredNodeIdRef = useRef<string | null>(null);
+  const handleNodeMouseEnter = React.useCallback((id: string) => {
+    canvasHoveredNodeIdRef.current = id;
+  }, []);
+  const handleNodeMouseLeave = React.useCallback(() => {
+    canvasHoveredNodeIdRef.current = null;
+  }, []);
 
 
   // Canvas title state (via hook)
@@ -158,7 +178,8 @@ export default function App() {
 
   // Wrap handleWheel to pass hovered node for zoom-to-center
   const handleWheel = (e: React.WheelEvent) => {
-    const hoveredNode = canvasHoveredNodeId ? nodes.find(n => n.id === canvasHoveredNodeId) : undefined;
+    const hoveredId = canvasHoveredNodeIdRef.current;
+    const hoveredNode = hoveredId ? nodes.find(n => n.id === hoveredId) : undefined;
     baseHandleWheel(e, hoveredNode);
   };
 
@@ -621,7 +642,7 @@ export default function App() {
     handleImageToImage,
     handleImageToVideo,
     handleChangeAngleGenerate
-  } = useImageNodeHandlers({ nodes, setNodes, setSelectedNodeIds, onGenerateNode: handleGenerate });
+  } = useImageNodeHandlers({ nodes, setNodes, setSelectedNodeIds, onGenerateNode: handleGenerate, workflowId });
 
   // Asset handlers (create asset modal)
   const {
@@ -712,7 +733,8 @@ export default function App() {
     viewport,
     canvasRef,
     setNodes,
-    setSelectedNodeIds
+    setSelectedNodeIds,
+    notify: showToast
   });
 
   /**
@@ -1291,7 +1313,7 @@ export default function App() {
       e.stopPropagation();
       const droppedImages = externalFiles.filter(isSupportedImageFile);
       if (droppedImages.length === 0) {
-        window.alert('目前支持拖入 PNG、JPEG、WebP、GIF 或 AVIF 图片。');
+        showToast('目前支持拖入 PNG、JPEG、WebP、GIF 或 AVIF 图片。', { tone: 'error' });
         return;
       }
       await importImageFiles(droppedImages, { x: e.clientX, y: e.clientY });
@@ -1427,6 +1449,42 @@ export default function App() {
   // EVENT HANDLERS
   // ============================================================================
 
+  // 画布容器的屏幕偏移只在窗口 resize / 侧边栏折叠时变化，但原来拖连线时每个
+  // pointermove 都要 getBoundingClientRect()，render 里还要再读一次。
+  // 写完 DOM 立刻读几何量会强制同步重排 —— 在拖拽路径上就是每帧一次。
+  // 这里缓存下来：ResizeObserver 负责布局变化，指针按下时再兜底刷新一次。
+  const canvasOffsetRef = useRef<{ left: number; top: number } | undefined>(undefined);
+  const [canvasOffset, setCanvasOffset] = useState<{ left: number; top: number } | undefined>(undefined);
+
+  const refreshCanvasOffset = React.useCallback(() => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    const next = rect ? { left: rect.left, top: rect.top } : undefined;
+    canvasOffsetRef.current = next;
+    setCanvasOffset(previous => (
+      previous?.left === next?.left && previous?.top === next?.top ? previous : next
+    ));
+  }, [canvasRef]);
+
+  useEffect(() => {
+    refreshCanvasOffset();
+    window.addEventListener('resize', refreshCanvasOffset);
+    window.addEventListener('scroll', refreshCanvasOffset, true);
+
+    const element = canvasRef.current;
+    // 侧边栏折叠有 CSS 过渡，按下即读会拿到动画前的值；ResizeObserver 会在
+    // 每一帧布局稳定后回调，所以过渡结束时缓存一定是最新的。
+    const observer = typeof ResizeObserver !== 'undefined' && element
+      ? new ResizeObserver(refreshCanvasOffset)
+      : null;
+    if (observer && element) observer.observe(element);
+
+    return () => {
+      window.removeEventListener('resize', refreshCanvasOffset);
+      window.removeEventListener('scroll', refreshCanvasOffset, true);
+      observer?.disconnect();
+    };
+  }, [refreshCanvasOffset, canvasRef]);
+
   const handlePointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).id === 'canvas-background') {
       if (e.button === 0 && isSpacePressedRef.current) {
@@ -1465,8 +1523,7 @@ export default function App() {
     if (updateNodeDrag(e, viewport, setNodes, selectedNodeIds)) return;
 
     // 3. Handle Connection Dragging
-    const canvasRect = canvasRef.current?.getBoundingClientRect();
-    if (updateConnectionDrag(e, nodes, viewport, canvasRect ? { left: canvasRect.left, top: canvasRect.top } : undefined)) return;
+    if (updateConnectionDrag(e, nodes, viewport, canvasOffsetRef.current)) return;
 
     // 4. Handle Canvas Panning (disabled when selection box is active)
     if (!isSelecting) {
@@ -1524,6 +1581,146 @@ export default function App() {
   // handleDoubleClick, handleGlobalContextMenu, handleAddNext, handleNodeContextMenu,
   // handleContextMenuCreateAsset, handleContextMenuSelect, handleToolbarAdd
 
+  // ==========================================================================
+  // 画布节点的稳定 props
+  //
+  // CanvasNode 已经用 React.memo 包起来了，但 memo 只有在 props 引用稳定时才有用。
+  // 下面这几块负责消除"每次 render 都换新引用"的 props：内联箭头函数、
+  // 每帧重新计算的派生数组。拖一个节点时 setNodes 每帧触发一次 render，
+  // 没有这些处理，60 个节点就是每帧 60 次子树重建。
+  // ==========================================================================
+
+  // 每个节点用于预览的上游产物 URL。字符串按值比较，直接重算即可。
+  const nodeInputUrls = React.useMemo(() => {
+    const byId = new Map(nodes.map(item => [item.id, item]));
+    const map = new Map<string, string | undefined>();
+    for (const node of nodes) {
+      const parentId = node.parentIds?.[0];
+      const parent = parentId ? byId.get(parentId) : undefined;
+      if (!parent) {
+        map.set(node.id, undefined);
+      } else if (node.type === NodeType.VIDEO_EDITOR && parent.type === NodeType.VIDEO) {
+        // VIDEO_EDITOR nodes need the actual video URL from parent Video node
+        map.set(node.id, parent.resultUrl);
+      } else if (parent.type === NodeType.VIDEO && parent.lastFrame) {
+        // For other nodes, if parent is video, use lastFrame for image preview
+        map.set(node.id, parent.lastFrame);
+      } else {
+        map.set(node.id, parent.resultUrl);
+      }
+    }
+    return map;
+  }, [nodes]);
+
+  // collectNodeReferences 每次都返回新数组。它只依赖 parentIds 和被指向的父节点对象，
+  // 所以这些引用没变时复用上一次的数组——否则拖拽期间每个节点的 connectedReferences
+  // 都是新引用，memo 会全部失效。
+  const referenceCacheRef = useRef(new Map<string, { deps: unknown[]; value: NodeReference[] }>());
+  const nodeConnectedReferences = React.useMemo(() => {
+    const byId = new Map(nodes.map(item => [item.id, item]));
+    const previous = referenceCacheRef.current;
+    const nextCache = new Map<string, { deps: unknown[]; value: NodeReference[] }>();
+    const result = new Map<string, NodeReference[]>();
+
+    for (const node of nodes) {
+      const deps: unknown[] = [node.parentIds];
+      for (const parentId of node.parentIds || []) deps.push(byId.get(parentId));
+
+      const cached = previous.get(node.id);
+      const reusable = Boolean(cached)
+        && cached!.deps.length === deps.length
+        && cached!.deps.every((dep, index) => dep === deps[index]);
+
+      const value = reusable ? cached!.value : collectNodeReferences(node.parentIds, nodes);
+      nextCache.set(node.id, { deps, value });
+      result.set(node.id, value);
+    }
+
+    referenceCacheRef.current = nextCache;
+    return result;
+  }, [nodes]);
+
+  // 这十几个回调来自不同的 hook，稳定性无法逐个保证。用 ref 转发：
+  // 传给 CanvasNode 的引用永远不变，内部始终调用最新实现。
+  const latestNodeCallbacks = {
+    updateNodeWithSync,
+    handleGenerate,
+    handleAddNext,
+    handleNodeContextMenu,
+    handleConnectorPointerDown,
+    handleOpenEditor,
+    handleUpload,
+    handleExpandImage,
+    handleWriteContent,
+    handleTextToVideo,
+    handleTextToImage,
+    handleImageToImage,
+    handleImageToVideo,
+    handleChangeAngleGenerate,
+    handleExtractLastFrame,
+    handleDuplicate,
+    handleNodePointerDown,
+    setSelectedNodeIds,
+    selectedNodeIds
+  };
+  const nodeCallbacksRef = useRef(latestNodeCallbacks);
+  useEffect(() => {
+    nodeCallbacksRef.current = latestNodeCallbacks;
+  });
+
+  const stableNodeHandlers = React.useMemo(() => ({
+    onUpdate: (id: string, updates: Partial<NodeData>) =>
+      nodeCallbacksRef.current.updateNodeWithSync(id, updates),
+    onGenerate: (id: string) => nodeCallbacksRef.current.handleGenerate(id),
+    onAddNext: (id: string, type: 'left' | 'right', anchor?: { x: number; y: number }) =>
+      nodeCallbacksRef.current.handleAddNext(id, type, anchor),
+    onContextMenu: (e: React.MouseEvent, id: string) =>
+      nodeCallbacksRef.current.handleNodeContextMenu(e, id),
+    onConnectorDown: (e: React.PointerEvent, id: string, side: 'left' | 'right') => {
+      // 连线拖拽全程读缓存的画布偏移，开始时兜底刷新一次（每次手势一次，不是每帧）。
+      refreshCanvasOffset();
+      nodeCallbacksRef.current.handleConnectorPointerDown(e, id, side);
+    },
+    onSelect: (id: string) => nodeCallbacksRef.current.setSelectedNodeIds([id]),
+    onOpenEditor: (id: string) => nodeCallbacksRef.current.handleOpenEditor(id),
+    onUpload: (id: string, imageDataUrl: string) =>
+      nodeCallbacksRef.current.handleUpload(id, imageDataUrl),
+    onExpand: (imageUrl: string) => nodeCallbacksRef.current.handleExpandImage(imageUrl),
+    onWriteContent: (id: string) => nodeCallbacksRef.current.handleWriteContent(id),
+    onTextToVideo: (id: string) => nodeCallbacksRef.current.handleTextToVideo(id),
+    onTextToImage: (id: string) => nodeCallbacksRef.current.handleTextToImage(id),
+    onImageToImage: (id: string) => nodeCallbacksRef.current.handleImageToImage(id),
+    onImageToVideo: (id: string) => nodeCallbacksRef.current.handleImageToVideo(id),
+    onChangeAngleGenerate: (id: string) =>
+      nodeCallbacksRef.current.handleChangeAngleGenerate(id),
+    onExtractLastFrame: (id: string) => nodeCallbacksRef.current.handleExtractLastFrame(id),
+    onNodePointerDown: (e: React.PointerEvent, id: string) => {
+      const current = nodeCallbacksRef.current;
+      const currentSelection = current.selectedNodeIds;
+      if (e.altKey) {
+        const sourceIds = currentSelection.includes(id) && currentSelection.length > 1
+          ? currentSelection
+          : [id];
+        const duplicatedIds = current.handleDuplicate(sourceIds);
+        if (duplicatedIds.length > 0) {
+          current.handleNodePointerDown(e, duplicatedIds[0], undefined);
+        }
+        return;
+      }
+      // If shift is held, preserve selection for multi-drag/multi-select
+      if (e.shiftKey) {
+        if (!currentSelection.includes(id)) {
+          // Add to selection
+          current.setSelectedNodeIds(previous => [...previous, id]);
+        }
+        current.handleNodePointerDown(e, id, undefined);
+        return;
+      }
+      // No shift: always select just this node (to show its controls)
+      current.setSelectedNodeIds([id]);
+      current.handleNodePointerDown(e, id, undefined);
+    }
+  }), [refreshCanvasOffset]);
 
   return (
     <div className={`w-screen h-screen ${canvasTheme === 'dark' ? 'bg-[#050505] text-white' : 'bg-neutral-50 text-neutral-900'} overflow-hidden select-none font-sans transition-colors duration-300`}>
@@ -1717,10 +1914,7 @@ export default function App() {
               isDraggingConnection={isDraggingConnection}
               connectionStart={connectionStart}
               tempConnectionEnd={tempConnectionEnd}
-              canvasOffset={(() => {
-                const rect = canvasRef.current?.getBoundingClientRect();
-                return rect ? { left: rect.left, top: rect.top } : undefined;
-              })()}
+              canvasOffset={canvasOffset}
               selectedConnection={selectedConnection}
               onEdgeClick={handleEdgeClick}
             />
@@ -1733,72 +1927,34 @@ export default function App() {
                 workflowId={workflowId || undefined}
                 key={node.id}
                 data={node}
-                allNodes={nodes}
-                inputUrl={(() => {
-                  // Get first parent's result for display (multiple inputs handled in generation)
-                  if (!node.parentIds || node.parentIds.length === 0) return undefined;
-                  const parent = nodes.find(n => n.id === node.parentIds![0]);
-
-                  // VIDEO_EDITOR nodes need the actual video URL from parent Video node
-                  if (node.type === NodeType.VIDEO_EDITOR && parent?.type === NodeType.VIDEO) {
-                    return parent.resultUrl;
-                  }
-
-                  // For other nodes, if parent is video, use lastFrame for image preview
-                  if (parent?.type === NodeType.VIDEO && parent.lastFrame) {
-                    return parent.lastFrame;
-                  }
-                  return parent?.resultUrl;
-                })()}
-                connectedReferences={collectNodeReferences(node.parentIds, nodes)}
-                onUpdate={updateNodeWithSync}
-                onGenerate={handleGenerate}
-                onAddNext={handleAddNext}
+                // allNodes 只有漫剧成片/产品场景节点用得上（组装 manifest）。
+                // 无差别下发会让每个节点在拖拽时都收到新数组，memo 直接失效。
+                allNodes={NODE_TYPES_NEEDING_ALL_NODES.has(node.type) ? nodes : undefined}
+                inputUrl={nodeInputUrls.get(node.id)}
+                connectedReferences={nodeConnectedReferences.get(node.id)}
+                onUpdate={stableNodeHandlers.onUpdate}
+                onGenerate={stableNodeHandlers.onGenerate}
+                onAddNext={stableNodeHandlers.onAddNext}
                 selected={selectedNodeIds.includes(node.id)}
                 showControls={selectedNodeIds.length === 1 && selectedNodeIds.includes(node.id)}
-                onNodePointerDown={(e) => {
-                  if (e.altKey) {
-                    const sourceIds = selectedNodeIds.includes(node.id) && selectedNodeIds.length > 1
-                      ? selectedNodeIds
-                      : [node.id];
-                    const duplicatedIds = handleDuplicate(sourceIds);
-                    if (duplicatedIds.length > 0) {
-                      handleNodePointerDown(e, duplicatedIds[0], undefined);
-                    }
-                    return;
-                  }
-                  // If shift is held, preserve selection for multi-drag/multi-select
-                  if (e.shiftKey) {
-                    if (selectedNodeIds.includes(node.id)) {
-                      handleNodePointerDown(e, node.id, undefined);
-                    } else {
-                      // Add to selection
-                      setSelectedNodeIds(prev => [...prev, node.id]);
-                      handleNodePointerDown(e, node.id, undefined);
-                    }
-                  } else {
-                    // No shift: always select just this node (to show its controls)
-                    setSelectedNodeIds([node.id]);
-                    handleNodePointerDown(e, node.id, undefined);
-                  }
-                }}
-                onContextMenu={handleNodeContextMenu}
-                onSelect={(id) => setSelectedNodeIds([id])}
-                onConnectorDown={handleConnectorPointerDown}
+                onNodePointerDown={stableNodeHandlers.onNodePointerDown}
+                onContextMenu={stableNodeHandlers.onContextMenu}
+                onSelect={stableNodeHandlers.onSelect}
+                onConnectorDown={stableNodeHandlers.onConnectorDown}
                 isHoveredForConnection={connectionHoveredNodeId === node.id}
-                onOpenEditor={handleOpenEditor}
-                onUpload={handleUpload}
-                onExpand={handleExpandImage}
-                onWriteContent={handleWriteContent}
-                onTextToVideo={handleTextToVideo}
-                onTextToImage={handleTextToImage}
-                onImageToImage={handleImageToImage}
-                onImageToVideo={handleImageToVideo}
-                onChangeAngleGenerate={handleChangeAngleGenerate}
-                onExtractLastFrame={handleExtractLastFrame}
+                onOpenEditor={stableNodeHandlers.onOpenEditor}
+                onUpload={stableNodeHandlers.onUpload}
+                onExpand={stableNodeHandlers.onExpand}
+                onWriteContent={stableNodeHandlers.onWriteContent}
+                onTextToVideo={stableNodeHandlers.onTextToVideo}
+                onTextToImage={stableNodeHandlers.onTextToImage}
+                onImageToImage={stableNodeHandlers.onImageToImage}
+                onImageToVideo={stableNodeHandlers.onImageToVideo}
+                onChangeAngleGenerate={stableNodeHandlers.onChangeAngleGenerate}
+                onExtractLastFrame={stableNodeHandlers.onExtractLastFrame}
                 zoom={viewport.zoom}
-                onMouseEnter={() => setCanvasHoveredNodeId(node.id)}
-                onMouseLeave={() => setCanvasHoveredNodeId(null)}
+                onMouseEnter={handleNodeMouseEnter}
+                onMouseLeave={handleNodeMouseLeave}
                 canvasTheme={canvasTheme}
               />
             ))}
@@ -2156,6 +2312,9 @@ export default function App() {
         mediaUrl={expandedImageUrl}
         onClose={handleCloseExpand}
       />
+
+      {/* 应用内提示（替代会冻住渲染进程的 window.alert） */}
+      <ToastStack toasts={toasts} onDismiss={dismissToast} canvasTheme={canvasTheme} />
     </div >
   );
 }

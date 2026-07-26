@@ -118,7 +118,11 @@ router.post('/remotion/:jobId/reveal', (req, res) => {
   child.once('error', (error) => fail(error.message));
   child.once('exit', (code, signal) => {
     if (replied) return;
-    if (code !== 0) {
+    // explorer.exe /select 成功时也会返回非 0 退出码（通常是 1），据此判失败会让
+    // Windows 用户看到「无法显示成片」而资源管理器其实已经正常打开了。
+    // server/index.js 的「打开素材目录」早就有同样的豁免，这里必须保持一致。
+    const exitCodeIsMeaningful = process.platform !== 'win32';
+    if (exitCodeIsMeaningful && code !== 0) {
       fail(signal ? `命令被信号 ${signal} 中止` : `命令退出码 ${code}`);
       return;
     }

@@ -65,7 +65,7 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.exe
-            release/*.yml
+            release/latest*.yml
             release/*.blockmap
           if-no-files-found: error
           # Release 发布成功后会立即删除；1 天仅作为发布步骤失败时的兜底。

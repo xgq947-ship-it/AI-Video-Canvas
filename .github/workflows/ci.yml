@@ -23,7 +23,7 @@ jobs:
         run: npm ci
 
       - name: 类型检查
-        run: npx tsc --noEmit
+        run: npm run typecheck
 
       - name: 运行测试
         run: npm test

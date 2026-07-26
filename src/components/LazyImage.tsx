@@ -1,12 +1,15 @@
 /**
  * LazyImage.tsx
- * 
+ *
  * A lazy-loading image component that shows a skeleton placeholder
  * and only loads the actual image when it enters the viewport.
  * Uses Intersection Observer for efficient lazy loading.
+ *
+ * 划远之后会把 <img> 卸载掉，释放解码后的位图 —— 见 useLazyVisibility。
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import { useLazyVisibility } from '../hooks/useLazyVisibility';
 
 interface LazyImageProps {
     src: string;
@@ -28,9 +31,9 @@ export const LazyImage: React.FC<LazyImageProps> = ({
     rootMargin = '50px'
 }) => {
     const [isLoaded, setIsLoaded] = useState(false);
-    const [isInView, setIsInView] = useState(false);
     const [hasError, setHasError] = useState(false);
     const imgRef = useRef<HTMLDivElement>(null);
+    const isInView = useLazyVisibility(imgRef, { threshold, rootMargin });
 
     // 节点异步生成完成后 src 会原地更新。重置上一张图的加载/错误状态，
     // 否则 React 复用组件时可能继续显示旧图或旧错误占位。
@@ -39,30 +42,10 @@ export const LazyImage: React.FC<LazyImageProps> = ({
         setHasError(false);
     }, [src]);
 
-    // Set up Intersection Observer
+    // 卸载后重新进入视口要重新走一遍加载流程，否则会停在"已加载"的空状态。
     useEffect(() => {
-        const observer = new IntersectionObserver(
-            (entries) => {
-                entries.forEach((entry) => {
-                    if (entry.isIntersecting) {
-                        setIsInView(true);
-                        // Once in view, disconnect observer
-                        observer.disconnect();
-                    }
-                });
-            },
-            {
-                threshold,
-                rootMargin
-            }
-        );
-
-        if (imgRef.current) {
-            observer.observe(imgRef.current);
-        }
-
-        return () => observer.disconnect();
-    }, [threshold, rootMargin]);
+        if (!isInView) setIsLoaded(false);
+    }, [isInView]);
 
     const handleLoad = () => {
         setIsLoaded(true);

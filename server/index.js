@@ -8,6 +8,7 @@ import express from 'express';
 import cors from 'cors';
 import { GoogleGenAI } from '@google/genai';
 import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
@@ -95,6 +96,24 @@ MASSAGE_EQUIPMENT_SUBCATEGORY_NAMES.forEach(subcategory => {
 });
 
 const API_KEY_OVERRIDES = loadApiKeyOverrides(LIBRARY_DIR);
+
+/** 扫描素材目录时的并发上限：够快，又不至于一次打开几百个文件句柄。 */
+const ASSET_SCAN_CONCURRENCY = 24;
+
+/** 以 limit 为上限并发映射，保持输出顺序与输入一致。 */
+async function mapWithConcurrency(items, limit, mapper) {
+    const results = new Array(items.length);
+    let next = 0;
+    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+        while (next < items.length) {
+            const index = next;
+            next += 1;
+            results[index] = await mapper(items[index], index);
+        }
+    });
+    await Promise.all(workers);
+    return results;
+}
 
 // Enable CORS for all routes (must come before static file serving)
 app.use(cors());
@@ -735,12 +754,12 @@ app.post('/api/projects/:id/assets/import', (req, res) => {
     }
 });
 
-app.post('/api/projects/:id/assets/upload-image', (req, res) => {
+const storeProjectImageUpload = (req, res, payload) => {
     try {
         const workflowPath = path.join(WORKFLOWS_DIR, `${req.params.id}.json`);
         if (!fs.existsSync(workflowPath)) return res.status(404).json({ error: '项目不存在' });
         const workflow = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
-        const saved = saveProjectImageUpload(workflow, req.body, { projectsDir: PROJECTS_DIR });
+        const saved = saveProjectImageUpload(workflow, payload, { projectsDir: PROJECTS_DIR });
         workflow.updatedAt = new Date().toISOString();
         fs.writeFileSync(workflowPath, JSON.stringify(workflow, null, 2));
         writeProjectManifest(workflow);
@@ -750,7 +769,41 @@ app.post('/api/projects/:id/assets/upload-image', (req, res) => {
         const status = error.code === 'UNSUPPORTED_IMAGE' || error.code === 'IMAGE_TOO_LARGE' ? 400 : 500;
         res.status(status).json({ error: error.message });
     }
+};
+
+app.post('/api/projects/:id/assets/upload-image', (req, res) => {
+    storeProjectImageUpload(req, res, req.body);
 });
+
+/**
+ * 二进制直传：请求体就是图片本身，元数据走请求头。
+ *
+ * 旧的 JSON + data URL 路径对大图非常伤：一张 100MB 的图会在渲染进程里先变成
+ * 133MB 的 base64 字符串，JSON.stringify 再复制一份，后端还要解析出同样大的字符串。
+ * 走 raw body 之后这三份拷贝都没有了，后端拿到的就是实际大小的 Buffer。
+ * 旧路由保留，避免老客户端/其它调用方失效。
+ */
+app.post(
+    '/api/projects/:id/assets/upload-image-binary',
+    express.raw({ type: () => true, limit: '100mb' }),
+    (req, res) => {
+        // 头部只能是 ASCII，中文文件名由客户端 encodeURIComponent 后传过来。
+        const decodeHeader = (value) => {
+            if (!value) return '';
+            try {
+                return decodeURIComponent(String(value));
+            } catch {
+                return String(value);
+            }
+        };
+        storeProjectImageUpload(req, res, {
+            buffer: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0),
+            mimeType: String(req.get('x-evan-mime') || '').toLowerCase(),
+            prompt: decodeHeader(req.get('x-evan-prompt')),
+            originalFilename: decodeHeader(req.get('x-evan-filename'))
+        });
+    }
+);
 
 app.get('/api/projects/:id/assets', (req, res) => {
     try {
@@ -1595,11 +1648,10 @@ app.get('/api/assets/:type', async (req, res) => {
 
         if (workflowId) {
             const wfPath = path.join(WORKFLOWS_DIR, `${workflowId}.json`);
-            if (!fs.existsSync(wfPath)) return emptyResult();
             let assetsDirName;
             let projectDirName;
             try {
-                const workflow = JSON.parse(fs.readFileSync(wfPath, 'utf8'));
+                const workflow = JSON.parse(await fsp.readFile(wfPath, 'utf8'));
                 assetsDirName = workflow.assetsDirName;
                 projectDirName = workflow.projectDirName;
             } catch (e) {
@@ -1615,12 +1667,17 @@ app.get('/api/assets/:type', async (req, res) => {
             }
         }
 
-        if (!fs.existsSync(targetDir)) {
+        // 全程异步 IO。以前这里是 readdirSync + 每个文件 existsSync/readFileSync/statSync，
+        // 一个有几百张素材的项目打开素材库就会把 Node 事件循环卡住几百毫秒 ——
+        // 同一时刻的生成轮询（1.5s 一次）、渲染进度、自动保存请求全都被堵在后面。
+        let files;
+        try {
+            files = await fsp.readdir(targetDir);
+        } catch (e) {
             return emptyResult();
         }
 
-        const files = fs.readdirSync(targetDir);
-        const assets = [];
+        let assets = [];
 
         if (workflowId) {
             // Project folders often contain media with no sidecar metadata (workflow-editor
@@ -1631,40 +1688,41 @@ app.get('/api/assets/:type', async (req, res) => {
                 ? new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif'])
                 : new Set(['.mp4', '.webm', '.mov', '.m4v']);
 
-            for (const file of files) {
-                const ext = path.extname(file).toLowerCase();
-                if (!mediaExts.has(ext)) continue;
-
+            const mediaFiles = files.filter(file => mediaExts.has(path.extname(file).toLowerCase()));
+            assets = await mapWithConcurrency(mediaFiles, ASSET_SCAN_CONCURRENCY, async (file) => {
                 const base = file.slice(0, file.lastIndexOf('.'));
                 const sidecarPath = path.join(targetDir, `${base}.json`);
                 let metadata = { id: base, filename: file, prompt: '', type };
-                if (fs.existsSync(sidecarPath)) {
-                    try {
-                        metadata = { ...metadata, ...JSON.parse(fs.readFileSync(sidecarPath, 'utf8')) };
-                    } catch (e) {
-                        // Fall back to the synthesized metadata below
-                    }
+                try {
+                    metadata = { ...metadata, ...JSON.parse(await fsp.readFile(sidecarPath, 'utf8')) };
+                } catch (e) {
+                    // 没有 sidecar 或内容损坏：退回到上面合成的元数据
                 }
                 if (!metadata.createdAt) {
-                    metadata.createdAt = fs.statSync(path.join(targetDir, file)).mtime.toISOString();
+                    try {
+                        const stats = await fsp.stat(path.join(targetDir, file));
+                        metadata.createdAt = stats.mtime.toISOString();
+                    } catch (e) {
+                        metadata.createdAt = new Date(0).toISOString();
+                    }
                 }
                 metadata.filename = file;
                 metadata.url = `${urlPrefix}/${file}`;
-                assets.push(metadata);
-            }
+                return metadata;
+            });
         } else {
-            for (const file of files) {
-                if (file.endsWith('.json')) {
-                    try {
-                        const content = fs.readFileSync(path.join(targetDir, file), 'utf8');
-                        const metadata = JSON.parse(content);
-                        metadata.url = `${urlPrefix}/${metadata.filename}`;
-                        assets.push(metadata);
-                    } catch (e) {
-                        // Skip invalid JSON files
-                    }
+            const sidecars = files.filter(file => file.endsWith('.json'));
+            const parsed = await mapWithConcurrency(sidecars, ASSET_SCAN_CONCURRENCY, async (file) => {
+                try {
+                    const content = await fsp.readFile(path.join(targetDir, file), 'utf8');
+                    const metadata = JSON.parse(content);
+                    metadata.url = `${urlPrefix}/${metadata.filename}`;
+                    return metadata;
+                } catch (e) {
+                    return null; // Skip invalid JSON files
                 }
-            }
+            });
+            assets = parsed.filter(Boolean);
         }
 
         // Sort by createdAt descending (newest first)

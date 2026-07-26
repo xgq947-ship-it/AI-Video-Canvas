@@ -13,7 +13,7 @@ import { TextElement, EditorElement, PRESET_COLORS } from '../components/modals/
 // ============================================================================
 
 interface UseImageEditorTextProps {
-    imageRef: React.RefObject<HTMLImageElement>;
+    imageRef: React.RefObject<HTMLImageElement | null>;
     saveState: () => void;
     setElements: React.Dispatch<React.SetStateAction<EditorElement[]>>;
 }

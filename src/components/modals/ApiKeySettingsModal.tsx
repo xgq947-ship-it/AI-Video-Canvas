@@ -1,6 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Eye, EyeOff, FolderOpen, KeyRound, Loader2, LogIn, RefreshCw, ShieldCheck, TerminalSquare, Trash2, Wand2, X } from 'lucide-react';
+import { CheckCircle2, Eye, EyeOff, FolderOpen, Info, KeyRound, Loader2, LogIn, RefreshCw, ShieldCheck, Sparkles, TerminalSquare, Trash2, Wand2, X } from 'lucide-react';
 import { notifyCodexStatusChanged } from '../../hooks/useCodexService';
+import { useAppUpdates } from '../../hooks/useAppUpdates';
+import { AboutPanel } from './settings/AboutPanel';
+import { WhatsNewPanel } from './settings/WhatsNewPanel';
+
+type SettingsPage = 'connections' | 'whatsNew' | 'about';
+
+const SETTINGS_PAGES = [
+    { id: 'connections' as const, label: 'AI 服务与密钥', icon: KeyRound },
+    { id: 'whatsNew' as const, label: '新功能', icon: Sparkles },
+    { id: 'about' as const, label: '关于', icon: Info }
+];
 
 interface ApiKeyField {
     name: string;
@@ -47,6 +58,18 @@ interface ApiKeySettingsModalProps {
 }
 
 export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen, onClose, canvasTheme }) => {
+    const [activePage, setActivePage] = useState<SettingsPage>('connections');
+    const {
+        appVersion,
+        update,
+        hasPendingUpdate,
+        changelog,
+        isDesktop,
+        check: checkForUpdates,
+        download: downloadUpdate,
+        install: installUpdate,
+        openDownloadPage
+    } = useAppUpdates();
     const [fields, setFields] = useState<ApiKeyField[]>([]);
     const [values, setValues] = useState<Record<string, string>>({});
     const [visibleFields, setVisibleFields] = useState<Set<string>>(new Set());
@@ -278,7 +301,7 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                 if (event.target === event.currentTarget) onClose();
             }}
         >
-            <div className={`relative flex max-h-[90vh] w-full max-w-[900px] flex-col overflow-hidden rounded-[28px] border shadow-[0_40px_120px_rgba(0,0,0,0.65)] ${isDark ? 'border-white/10 bg-[#111318] text-white' : 'border-neutral-200 bg-white text-neutral-900'}`}>
+            <div className={`relative flex max-h-[90vh] w-full max-w-[1040px] flex-col overflow-hidden rounded-[28px] border shadow-[0_40px_120px_rgba(0,0,0,0.65)] ${isDark ? 'border-white/10 bg-[#111318] text-white' : 'border-neutral-200 bg-white text-neutral-900'}`}>
                 <div className="pointer-events-none absolute -left-24 -top-28 h-72 w-72 rounded-full bg-blue-500/20 blur-[90px]" />
                 <div className="pointer-events-none absolute right-0 top-0 h-64 w-64 rounded-full bg-violet-500/15 blur-[100px]" />
                 <div className={`relative flex shrink-0 items-start justify-between border-b px-8 py-7 ${isDark ? 'border-white/[0.08]' : 'border-neutral-200'}`}>
@@ -288,19 +311,32 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                         </div>
                         <div>
                             <div className="mb-2 flex flex-wrap items-center gap-2">
-                                <span className="rounded-full border border-blue-400/20 bg-blue-400/10 px-2.5 py-1 text-[10px] font-bold tracking-[0.16em] text-blue-400">LOCAL CONNECTIONS</span>
-                                <span className={`text-[11px] ${isDark ? 'text-neutral-500' : 'text-neutral-500'}`}>本机安全配置中心</span>
+                                <span className="rounded-full border border-blue-400/20 bg-blue-400/10 px-2.5 py-1 text-[10px] font-bold tracking-[0.16em] text-blue-400">SETTINGS</span>
+                                <span className={`text-[11px] ${isDark ? 'text-neutral-500' : 'text-neutral-500'}`}>v{appVersion}</span>
                             </div>
-                            <h2 className="text-2xl font-semibold tracking-tight">AI 服务与密钥</h2>
-                            <p className={`mt-1.5 text-xs leading-5 ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>统一管理 Codex、提示词后端和云端 API；密钥不会写入项目文件。</p>
-                            <div className="mt-3 flex flex-wrap gap-2">
-                                <span className={`rounded-full border px-2.5 py-1 text-[10px] ${codexStatus?.authenticated ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-400' : 'border-white/10 text-neutral-500'}`}>
-                                    Codex {codexStatus?.authenticated ? '已连接' : '未连接'}
-                                </span>
-                                <span className={`rounded-full border px-2.5 py-1 text-[10px] ${configuredKeyCount ? 'border-blue-400/25 bg-blue-400/10 text-blue-400' : 'border-white/10 text-neutral-500'}`}>
-                                    {configuredKeyCount} 项 API 密钥已配置
-                                </span>
-                            </div>
+                            <h2 className="text-2xl font-semibold tracking-tight">设置</h2>
+                            <p className={`mt-1.5 text-xs leading-5 ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                                {activePage === 'connections'
+                                    ? '统一管理 Codex、提示词后端和云端 API；密钥不会写入项目文件。'
+                                    : activePage === 'whatsNew'
+                                        ? '每次更新带来的新增、改进与修复。'
+                                        : '版本信息与软件更新。'}
+                            </p>
+                            {activePage === 'connections' && (
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                    <span className={`rounded-full border px-2.5 py-1 text-[10px] ${codexStatus?.authenticated ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-400' : 'border-white/10 text-neutral-500'}`}>
+                                        Codex {codexStatus?.authenticated ? '已连接' : '未连接'}
+                                    </span>
+                                    <span className={`rounded-full border px-2.5 py-1 text-[10px] ${configuredKeyCount ? 'border-blue-400/25 bg-blue-400/10 text-blue-400' : 'border-white/10 text-neutral-500'}`}>
+                                        {configuredKeyCount} 项 API 密钥已配置
+                                    </span>
+                                    {hasPendingUpdate && (
+                                        <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2.5 py-1 text-[10px] text-amber-400">
+                                            有新版本 v{update.version}
+                                        </span>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     </div>
                     <button onClick={onClose} className={`rounded-xl border p-2.5 transition-colors ${isDark ? 'border-white/10 text-neutral-500 hover:bg-white/10 hover:text-white' : 'border-neutral-200 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-900'}`} aria-label="关闭 API 配置">
@@ -308,8 +344,68 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                     </button>
                 </div>
 
-                <div className="relative min-h-0 flex-1 overflow-y-auto px-8 py-6">
-                    {isLoading ? (
+                <div className="relative flex min-h-0 flex-1">
+                    {/* 左侧分栏导航 */}
+                    <nav className={`hidden w-52 shrink-0 overflow-y-auto border-r px-3 py-5 sm:block ${isDark ? 'border-white/[0.08]' : 'border-neutral-200'}`}>
+                        {SETTINGS_PAGES.map(page => {
+                            const Icon = page.icon;
+                            const isActive = activePage === page.id;
+                            return (
+                                <button
+                                    key={page.id}
+                                    type="button"
+                                    onClick={() => setActivePage(page.id)}
+                                    aria-current={isActive ? 'page' : undefined}
+                                    className={`mb-1 flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${isActive
+                                        ? 'bg-blue-600 font-medium text-white'
+                                        : isDark
+                                            ? 'text-neutral-300 hover:bg-white/[0.06]'
+                                            : 'text-neutral-700 hover:bg-neutral-100'
+                                        }`}
+                                >
+                                    <Icon size={16} className="shrink-0" />
+                                    <span className="flex-1 truncate">{page.label}</span>
+                                    {page.id === 'about' && hasPendingUpdate && (
+                                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${isActive ? 'bg-white' : 'bg-amber-400'}`} />
+                                    )}
+                                </button>
+                            );
+                        })}
+                    </nav>
+
+                    {/* 小屏退化成横向标签，避免侧栏挤掉内容 */}
+                    <div className="flex min-w-0 flex-1 flex-col">
+                        <div className={`flex shrink-0 gap-1 overflow-x-auto border-b px-4 py-2 sm:hidden ${isDark ? 'border-white/[0.08]' : 'border-neutral-200'}`}>
+                            {SETTINGS_PAGES.map(page => (
+                                <button
+                                    key={page.id}
+                                    type="button"
+                                    onClick={() => setActivePage(page.id)}
+                                    className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs transition-colors ${activePage === page.id
+                                        ? 'bg-blue-600 font-medium text-white'
+                                        : isDark ? 'text-neutral-400' : 'text-neutral-600'
+                                        }`}
+                                >
+                                    {page.label}
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
+                {activePage === 'whatsNew' ? (
+                    <WhatsNewPanel entries={changelog} appVersion={appVersion} isDark={isDark} />
+                ) : activePage === 'about' ? (
+                    <AboutPanel
+                        appVersion={appVersion}
+                        update={update}
+                        isDesktop={isDesktop}
+                        isDark={isDark}
+                        onCheck={checkForUpdates}
+                        onDownload={downloadUpdate}
+                        onInstall={installUpdate}
+                        onOpenDownloadPage={openDownloadPage}
+                    />
+                ) : isLoading ? (
                         <div className="flex h-48 items-center justify-center gap-2 text-sm text-neutral-500"><Loader2 size={18} className="animate-spin" />正在读取配置</div>
                     ) : (
                         <div className="space-y-4">
@@ -506,6 +602,8 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                             ))}
                         </div>
                     )}
+                        </div>
+                    </div>
                 </div>
 
                 <div className={`relative flex shrink-0 items-center justify-between border-t px-8 py-4 backdrop-blur-xl ${isDark ? 'border-white/[0.08] bg-[#111318]/95' : 'border-neutral-200 bg-neutral-50/95'}`}>
@@ -515,10 +613,13 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                     </div>
                     <div className="flex gap-2">
                         <button onClick={onClose} className={`rounded-xl border px-4 py-2.5 text-sm transition-colors ${isDark ? 'border-white/10 bg-white/[0.04] text-neutral-300 hover:bg-white/10' : 'border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-100'}`}>关闭</button>
-                        <button onClick={handleSave} disabled={!hasChanges || isSaving} className="flex min-w-28 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-950/20 transition-all hover:from-blue-500 hover:to-indigo-400 disabled:cursor-not-allowed disabled:opacity-35">
-                            {isSaving && <Loader2 size={14} className="animate-spin" />}
-                            {isSaving ? '保存中' : '保存修改'}
-                        </button>
+                        {/* 只有密钥页有可保存的内容；「新功能」「关于」是只读页面。 */}
+                        {activePage === 'connections' && (
+                            <button onClick={handleSave} disabled={!hasChanges || isSaving} className="flex min-w-28 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-950/20 transition-all hover:from-blue-500 hover:to-indigo-400 disabled:cursor-not-allowed disabled:opacity-35">
+                                {isSaving && <Loader2 size={14} className="animate-spin" />}
+                                {isSaving ? '保存中' : '保存修改'}
+                            </button>
+                        )}
                     </div>
                 </div>
             </div>

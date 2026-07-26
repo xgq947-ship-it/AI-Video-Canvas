@@ -81,3 +81,88 @@ test('自定义项目路径只通过 Electron 原生选择器和桌面令牌提�
   assert.match(serverMain, /EVAN_DESKTOP_TOKEN/);
   assert.match(serverMain, /自定义项目路径必须通过桌面应用选择/);
 });
+
+// ---------------------------------------------------------------------------
+// 应用内更新
+// ---------------------------------------------------------------------------
+
+const electronUpdater = fs.readFileSync(new URL('../electron/updater.js', import.meta.url), 'utf8');
+const changelog = JSON.parse(fs.readFileSync(new URL('../CHANGELOG.json', import.meta.url), 'utf8'));
+
+test('更新源由 electron-builder 的 publish 配置生成，不再依赖外部配置文件', () => {
+  // 之前用 provider:'generic' 读 resources/update-config.json，而这个文件从来没有
+  // 任何构建步骤写入过 —— 打包版永远走 not_configured，更新功能实际是死的。
+  const [target] = pkg.build.publish;
+  assert.equal(target.provider, 'github');
+  assert.equal(target.owner, 'xgq947-ship-it');
+  assert.equal(target.repo, 'AI-Video-Canvas');
+  assert.doesNotMatch(electronUpdater, /update-config\.json/);
+  assert.doesNotMatch(electronUpdater, /provider: 'generic'/);
+});
+
+test('macOS 绝不走应用内安装：Squirrel.Mac 会校验签名而我们的包未签名', () => {
+  // 未签名的 mac 包能检查到新版本，但安装必定失败。所以只允许 win32 应用内安装，
+  // 其余平台一律跳转 GitHub 下载页。改这条之前请先确认 mac 包已经做了代码签名。
+  assert.match(electronUpdater, /supportsInAppInstall = \(\) => process\.platform === 'win32'/);
+
+  // 下载与安装两处都必须先过 supportsInAppInstall 这道闸。
+  const downloadBlock = electronUpdater.slice(
+    electronUpdater.indexOf('const download ='),
+    electronUpdater.indexOf('const install =')
+  );
+  const installBlock = electronUpdater.slice(
+    electronUpdater.indexOf('const install ='),
+    electronUpdater.indexOf('const openDownloadPage =')
+  );
+  assert.match(downloadBlock, /if \(!supportsInAppInstall\(\)\)/);
+  assert.match(downloadBlock, /shell\.openExternal\(RELEASES_PAGE_URL\)/);
+  assert.match(installBlock, /if \(!supportsInAppInstall\(\)\)/);
+  assert.match(installBlock, /shell\.openExternal\(RELEASES_PAGE_URL\)/);
+
+  // 自动下载必须关掉：mac 上下载完也装不上，白占用户带宽和磁盘。
+  assert.match(electronUpdater, /autoUpdater\.autoDownload = false/);
+  assert.match(electronUpdater, /autoInstallOnAppQuit = supportsInAppInstall\(\)/);
+});
+
+test('更新的 IPC 通道在主进程注册并通过 preload 暴露', () => {
+  for (const channel of [
+    'app:info',
+    'update:get-state',
+    'update:check',
+    'update:download',
+    'update:install',
+    'update:open-download-page'
+  ]) {
+    assert.match(electronMain, new RegExp(`ipcMain\\.handle\\('${channel}'`), `缺少 ${channel}`);
+    assert.ok(electronPreload.includes(channel), `preload 未暴露 ${channel}`);
+  }
+  // 状态是主进程主动推的，渲染进程必须能订阅而不是轮询。
+  assert.match(electronPreload, /ipcRenderer\.on\('desktop:update-status'/);
+  assert.match(electronPreload, /removeListener\('desktop:update-status'/);
+});
+
+test('CHANGELOG 最新条目与 package.json 版本一致', () => {
+  // 发版时忘了写更新说明的话，用户在「新功能」里会看到上一版的内容。
+  assert.ok(Array.isArray(changelog) && changelog.length > 0, 'CHANGELOG.json 不能为空');
+  assert.equal(changelog[0].version, pkg.version);
+  for (const entry of changelog) {
+    assert.match(entry.version, /^\d+\.\d+\.\d+$/);
+    assert.match(entry.date, /^\d{4}-\d{2}-\d{2}$/);
+  }
+});
+
+test('更新说明是静态打进前端包的，不依赖联网', () => {
+  // CHANGELOG.json 由 vite 静态 import 打进渲染进程 bundle，所以不需要单独收录进
+  // build.files。关键是不能改成运行时去拉 GitHub API —— 那样断网就看不到更新说明，
+  // 而「刚更新完想看看改了什么」恰恰是最常见的使用时刻。
+  const updatesHook = fs.readFileSync(new URL('../src/hooks/useAppUpdates.ts', import.meta.url), 'utf8');
+  assert.match(updatesHook, /import changelogData from '\.\.\/\.\.\/CHANGELOG\.json'/);
+  assert.doesNotMatch(updatesHook, /api\.github\.com/);
+});
+
+test('Release 只上传更新源需要的 yml，不带构建调试文件', () => {
+  // latest.yml / latest-mac.yml 是 electron-updater 的更新源，必须在 Release 上；
+  // builder-debug.yml 只是构建调试产物，之前被 release/*.yml 顺手带了上去。
+  assert.match(installerWorkflow, /release\/latest\*\.yml/);
+  assert.doesNotMatch(installerWorkflow, /release\/\*\.yml/);
+});

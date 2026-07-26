@@ -16,7 +16,7 @@ interface TopBarProps {
     canvasTitle: string;
     isEditingTitle: boolean;
     editingTitleValue: string;
-    canvasTitleInputRef: React.RefObject<HTMLInputElement>;
+    canvasTitleInputRef: React.RefObject<HTMLInputElement | null>;
     setCanvasTitle: (title: string) => void;
     setIsEditingTitle: (editing: boolean) => void;
     setEditingTitleValue: (value: string) => void;
@@ -155,7 +155,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                     <img src="/TwitCanva-logo.png" alt="Evan Logo" className="w-8 h-8 rounded-lg object-contain bg-black/20" />
                     {isEditingTitle ? (
                         <input
-                            ref={canvasTitleInputRef as React.RefObject<HTMLInputElement>}
+                            ref={canvasTitleInputRef as React.RefObject<HTMLInputElement | null>}
                             type="text"
                             value={editingTitleValue}
                             onChange={(e) => setEditingTitleValue(e.target.value)}
@@ -243,8 +243,8 @@ export const TopBar: React.FC<TopBarProps> = ({
                                 >
                                     <KeyRound size={16} className="text-blue-400" />
                                     <span>
-                                        <span className="block font-medium">配置 API 密钥</span>
-                                        <span className="mt-0.5 block text-[10px] text-neutral-500">管理当前工作台服务</span>
+                                        <span className="block font-medium">设置</span>
+                                        <span className="mt-0.5 block text-[10px] text-neutral-500">密钥、新功能与检查更新</span>
                                     </span>
                                 </button>
                                 <button

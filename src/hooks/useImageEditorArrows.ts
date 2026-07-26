@@ -13,8 +13,8 @@ import { EditorElement } from '../components/modals/imageEditor/imageEditor.type
 // ============================================================================
 
 interface UseImageEditorArrowsProps {
-    arrowCanvasRef: React.RefObject<HTMLCanvasElement>;
-    imageRef: React.RefObject<HTMLImageElement>;
+    arrowCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+    imageRef: React.RefObject<HTMLImageElement | null>;
     saveState: () => void;
     setElements: React.Dispatch<React.SetStateAction<EditorElement[]>>;
 }

@@ -46,9 +46,10 @@ interface CanvasNodeProps {
   onChangeAngleGenerate?: (nodeId: string) => void;
   onExtractLastFrame?: (nodeId: string) => void;
   zoom: number;
-  // Mouse event callbacks for chat panel drag functionality
-  onMouseEnter?: () => void;
-  onMouseLeave?: () => void;
+  // 悬停回调带上 nodeId，调用方才能传稳定的引用（否则每次 render 都是新箭头函数，
+  // React.memo 会全部失效）。
+  onMouseEnter?: (id: string) => void;
+  onMouseLeave?: (id: string) => void;
   // Theme
   canvasTheme?: 'dark' | 'light';
 }
@@ -69,7 +70,7 @@ const NODE_TYPE_LABELS: Record<NodeType, string> = {
   [NodeType.RENDER]: '成片',
 };
 
-export const CanvasNode: React.FC<CanvasNodeProps> = ({
+const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   workflowId,
   data,
   allNodes,
@@ -515,8 +516,8 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
       }}
       onPointerDown={(e) => onNodePointerDown(e, data.id)}
       onContextMenu={(e) => onContextMenu(e, data.id)}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
+      onMouseEnter={() => onMouseEnter?.(data.id)}
+      onMouseLeave={() => onMouseLeave?.(data.id)}
     >
       <NodeConnectors nodeId={data.id} onConnectorDown={onConnectorDown} canvasTheme={canvasTheme} />
 
@@ -632,3 +633,12 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
     </div >
   );
 };
+
+/**
+ * 拖动一个节点时，App 每个 pointermove 都会 setNodes，整个画布随之 render。
+ * 没有 memo 时 60 个节点 = 每帧 60 次子树重建。
+ *
+ * 注意：memo 只有在调用方同时传稳定引用（useCallback + useMemo）时才有效，
+ * 单独加 memo 而 props 里还是内联箭头函数，效果为零。见 App.tsx 的节点渲染块。
+ */
+export const CanvasNode = React.memo(CanvasNodeComponent);

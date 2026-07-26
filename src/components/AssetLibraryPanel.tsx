@@ -337,7 +337,7 @@ const AssetLibraryContent: React.FC<AssetLibraryContentProps> = ({
             const files = Array.from(event.clipboardData?.items || [])
                 .filter(item => item.kind === 'file')
                 .map(item => item.getAsFile())
-                .filter((file): file is File => Boolean(file) && isSupportedMediaFile(file));
+                .filter((file): file is File => file !== null && isSupportedMediaFile(file));
             if (files.length === 0) return;
             event.preventDefault();
             void uploadFiles(files);

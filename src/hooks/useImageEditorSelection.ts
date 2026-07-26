@@ -13,7 +13,7 @@ import { EditorElement } from '../components/modals/imageEditor/imageEditor.type
 // ============================================================================
 
 interface UseImageEditorSelectionProps {
-    selectCanvasRef: React.RefObject<HTMLCanvasElement>;
+    selectCanvasRef: React.RefObject<HTMLCanvasElement | null>;
     elements: EditorElement[];
     setElements: React.Dispatch<React.SetStateAction<EditorElement[]>>;
     saveState: () => void;

@@ -1,5 +1,34 @@
 export {};
 
+export type UpdateStatus =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'ready'
+  | 'current'
+  | 'error'
+  | 'unsupported';
+
+export interface UpdateState {
+  status: UpdateStatus;
+  version: string | null;
+  currentVersion: string;
+  percent: number;
+  message: string;
+  /** Windows 可以应用内安装；macOS 未签名，只能跳转下载页。 */
+  canInstallInApp: boolean;
+  releasesUrl: string;
+  checkedAt: string | null;
+}
+
+export interface AppInfo {
+  version: string;
+  platform: string;
+  arch: string;
+  isPackaged: boolean;
+}
+
 declare global {
   interface Window {
     evanDesktop?: {
@@ -24,6 +53,16 @@ declare global {
         groups: unknown[];
         viewport: { x: number; y: number; zoom: number };
       }>;
+      getAppInfo: () => Promise<AppInfo>;
+      updates: {
+        getState: () => Promise<UpdateState>;
+        check: () => Promise<UpdateState>;
+        download: () => Promise<UpdateState>;
+        install: () => Promise<UpdateState>;
+        openDownloadPage: () => Promise<UpdateState>;
+        /** 返回取消订阅函数。 */
+        onStatus: (callback: (state: UpdateState) => void) => () => void;
+      };
     };
   }
 }

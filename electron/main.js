@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess } from 'elec
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { configureAutoUpdates } from './updater.js';
+import { createUpdateController } from './updater.js';
 
 const ELECTRON_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(ELECTRON_DIR, '..');
@@ -13,7 +13,8 @@ let backendOrigin = null;
 let shuttingDown = false;
 let backendRestartTimer = null;
 let backendCrashTimes = [];
-let autoUpdatesConfigured = false;
+let updateStartupCheckScheduled = false;
+const updates = createUpdateController({ getWindow: () => mainWindow });
 const BACKEND_RESTART_LIMIT = 3;
 const BACKEND_RESTART_WINDOW_MS = 60_000;
 const BACKEND_RESTART_DELAY_MS = 750;
@@ -103,7 +104,9 @@ function createWindow() {
         height: 960,
         minWidth: 1080,
         minHeight: 720,
-        show: true,
+        // show: false + ready-to-show 才是标准做法：show: true 会让窗口立刻绘制一帧
+        // 空白/未样式化的内容，也让下面的 ready-to-show 处理器失去意义。
+        show: false,
         backgroundColor: '#111111',
         title: 'Evan AI Video Canvas',
         webPreferences: {
@@ -117,7 +120,15 @@ function createWindow() {
         mainWindow?.show();
         mainWindow?.focus();
     });
-    mainWindow.on('closed', () => { mainWindow = null; });
+    // ready-to-show 万一没来（渲染进程异常），也不能让用户对着空气等。
+    const showFallbackTimer = setTimeout(() => {
+        if (mainWindow && !mainWindow.isVisible()) mainWindow.show();
+    }, 3_000);
+    showFallbackTimer.unref?.();
+    mainWindow.on('closed', () => {
+        clearTimeout(showFallbackTimer);
+        mainWindow = null;
+    });
     mainWindow.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
         if (!isMainFrame || url === LOADING_PAGE) return;
         dialog.showErrorBox(
@@ -210,6 +221,23 @@ ipcMain.handle('codex:select-cli', async () => {
     return { canceled: false, path: path.resolve(result.filePaths[0]) };
 });
 
+// ---------------------------------------------------------------------------
+// 应用信息与更新
+// ---------------------------------------------------------------------------
+
+ipcMain.handle('app:info', () => ({
+    version: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    isPackaged: app.isPackaged
+}));
+
+ipcMain.handle('update:get-state', () => updates.getState());
+ipcMain.handle('update:check', () => updates.check({ silent: false }));
+ipcMain.handle('update:download', () => updates.download());
+ipcMain.handle('update:install', () => updates.install());
+ipcMain.handle('update:open-download-page', () => updates.openDownloadPage());
+
 ipcMain.handle('external:open', async (_event, rawUrl) => {
     try {
         const url = new URL(String(rawUrl || ''));
@@ -250,12 +278,16 @@ function loadBackendOrigin(origin) {
     backendOrigin = origin;
     if (!mainWindow) return;
     void mainWindow.loadURL(origin).then(() => {
-        mainWindow?.show();
-        mainWindow?.focus();
-        app.focus({ steal: true });
-        if (!autoUpdatesConfigured) {
-            autoUpdatesConfigured = true;
-            configureAutoUpdates(mainWindow);
+        // 后端就绪可能是启动后好几秒的事。窗口还没显示（首次启动）就显示出来，
+        // 但绝不能 focus/steal —— 用户在等待期间切去了别的应用的话，
+        // 这一下会把他们硬拽回来。
+        if (mainWindow && !mainWindow.isVisible()) {
+            mainWindow.show();
+            mainWindow.focus();
+        }
+        if (!updateStartupCheckScheduled) {
+            updateStartupCheckScheduled = true;
+            updates.scheduleStartupCheck();
         }
     }).catch(error => {
         dialog.showErrorBox('Evan 启动失败', `本地页面无法加载：${error.message}`);

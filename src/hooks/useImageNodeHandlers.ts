@@ -18,7 +18,47 @@ interface UseImageNodeHandlersOptions {
     setNodes: React.Dispatch<React.SetStateAction<NodeData[]>>;
     setSelectedNodeIds: React.Dispatch<React.SetStateAction<string[]>>;
     onGenerateNode?: (nodeId: string) => void; // Callback to trigger generation on a node
+    workflowId?: string | null;
 }
+
+/**
+ * 把 Modal 返回的 data URL 落盘成项目里的图片文件，返回 /library/... 地址。
+ *
+ * 其它所有生成路径都是"写盘 + 返回文件 URL"，只有镜头角度是把 base64 直接塞进
+ * 节点的 resultUrl。服务端在保存工作流时会兜底 sanitize，所以不会永久污染
+ * project.json，但在那之前这份 base64 一直挂在内存里，而且每次保存都要把它
+ * 整个塞进 JSON 请求体。
+ *
+ * 落盘失败时返回 null，调用方退回 data URL —— 生成配额已经花掉了，绝不能因为
+ * 存不下就把结果丢掉。
+ */
+const persistDataUrlToProject = async (
+    workflowId: string,
+    dataUrl: string,
+    displayName: string
+): Promise<string | null> => {
+    try {
+        const blob = await (await fetch(dataUrl)).blob();
+        const response = await fetch(
+            `/api/projects/${encodeURIComponent(workflowId)}/assets/upload-image-binary`,
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': blob.type || 'image/png',
+                    'X-Evan-Mime': blob.type || 'image/png',
+                    'X-Evan-Filename': encodeURIComponent(displayName),
+                    'X-Evan-Prompt': encodeURIComponent(displayName)
+                },
+                body: blob
+            }
+        );
+        const result = await response.json().catch(() => ({}));
+        return response.ok && result.url ? String(result.url) : null;
+    } catch (error) {
+        console.warn('[ChangeAngle] 结果落盘失败，暂时使用内存中的 data URL:', error);
+        return null;
+    }
+};
 
 // ============================================================================
 // HOOK
@@ -28,7 +68,8 @@ export const useImageNodeHandlers = ({
     nodes,
     setNodes,
     setSelectedNodeIds,
-    onGenerateNode
+    onGenerateNode,
+    workflowId
 }: UseImageNodeHandlersOptions) => {
     /**
      * Handle "Image to Image" - creates a new Image node connected to this Image node
@@ -155,13 +196,22 @@ export const useImageNodeHandlers = ({
                 inferenceTimeMs: result.inferenceTimeMs
             });
 
+            // 和其它生成路径一样落盘，节点里存文件 URL 而不是 base64。
+            const persistedUrl = workflowId
+                ? await persistDataUrlToProject(
+                    workflowId,
+                    result.imageUrl,
+                    `camera_angle_${Date.now()}.png`
+                )
+                : null;
+
             // Update node with result
             setNodes(prev => prev.map(n =>
                 n.id === newNodeId
                     ? {
                         ...n,
                         status: NodeStatus.SUCCESS,
-                        resultUrl: result.imageUrl,
+                        resultUrl: persistedUrl || result.imageUrl,
                         seed: result.seed
                     }
                     : n

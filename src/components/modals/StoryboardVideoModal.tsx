@@ -123,7 +123,7 @@ export const StoryboardVideoModal: React.FC<StoryboardVideoModalProps> = ({
 
     // Dynamic resolution options based on model and duration
     const currentModel = VIDEO_MODELS.find(m => m.id === settings.model) || VIDEO_MODELS[0];
-    const availableResolutions = (currentModel as any).durationResolutionMap?.[settings.duration]
+    const availableResolutions: string[] = (currentModel as any).durationResolutionMap?.[settings.duration]
         || currentModel.resolutions
         || VIDEO_RESOLUTIONS;
 

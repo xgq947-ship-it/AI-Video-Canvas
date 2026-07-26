@@ -35,7 +35,7 @@ const getNodeWidth = (node: NodeData, allNodes?: NodeData[]): number => {
     if (node.type === NodeType.IMAGE_EDITOR) {
         // Find parent node in the selection
         const parentId = node.parentIds?.[0];
-        const parentNode = parentId && allNodes?.find(n => n.id === parentId);
+        const parentNode = parentId ? allNodes?.find(n => n.id === parentId) : undefined;
         if (parentNode?.resultUrl && parentNode?.resultAspectRatio) {
             const parts = parentNode.resultAspectRatio.split('/');
             if (parts.length === 2) {
@@ -57,7 +57,7 @@ const getNodeWidth = (node: NodeData, allNodes?: NodeData[]): number => {
     if (node.type === NodeType.VIDEO_EDITOR) {
         // Find parent node in the selection
         const parentId = node.parentIds?.[0];
-        const parentNode = parentId && allNodes?.find(n => n.id === parentId);
+        const parentNode = parentId ? allNodes?.find(n => n.id === parentId) : undefined;
         if (parentNode?.resultUrl) {
             return 500;
         }
@@ -86,7 +86,7 @@ const getNodeHeight = (node: NodeData, allNodes?: NodeData[]): number => {
     if (node.type === NodeType.IMAGE_EDITOR) {
         // Find parent node in the selection
         const parentId = node.parentIds?.[0];
-        const parentNode = parentId && allNodes?.find(n => n.id === parentId);
+        const parentNode = parentId ? allNodes?.find(n => n.id === parentId) : undefined;
         if (parentNode?.resultUrl && parentNode?.resultAspectRatio) {
             const parts = parentNode.resultAspectRatio.split('/');
             if (parts.length === 2) {
@@ -108,7 +108,7 @@ const getNodeHeight = (node: NodeData, allNodes?: NodeData[]): number => {
     if (node.type === NodeType.VIDEO_EDITOR) {
         // Find parent node in the selection
         const parentId = node.parentIds?.[0];
-        const parentNode = parentId && allNodes?.find(n => n.id === parentId);
+        const parentNode = parentId ? allNodes?.find(n => n.id === parentId) : undefined;
         if (parentNode?.resultUrl) {
             // Video editor shows 16:9 when has content
             return 500 / (16 / 9);

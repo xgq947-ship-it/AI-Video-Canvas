@@ -18,6 +18,43 @@ const activeByProject = new Map();
 const ACTIVE = new Set(['queued', 'rendering']);
 const MAX_LOG_LINES = 400;
 
+// jobs 之前只 set 不 delete —— 桌面端后端进程可以连开好几天，渲染几百次之后
+// 这个 Map 会一直长下去（每条最多 MAX_LOG_LINES 行日志）。体积不算大，
+// 但无界增长本身就是 bug。已结束的任务保留一段时间供前端轮询，然后清掉。
+const JOB_RETENTION_MS = 30 * 60_000;
+const MAX_RETAINED_FINISHED_JOBS = 20;
+
+/**
+ * 清理已结束且过期的任务。
+ * @param {number} [now] 便于测试注入时间
+ */
+export const pruneFinishedJobs = (now = Date.now()) => {
+    /** @type {Array<[string, number]>} */
+    const finished = [];
+
+    for (const [id, job] of jobs) {
+        if (ACTIVE.has(job.status)) continue;
+        const settledAt = Date.parse(job.updatedAt);
+        const age = Number.isFinite(settledAt) ? now - settledAt : Infinity;
+        if (age > JOB_RETENTION_MS) {
+            jobs.delete(id);
+            continue;
+        }
+        finished.push([id, Number.isFinite(settledAt) ? settledAt : 0]);
+    }
+
+    // 短时间内渲染很多次也不能无限堆积：按结束时间只留最近的若干条。
+    if (finished.length > MAX_RETAINED_FINISHED_JOBS) {
+        finished.sort((left, right) => left[1] - right[1]);
+        for (const [id] of finished.slice(0, finished.length - MAX_RETAINED_FINISHED_JOBS)) {
+            jobs.delete(id);
+        }
+    }
+};
+
+/** 仅供测试：当前保留的任务数。 */
+export const retainedJobCount = () => jobs.size;
+
 const sanitizeName = (s) =>
   String(s || 'project')
     .replace(/[^\w一-龥-]+/g, '_')
@@ -55,6 +92,8 @@ export const getJobRaw = (id) => jobs.get(id) || null;
  */
 export const createJob = ({ manifest, libraryDir, rendersDir, outputUrlPrefix = '/library/renders' }) => {
   const projectId = (manifest && manifest.project && manifest.project.id) || 'default';
+
+  pruneFinishedJobs();
 
   // 单项目单任务
   const existingId = activeByProject.get(projectId);
@@ -140,6 +179,8 @@ export const createJob = ({ manifest, libraryDir, rendersDir, outputUrlPrefix = 
       pushLog((cancelled ? '已取消: ' : '失败: ') + job.error);
     } finally {
       if (activeByProject.get(projectId) === id) activeByProject.delete(projectId);
+      // 结束时顺手清一次，长时间不再发起渲染也不会留下陈旧任务。
+      pruneFinishedJobs();
     }
   })();
 

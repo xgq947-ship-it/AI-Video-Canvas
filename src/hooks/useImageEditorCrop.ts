@@ -21,7 +21,7 @@ export interface CropRect {
 type DragHandle = 'move' | 'nw' | 'ne' | 'sw' | 'se' | null;
 
 interface UseImageEditorCropProps {
-    imageRef: React.RefObject<HTMLImageElement>;
+    imageRef: React.RefObject<HTMLImageElement | null>;
     saveState: () => void;
     onCropApply: (croppedImageDataUrl: string) => void;
 }

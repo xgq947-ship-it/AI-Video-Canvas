@@ -2,7 +2,7 @@
   "name": "twitcanva",
   "productName": "Evan AI Video Canvas",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "main": "electron/main.js",
   "type": "module",
   "engines": {
@@ -18,6 +18,7 @@
     "server": "node server/index.js",
     "mcp:claude": "node mcp/twitcanva-mcp.js",
     "test": "node --test test/*.test.mjs",
+    "typecheck": "tsc --noEmit",
     "generate:test-assets": "node scripts/generate-test-assets.mjs",
     "render:e2e-test": "node scripts/proof-manifest-render.mjs",
     "build": "vite build",
@@ -54,6 +55,8 @@
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.1",
     "@types/node": "^22.14.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "@types/three": "^0.182.0",
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.2.1",
@@ -111,6 +114,14 @@
       }
     ],
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "//publish": "打包时据此生成 app-update.yml 与 latest*.yml；electron-updater 会自动读取，无需额外配置文件。CI 用 --publish never，产物仍由 workflow 上传到 Release。",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "xgq947-ship-it",
+        "repo": "AI-Video-Canvas"
+      }
+    ],
     "mac": {
       "category": "public.app-category.video",
       "icon": "build/icon.icns",

@@ -9,6 +9,7 @@ import React, { useRef, useState, useEffect } from 'react';
 import { Loader2, Maximize2, ImageIcon as ImageIcon, Film, Upload, Pencil, Video, GripVertical, Download, Expand, Shrink, RotateCcw, CircleAlert } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { LazyImage } from '../LazyImage';
+import { LazyVideo } from '../LazyVideo';
 
 interface NodeContentProps {
     data: NodeData;
@@ -123,7 +124,7 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                     style={getAspectRatioStyle()}
                 >
                     {isVideoType ? (
-                        <video src={data.resultUrl} controls loop preload="metadata" className="w-full h-full object-cover" />
+                        <LazyVideo src={data.resultUrl} className="w-full h-full object-cover" />
                     ) : (
                         <LazyImage
                             key={displayedResultUrl}

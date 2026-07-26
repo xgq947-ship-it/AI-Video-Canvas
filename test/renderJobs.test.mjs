@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createJob, getJob, cancelJob, _reset } from '../server/services/renderJobs.js';
+import { createJob, getJob, cancelJob, pruneFinishedJobs, retainedJobCount, _reset } from '../server/services/renderJobs.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jobs-'));
 const libraryDir = tmp;
@@ -55,6 +55,46 @@ test('取消进行中的任务 → 状态变为 cancelled', () => {
   // 取消后不能再次取消
   const c2 = cancelJob(r.job.jobId);
   assert.equal(c2.code, 400);
+});
+
+test('已结束的任务超过保留期后会被清掉（jobs Map 不再无界增长）', async () => {
+  _reset();
+  const job = createJob({ manifest: badManifest, libraryDir, rendersDir }).job;
+  cancelJob(job.jobId);
+
+  // 保留期内仍可查询：前端要靠轮询拿到最终状态。
+  pruneFinishedJobs(Date.now());
+  assert.ok(getJob(job.jobId), '刚结束的任务不能立刻清掉');
+
+  // 超过 30 分钟之后清理。
+  pruneFinishedJobs(Date.now() + 31 * 60_000);
+  assert.equal(getJob(job.jobId), null);
+  assert.equal(retainedJobCount(), 0);
+});
+
+test('短时间内大量渲染只保留最近若干条已结束任务', () => {
+  _reset();
+  for (let i = 0; i < 40; i += 1) {
+    const job = createJob({
+      manifest: { ...badManifest, project: { id: `p${i}`, title: `p${i}` } },
+      libraryDir,
+      rendersDir
+    }).job;
+    cancelJob(job.jobId);
+  }
+
+  pruneFinishedJobs(Date.now());
+  assert.ok(retainedJobCount() <= 20, `已结束任务应被裁剪，实际 ${retainedJobCount()}`);
+});
+
+test('进行中的任务绝不会被清理掉', () => {
+  _reset();
+  const job = createJob({ manifest: badManifest, libraryDir, rendersDir }).job;
+  assert.equal(job.status, 'queued');
+
+  // 即使时间推得很远，进行中的任务也必须留着。
+  pruneFinishedJobs(Date.now() + 24 * 60 * 60_000);
+  assert.ok(getJob(job.jobId), '进行中的任务被误删会让前端永远等不到结果');
 });
 
 test.after(() => { _reset(); });

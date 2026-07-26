@@ -1,12 +1,17 @@
 /**
  * useAutoSave.ts
- * 
+ *
  * Custom hook that periodically saves the canvas state to the backend
  * if there are unsaved changes and no active generations.
+ *
+ * 定时逻辑放在 utils/autoSaveScheduler.js，这里只负责把最新的 props 喂给它。
+ * 千万不要把 `nodes` / `onSave` 加回 effect 依赖：它们每次 render 都变，
+ * 会让 60 秒的计时器不断重置，自动保存就再也不会触发。
  */
 
 import { useEffect, useRef } from 'react';
-import { NodeData, NodeStatus } from '../types';
+import { NodeData } from '../types';
+import { createAutoSaveScheduler } from '../utils/autoSaveScheduler.js';
 
 interface UseAutoSaveOptions {
     isDirty: boolean;
@@ -22,32 +27,27 @@ export const useAutoSave = ({
     interval = 60000
 }: UseAutoSaveOptions) => {
     const lastSaveTimeRef = useRef<number>(Date.now());
-    const isSavingRef = useRef<boolean>(false);
+    const stateRef = useRef({ isDirty, nodes, onSave });
+
+    // 每次 render 后刷新快照；定时器读的是 ref，所以不需要重建。
+    useEffect(() => {
+        stateRef.current = { isDirty, nodes, onSave };
+    });
 
     useEffect(() => {
-        const checkAndSave = async () => {
-            // Only save if dirty and we have nodes
-            if (!isDirty || nodes.length === 0) return;
-
-            // Don't save if already in the middle of a save operation
-            if (isSavingRef.current) return;
-
-            try {
-                isSavingRef.current = true;
-                console.log('[Auto-Save] Triggering periodic save...');
-                await onSave();
+        const scheduler = createAutoSaveScheduler({
+            intervalMs: interval,
+            getState: () => ({
+                isDirty: stateRef.current.isDirty,
+                nodeCount: stateRef.current.nodes.length,
+                save: stateRef.current.onSave
+            }),
+            onSaved: () => {
                 lastSaveTimeRef.current = Date.now();
-            } catch (error) {
-                console.error('[Auto-Save] Failed to auto-save:', error);
-            } finally {
-                isSavingRef.current = false;
             }
-        };
-
-        const timer = setInterval(checkAndSave, interval);
-
-        return () => clearInterval(timer);
-    }, [isDirty, nodes, onSave, interval]);
+        });
+        return () => scheduler.stop();
+    }, [interval]);
 
     return {
         lastSaveTime: lastSaveTimeRef.current

@@ -39,39 +39,45 @@ def _visible(locator: Any) -> bool:
         return False
 
 
+# Google 账号登录态探针地址。
+#
+# 为什么不用 labs.google/fx/tools/flow 判断登录：实测该地址是**公开营销落地页**
+# （Overview / Models / Pricing / "Create with Google Flow"），对已登录和未登录用户
+# 渲染的 DOM 完全相同 —— 原来找的 editor / account / sign-in 三个选择器一个都不命中，
+# 探针只能空等到 25 秒超时后报「未发现足够的登录证据」。这正是「Flow 检查不出来」的根因。
+# Slate 编辑器只存在于 /fx/tools/flow/project/<id> 应用页，首页上永远没有。
+#
+# myaccount.google.com 的重定向行为则是稳定信号：未登录必定被重定向离开该域名。
+GOOGLE_ACCOUNT_PROBE_URL = "https://myaccount.google.com/"
+_GOOGLE_SIGNED_OUT_HOSTS = {"accounts.google.com", "www.google.com", "google.com"}
+
+
 def _probe_flow_login(page: Any) -> dict[str, Any]:
-    """只读确认 Flow 登录；公开首页和单纯打开页面绝不算已登录。"""
-    page.goto(LOGIN_URLS["google-flow"], wait_until="domcontentloaded", timeout=60_000)
-    account = page.locator(
-        "[aria-label*='Google Account'], [aria-label*='Google 账号'], "
-        "[aria-label*='Google 帳戶']"
-    )
-    editor = page.locator('[role="textbox"][contenteditable="true"][data-slate-editor="true"]')
-    sign_in = page.get_by_text("Sign in", exact=True).or_(page.get_by_text("登录", exact=True))
+    """只读确认 Google 账号登录态（Flow 的前提），按重定向判定。"""
+    page.goto(GOOGLE_ACCOUNT_PROBE_URL, wait_until="domcontentloaded", timeout=60_000)
     deadline = time.monotonic() + LOGIN_PROBE_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
-        current_url = str(getattr(page, "url", "") or "")
-        host = (urlparse(current_url).hostname or "").lower()
-        if host == "accounts.google.com" or _visible(sign_in):
-            return {
-                "authenticated": False,
-                "reason": "not-authenticated",
-                "evidence": "login-control",
-                "message": "Google Flow 当前未登录",
-            }
-        if host == "labs.google" and (_visible(editor) or _visible(account)):
+        host = (urlparse(str(getattr(page, "url", "") or "")).hostname or "").lower()
+        if host == "myaccount.google.com":
             return {
                 "authenticated": True,
                 "reason": "authenticated",
-                "evidence": "flow-editor" if _visible(editor) else "google-account-control",
-                "message": "已在真实 Flow 页面确认 Google 账号登录",
+                "evidence": "google-account-page",
+                "message": "已确认 Google 账号登录",
+            }
+        if host in _GOOGLE_SIGNED_OUT_HOSTS:
+            return {
+                "authenticated": False,
+                "reason": "not-authenticated",
+                "evidence": "redirected-to-signin",
+                "message": "Google 账号当前未登录，请在 Evan 专属 Chrome 中登录",
             }
         page.wait_for_timeout(500)
     return {
         "authenticated": False,
         "reason": "unconfirmed",
         "evidence": "no-auth-evidence",
-        "message": "Flow 页面已打开，但未发现足够的登录证据",
+        "message": "无法确认 Google 账号登录状态",
     }
 
 
@@ -122,10 +128,32 @@ def check_browser_logins(providers: list[str] | None = None) -> CommandResponse:
     sessionhub_root = Path(get_config().sessionhub_root).expanduser().resolve()
     if str(sessionhub_root) not in sys.path:
         sys.path.insert(0, str(sessionhub_root))
-    from scene.chrome_cdp import CDP_PORT, start_chrome, stop_chrome  # type: ignore
+    from scene.chrome_cdp import (  # type: ignore
+        CDP_PORT,
+        _instance_is_headless,
+        _instance_pid,
+        _instance_supports_playwright,
+        start_chrome,
+        stop_chrome,
+    )
 
-    # 可见登录实例没有 CDP；先优雅退出以落盘 Cookie，再用同一个 Profile 无头接管。
-    stop_chrome()
+    # 只在**必要时**重启浏览器。
+    #
+    # 这里原来无条件 stop_chrome()，而 start_chrome 本身就有复用分支 ——
+    # 等于每次检查都主动摧毁复用，付一次完整冷启动（SIGTERM 等待 ≤5s +
+    # Chrome 启动 + _wait_cdp_stable ≤25s），这是「检查登录态很久」的主因。
+    #
+    # 但不能直接删：可见登录实例没有 CDP，且用户刚登录完的 Cookie 要等它优雅退出
+    # 才落盘。跳过 stop 会读到还没写盘的状态，报出「刚登录成功却显示未登录」。
+    # 所以按实例种类判断：已经是无头 + 可被 Playwright 接管的实例才直接复用。
+    pid = _instance_pid()
+    reusable = (
+        pid is not None
+        and _instance_is_headless(pid)
+        and _instance_supports_playwright(pid)
+    )
+    if not reusable:
+        stop_chrome()
     ok, message = start_chrome(headless=True)
     if not ok:
         return CommandResponse(

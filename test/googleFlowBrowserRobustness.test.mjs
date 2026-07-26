@@ -95,7 +95,12 @@ test('设置页登录状态只接受真实页面探针，不沿用打开登录�
   assert.match(browserCli, /def _probe_flow_login/);
   assert.match(browserCli, /def _probe_jimeng_login/);
   assert.match(browserCli, /"evidence": "authenticated-composer"/);
-  assert.match(browserCli, /"evidence": "flow-editor" if _visible\(editor\) else "google-account-control"/);
+  // Flow 的证据不再是页面元素。实测 https://labs.google/fx/tools/flow 是公开营销
+  // 落地页，对已登录和未登录渲染完全相同，原来的 editor / account 选择器 count 恒为 0，
+  // 探针只能空等到超时报 unconfirmed —— 即用户看到的「Flow 检查不出来」。
+  // 现在按 myaccount.google.com 的重定向行为判定，详见 test/browserLoginProbe.test.mjs。
+  assert.match(browserCli, /"evidence": "google-account-page"/);
+  assert.match(browserCli, /"evidence": "redirected-to-signin"/);
   assert.match(serverMain, /app\.post\('\/api\/browser-sessions\/check'/);
   assert.match(serverMain, /enqueueBrowserWorkflow\(\(\) => runOpsCli/);
   assert.match(serverMain, /if \(result\.authenticated === true\)/);

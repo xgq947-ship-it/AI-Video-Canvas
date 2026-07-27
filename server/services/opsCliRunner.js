@@ -73,11 +73,11 @@ export const BROWSER_MODELS_SETUP_HINT =
 // + 即梦/Flow 前端拉 chunk + 编辑器挂载），也就是 EDITOR_NOT_READY 最常见的来源。
 // 这不是首次运行才有的问题，是每次隔几分钟再操作都会复现。
 //
-// 放宽到 10 分钟：连续创作期间不再反复冷启动，代价是这段时间里 Chromium 常驻。
+// 放宽到 30 分钟：连续创作期间不再反复冷启动，代价是这段时间里 Chrome 常驻。
 // 上限是可控的 —— 退出 Evan 时会主动关掉（见 closeBrowserForShutdown）。
-const BROWSER_IDLE_CLOSE_MS = Number(process.env.EVAN_BROWSER_IDLE_CLOSE_MS) || 10 * 60_000;
+const BROWSER_IDLE_CLOSE_MS = Number(process.env.EVAN_BROWSER_IDLE_CLOSE_MS) || 30 * 60_000;
 const BROWSER_LOGIN_IDLE_CLOSE_MS =
-    Number(process.env.EVAN_BROWSER_LOGIN_IDLE_CLOSE_MS) || 15 * 60_000;
+    Number(process.env.EVAN_BROWSER_LOGIN_IDLE_CLOSE_MS) || 30 * 60_000;
 
 let activeBrowserOperations = 0;
 let browserIdleTimer = null;

@@ -91,7 +91,10 @@ FFmpeg `6.1.1` 与 FFprobe `6.1.1` 由锁定的 `ffmpeg-ffprobe-static` 平台�
 桌面安装包从 `resources/media-tools/` 执行，不依赖系统 `PATH`。
 
 当前迁移兼容层使用应用专用 CDP 端口 `19222`，且会校验 profile 所属进程，不会连接系统
-用户日常 Chrome Profile。常驻 Worker 完成后将移除该固定端口。
+用户日常 Chrome Profile。Windows 在普通登录实例切换到无头生成实例前会先按专属
+Profile 精确关闭旧进程，等待退出时使用原生 PID 句柄，不在轮询中重复启动 PowerShell。
+生成实例空闲 30 分钟后关闭；退出 Evan 时仍会立即回收。常驻 Worker 完成后将移除该固定
+端口。
 
 自动生成显式启动无头 Chrome。用户主动执行“打开 Evan 专属 Chrome/登录”才会切换成无自动化参数的可见实例；
 后端不设置全局强制弹窗变量。

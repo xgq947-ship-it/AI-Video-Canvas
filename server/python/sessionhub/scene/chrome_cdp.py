@@ -229,14 +229,18 @@ def _powershell(script: str) -> str:
     return proc.stdout if proc.returncode == 0 else ""
 
 
-def _instance_pid_windows() -> int | None:
-    """按 --user-data-dir 精确匹配专用实例，绝不误伤用户日常 Chrome。"""
+def _instance_details_windows() -> tuple[int, str] | None:
+    """一次查询专用实例的 PID 与命令行。
+
+    ``Get-CimInstance`` 在部分 Windows 电脑上启动很慢，所以调用方必须复用这次
+    查询结果，不能在轮询里反复启动 PowerShell。
+    """
     marker = f"user-data-dir={PROFILE_DIR}"
     out = _powershell(
         "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
         "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"
     )
-    fallback: int | None = None
+    fallback: tuple[int, str] | None = None
     for line in out.splitlines():
         pid_text, _, cmdline = line.partition("\t")
         try:
@@ -246,10 +250,55 @@ def _instance_pid_windows() -> int | None:
         if marker not in cmdline:
             continue
         if "--type=" not in cmdline:
-            return pid  # 顶层主进程；可见登录实例没有 remote-debugging-port
+            return pid, cmdline  # 顶层主进程；可见登录实例没有 remote-debugging-port
         if fallback is None:
-            fallback = pid
+            fallback = (pid, cmdline)
     return fallback
+
+
+def _instance_pid_windows() -> int | None:
+    """按 --user-data-dir 精确匹配专用实例，绝不误伤用户日常 Chrome。"""
+    details = _instance_details_windows()
+    return details[0] if details else None
+
+
+def _windows_pid_is_running(pid: int) -> bool | None:
+    """用 Win32 进程句柄查询 PID，避免每 250ms 冷启动一次 PowerShell。
+
+    返回 ``None`` 代表权限或系统调用异常；关闭流程会把它按“仍在运行”处理并在
+    超时后只对已经核验过 Profile 的原 PID 强制结束，绝不扩大目标范围。
+    """
+    if not IS_WINDOWS:
+        return None
+    try:
+        import ctypes
+
+        synchronize = 0x00100000
+        wait_object_0 = 0x00000000
+        wait_timeout = 0x00000102
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
+        handle = kernel32.OpenProcess(synchronize, False, int(pid))
+        if not handle:
+            # ERROR_INVALID_PARAMETER 表示 PID 已不存在；其它错误（例如拒绝访问）
+            # 不能安全地当成“已退出”。
+            return False if ctypes.get_last_error() == 87 else None
+        try:
+            result = kernel32.WaitForSingleObject(handle, 0)
+            if result == wait_object_0:
+                return False
+            if result == wait_timeout:
+                return True
+            return None
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return None
 
 
 def _instance_command(pid: int) -> str:
@@ -268,13 +317,13 @@ def _instance_command(pid: int) -> str:
         return ""
 
 
-def _instance_is_headless(pid: int) -> bool:
+def _instance_is_headless(pid: int, command: str | None = None) -> bool:
     if IS_WINDOWS:
         # Chromium 的 `Browser` 字段在新无头模式下也可能仍是
         # "Chrome/1xx"，不能据此判断。先看已按 PID 精确取得的命令行，
         # 再用 CDP User-Agent 中的 HeadlessChrome 兜底。
-        command = _instance_command(pid).lower()
-        if "--headless" in command:
+        resolved_command = command if command is not None else _instance_command(pid)
+        if "--headless" in resolved_command.lower():
             return True
         try:
             with urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=2) as resp:
@@ -285,10 +334,23 @@ def _instance_is_headless(pid: int) -> bool:
     return "--headless" in _instance_command(pid)
 
 
-def _instance_supports_playwright(pid: int) -> bool:
+def _instance_supports_playwright(pid: int, command: str | None = None) -> bool:
     """生成实例必须带 Evan 指定的 CDP 跨源参数，登录实例不会命中。"""
-    command = _instance_command(pid).lower()
-    return "--remote-allow-origins" in command and "--enable-automation" in command
+    resolved_command = command if command is not None else _instance_command(pid)
+    normalized = resolved_command.lower()
+    return "--remote-allow-origins" in normalized and "--enable-automation" in normalized
+
+
+def _windows_login_instance_reusable(command: str) -> bool:
+    """普通登录实例可以直接复用；自动化/无头实例必须先安全切换模式。"""
+    normalized = command.lower()
+    automation_markers = (
+        "--headless",
+        "--remote-debugging-port",
+        "--remote-allow-origins",
+        "--enable-automation",
+    )
+    return not any(marker in normalized for marker in automation_markers)
 
 
 def start_login_chrome(url: str) -> tuple[bool, str]:
@@ -297,7 +359,6 @@ def start_login_chrome(url: str) -> tuple[bool, str]:
     登录完成后的站点状态写入 Evan 专属 profile。后续生成会关闭这个可见实例，
     再以无头 CDP 模式启动同一个 profile，因此不会触碰日常 Chrome 数据。
     """
-    stop_chrome()
     if not CHROME_BIN.exists():
         return False, f"找不到 Google Chrome：{CHROME_BIN}"
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
@@ -310,12 +371,46 @@ def start_login_chrome(url: str) -> tuple[bool, str]:
         "--new-window",
         url,
     ]
-    subprocess.Popen(
+
+    if IS_WINDOWS:
+        details = _instance_details_windows()
+        if details:
+            pid, command = details
+            if _windows_login_instance_reusable(command):
+                # 同一 user-data-dir 的第二次普通启动会把 URL 交给现有登录实例。
+                # 不需要先关再开，用户重复点登录入口时可以立即响应。
+                subprocess.Popen(
+                    launch_cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    **_detached_popen_kwargs(),
+                )
+                return True, "已在现有 Evan 专属 Chrome 中打开登录页"
+            stop_chrome(pid)
+    else:
+        stop_chrome()
+
+    process = subprocess.Popen(
         launch_cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         **_detached_popen_kwargs(),
     )
+    if IS_WINDOWS:
+        # 这是刚由本函数使用明确 Profile 启动的 PID，可以直接用原生句柄确认，
+        # 无需再为每次轮询启动 PowerShell/CIM。
+        for _ in range(30):
+            running = _windows_pid_is_running(process.pid)
+            if running is True:
+                return True, "Evan 专属 Chrome 登录窗口已打开"
+            if running is False:
+                break
+            time.sleep(0.1)
+        # Chrome 极少数情况下会把启动转交给另一个新进程；只做一次精确兜底查询。
+        if _instance_pid_windows() is not None:
+            return True, "Evan 专属 Chrome 登录窗口已打开"
+        return False, "已启动 Google Chrome，但未检测到 Evan 专属实例"
+
     for _ in range(30):
         pid = _instance_pid()
         if pid is not None:
@@ -463,9 +558,10 @@ def surface_for_login(reason: str) -> None:
     raise RuntimeError(reason)
 
 
-def stop_chrome() -> tuple[bool, str]:
+def stop_chrome(known_pid: int | None = None) -> tuple[bool, str]:
     if IS_WINDOWS:
-        pid = _instance_pid_windows()
+        # known_pid 只能来自本模块刚按 --user-data-dir 精确核验的查询结果。
+        pid = known_pid if known_pid is not None else _instance_pid_windows()
         if pid is None:
             return True, "未找到专用 Chrome，无需关闭"
         # 先不带 /F 请求正常退出，让 Chrome 有机会完整落盘 Cookie/Profile；超时才强杀。
@@ -475,7 +571,7 @@ def stop_chrome() -> tuple[bool, str]:
             check=False,
         )
         for _ in range(20):
-            if _instance_pid_windows() is None and not is_port_open():
+            if _windows_pid_is_running(pid) is False and not is_port_open():
                 return True, "已关闭专用 Chrome"
             time.sleep(0.25)
         subprocess.run(
@@ -483,6 +579,10 @@ def stop_chrome() -> tuple[bool, str]:
             capture_output=True,
             check=False,
         )
+        for _ in range(20):
+            if _windows_pid_is_running(pid) is False and not is_port_open():
+                break
+            time.sleep(0.1)
         return True, "已强制关闭专用 Chrome"
 
     main_pid = _instance_pid()
@@ -535,32 +635,50 @@ def stop_chrome() -> tuple[bool, str]:
 def start_chrome(force: bool = False, *, foreground: bool = False, headless: bool = False) -> tuple[bool, str]:
     _debug_log("start_chrome.enter", force=force, foreground=foreground, headless=headless)
     ok, msg = check_cdp()
-    if ok and not force:
+    stopped_existing = False
+    if IS_WINDOWS:
+        details = _instance_details_windows()
+        pid = details[0] if details else None
+        command = details[1] if details else None
+    else:
         pid = _instance_pid()
+        command = None
+
+    # 关键修复：可见登录实例不开放 CDP。旧逻辑只有 ok=True 才检查实例，因此会直接
+    # 再启动一个同 Profile 的无头 Chrome；Chrome 单实例机制把参数交给可见实例后退出，
+    # 19222 永远不会出现，最终报“已启动 Chrome，但 CDP 仍不可用”。
+    if not ok and pid is not None:
+        _debug_log("start_chrome.restart_existing_without_cdp", pid=pid)
+        stop_chrome(pid if IS_WINDOWS else None)
+        stopped_existing = True
+        pid = None
+        command = None
+
+    if ok and not force:
         if pid is None:
             return False, (
                 f"{CDP_PORT} 端口被另一个浏览器实例占用，且它用的不是 Evan 专属 Profile"
                 f"（{PROFILE_DIR}）。没有复用它，以免把任务发到错误的浏览器资料上。"
                 f"请退出 Evan、结束占用该端口的浏览器进程后重新打开 Evan。"
             )
-        if pid is not None and not _instance_supports_playwright(pid):
+        if pid is not None and not _instance_supports_playwright(pid, command):
             # 升级后的首次运行可能仍残留旧参数实例。保留 profile，重启进程即可，
             # 否则 connect_over_cdp 会报 Browser.setDownloadBehavior 协议错误。
             _debug_log("start_chrome.restart_for_playwright", pid=pid)
-            stop_chrome()
+            stop_chrome(pid if IS_WINDOWS else None)
             ok = False
-        elif headless and pid is not None and not _instance_is_headless(pid):
+        elif headless and pid is not None and not _instance_is_headless(pid, command):
             _debug_log("start_chrome.restart_for_headless", pid=pid)
-            stop_chrome()
+            stop_chrome(pid if IS_WINDOWS else None)
             ok = False
         elif (
             not headless
             and pid is not None
-            and _instance_is_headless(pid)
+            and _instance_is_headless(pid, command)
             and (foreground or _foreground_allowed())
         ):
             _debug_log("start_chrome.restart_for_headful_foreground", pid=pid)
-            stop_chrome()
+            stop_chrome(pid if IS_WINDOWS else None)
             ok = False
     if ok and not force:
         # 默认静默：已在运行时也把专用窗口压回后台，避免上一次登录/操作残留的前台窗口
@@ -571,7 +689,7 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
             hide_chrome()
         _debug_log("start_chrome.reuse", foreground=foreground, headless=headless, message=msg)
         return True, msg
-    if force:
+    if force and not stopped_existing:
         stop_chrome()
     if not CHROME_BIN.exists():
         return False, f"找不到 Chrome：{CHROME_BIN}"
@@ -652,4 +770,7 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
             return True, msg
         time.sleep(0.5)
     logging.error("Chrome CDP 启动超时")
-    return False, f"已尝试启动 Chrome，但 CDP 仍不可用。也可以手动运行：\n{chrome_start_command()}"
+    return False, (
+        f"已尝试启动 Evan 专属 Chrome，但本机端口 {CDP_PORT} 的自动化连接仍不可用。"
+        "请完全退出 Evan 后重试；如果持续出现，请检查安全软件是否拦截 Chrome 的本机连接。"
+    )

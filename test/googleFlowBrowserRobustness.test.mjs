@@ -66,6 +66,7 @@ test('系统 Chrome 使用独立 Profile 和可被 Playwright 接管的低后台
   assert.match(chromeRuntime, /--disable-component-update/);
   assert.match(chromeRuntime, /_instance_supports_playwright/);
   assert.match(chromeRuntime, /restart_for_playwright/);
+  assert.match(opsRunner, /30 \* 60_000/);
 });
 
 test('每个 Flow 与即梦任务使用独立临时页并在结束后清理', () => {
@@ -117,6 +118,28 @@ test('登录窗口优雅退出落盘 Profile，超时后才强杀', () => {
   assert.match(stopBlock, /os\.kill\(main_pid, signal\.SIGTERM\)/);
   assert.match(stopBlock, /Chrome 会自行通知 Helper 退出并刷新 Cookie 数据库/);
   assert.ok(stopBlock.indexOf('signal.SIGTERM') < stopBlock.indexOf('signal.SIGKILL'));
+});
+
+test('Windows 关闭等待使用原生 PID 句柄，不在轮询中反复启动 PowerShell', () => {
+  const stopBlock = chromeRuntime.slice(
+    chromeRuntime.indexOf('def stop_chrome'),
+    chromeRuntime.indexOf('def start_chrome')
+  );
+  const windowsBlock = stopBlock.slice(
+    stopBlock.indexOf('if IS_WINDOWS:'),
+    stopBlock.indexOf('main_pid = _instance_pid()')
+  );
+
+  assert.equal(
+    (windowsBlock.match(/_instance_pid_windows\(\)/g) || []).length,
+    1,
+    '只能在没有 known_pid 时做一次 Profile 精确查询'
+  );
+  assert.match(windowsBlock, /_windows_pid_is_running\(pid\)/);
+  assert.doesNotMatch(
+    windowsBlock.slice(windowsBlock.indexOf('for _ in range(20):')),
+    /_instance_pid_windows\(\)/
+  );
 });
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,20 @@
 [
   {
+    "version": "0.2.5",
+    "date": "2026-07-27",
+    "summary": "这一版修复 Windows 手动打开 Evan 专属 Chrome 很慢，以及打开过登录窗口后生图可能报 PAGE_NAVIGATION_FAILED、Chrome 已启动但 CDP 仍不可用的问题。",
+    "fixed": [
+      "Windows 关闭或切换 Evan 专属 Chrome 时，每次轮询都重新启动 PowerShell 查询进程，导致打开登录窗口和生成前切换浏览器特别慢的问题。",
+      "普通可见登录窗口已经占用 Evan Profile、但没有开放 CDP 时，生成流程仍直接启动第二个同 Profile Chrome；启动参数被 Chrome 单实例机制吞掉，最终一直无法连接 19222 端口的问题。",
+      "CDP 启动失败提示暴露一长串内部命令但无法帮助普通用户恢复的问题。"
+    ],
+    "improved": [
+      "Windows 只做一次专属 Profile 进程核验，后续关闭等待改用 Win32 原生进程句柄，不再循环冷启动 PowerShell。",
+      "重复打开普通登录窗口会直接复用已有 Evan Chrome；从登录模式切换到生成模式时会先安全关闭旧实例、等待 Profile 释放，再启动无头 Chrome。",
+      "无头生成实例的空闲保留时间从 10 分钟延长到 30 分钟，连续生图更少触发 Chrome 和网页编辑器冷启动。"
+    ]
+  },
+  {
     "version": "0.2.4",
     "date": "2026-07-27",
     "summary": "这一版修复 Windows 安装最新版 Evan 后首次启动时，明明已经安装 Google Chrome，却被错误阻断并提示无法读取 Chrome 版本的问题。",

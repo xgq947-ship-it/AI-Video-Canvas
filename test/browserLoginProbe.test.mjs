@@ -220,6 +220,85 @@ test('已经是无头 CDP 实例时不重启浏览器', () => {
     assert.match(block, /stop_chrome\(\)/);
 });
 
+test('可见登录实例占用 Profile 时，生成先关闭它再启动无头 CDP', { skip: !ready }, () => {
+    const script = `
+import json, sys, tempfile
+from pathlib import Path
+sys.path.insert(0, 'sessionhub')
+from scene import chrome_cdp as c
+
+events = []
+checks = iter([(False, 'no-cdp'), (True, 'cdp-ready')])
+
+class FakeProcess:
+    pid = 9001
+
+def fake_popen(args, **kwargs):
+    events.append({'event': 'launch', 'args': args})
+    return FakeProcess()
+
+c.IS_WINDOWS = True
+c.CHROME_BIN = Path(sys.executable)
+c.PROFILE_DIR = Path(tempfile.mkdtemp()) / 'browser-profile'
+c.check_cdp = lambda: next(checks)
+c._instance_details_windows = lambda: (
+    4242,
+    f'"chrome.exe" --user-data-dir="{c.PROFILE_DIR}" --new-window about:blank'
+)
+c.stop_chrome = lambda known_pid=None: (
+    events.append({'event': 'stop', 'pid': known_pid}) or (True, 'closed')
+)
+c.subprocess.Popen = fake_popen
+
+ok, message = c.start_chrome(headless=True)
+print(json.dumps({'ok': ok, 'message': message, 'events': events}))
+`;
+    const result = runPython(script);
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.events.map(event => event.event), ['stop', 'launch']);
+    assert.equal(result.events[0].pid, 4242);
+    assert.ok(result.events[1].args.includes('--headless=new'));
+});
+
+test('Windows 重复打开普通登录窗口直接复用，不关闭 Chrome', { skip: !ready }, () => {
+    const script = `
+import json, sys, tempfile
+from pathlib import Path
+sys.path.insert(0, 'sessionhub')
+from scene import chrome_cdp as c
+
+events = []
+
+class FakeProcess:
+    pid = 9002
+
+def fake_popen(args, **kwargs):
+    events.append({'event': 'launch', 'args': args})
+    return FakeProcess()
+
+c.IS_WINDOWS = True
+c.CHROME_BIN = Path(sys.executable)
+c.PROFILE_DIR = Path(tempfile.mkdtemp()) / 'browser-profile'
+c._instance_details_windows = lambda: (
+    4242,
+    f'"chrome.exe" --user-data-dir="{c.PROFILE_DIR}" --new-window about:blank'
+)
+c.stop_chrome = lambda known_pid=None: (
+    events.append({'event': 'stop', 'pid': known_pid}) or (True, 'closed')
+)
+c.subprocess.Popen = fake_popen
+
+ok, message = c.start_login_chrome('https://labs.google/fx/tools/flow')
+print(json.dumps({'ok': ok, 'message': message, 'events': events}))
+`;
+    const result = runPython(script);
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.events.map(event => event.event), ['launch']);
+    assert.match(result.message, /现有/);
+});
+
 test('没有环境变量时也落在同一个 Evan 专属 Profile 上', { skip: !ready }, () => {
     // 回归：此前回退到 ~/.sessionhub/evan-browser，于是任何没带
     // SESSIONHUB_CHROME_PROFILE 的调用都会另起一个全新的空 Chrome，还占住 19222。

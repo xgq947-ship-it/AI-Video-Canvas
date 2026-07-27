@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { defaultBrowserProfileDir, resolveRuntimePaths } from '../server/runtime/paths.js';
@@ -89,4 +90,34 @@ test('打包应用显式给了数据目录时，Profile 仍跟随数据目录', 
         homeDir: path.resolve('/Users/demo')
     });
     assert.equal(paths.browserProfileDir, path.join(dataDir, 'browser-profile'));
+});
+
+test('三处应用名保持一致：productName / Node 默认值 / Python 默认值', () => {
+    // Electron 的 app.getPath('userData') 用的是 package.json 的 productName。
+    // 改名而这三处没同步，桌面应用的 userData 会搬家，Node 与 Python 却仍指向旧目录 ——
+    // 症状正是「明明在桌面应用里登录过，却报尚未创建 Evan 专属 Chrome 登录资料」，
+    // 而且不会有任何报错，纯靠人去猜。这是本仓库诊断成本最高的一类故障。
+    const productName = JSON.parse(
+        fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')
+    ).productName;
+    assert.ok(productName, 'package.json 缺少 productName');
+
+    assert.equal(
+        defaultBrowserProfileDir({}, { platform: 'darwin', homeDir: path.resolve('/Users/demo') }),
+        path.join(
+            path.resolve('/Users/demo'),
+            'Library', 'Application Support', productName, 'data', 'browser-profile'
+        ),
+        'Node 侧默认 Profile 路径与 package.json 的 productName 不一致'
+    );
+
+    const chromeRuntime = fs.readFileSync(
+        new URL('../server/python/sessionhub/scene/chrome_cdp.py', import.meta.url), 'utf8'
+    );
+    assert.ok(
+        chromeRuntime.includes(`app_name = "${productName}"`),
+        `chrome_cdp.py 的 app_name 与 productName（${productName}）不一致`
+    );
+    // Python 侧同样要落在 data/browser-profile，否则两侧只差一层目录也会失联。
+    assert.match(chromeRuntime, /return base \/ "data" \/ "browser-profile"/);
 });

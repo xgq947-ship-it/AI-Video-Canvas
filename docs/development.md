@@ -36,6 +36,13 @@ npm run build
 开发服务器使用前端 `5173`、后端 `3001`。桌面版后端由 Electron 分配随机 loopback
 端口，不使用这两个固定端口。
 
+> **不要同时运行 `npm run dev` 和已安装的桌面应用。**
+> 两者共用同一份 `browser-profile`（登录一次两边都能用，见「浏览器自动化」），
+> 因此也共用同一个 Evan 专属 Chrome 实例。而串行队列
+> （`googleFlowWorkflowQueue`）只在单个后端进程内生效，跨进程不排队：
+> 两个后端会互相切换页面、抢焦点，正在等结果的一方会拿到
+> `SUBMISSION_UNKNOWN`——积分已扣但结果收不回来。调试时请先退出桌面应用。
+
 ## 桌面应用
 
 ```bash
@@ -83,6 +90,14 @@ Python 虚拟环境或 `node_modules/` 提交进 Git。
 `browser-profile/` 保存 Flow/即梦登录态；应用更新不会覆盖。兼容性探针会阻止缺失或
 版本过低的 Chrome 启动自动化。Remotion 使用同一个系统 Chrome 可执行文件，不会首次
 渲染时联网下载浏览器。
+
+`browser-profile/` 的位置**不随后端从哪个目录启动而变**，源码模式与桌面应用落在
+同一处（`app.getPath('userData')/data/browser-profile`），所以在桌面应用里登录过
+即梦/Flow 后，`npm run dev` 直接可用，无需重新登录。三处默认值必须保持一致：
+`package.json` 的 `productName`、`server/runtime/paths.js` 的
+`defaultBrowserProfileDir()`、`server/python/sessionhub/scene/chrome_cdp.py` 的
+`_default_profile_dir()`——任一处改名都会让另外两处指向旧目录，症状是
+「明明登录过却报尚未创建登录资料」。`test/runtimePaths.test.mjs` 有守卫。
 
 ## 媒体工具
 

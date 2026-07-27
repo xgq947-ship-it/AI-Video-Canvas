@@ -11,6 +11,10 @@ import path from 'node:path';
 import { enqueueGoogleFlowWorkflow } from './googleFlowWorkflowQueue.js';
 import { runOpsCli } from './opsCliRunner.js';
 import { fetchWorkflowMedia } from '../utils/workflowMedia.js';
+import { runWithExecutionMode } from './webhttp/index.js';
+import { generateFlowVideoHttp } from './webhttp/flow/provider.js';
+import { resolveProtocolModelId } from './webhttp/registry.js';
+import { FLOW_BASELINE_VIDEO_MODEL } from './webhttp/flow/protocol.js';
 
 export const GOOGLE_FLOW_WORKFLOW_MODEL_ID = 'google-flow-omni-flash';
 export const GOOGLE_FLOW_VEO_3_1_LITE_WORKFLOW_MODEL_ID = 'google-flow-veo-3-1-lite';
@@ -209,8 +213,17 @@ export function buildGoogleFlowWorkflowArgs({
 }
 
 export function generateGoogleFlowWorkflowVideo(options) {
-    return enqueueGoogleFlowWorkflow(
-        () => executeGoogleFlowWorkflow(options),
-        { label: 'Google Flow 视频生成', signal: options?.signal }
-    );
+    return runWithExecutionMode({
+        mode: options?.executionMode,
+        provider: 'google-flow',
+        label: 'Google Flow 视频生成',
+        http: () => generateFlowVideoHttp({
+            ...options,
+            modelId: resolveProtocolModelId(options?.modelId, FLOW_BASELINE_VIDEO_MODEL)
+        }),
+        browser: () => enqueueGoogleFlowWorkflow(
+            () => executeGoogleFlowWorkflow(options),
+            { label: 'Google Flow 视频生成', signal: options?.signal }
+        )
+    });
 }

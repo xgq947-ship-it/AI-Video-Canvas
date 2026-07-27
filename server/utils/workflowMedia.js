@@ -18,12 +18,18 @@ export async function fetchWorkflowMedia(
         expectedType,
         recoveryHint,
         timeoutMs = DEFAULT_WORKFLOW_MEDIA_TIMEOUT_MS,
+        // Result CDNs behind a login (Flow's media.getMediaUrlRedirect needs the
+        // Labs NextAuth cookie) accept the same request as the browser once the
+        // caller supplies the headers. Never logged — see redactSecrets.
+        headers,
         fetchImpl = fetch
     }
 ) {
     let response;
     try {
         response = await fetchImpl(url, {
+            headers: headers || undefined,
+            redirect: 'follow',
             signal: AbortSignal.timeout(timeoutMs)
         });
     } catch (error) {

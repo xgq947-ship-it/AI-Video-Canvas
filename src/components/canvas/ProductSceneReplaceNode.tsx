@@ -5,7 +5,7 @@ import { NodeConnectors } from './NodeConnectors';
 import { validateProductDimensions } from '../../../shared/productSceneReplacement.js';
 import { MASSAGE_EQUIPMENT_SECTIONS } from '../../../shared/massageEquipmentCategories.js';
 import {
-  IMAGE_GENERATION_PROVIDERS,
+  listImageGenerationProviders,
   getImageGenerationProvider,
   getVideoGenerationProvider,
   normalizeImageAspectRatio,
@@ -307,7 +307,7 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
               }}
               className={`min-w-0 rounded-xl border px-3 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}
             >
-              {IMAGE_GENERATION_PROVIDERS.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+              {listImageGenerationProviders().map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
             </select>
             <select
               aria-label="输出比例"

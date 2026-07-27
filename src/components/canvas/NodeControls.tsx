@@ -6,10 +6,11 @@
  * For Video nodes: includes Advanced Settings for frame-to-frame mode.
  */
 
-import React, { useState, useRef, useEffect, memo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, memo } from 'react';
 import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Images, Film, Clock, Expand, Shrink, Monitor, Crop, HardDrive, Upload, Loader2, Mic2, ScanSearch } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { useBrowserModels } from '../../hooks/useBrowserModels';
+import { useGenerationModelRegistry } from '../../hooks/useGenerationModelRegistry';
 import { useCodexService } from '../../hooks/useCodexService';
 import { ChangeAnglePanel } from './ChangeAnglePanel';
 import type { NodeReference } from '../../utils/nodeReferences.js';
@@ -24,8 +25,8 @@ import {
 import { shouldUseReferenceImages, usesReferenceMaterialsOnly } from '../../utils/videoModelCapabilities.js';
 import { buildReverseImagePromptInstruction, type ReverseImagePromptMode } from '../../../shared/reverseImagePrompt.js';
 import {
-    IMAGE_GENERATION_PROVIDERS,
-    VIDEO_GENERATION_PROVIDERS,
+    listImageGenerationProviders,
+    listVideoGenerationProviders,
     supportedImageOutputCounts,
     type VideoGenerationProvider,
 } from '../../../shared/generationProviders.js';
@@ -76,7 +77,9 @@ type VideoModelOption = VideoGenerationProvider & {
     durationResolutionMap?: Record<number, string[]>;
 };
 
-const VIDEO_MODELS: VideoModelOption[] = VIDEO_GENERATION_PROVIDERS.map(model => ({
+// 运行时发现的能力要能生效，所以这两份列表按 registry revision 重新计算，
+// 而不是在模块加载时算一次就固定下来。
+const buildVideoModels = (): VideoModelOption[] => listVideoGenerationProviders().map(model => ({
     ...model,
     supportsMultiImage: model.supportsMultipleReferenceImages,
     supportsIngredients: model.supportsMultipleReferenceImages,
@@ -89,7 +92,7 @@ const VIDEO_MODELS: VideoModelOption[] = VIDEO_GENERATION_PROVIDERS.map(model =>
 // supportsImageToImage: Can use a single reference image (for image-to-image transformation)
 // supportsMultiImage: Can use multiple reference images (2-4) via Multi-Image API
 // aspectRatios: Supported aspect ratios for the model
-const IMAGE_MODELS = IMAGE_GENERATION_PROVIDERS.map(model => ({
+const buildImageModels = () => listImageGenerationProviders().map(model => ({
     ...model,
     supportsMultiImage: model.supportsMultipleReferenceImages,
     aspectRatios: model.supportedAspectRatios,
@@ -331,6 +334,11 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
 
         onUpdate(data.id, { frameInputs: updatedFrameInputs });
     };
+
+    // 运行时模型注册表更新后（登录成功 / 手动刷新），下拉选项与参数区跟着重算。
+    const { revision: modelRegistryRevision } = useGenerationModelRegistry();
+    const IMAGE_MODELS = useMemo(buildImageModels, [modelRegistryRevision]);
+    const VIDEO_MODELS = useMemo(buildVideoModels, [modelRegistryRevision]);
 
     const currentSizeLabel = (data.type === NodeType.VIDEO)
         ? (data.resolution || "Auto")

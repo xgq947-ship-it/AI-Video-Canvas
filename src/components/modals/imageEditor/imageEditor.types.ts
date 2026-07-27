@@ -3,7 +3,7 @@
  * 
  * Shared types and constants for the Image Editor modal.
  */
-import { IMAGE_GENERATION_PROVIDERS } from '../../../../shared/generationProviders.js';
+import { listImageGenerationProviders } from '../../../../shared/generationProviders.js';
 
 // ============================================================================
 // TYPES
@@ -104,7 +104,7 @@ export interface ImageModel {
  * Available image generation models
  * Browser workflow models support reference images through Google Flow or 即梦.
  */
-export const IMAGE_MODELS: ImageModel[] = IMAGE_GENERATION_PROVIDERS.map(model => ({
+export const IMAGE_MODELS: ImageModel[] = listImageGenerationProviders().map(model => ({
     id: model.id,
     name: model.name,
     provider: model.provider,

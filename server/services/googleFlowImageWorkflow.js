@@ -11,6 +11,10 @@ import path from 'node:path';
 import { runOpsCli } from './opsCliRunner.js';
 import { enqueueGoogleFlowWorkflow } from './googleFlowWorkflowQueue.js';
 import { fetchWorkflowMedia } from '../utils/workflowMedia.js';
+import { runWithExecutionMode } from './webhttp/index.js';
+import { generateFlowImageHttp } from './webhttp/flow/provider.js';
+import { resolveProtocolModelId } from './webhttp/registry.js';
+import { FLOW_BASELINE_IMAGE_MODEL } from './webhttp/flow/protocol.js';
 
 export const GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID = 'google-flow-nano-banana-2';
 // 画布模型 id → Ops-Cli text_to_image --model 值（Flow Image 模式下拉里的模型名）。
@@ -272,8 +276,18 @@ async function executeGoogleFlowImageWorkflow({
 }
 
 export function generateGoogleFlowWorkflowImage(options) {
-    return enqueueGoogleFlowWorkflow(
-        () => executeGoogleFlowImageWorkflow(options),
-        { label: 'Google Flow 图片生成', signal: options?.signal }
-    );
+    return runWithExecutionMode({
+        mode: options?.executionMode,
+        provider: 'google-flow',
+        label: 'Google Flow 图片生成',
+        http: () => generateFlowImageHttp({
+            ...options,
+            // 画布模型 id → Flow 协议 imageModelName；未知 id 退回已验证样本。
+            modelId: resolveProtocolModelId(options?.modelId, FLOW_BASELINE_IMAGE_MODEL)
+        }),
+        browser: () => enqueueGoogleFlowWorkflow(
+            () => executeGoogleFlowImageWorkflow(options),
+            { label: 'Google Flow 图片生成', signal: options?.signal }
+        )
+    });
 }

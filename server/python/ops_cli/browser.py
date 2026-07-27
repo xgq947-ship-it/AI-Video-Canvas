@@ -17,6 +17,12 @@ from ops_cli.config import get_config
 
 MANAGED_WINDOW_PREFIX = "ops-cli:"
 KEEPALIVE_WINDOW_NAME = f"{MANAGED_WINDOW_PREFIX}keepalive"
+# HTTP 通道的常驻页（见 ops_cli/webhttp.py）。它和普通任务页不同：没有"任务结束"
+# 这个时刻，寿命跨越多次请求，所以不能按 managed 残留的时间戳规则回收。
+# 名字里没有时间戳段，_managed_marker_timestamp 会返回 None，而 None 一律判定为
+# 陈旧 —— 不豁免的话，任意一次浏览器任务或 browser cleanup 都会把正在发请求的
+# 桥接页直接关掉。
+WEBHTTP_WINDOW_PREFIX = f"{MANAGED_WINDOW_PREFIX}webhttp:"
 # 正常任务会在 finally 立即关闭自己的页面。这里只兜底清理由异常崩溃留下的旧 marker；
 # 设为两小时，避免用户在另一个 10~30 分钟生成任务进行中打开登录页时误关活跃任务。
 MANAGED_RESIDUE_MIN_AGE_SECONDS = 2 * 60 * 60
@@ -29,215 +35,6 @@ LOGIN_URLS = {
     "jimeng": "https://jimeng.jianying.com/ai-tool/generate?type=video",
     "gemini-web": "https://gemini.google.com/app",
 }
-
-LOGIN_PROBE_TIMEOUT_SECONDS = 25
-
-
-def _visible(locator: Any) -> bool:
-    try:
-        return any(locator.nth(index).is_visible() for index in range(locator.count()))
-    except Exception:
-        return False
-
-
-# Google 账号登录态探针地址。
-#
-# 为什么不用 labs.google/fx/tools/flow 判断登录：实测该地址是**公开营销落地页**
-# （Overview / Models / Pricing / "Create with Google Flow"），对已登录和未登录用户
-# 渲染的 DOM 完全相同 —— 原来找的 editor / account / sign-in 三个选择器一个都不命中，
-# 探针只能空等到 25 秒超时后报「未发现足够的登录证据」。这正是「Flow 检查不出来」的根因。
-# Slate 编辑器只存在于 /fx/tools/flow/project/<id> 应用页，首页上永远没有。
-#
-# myaccount.google.com 的重定向行为则是稳定信号：未登录必定被重定向离开该域名。
-GOOGLE_ACCOUNT_PROBE_URL = "https://myaccount.google.com/"
-_GOOGLE_SIGNED_OUT_HOSTS = {"accounts.google.com", "www.google.com", "google.com"}
-
-
-def _probe_flow_login(page: Any) -> dict[str, Any]:
-    """只读确认 Google 账号登录态（Flow 的前提），按重定向判定。"""
-    return probe_google_account_login(page)
-
-
-def probe_google_account_login(page: Any) -> dict[str, Any]:
-    """按 myaccount.google.com 的重定向判定 Google 账号登录态。
-
-    Flow 与 Gemini 都没有独立于 Google 账号的授权步骤，登录态判定共用这一个信号：
-    未登录必定被重定向离开 myaccount.google.com。只有探针超时才会返回 unconfirmed，
-    页面 DOM 的形状永远不参与判定。
-    """
-    page.goto(GOOGLE_ACCOUNT_PROBE_URL, wait_until="domcontentloaded", timeout=60_000)
-    deadline = time.monotonic() + LOGIN_PROBE_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        host = (urlparse(str(getattr(page, "url", "") or "")).hostname or "").lower()
-        if host == "myaccount.google.com":
-            return {
-                "authenticated": True,
-                "reason": "authenticated",
-                "evidence": "google-account-page",
-                "message": "已确认 Google 账号登录",
-            }
-        if host in _GOOGLE_SIGNED_OUT_HOSTS:
-            return {
-                "authenticated": False,
-                "reason": "not-authenticated",
-                "evidence": "redirected-to-signin",
-                "message": "Google 账号当前未登录，请在 Evan 专属 Chrome 中登录",
-            }
-        page.wait_for_timeout(500)
-    return {
-        "authenticated": False,
-        "reason": "unconfirmed",
-        "evidence": "no-auth-evidence",
-        "message": "无法确认 Google 账号登录状态",
-    }
-
-
-def _probe_jimeng_login(page: Any) -> dict[str, Any]:
-    """用即梦官方账号接口只读确认登录，游客编辑器不能作为成功证据。"""
-    from ops_cli.platforms.image_to_video.providers.jimeng import (  # type: ignore
-        _account_login_state,
-    )
-
-    page.goto(LOGIN_URLS["jimeng"], wait_until="domcontentloaded", timeout=60_000)
-    account_state = _account_login_state(page)
-    if account_state is True:
-        return {
-            "authenticated": True,
-            "reason": "authenticated",
-            "evidence": "account-api-user-id",
-            "message": "已通过即梦账号接口确认登录",
-        }
-    if account_state is False:
-        return {
-            "authenticated": False,
-            "reason": "not-authenticated",
-            "evidence": "account-api-guest",
-            "message": "即梦账号接口确认当前未登录",
-        }
-    return {
-        "authenticated": False,
-        "reason": "unconfirmed",
-        "evidence": "account-api-unconfirmed",
-        "message": "即梦账号接口暂时无法确认登录状态",
-    }
-
-
-def _probe_gemini_login(page: Any) -> dict[str, Any]:
-    from ops_cli.platforms._gemini_web_common import probe_gemini_login
-
-    return probe_gemini_login(page)
-
-
-def check_browser_logins(providers: list[str] | None = None) -> CommandResponse:
-    """关闭登录窗口并用同一 Profile 无头做真实页面只读探针。"""
-    selected = providers or list(LOGIN_URLS)
-    invalid = [provider for provider in selected if provider not in LOGIN_URLS]
-    if invalid:
-        return CommandResponse(
-            success=False,
-            platform="browser",
-            command="check-login",
-            data={"error": f"不支持的浏览器登录平台：{', '.join(invalid)}"},
-        )
-
-    sessionhub_root = Path(get_config().sessionhub_root).expanduser().resolve()
-    if str(sessionhub_root) not in sys.path:
-        sys.path.insert(0, str(sessionhub_root))
-    from scene.chrome_cdp import (  # type: ignore
-        CDP_PORT,
-        PROFILE_DIR,
-        _instance_is_headless,
-        _instance_pid,
-        _instance_supports_playwright,
-        start_chrome,
-        stop_chrome,
-    )
-
-    if not PROFILE_DIR.exists():
-        results = {
-            provider: {
-                "authenticated": False,
-                "reason": "not-authenticated",
-                "evidence": "profile-missing",
-                "message": "尚未创建 Evan 专属 Chrome 登录资料",
-            }
-            for provider in selected
-        }
-        return CommandResponse(
-            success=True,
-            platform="browser",
-            command="check-login",
-            data={"providers": results},
-        )
-
-    # 只在**必要时**重启浏览器。
-    #
-    # 这里原来无条件 stop_chrome()，而 start_chrome 本身就有复用分支 ——
-    # 等于每次检查都主动摧毁复用，付一次完整冷启动（SIGTERM 等待 ≤5s +
-    # Chrome 启动 + _wait_cdp_stable ≤25s），这是「检查登录态很久」的主因。
-    #
-    # 但不能直接删：可见登录实例没有 CDP，且用户刚登录完的 Cookie 要等它优雅退出
-    # 才落盘。跳过 stop 会读到还没写盘的状态，报出「刚登录成功却显示未登录」。
-    # 所以按实例种类判断：已经是无头 + 可被 Playwright 接管的实例才直接复用。
-    pid = _instance_pid()
-    reusable = (
-        pid is not None
-        and _instance_is_headless(pid)
-        and _instance_supports_playwright(pid)
-    )
-    if not reusable:
-        stop_chrome()
-    ok, message = start_chrome(headless=True)
-    if not ok:
-        return CommandResponse(
-            success=False,
-            platform="browser",
-            command="check-login",
-            data={"error": message, "error_code": "BROWSER_CLOSED"},
-        )
-
-    def _check(context: Any) -> dict[str, Any]:
-        cleanup_playwright_context(context)
-        results: dict[str, Any] = {}
-        for provider in selected:
-            page = context.new_page()
-            try:
-                if provider == "google-flow":
-                    results[provider] = _probe_flow_login(page)
-                elif provider == "jimeng":
-                    results[provider] = _probe_jimeng_login(page)
-                else:
-                    results[provider] = _probe_gemini_login(page)
-            except Exception as exc:
-                results[provider] = {
-                    "authenticated": False,
-                    "reason": "unconfirmed",
-                    "evidence": "probe-error",
-                    "message": f"登录探针执行失败：{exc}",
-                }
-            finally:
-                try:
-                    page.close()
-                except Exception:
-                    pass
-        ensure_keepalive_page(context)
-        return results
-
-    try:
-        results = _with_cdp_context(CDP_PORT, _check)
-    except Exception as exc:
-        return CommandResponse(
-            success=False,
-            platform="browser",
-            command="check-login",
-            data={"error": str(exc), "error_code": "BROWSER_CLOSED"},
-        )
-    return CommandResponse(
-        success=True,
-        platform="browser",
-        command="check-login",
-        data={"providers": results},
-    )
 
 
 def browser_status() -> CommandResponse:
@@ -505,6 +302,14 @@ def build_tab_cleanup_plan(
                 keep.append(item)
             else:
                 close.append({**item, "reason": "extra_blank"})
+            continue
+
+        if window_name.startswith(WEBHTTP_WINDOW_PREFIX):
+            # 常驻桥接页：始终保留，并占住它所在业务域名的去重位，
+            # 这样重复的普通标签页仍会被清掉，被关的不会是它。
+            keep.append(item)
+            if dedup_key is not None:
+                seen_dedup_keys.add(dedup_key)
             continue
 
         if window_name.startswith(MANAGED_WINDOW_PREFIX):

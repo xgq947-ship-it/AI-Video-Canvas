@@ -25,8 +25,28 @@ import {
     isGeminiWebVideoModel
 } from '../services/geminiWebWorkflow.js';
 import { getVideoGenerationProvider } from '../../shared/generationProviders.js';
+import { resolveWebExecutionMode } from '../services/webhttp/index.js';
 
 const router = express.Router();
+
+/**
+ * 画布模型 id → Web HTTP provider id。
+ *
+ * 只用于查执行模式（auto / http / browser），协议模型 id 的映射在
+ * services/webhttp/registry.js 里，两者刻意分开。
+ */
+function webProviderForModel(modelId) {
+    const id = String(modelId || '');
+    if (id.startsWith('gemini-web-')) return 'gemini-web';
+    if (id.startsWith('jimeng-')) return 'jimeng';
+    if (id.startsWith('google-flow-')) return 'google-flow';
+    return null;
+}
+
+function executionModeFor(app, modelId) {
+    const provider = webProviderForModel(modelId);
+    return provider ? resolveWebExecutionMode(app, provider) : undefined;
+}
 
 const productSceneContext = appLocals => ({
     dirs: {
@@ -167,7 +187,8 @@ router.post('/generate-image', async (req, res) => {
                 libraryDir: LIBRARY_DIR,
                 timeoutMinutes: 10,
                 modelId: imageModel,
-                count: requestedCount
+                count: requestedCount,
+                executionMode: executionModeFor(req.app, imageModel)
             });
             workflowImages = result.images;
         } else if (isOpenAIModel) {
@@ -314,7 +335,8 @@ router.post('/generate-video', async (req, res) => {
                 libraryDir: LIBRARY_DIR,
                 timeoutMinutes: 15,
                 cameraMovement: req.body.cameraMovement || '',
-                nativeAudio: req.body.generateAudio !== false
+                nativeAudio: req.body.generateAudio !== false,
+                executionMode: executionModeFor(req.app, videoModel)
             });
             videoBuffer = workflowResult.buffer;
             videoExtension = workflowResult.extension;
@@ -341,7 +363,8 @@ router.post('/generate-video', async (req, res) => {
                 duration: duration || 4,
                 modelId: videoModel,
                 libraryDir: LIBRARY_DIR,
-                timeoutMinutes: 15
+                timeoutMinutes: 15,
+                executionMode: executionModeFor(req.app, videoModel)
             });
             videoBuffer = workflowResult.buffer;
             videoExtension = workflowResult.extension;
@@ -371,11 +394,14 @@ router.post('/generate-video', async (req, res) => {
                 referenceImageInputs: jimengReferenceInputs,
                 referenceLabels: jimengReferenceLabels,
                 model: resolveJimengModelLabel(videoModel),
+                // 浏览器路径按下拉文案匹配，HTTP 路径需要画布 id 去查 model_req_key。
+                videoModelId: videoModel,
                 aspectRatio: aspectRatio || '16:9',
                 duration: duration || 5,
                 resolution: resolution || '720P',
                 libraryDir: LIBRARY_DIR,
-                timeoutMinutes: 15
+                timeoutMinutes: 15,
+                executionMode: executionModeFor(req.app, videoModel)
             });
             videoBuffer = workflowResult.buffer;
             videoExtension = workflowResult.extension;

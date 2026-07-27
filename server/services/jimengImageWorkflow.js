@@ -13,6 +13,10 @@ import {
     loadBrowserImageResults,
     resolveBrowserReferenceImages
 } from './googleFlowImageWorkflow.js';
+import { runWithExecutionMode } from './webhttp/index.js';
+import { generateJimengImageHttp } from './webhttp/jimeng/provider.js';
+import { resolveProtocolModelId } from './webhttp/registry.js';
+import { JIMENG_BASELINE_IMAGE_MODEL } from './webhttp/jimeng/protocol.js';
 
 export const JIMENG_IMAGE_PRO_MODEL_ID = 'jimeng-image-5-0-pro';
 export const JIMENG_IMAGE_LITE_MODEL_ID = 'jimeng-image-5-0-lite';
@@ -143,8 +147,17 @@ async function executeJimengImageWorkflow({
 }
 
 export function generateJimengWorkflowImage(options) {
-    return enqueueBrowserWorkflow(
-        () => executeJimengImageWorkflow(options),
-        { label: '即梦图片生成', signal: options?.signal }
-    );
+    return runWithExecutionMode({
+        mode: options?.executionMode,
+        provider: 'jimeng',
+        label: '即梦图片生成',
+        http: () => generateJimengImageHttp({
+            ...options,
+            modelId: resolveProtocolModelId(options?.modelId, JIMENG_BASELINE_IMAGE_MODEL)
+        }),
+        browser: () => enqueueBrowserWorkflow(
+            () => executeJimengImageWorkflow(options),
+            { label: '即梦图片生成', signal: options?.signal }
+        )
+    });
 }

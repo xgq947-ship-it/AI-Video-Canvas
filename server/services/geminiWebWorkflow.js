@@ -5,6 +5,12 @@ import path from 'path';
 import { runOpsCli } from './opsCliRunner.js';
 import { enqueueBrowserWorkflow } from './googleFlowWorkflowQueue.js';
 import { loadBrowserImageResults, resolveBrowserReferenceImages } from './googleFlowImageWorkflow.js';
+import { runWithExecutionMode } from './webhttp/index.js';
+import {
+    generateGeminiImageHttp,
+    generateGeminiVideoHttp,
+    runGeminiTextTaskHttp
+} from './webhttp/gemini/provider.js';
 
 export const GEMINI_WEB_IMAGE_MODEL_ID = 'gemini-web-image';
 export const GEMINI_WEB_VIDEO_MODEL_ID = 'gemini-web-video';
@@ -85,14 +91,34 @@ async function executeVideo({ prompt, referenceImageInputs = [], aspectRatio = '
   } finally { cleanupTaskDir(taskDir); }
 }
 
-export const generateGeminiWebImage = options => enqueueBrowserWorkflow(
-  () => executeImage(options),
-  { label: 'Gemini Web 图片生成', signal: options?.signal }
-);
-export const generateGeminiWebVideo = options => enqueueBrowserWorkflow(
-  () => executeVideo(options),
-  { label: 'Gemini Web 视频生成', signal: options?.signal }
-);
+/**
+ * HTTP 主通道 + Browser 兜底。
+ *
+ * HTTP 路径刻意**不**整体进入 `enqueueBrowserWorkflow`：它只在发请求的瞬间借用
+ * 那一个 Chrome（由 bridge 内部按 provider 串行），轮询与下载都在 Node 里跑。
+ * 浏览器兜底路径仍然完整入队，行为与改造前一致。
+ */
+export const generateGeminiWebImage = options => runWithExecutionMode({
+  mode: options?.executionMode,
+  provider: 'gemini-web',
+  label: 'Gemini Web 图片生成',
+  http: () => generateGeminiImageHttp(options),
+  browser: () => enqueueBrowserWorkflow(
+    () => executeImage(options),
+    { label: 'Gemini Web 图片生成', signal: options?.signal }
+  )
+});
+
+export const generateGeminiWebVideo = options => runWithExecutionMode({
+  mode: options?.executionMode,
+  provider: 'gemini-web',
+  label: 'Gemini Web 视频生成',
+  http: () => generateGeminiVideoHttp(options),
+  browser: () => enqueueBrowserWorkflow(
+    () => executeVideo(options),
+    { label: 'Gemini Web 视频生成', signal: options?.signal }
+  )
+});
 
 /**
  * 识图 / 提示词优化同样在驱动那一个 Evan 专属 Chrome，必须和生成走同一条串行队列。
@@ -104,11 +130,17 @@ export const generateGeminiWebVideo = options => enqueueBrowserWorkflow(
  * 调用方（optimize-prompt、reverse-image-prompt、产品短视频识图）都不在队列任务内部，
  * 因此这里入队不会产生嵌套死锁。
  */
-export const runGeminiWebTextTask = options =>
-  enqueueBrowserWorkflow(
+export const runGeminiWebTextTask = options => runWithExecutionMode({
+  mode: options?.executionMode,
+  provider: 'gemini-web',
+  label: 'Gemini Web 识图',
+  // HTTP 返回 { text, conversation }；旧调用方只要字符串，这里保持原契约。
+  http: async () => (await runGeminiTextTaskHttp(options)).text,
+  browser: () => enqueueBrowserWorkflow(
     () => executeTextTask(options),
     { label: 'Gemini Web 识图', signal: options?.signal }
-  );
+  )
+});
 
 async function executeTextTask({ prompt, referenceImageInputs = [], libraryDir, timeoutMinutes = 5, signal }) {
   const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-gemini-web-text-'));

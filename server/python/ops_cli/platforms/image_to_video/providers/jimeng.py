@@ -35,10 +35,8 @@ from ops_cli.platforms._google_flow_common import (
 JIMENG_SCENE = "jimeng/video_generate"
 DEFAULT_GENERATE_URL = "https://jimeng.jianying.com/ai-tool/generate?type=video"
 JIMENG_HOST = "jimeng.jianying.com"
-JIMENG_ACCOUNT_INFO_PATH = (
-    "/passport/account/info/v2/"
-    "?aid=513695&account_sdk_source=web&sdk_version=2.2.6"
-)
+# 登录态主检测地址（协议文档第 3 节）：只读 HTML bootstrap，无需任何动态签名。
+JIMENG_LOGIN_PROBE_URL = "https://jimeng.jianying.com/ai-tool/generate"
 
 # 默认走 VIP 通道：非 VIP 通道高峰期排队可到数小时，自动化任务几乎必然撞 timeout。
 # 想省积分可显式传 --model "即梦 Seedance 2.0" 并调大 --timeout-minutes。
@@ -260,33 +258,45 @@ def _raise_auth_required(message: str) -> None:
 
 
 def _account_login_state(page: Any) -> bool | None:
-    """通过即梦自己的只读账号接口确认登录态，不返回或持久化账号内容。
+    """按 HTTP 登录态判定：拉 /ai-tool/generate 的原始 HTML，读 window.__isLogined。
 
-    True 只代表接口返回了非空 user_id；明确的游客响应返回 False；网络或结构变化返回
-    None，由调用方显示“无法确认”，绝不把编辑器可见当成登录成功。
+    这是协议文档指定的主判断，也是最省的一个：不需要 sign / a_bogus /
+    x-secsdk-web-signature，不消耗积分，不创建 Workspace，不产生任何生成任务。
+
+    刻意读**原始文档**而不是 hydrate 之后的页面：应用启动后可能重新赋值或删掉这个
+    全局变量，届时读到的就不是服务端下发的真实登录态。
+
+    True = __isLogined 为 true；False = 明确的 false；None = 没找到标志或请求失败，
+    由调用方显示"无法确认"，绝不把编辑器可见当成登录成功。
+
+    注意两个已知的误判来源，都不能用：
+    - 未登录页面同样包含 sec_uid 字符串（在模型配置里）；
+    - get_account_info 的 ret=0 只代表接口通了，不带任何身份信息。
     """
     try:
         result = page.evaluate(
             """async (url) => {
                 const response = await fetch(url, { credentials: 'include' });
-                const payload = await response.json();
+                const html = await response.text();
+                const match = html.match(/window\\.__isLogined\\s*=\\s*(true|false)/);
                 return {
                     httpStatus: response.status,
-                    message: payload?.message || '',
-                    errorCode: payload?.data?.error_code ?? null,
-                    hasUserId: Boolean(payload?.data?.user_id)
+                    flag: match ? match[1] : '',
+                    hasUserInfo: html.indexOf('__userInfoStringify') >= 0
                 };
             }""",
-            JIMENG_ACCOUNT_INFO_PATH,
+            JIMENG_LOGIN_PROBE_URL,
         )
     except Exception:
         return None
     if not isinstance(result, dict) or int(result.get("httpStatus") or 0) != 200:
         return None
-    if result.get("hasUserId") is True:
-        return True
-    if result.get("errorCode") == 13 or str(result.get("message") or "").lower() == "error":
+    flag = str(result.get("flag") or "")
+    if flag == "false":
         return False
+    if flag == "true":
+        # __isLogined 为真但用户信息 bootstrap 缺失时不下定论，交给调用方二次确认。
+        return True if result.get("hasUserInfo") else None
     return None
 
 

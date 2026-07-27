@@ -13,6 +13,21 @@ import {
     saveOptimizerPreference
 } from '../services/optimizerPreference.js';
 import { browserSessionState } from '../services/browserSessionState.js';
+import {
+    applyWebExecutionPreferenceToApp,
+    describeWebExecutionSettings,
+    loadWebExecutionPreference,
+    saveWebExecutionPreference,
+    WEB_HTTP_PROVIDER_IDS,
+    WEB_HTTP_PROVIDER_LABELS
+} from '../services/webhttp/index.js';
+import { getModelRegistry, invalidateModelRegistryCache } from '../services/webhttp/registry.js';
+import {
+    checkAllWebAuthStatus,
+    describeAuthStatus,
+    persistAuthStatus,
+    toBrowserSessionState
+} from '../services/webhttp/auth.js';
 
 const router = express.Router();
 
@@ -90,6 +105,85 @@ router.post('/optimizer', (req, res) => {
     } catch (error) {
         console.error('[优化后端] 保存失败：', error);
         res.status(400).json({ error: error.message || '优化后端保存失败' });
+    }
+});
+
+// —— Web Provider 执行模式（auto / http / browser）——
+router.get('/web-execution', (req, res) => {
+    res.json(describeWebExecutionSettings(req.app));
+});
+
+router.post('/web-execution', (req, res) => {
+    try {
+        const libraryDir = req.app.locals.LIBRARY_DIR;
+        saveWebExecutionPreference(libraryDir, {
+            provider: req.body?.provider,
+            mode: req.body?.mode
+        });
+        applyWebExecutionPreferenceToApp(req.app, process.env, loadWebExecutionPreference(libraryDir));
+        res.json({ success: true, current: describeWebExecutionSettings(req.app) });
+    } catch (error) {
+        res.status(400).json({ error: error.message || '执行模式保存失败' });
+    }
+});
+
+/**
+ * 三个 Web 平台的登录状态（HTTP-first）。
+ *
+ * 判断只来自平台自己返回的数据：
+ *   Gemini  GET /app                 → WIZ_global_data.S06Grb + SNlM0e
+ *   即梦    GET /ai-tool/generate    → window.__isLogined
+ *   Flow    GET /fx/api/auth/session → user.email + access_token
+ * 不看头像、不看登录按钮、不看任何 selector，也不生成内容、不消耗额度。
+ */
+router.get('/web-sessions', async (req, res) => {
+    const stored = browserSessionState.list();
+    const describe = provider => ({
+        id: provider,
+        label: WEB_HTTP_PROVIDER_LABELS[provider],
+        state: stored[provider]?.state || 'unknown',
+        updatedAt: stored[provider]?.updatedAt || null,
+        message: stored[provider]?.message || ''
+    });
+
+    // 默认只回读已持久化的状态：打开设置页不该顺手唤醒 Chrome。
+    // `?probe=1` 才真的发起 HTTP 检测（对应界面上的「重新检测」）。
+    if (req.query.probe !== '1') {
+        return res.json({ providers: WEB_HTTP_PROVIDER_IDS.map(describe), probed: false });
+    }
+
+    try {
+        const statuses = await checkAllWebAuthStatus({ force: true, providers: WEB_HTTP_PROVIDER_IDS });
+        const providers = statuses.map(status => {
+            persistAuthStatus(browserSessionState, status);
+            return {
+                id: status.provider,
+                label: WEB_HTTP_PROVIDER_LABELS[status.provider],
+                // 六态原样透出给界面；持久化时才收敛到会话状态词表。
+                status: status.status,
+                state: toBrowserSessionState(status.status),
+                source: status.source,
+                checkedAt: status.checkedAt,
+                updatedAt: new Date(status.checkedAt).toISOString(),
+                expiresAt: status.expiresAt || null,
+                // 账号信息只在响应里出现，不落盘。
+                account: status.email || status.name || status.userId || '',
+                message: status.message || describeAuthStatus(status)
+            };
+        });
+        res.json({ providers, probed: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message || '登录状态检测失败' });
+    }
+});
+
+/** 统一模型注册表：图片/视频节点、产品短视频节点与设置页共用这一个数据源。 */
+router.get('/models', async (req, res) => {
+    try {
+        if (req.query.refresh === '1') invalidateModelRegistryCache();
+        res.json(await getModelRegistry({ refresh: req.query.refresh === '1' }));
+    } catch (error) {
+        res.status(500).json({ error: error.message || '读取模型注册表失败' });
     }
 });
 

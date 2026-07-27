@@ -21,6 +21,10 @@ import {
     writeDataUrlImage
 } from './googleFlowWorkflow.js';
 import { fetchWorkflowMedia } from '../utils/workflowMedia.js';
+import { runWithExecutionMode } from './webhttp/index.js';
+import { generateJimengVideoHttp } from './webhttp/jimeng/provider.js';
+import { resolveProtocolModelId } from './webhttp/registry.js';
+import { JIMENG_BASELINE_VIDEO_MODEL } from './webhttp/jimeng/protocol.js';
 
 export const JIMENG_WORKFLOW_MODEL_ID = 'jimeng-seedance-2-0';
 export const JIMENG_FAST_WORKFLOW_MODEL_ID = 'jimeng-seedance-2-0-fast';
@@ -200,8 +204,18 @@ async function executeJimengWorkflow({
 }
 
 export function generateJimengWorkflowVideo(options) {
-    return enqueueBrowserWorkflow(
-        () => executeJimengWorkflow(options),
-        { label: '即梦视频生成', signal: options?.signal }
-    );
+    return runWithExecutionMode({
+        mode: options?.executionMode,
+        provider: 'jimeng',
+        label: '即梦视频生成',
+        http: () => generateJimengVideoHttp({
+            ...options,
+            // 浏览器路径按下拉文案传 model；HTTP 需要 model_req_key。
+            modelId: resolveProtocolModelId(options?.videoModelId, JIMENG_BASELINE_VIDEO_MODEL)
+        }),
+        browser: () => enqueueBrowserWorkflow(
+            () => executeJimengWorkflow(options),
+            { label: '即梦视频生成', signal: options?.signal }
+        )
+    });
 }

@@ -9,7 +9,6 @@ import typer
 
 from ops_cli.browser import (
     check_browser_port,
-    check_browser_logins,
     cleanup_browser_tabs,
     close_browser,
     list_browser_tabs,
@@ -20,6 +19,11 @@ from ops_cli.capabilities import CapabilitySpec, register_capabilities
 from ops_cli.cli_helpers import _execute
 from ops_cli.output import CommandResponse
 from ops_cli.platforms._gemini_web_common import run_text_task
+from ops_cli.webhttp import (
+    DEFAULT_FETCH_TIMEOUT_SECONDS,
+    run_web_context,
+    run_web_fetch,
+)
 
 
 app = typer.Typer(help="Ecommerce operations CLI.", no_args_is_help=True)
@@ -91,19 +95,6 @@ def browser_login(
     )
 
 
-@browser_app.command("check-login")
-def browser_check_login(
-    ctx: typer.Context,
-    provider: list[str] | None = typer.Option(None, "--provider", help="google-flow, jimeng, or gemini-web; repeatable"),
-) -> None:
-    _execute(
-        ctx,
-        command_name="ops browser check-login",
-        params={"providers": provider or []},
-        handler=lambda: check_browser_logins(provider),
-    )
-
-
 @browser_app.command("open")
 def browser_open(ctx: typer.Context) -> None:
     _execute(
@@ -124,15 +115,58 @@ def browser_close(ctx: typer.Context) -> None:
     )
 
 
+@browser_app.command("web-fetch")
+def browser_web_fetch(
+    ctx: typer.Context,
+    provider: str = typer.Option(..., "--provider", help="google-flow, jimeng, or gemini-web"),
+    request_file: str = typer.Option(..., "--request-file", help="JSON file holding the request spec(s)."),
+    response_file: str = typer.Option(..., "--response-file", help="Where to write the raw responses."),
+    timeout_seconds: int = typer.Option(DEFAULT_FETCH_TIMEOUT_SECONDS, "--timeout-seconds"),
+) -> None:
+    """Run HTTP request(s) from inside the logged-in provider page.
+
+    Headers, cookies and bodies travel through the two files only: `params` and
+    the response `data` are written to app.log, so nothing secret may go there.
+    """
+    params = {
+        "provider": provider,
+        "request_file": request_file,
+        "response_file": response_file,
+        "timeout_seconds": timeout_seconds,
+    }
+    _execute(
+        ctx,
+        command_name="ops browser web-fetch",
+        params=params,
+        handler=lambda: run_web_fetch(**params),
+    )
+
+
+@browser_app.command("web-context")
+def browser_web_context(
+    ctx: typer.Context,
+    provider: str = typer.Option(..., "--provider", help="google-flow, jimeng, or gemini-web"),
+    output_file: str = typer.Option(..., "--output-file", help="Where to write the auth/bootstrap context."),
+) -> None:
+    params = {"provider": provider, "output_file": output_file}
+    _execute(
+        ctx,
+        command_name="ops browser web-context",
+        params=params,
+        handler=lambda: run_web_context(**params),
+    )
+
+
 # Register browser capability
 register_capabilities(
     [
         CapabilitySpec(id="browser.check", platform="browser", command="check", recovery_policy="never"),
+        CapabilitySpec(id="browser.web-fetch", platform="browser", command="web-fetch", recovery_policy="never"),
+        CapabilitySpec(id="browser.web-context", platform="browser", command="web-context", recovery_policy="never"),
         CapabilitySpec(id="browser.tabs", platform="browser", command="tabs", recovery_policy="never"),
         CapabilitySpec(id="browser.cleanup", platform="browser", command="cleanup", recovery_policy="never"),
         CapabilitySpec(id="browser.open", platform="browser", command="open", recovery_policy="never"),
         CapabilitySpec(id="browser.login", platform="browser", command="login", recovery_policy="never"),
-        CapabilitySpec(id="browser.check-login", platform="browser", command="check-login", recovery_policy="never"),
         CapabilitySpec(id="browser.close", platform="browser", command="close", recovery_policy="never"),
     ]
 )

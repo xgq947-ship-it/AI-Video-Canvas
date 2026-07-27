@@ -111,8 +111,127 @@ export const VIDEO_GENERATION_PROVIDERS = Object.freeze([
   },
 ]);
 
-export const getImageGenerationProvider = id => IMAGE_GENERATION_PROVIDERS.find(item => item.id === id) || null;
-export const getVideoGenerationProvider = id => VIDEO_GENERATION_PROVIDERS.find(item => item.id === id) || null;
+/**
+ * 运行时发现的能力覆盖层。
+ *
+ * 上面的静态表是**基线**：离线、未登录、模型发现失败时它保证节点不会空掉，也保证
+ * 旧项目文件里的 model id 永远能解析。平台真正开放的能力（新比例、1080p、新时长、
+ * 新的参考图上限）由 /api/settings/models 在运行时叠加上来，这样平台加模型时不需要
+ * 改前端代码。
+ *
+ * 只覆盖 capability 字段，不改 id / provider / browserProvider —— 那三个决定了走哪条
+ * 链路，必须由代码而不是远端数据决定。
+ */
+const capabilityOverlay = new Map();
+/** 平台新增、静态表里还没有的模型。 */
+const discoveredExtras = { image: [], video: [] };
+
+const CAPABILITY_KEYS = new Set([
+  'name', 'maxReferenceImages', 'maxOutputCount', 'supportsMultipleOutputs',
+  'supportsMultipleReferenceImages', 'supportsImageToImage', 'supportsImageToVideo',
+  'supportsTextToVideo', 'supportsNativeAudio', 'resolutions', 'supportedAspectRatios',
+  'supportedDurations'
+]);
+
+function withOverlay(model) {
+  if (!model) return model;
+  const overlay = capabilityOverlay.get(model.id);
+  return overlay ? { ...model, ...overlay } : model;
+}
+
+/**
+ * 把后端注册表（server/services/webhttp/registry.js）的结果叠加进来。
+ *
+ * 未识别的字段一律丢弃，缺失的字段保留基线值：一次残缺的发现结果不能把用户本来
+ * 能用的比例或时长弄没。
+ */
+export function applyDiscoveredModelRegistry(registry) {
+  const models = Array.isArray(registry?.models) ? registry.models : [];
+  const byCanvasId = new Map(
+    [...IMAGE_GENERATION_PROVIDERS, ...VIDEO_GENERATION_PROVIDERS].map(model => [model.id, model])
+  );
+
+  for (const model of models) {
+    const overlay = {};
+    if (model.displayName) overlay.name = model.displayName;
+    if (Array.isArray(model.aspectRatios) && model.aspectRatios.length) {
+      overlay.supportedAspectRatios = model.aspectRatios;
+    }
+    if (Array.isArray(model.resolutions) && model.resolutions.length) overlay.resolutions = model.resolutions;
+    if (Array.isArray(model.durations) && model.durations.length) overlay.supportedDurations = model.durations;
+    if (Number(model.maxReferenceImages) > 0) {
+      overlay.maxReferenceImages = Number(model.maxReferenceImages);
+      overlay.supportsMultipleReferenceImages = Number(model.maxReferenceImages) > 1;
+    }
+    if (Number(model.maxBatchCount) > 0) {
+      overlay.maxOutputCount = Number(model.maxBatchCount);
+      overlay.supportsMultipleOutputs = Number(model.maxBatchCount) > 1;
+    }
+    if (typeof model.supportsAudio === 'boolean') overlay.supportsNativeAudio = model.supportsAudio;
+    if (Array.isArray(model.inputModes)) {
+      if (model.type === 'video') {
+        overlay.supportsImageToVideo = model.inputModes.some(mode =>
+          ['image-to-video', 'first-frame', 'reference-image', 'unified-edit', 'multi-reference'].includes(mode));
+        overlay.supportsTextToVideo = model.inputModes.includes('text');
+      } else {
+        overlay.supportsImageToImage = model.inputModes.some(mode =>
+          ['reference-image', 'multi-reference', 'unified-edit'].includes(mode));
+      }
+    }
+
+    const filtered = Object.fromEntries(
+      Object.entries(overlay).filter(([key, value]) => CAPABILITY_KEYS.has(key) && value !== undefined)
+    );
+
+    if (byCanvasId.has(model.id)) {
+      capabilityOverlay.set(model.id, filtered);
+      continue;
+    }
+    // 平台新模型：登记为可选项，链路按 provider 决定。
+    const bucket = model.type === 'video' ? discoveredExtras.video : discoveredExtras.image;
+    if (bucket.some(item => item.id === model.id)) continue;
+    const base = model.type === 'video'
+      ? {
+        id: model.id, name: model.displayName || model.id, provider: 'workflow',
+        browserProvider: model.provider, supportsTextToVideo: true, supportsImageToVideo: true,
+        supportsMultipleReferenceImages: true, maxReferenceImages: 12, supportsNativeAudio: true,
+        supportsExtend: false, supportedDurations: [5], resolutions: ['自动'], supportedAspectRatios: ['16:9', '9:16']
+      }
+      : {
+        id: model.id, name: model.displayName || model.id, provider: 'workflow',
+        browserProvider: model.provider, supportsImageToImage: true, supportsMultipleReferenceImages: true,
+        maxReferenceImages: 12, supportsMultipleOutputs: true, maxOutputCount: 4,
+        resolutions: ['自动'], supportedAspectRatios: ['1:1', '16:9', '9:16']
+      };
+    bucket.push({ ...base, ...filtered, discovered: true });
+  }
+}
+
+/** 测试与「刷新模型」用：回到纯基线状态。 */
+export function resetDiscoveredModelRegistry() {
+  capabilityOverlay.clear();
+  discoveredExtras.image.length = 0;
+  discoveredExtras.video.length = 0;
+}
+
+/** 节点下拉的完整可选项：基线（已叠加能力）+ 运行时新发现的模型。 */
+export function listImageGenerationProviders() {
+  return [...IMAGE_GENERATION_PROVIDERS.map(withOverlay), ...discoveredExtras.image];
+}
+
+export function listVideoGenerationProviders() {
+  return [...VIDEO_GENERATION_PROVIDERS.map(withOverlay), ...discoveredExtras.video];
+}
+
+export const getImageGenerationProvider = id =>
+  withOverlay(IMAGE_GENERATION_PROVIDERS.find(item => item.id === id))
+  || discoveredExtras.image.find(item => item.id === id)
+  || null;
+
+export const getVideoGenerationProvider = id =>
+  withOverlay(VIDEO_GENERATION_PROVIDERS.find(item => item.id === id))
+  || discoveredExtras.video.find(item => item.id === id)
+  || null;
 
 export function clampImageOutputCount(modelId, requestedCount) {
   const provider = getImageGenerationProvider(modelId);
@@ -140,7 +259,7 @@ export function normalizeImageAspectRatio(modelId, value) {
 }
 
 export function normalizeVideoParameters(modelId, { aspectRatio, duration } = {}) {
-  const provider = getVideoGenerationProvider(modelId) || VIDEO_GENERATION_PROVIDERS[0];
+  const provider = getVideoGenerationProvider(modelId) || listVideoGenerationProviders()[0];
   const ratios = provider.supportedAspectRatios || [];
   const durations = provider.supportedDurations || [];
   return {
@@ -167,7 +286,7 @@ export function normalizeVideoParameters(modelId, { aspectRatio, duration } = {}
  * 一个都没有时返回 null，由调用方明确拒绝，不做静默裁切。
  */
 export function resolveVideoModelForAspectRatio(aspectRatio, preferredModelId) {
-  const usable = VIDEO_GENERATION_PROVIDERS.filter(model =>
+  const usable = listVideoGenerationProviders().filter(model =>
     model.supportsImageToVideo && model.supportedAspectRatios.includes(aspectRatio));
   if (usable.length === 0) return null;
   const preferred = usable.find(model => model.id === preferredModelId);
@@ -178,6 +297,6 @@ export function resolveVideoModelForAspectRatio(aspectRatio, preferredModelId) {
 
 /** 该画幅下可选的图生视频模型；空数组表示没有模型支持它。 */
 export function videoModelsForAspectRatio(aspectRatio) {
-  return VIDEO_GENERATION_PROVIDERS.filter(model =>
+  return listVideoGenerationProviders().filter(model =>
     model.supportsImageToVideo && model.supportedAspectRatios.includes(aspectRatio));
 }

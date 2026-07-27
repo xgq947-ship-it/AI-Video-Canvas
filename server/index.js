@@ -55,6 +55,17 @@ import {
 import { getPromptOptimizerProvider } from './services/promptOptimizerProviders.js';
 import { applyOptimizerPreferenceToApp, loadOptimizerPreference } from './services/optimizerPreference.js';
 import {
+    applyWebExecutionPreferenceToApp,
+    loadWebExecutionPreference
+} from './services/webhttp/index.js';
+import {
+    WEB_AUTH_PROVIDERS,
+    checkAllWebAuthStatus,
+    describeAuthStatus,
+    peekWebAuthStatus,
+    persistAuthStatus
+} from './services/webhttp/auth.js';
+import {
     BROWSER_MODELS_SETUP_HINT,
     browserRuntimeStatus,
     runOpsCli
@@ -190,6 +201,10 @@ applyApiKeysToApp(app, process.env, API_KEY_OVERRIDES);
 // 提示词优化后端选择：默认 DeepSeek；可在“配置”弹窗下拉里切换到 Claude / Codex 本机 CLI，
 // 选择存到 library/config/optimizer.json（环境变量作为初始默认）。
 applyOptimizerPreferenceToApp(app, process.env, loadOptimizerPreference(LIBRARY_DIR));
+
+// Gemini Web / 即梦 / Flow 的执行通道：默认 auto（HTTP 优先，提交前失败才回退浏览器），
+// 存到 library/config/web-execution.json，可在“配置”弹窗按平台单独切换。
+applyWebExecutionPreferenceToApp(app, process.env, loadWebExecutionPreference(LIBRARY_DIR));
 
 // ============================================================================
 // WORKFLOW SANITIZATION HELPERS
@@ -1257,78 +1272,42 @@ app.post('/api/browser-sessions/check', async (req, res) => {
     const requested = Array.isArray(req.body?.providers) ? req.body.providers.map(String) : [];
     const providers = requested.length ? requested : ['jimeng', 'google-flow', 'gemini-web'];
     const force = req.body?.force === true;
-    if (providers.some(provider => !['google-flow', 'jimeng', 'gemini-web'].includes(provider))) {
+    if (providers.some(provider => !WEB_AUTH_PROVIDERS.includes(provider))) {
         return res.status(400).json({ error: '包含不支持的浏览器登录平台' });
     }
-    const cacheTtlMs = 2 * 60_000;
-    const cachedResults = {};
-    const providersToProbe = providers.filter(provider => {
-        const session = browserSessionState.get(provider);
-        const verifiedAt = Date.parse(session.updatedAt || '');
-        const definitive = ['authenticated', 'expired'].includes(session.state);
-        const fresh = Number.isFinite(verifiedAt) && Date.now() - verifiedAt < cacheTtlMs;
-        if (!force && definitive && fresh) {
-            cachedResults[provider] = {
-                authenticated: session.state === 'authenticated',
-                reason: session.state === 'authenticated' ? 'authenticated' : 'not-authenticated',
-                evidence: 'session-cache',
-                message: session.message
+
+    // 登录检测现在是纯 HTTP：三个平台各拉一次自己的会话接口，读平台返回的数据判断。
+    // 不看头像、不看登录按钮、不看任何 selector，也不生成内容、不消耗积分。
+    //
+    // 刻意不再套那层浏览器串行队列：bridge 内部已按 provider 串行，外面再排一层
+    // 只会让「重新检测」在生成任务占用队列时直接 409 —— 而检测本身根本不冲突。
+    // 原来那条「忙碌判定必须早于写 checking」的约束依然成立，做法是只在真正要发请求
+    // 的平台上写 checking，且失败时立刻落到确定状态，不会卡在「检查中」。
+    const toProbe = providers.filter(provider => force || !peekWebAuthStatus(provider));
+    for (const provider of toProbe) browserSessionState.transition(provider, 'checking');
+
+    try {
+        const statuses = await checkAllWebAuthStatus({ force, providers });
+        const results = {};
+        for (const status of statuses) {
+            persistAuthStatus(browserSessionState, status);
+            results[status.provider] = {
+                // 兼容旧调用方（启动引导、设置页）读的 authenticated / reason / message。
+                authenticated: status.status === 'logged-in',
+                reason: status.status === 'logged-in' ? 'authenticated'
+                    : status.status === 'logged-out' || status.status === 'expired' ? 'not-authenticated'
+                        : 'unconfirmed',
+                evidence: status.reason || 'http',
+                message: status.message || describeAuthStatus(status),
+                status: status.status,
+                source: status.source,
+                checkedAt: status.checkedAt,
+                fromCache: Boolean(status.fromCache)
             };
-            return false;
-        }
-        return true;
-    });
-    if (providersToProbe.length === 0) {
-        return res.json({
-            success: true,
-            cached: true,
-            results: cachedResults,
-            sessions: browserSessionState.list()
-        });
-    }
-    // 忙碌判定必须在写入 checking 之前：一旦写了再拒绝，三个平台会永远停在「检查中」，
-    // 界面上和探针卡死一模一样。缓存能直接答的请求上面已经返回，不受影响。
-    try {
-        assertBrowserWorkflowIdle('检查登录状态');
-    } catch (error) {
-        return res.status(error.status || 409).json({
-            error: error.message,
-            code: error.code,
-            sessions: browserSessionState.list()
-        });
-    }
-    for (const provider of providersToProbe) browserSessionState.transition(provider, 'checking');
-    try {
-        const providerArgs = providersToProbe.flatMap(provider => ['--provider', provider]);
-        const { data } = await enqueueBrowserWorkflow(() => runOpsCli({
-            args: ['browser', 'check-login', ...providerArgs],
-            timeoutMs: 90_000,
-            label: '浏览器登录状态检查',
-            trackSessionState: false,
-            maxAttempts: 1
-        }), { label: '浏览器登录状态检查' });
-        const results = { ...cachedResults, ...(data.providers || {}) };
-        for (const provider of providersToProbe) {
-            const result = results[provider] || {};
-            if (result.authenticated === true) {
-                browserSessionState.transition(provider, 'authenticated', {
-                    message: result.message || '已通过真实页面确认登录状态'
-                });
-            } else if (result.reason === 'not-authenticated') {
-                browserSessionState.transition(provider, 'expired', {
-                    errorCode: 'AUTH_REQUIRED',
-                    message: result.message || '当前未登录'
-                });
-            } else {
-                browserSessionState.transition(provider, 'unknown', {
-                    errorCode: 'LOGIN_PROBE_UNCONFIRMED',
-                    message: result.message || '未获得足够证据，不能确认已登录'
-                });
-            }
         }
         res.json({ success: true, results, sessions: browserSessionState.list() });
     } catch (error) {
-        for (const provider of providersToProbe) {
+        for (const provider of toProbe) {
             browserSessionState.transition(provider, 'unknown', {
                 errorCode: error.code || 'LOGIN_PROBE_FAILED',
                 message: error.message

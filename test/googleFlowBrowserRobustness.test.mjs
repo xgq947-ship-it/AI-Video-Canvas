@@ -99,23 +99,35 @@ test('主动登录使用普通 Chrome，且不把打开窗口误记为已认证'
   assert.doesNotMatch(reauthRoute, /trackSessionState: false/);
 });
 
-test('设置页登录状态只接受真实页面探针，不沿用打开登录页的结果', () => {
-  assert.match(browserCli, /def check_browser_logins/);
-  assert.match(browserCli, /def _probe_flow_login/);
-  assert.match(browserCli, /def _probe_jimeng_login/);
-  assert.match(browserCli, /"evidence": "account-api-user-id"/);
-  assert.match(browserCli, /"evidence": "account-api-guest"/);
+test('设置页登录状态走 HTTP 判定，不看任何页面元素', () => {
+  // 曾经的实现按页面元素判断：Flow 找 editor / account / sign-in 选择器，
+  // 而 labs.google/fx/tools/flow 是公开营销页，对登录与未登录渲染完全相同 ——
+  // 三个选择器 count 恒为 0，探针只能空等到超时，就是「Flow 检查不出来」的根因。
+  // 现在三个平台一律读平台自己返回的数据，DOM 完全不参与。
+  const auth = fs.readFileSync(new URL('../server/services/webhttp/auth.js', import.meta.url), 'utf8');
+  assert.match(auth, /S06Grb/, 'Gemini 按 Google 账号标识判定');
+  assert.match(auth, /__isLogined/, '即梦按 window.__isLogined 判定');
+  assert.match(auth, /\/fx\/api\/auth\/session/, 'Flow 按 NextAuth session 判定');
+
+  // 旧探针必须已经消失。
+  assert.doesNotMatch(browserCli, /def check_browser_logins/);
+  assert.doesNotMatch(browserCli, /def _probe_flow_login/);
+  assert.doesNotMatch(browserCli, /def _probe_jimeng_login/);
   assert.doesNotMatch(browserCli, /"evidence": "authenticated-composer"/);
-  // Flow 的证据不再是页面元素。实测 https://labs.google/fx/tools/flow 是公开营销
-  // 落地页，对已登录和未登录渲染完全相同，原来的 editor / account 选择器 count 恒为 0，
-  // 探针只能空等到超时报 unconfirmed —— 即用户看到的「Flow 检查不出来」。
-  // 现在按 myaccount.google.com 的重定向行为判定，详见 test/browserLoginProbe.test.mjs。
-  assert.match(browserCli, /"evidence": "google-account-page"/);
-  assert.match(browserCli, /"evidence": "redirected-to-signin"/);
+  assert.doesNotMatch(browserCli, /"evidence": "google-account-page"/);
+
+  // 检测路由改为直接调 HTTP 检查器：不再经 ops-cli，也不再套浏览器队列
+  // （bridge 已按 provider 串行，外面再排一层只会让「重新检测」在生成时 409）。
   assert.match(serverMain, /app\.post\('\/api\/browser-sessions\/check'/);
-  assert.match(serverMain, /enqueueBrowserWorkflow\(\(\) => runOpsCli/);
-  assert.match(serverMain, /if \(result\.authenticated === true\)/);
-  assert.match(serverMain, /LOGIN_PROBE_UNCONFIRMED/);
+  assert.match(serverMain, /checkAllWebAuthStatus/);
+  const checkRoute = serverMain.slice(
+    serverMain.indexOf("app.post('/api/browser-sessions/check'"),
+    serverMain.indexOf("app.post('/api/browser/open'")
+  );
+  assert.doesNotMatch(checkRoute, /enqueueBrowserWorkflow/);
+  assert.doesNotMatch(checkRoute, /browser', 'check-login/);
+  // 兼容字段保留：启动引导与设置页仍按 authenticated / reason 读结果。
+  assert.match(checkRoute, /authenticated: status\.status === 'logged-in'/);
 });
 
 test('登录窗口优雅退出落盘 Profile，超时后才强杀', () => {

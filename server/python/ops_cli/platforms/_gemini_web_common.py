@@ -142,32 +142,73 @@ def build_video_prompt(
 
 
 def probe_gemini_login(page: Any) -> dict[str, Any]:
-    """Gemini 的登录态就是 Google 账号登录态，按重定向判定。
+    """按 HTTP 登录态判定：拉 /app，读 WIZ_global_data 里的 S06Grb 与 SNlM0e。
 
-    早期实现靠 gemini.google.com 的 DOM 判定：要求「输入框」与「账号态控件」同时可见。
-    但账号头像由 One Google Bar 以 iframe 注入，主文档里根本选不到 —— 已登录用户也永远
-    落到 unconfirmed 分支，界面上就是那句「Gemini 页面结构异常，未获得可用登录证据」。
-    Gemini 没有独立于 Google 账号的授权步骤，因此直接复用 Flow 那条已验证的重定向信号；
-    页面 DOM 的形状不再参与判定，unconfirmed 只可能来自探针超时。
+    旧实现先靠 DOM（输入框 + 账号控件同时可见），后来改成按 Google 账号页的重定向
+    信号判定。两者都被协议文档否定：判断只能来自平台自己返回的数据。
+    现在同源 fetch 一次 /app 就够 —— 不跳转、不看任何 selector、不消耗生成额度。
+
+    S06Grb 是当前 Google 账号标识，SNlM0e 是 Gemini 的 bootstrap token；
+    FdrFJe 刻意不参与判定：未登录页面同样带它。
     """
-    from ops_cli.browser import probe_google_account_login
+    try:
+        result = page.evaluate(
+            """async () => {
+                const response = await fetch('https://gemini.google.com/app', {
+                    credentials: 'include',
+                    headers: { 'cache-control': 'no-cache' }
+                });
+                const html = await response.text();
+                const pick = (key) => {
+                    const match = html.match(new RegExp('"' + key + '"\\s*:\\s*"([^"]*)"'));
+                    return match ? match[1] : '';
+                };
+                return { status: response.status, userId: pick('S06Grb'), at: pick('SNlM0e') };
+            }"""
+        )
+    except Exception as exc:
+        return {
+            "authenticated": False,
+            "reason": "unconfirmed",
+            "evidence": "probe-error",
+            "message": f"无法确认 Gemini 登录状态：{exc}",
+        }
 
-    result = dict(probe_google_account_login(page))
-    if result["authenticated"]:
-        result["message"] = "已确认 Google 账号登录，Gemini 可用"
-    elif result["reason"] == "not-authenticated":
-        result["message"] = "Gemini 需要 Google 账号，当前未登录，请在 Evan 专属 Chrome 中登录"
-    else:
-        result["message"] = "暂时无法确认 Google 账号登录状态，请稍后重试"
-    return result
+    if not isinstance(result, dict) or int(result.get("status") or 0) != 200:
+        return {
+            "authenticated": False,
+            "reason": "unconfirmed",
+            "evidence": "http-error",
+            "message": "Gemini 登录检测请求失败，请稍后重试",
+        }
+    if not str(result.get("userId") or ""):
+        return {
+            "authenticated": False,
+            "reason": "not-authenticated",
+            "evidence": "no-account-id",
+            "message": "Gemini 需要 Google 账号，当前未登录，请在 Evan 专属 Chrome 中登录",
+        }
+    if not str(result.get("at") or ""):
+        return {
+            "authenticated": False,
+            "reason": "not-authenticated",
+            "evidence": "no-bootstrap-token",
+            "message": "Gemini 登录已过期，请在 Evan 专属 Chrome 中重新登录",
+        }
+    return {
+        "authenticated": True,
+        "reason": "authenticated",
+        "evidence": "wiz-bootstrap",
+        "message": "已通过 Gemini 会话接口确认登录",
+    }
 
 
 def _ensure_authenticated(page: Any) -> None:
-    """确认登录，并把页面留在 Gemini 上。
+    """确认登录，并把页面停在干净的 Gemini 首页上。
 
-    探针最后停在 myaccount.google.com；后续 _select_creation_surface / _upload_references /
-    _composer 全都在这个页面上找 Gemini 的控件，必须显式导航回来，否则会在错误的站点上
-    找不到输入框。
+    探针本身现在是同源 fetch，不再让页面离开 Gemini，所以这里的 goto 不是"导航回来"，
+    而是刻意重置：后续 _select_creation_surface / _upload_references / _composer 需要
+    一个没有上一轮残留状态的编辑器。
     """
     result = probe_gemini_login(page)
     if not result["authenticated"]:

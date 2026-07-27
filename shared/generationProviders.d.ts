@@ -11,6 +11,23 @@ export interface VideoGenerationProvider {
 }
 export const IMAGE_GENERATION_PROVIDERS: readonly ImageGenerationProvider[];
 export const VIDEO_GENERATION_PROVIDERS: readonly VideoGenerationProvider[];
+/** 后端 /api/settings/models 返回的运行时模型注册表。 */
+export interface DiscoveredModelDefinition {
+  provider: string; id: string; displayName: string; type: 'image' | 'video';
+  inputModes?: string[]; aspectRatios?: string[]; resolutions?: string[]; durations?: number[];
+  maxReferenceImages?: number; maxBatchCount?: number; supportsAudio?: boolean;
+  supportsPromptEnhancement?: boolean; supportsSeed?: boolean; discovered?: boolean;
+  metadata?: Record<string, unknown>;
+}
+export interface DiscoveredModelRegistry {
+  updatedAt: string;
+  providers: Record<string, { discovered: boolean }>;
+  models: DiscoveredModelDefinition[];
+}
+export function applyDiscoveredModelRegistry(registry: DiscoveredModelRegistry | null | undefined): void;
+export function resetDiscoveredModelRegistry(): void;
+export function listImageGenerationProviders(): ImageGenerationProvider[];
+export function listVideoGenerationProviders(): VideoGenerationProvider[];
 export function getImageGenerationProvider(id?: string): ImageGenerationProvider | null;
 export function getVideoGenerationProvider(id?: string): VideoGenerationProvider | null;
 export function clampImageOutputCount(modelId: string, requestedCount: unknown): number;

@@ -53,6 +53,61 @@ interface CodexStatus {
 
 interface BrowserSession { state: string; message?: string | null; }
 
+/** Gemini Web / 即梦 / Flow 的执行通道：auto = HTTP 优先，提交前失败才回退浏览器。 */
+type WebExecutionMode = 'auto' | 'http' | 'browser';
+
+interface WebExecutionProvider {
+    id: string;
+    label: string;
+    mode: WebExecutionMode;
+}
+
+/** 文档定义的六态；界面直接展示它，持久化时才收敛到会话状态词表。 */
+type WebAuthStatus = 'unknown' | 'checking' | 'logged-in' | 'logged-out' | 'expired' | 'error';
+
+interface WebSessionProvider {
+    id: string;
+    label: string;
+    /** probe=1 时返回；仅读缓存时只有 state。 */
+    status?: WebAuthStatus;
+    state: string;
+    updatedAt: string | null;
+    checkedAt?: number;
+    source?: 'http' | 'browser' | 'fallback';
+    account?: string;
+    expiresAt?: number | null;
+    message: string;
+}
+
+const WEB_EXECUTION_MODE_LABELS: Record<WebExecutionMode, string> = {
+    auto: '自动（HTTP 优先，失败回退浏览器）',
+    http: '仅 HTTP',
+    browser: '仅浏览器自动化'
+};
+
+const WEB_SESSION_LABELS: Record<string, { text: string; tone: string }> = {
+    // 六态（probe 返回）
+    'logged-in': { text: '已登录', tone: 'text-emerald-400' },
+    'logged-out': { text: '未登录', tone: 'text-amber-400' },
+    expired: { text: '登录已过期', tone: 'text-amber-400' },
+    checking: { text: '检测中', tone: 'text-blue-400' },
+    error: { text: '检测失败', tone: 'text-red-400' },
+    // 持久化状态（只读缓存时）
+    authenticated: { text: '已登录', tone: 'text-emerald-400' },
+    reauthenticating: { text: '检测中', tone: 'text-blue-400' },
+    browser_unavailable: { text: '浏览器不可用', tone: 'text-red-400' },
+    submission_unknown: { text: '提交状态未知', tone: 'text-amber-400' },
+    unknown: { text: '未检测', tone: 'text-neutral-400' }
+};
+
+function formatCheckedAt(value?: number | null): string {
+    if (!value) return '';
+    const seconds = Math.max(0, Math.round((Date.now() - value) / 1000));
+    if (seconds < 60) return `最后检测：${seconds} 秒前`;
+    if (seconds < 3600) return `最后检测：${Math.round(seconds / 60)} 分钟前`;
+    return `最后检测：${Math.round(seconds / 3600)} 小时前`;
+}
+
 interface ApiKeySettingsModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -89,6 +144,9 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
     const [isCodexBusy, setIsCodexBusy] = useState(false);
     const [browserSessions, setBrowserSessions] = useState<Record<string, BrowserSession>>({});
     const [browserBusy, setBrowserBusy] = useState(false);
+    const [webExecution, setWebExecution] = useState<WebExecutionProvider[]>([]);
+    const [webSessions, setWebSessions] = useState<WebSessionProvider[]>([]);
+    const [webBusy, setWebBusy] = useState(false);
 
     const applyCodexStatus = (status: CodexStatus) => {
         setCodexStatus(status);
@@ -137,6 +195,17 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                 const result = await response.json();
                 if (!response.ok) throw new Error(result.error || '读取 Browser Automation 状态失败');
                 if (!cancelled) setBrowserSessions(result.browserModels?.sessions || {});
+            })
+            // 执行模式与登录状态都只读缓存，不带 probe=1：打开设置页不该唤醒 Chrome。
+            ,fetch('/api/settings/web-execution', { cache: 'no-store' }).then(async response => {
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || '读取 Web 执行模式失败');
+                if (!cancelled) setWebExecution(result.providers || []);
+            })
+            ,fetch('/api/settings/web-sessions', { cache: 'no-store' }).then(async response => {
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || '读取 Web 登录状态失败');
+                if (!cancelled) setWebSessions(result.providers || []);
             })
         ])
             .catch(fetchError => {
@@ -298,6 +367,57 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
             setError(loginError instanceof Error ? loginError.message : '启动 Codex 登录失败');
         } finally {
             setIsCodexBusy(false);
+        }
+    };
+
+    const handleWebExecutionMode = async (provider: string, mode: WebExecutionMode) => {
+        // 乐观更新，失败再回滚：下拉切换要立刻有反馈。
+        const previous = webExecution;
+        setWebExecution(current => current.map(item => (item.id === provider ? { ...item, mode } : item)));
+        setError('');
+        try {
+            const response = await fetch('/api/settings/web-execution', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider, mode })
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || '执行模式保存失败');
+            setWebExecution(result.current?.providers || previous);
+        } catch (modeError) {
+            setWebExecution(previous);
+            setError(modeError instanceof Error ? modeError.message : '执行模式保存失败');
+        }
+    };
+
+    /** 真实探针：走各平台的 session / API 请求判断，而不是看页面上有没有某个按钮。 */
+    const handleProbeWebSessions = async () => {
+        setWebBusy(true);
+        setError('');
+        try {
+            const response = await fetch('/api/settings/web-sessions?probe=1', { cache: 'no-store' });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || '登录状态检测失败');
+            setWebSessions(result.providers || []);
+        } catch (probeError) {
+            setError(probeError instanceof Error ? probeError.message : '登录状态检测失败');
+        } finally {
+            setWebBusy(false);
+        }
+    };
+
+    /** 「重新登录」——只有这个动作才打开浏览器；检测本身是纯 HTTP。 */
+    const handleWebReauthenticate = async (provider: string) => {
+        setWebBusy(true);
+        setError('');
+        try {
+            const response = await fetch(`/api/browser-sessions/${provider}/reauthenticate`, { method: 'POST' });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || '打开登录窗口失败');
+        } catch (loginError) {
+            setError(loginError instanceof Error ? loginError.message : '打开登录窗口失败');
+        } finally {
+            setWebBusy(false);
         }
     };
 
@@ -527,6 +647,96 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                 <div className="flex gap-2">
                                     <button type="button" disabled={browserBusy} onClick={() => void handleGeminiBrowser('open')} className="flex items-center gap-1.5 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-semibold text-black disabled:opacity-50"><LogIn size={13} />打开登录窗口</button>
                                     <button type="button" disabled={browserBusy} onClick={() => void handleGeminiBrowser('check')} className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs disabled:opacity-50 ${isDark ? 'border-neutral-700' : 'border-neutral-300'}`}>{browserBusy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}检查登录状态</button>
+                                </div>
+                            </section>
+
+                            {/* Web 平台执行模式 + 登录状态：Gemini Web / 即梦 / Flow 统一在这里 */}
+                            <section className={`rounded-2xl border p-5 transition-colors ${sectionSurface}`}>
+                                <div className="mb-1 flex items-center justify-between gap-3">
+                                    <div className="flex items-center gap-2">
+                                        <ShieldCheck size={14} className="text-emerald-400" />
+                                        <h3 className="text-sm font-medium">Web 平台执行模式与登录状态</h3>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        disabled={webBusy}
+                                        onClick={() => void handleProbeWebSessions()}
+                                        className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs disabled:opacity-50 ${isDark ? 'border-neutral-700' : 'border-neutral-300'}`}
+                                    >
+                                        {webBusy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                                        检测登录状态
+                                    </button>
+                                </div>
+                                <p className={`mb-3 text-[11px] leading-5 ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                                    生成主链路走平台 HTTP 接口，浏览器只负责登录、签名上下文和失败回退。
+                                    「仅 HTTP」不会自动回退；已经提交出去的任务在任何模式下都不会重复提交。
+                                </p>
+                                <div className="space-y-2">
+                                    {webExecution.map(provider => {
+                                        const session = webSessions.find(item => item.id === provider.id);
+                                        const badge = WEB_SESSION_LABELS[session?.state || 'unknown'] || WEB_SESSION_LABELS.unknown;
+                                        const checkedLabel = formatCheckedAt(
+                                            session?.checkedAt ?? (session?.updatedAt ? Date.parse(session.updatedAt) : null)
+                                        );
+                                        const needsLogin = ['logged-out', 'expired', 'authenticated'].includes(session?.status || '')
+                                            ? session?.status !== 'logged-in'
+                                            : session?.state !== 'authenticated';
+                                        return (
+                                            <div
+                                                key={provider.id}
+                                                className={`rounded-xl border px-3 py-2.5 ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}
+                                            >
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div className="min-w-0">
+                                                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                                            <span className="text-xs font-medium">{provider.label}</span>
+                                                            <span className={`text-[11px] ${badge.tone}`}>● {badge.text}</span>
+                                                            {session?.source && (
+                                                                <span className={`text-[10px] uppercase ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+                                                                    {session.source}
+                                                                </span>
+                                                            )}
+                                                            {checkedLabel && (
+                                                                <span className={`text-[10px] ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+                                                                    {checkedLabel}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        {session?.account && (
+                                                            <p className={`mt-0.5 truncate text-[11px] ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
+                                                                {session.account}
+                                                            </p>
+                                                        )}
+                                                        {session?.message && session.status !== 'logged-in' && (
+                                                            <p className="mt-0.5 truncate text-[11px] text-amber-400" title={session.message}>
+                                                                {session.message}
+                                                            </p>
+                                                        )}
+                                                    </div>
+                                                    <select
+                                                        aria-label={`${provider.label} 执行模式`}
+                                                        value={provider.mode}
+                                                        onChange={event => void handleWebExecutionMode(provider.id, event.target.value as WebExecutionMode)}
+                                                        className={`shrink-0 rounded-lg border px-2 py-1.5 text-xs ${isDark ? 'border-neutral-700 bg-neutral-900' : 'border-neutral-300 bg-white'}`}
+                                                    >
+                                                        {(Object.keys(WEB_EXECUTION_MODE_LABELS) as WebExecutionMode[]).map(mode => (
+                                                            <option key={mode} value={mode}>{WEB_EXECUTION_MODE_LABELS[mode]}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                {needsLogin && (
+                                                    <button
+                                                        type="button"
+                                                        disabled={webBusy}
+                                                        onClick={() => void handleWebReauthenticate(provider.id)}
+                                                        className="mt-2 flex items-center gap-1.5 rounded-lg bg-cyan-500 px-2.5 py-1.5 text-[11px] font-semibold text-black disabled:opacity-50"
+                                                    >
+                                                        <LogIn size={12} />重新登录
+                                                    </button>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             </section>
 

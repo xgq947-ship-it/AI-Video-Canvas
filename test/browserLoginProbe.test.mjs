@@ -1,16 +1,14 @@
 /**
- * 锁定登录态探针的判定逻辑与「不做无谓重启」。
+ * 锁定 Evan 专属 Chrome 的生命周期规则：「不做无谓重启」，但该重启时必须重启。
  *
- * 背景（本机实测，非推断）：
- * - 原来 Flow 探针访问 https://labs.google/fx/tools/flow，而该地址是**公开营销落地页**
- *   （Overview / Models / Pricing / "Create with Google Flow"），对已登录和未登录用户
- *   渲染的 DOM 完全相同。原先找的 editor / account / sign-in 三个选择器实测
- *   count 全为 0，探针只能空等到 25 秒超时报「未发现足够的登录证据」——
- *   这就是「Google Flow 检查不出来」的根因。Slate 编辑器只存在于
- *   /fx/tools/flow/project/<id> 应用页，首页上永远没有。
- * - check_browser_logins 原来无条件 stop_chrome()，而 start_chrome 自己就有复用分支，
- *   等于每次检查都主动摧毁复用、付一次完整冷启动。实测两个平台一起检查
- *   39.5s → 5.6s。
+ * 登录态判定本身已经全部改成 HTTP（见 test/webAuthStatus.test.mjs 与
+ * server/services/webhttp/auth.js），原来基于 DOM / 重定向的探针连同它们的用例
+ * 一起删除。这里只保留仍然成立的浏览器实例复用规则。
+ *
+ * 背景（本机实测，非推断）：无条件 stop_chrome() 会摧毁 start_chrome 自带的复用分支，
+ * 每次都要付一次完整冷启动；实测两个平台一起检查 39.5s → 5.6s。
+ * 但可见登录实例没有 CDP，且刚登录的 Cookie 要等它优雅退出才落盘，
+ * 所以不可复用的实例仍然必须先关掉。
  *
  * 未配置 Python 运行时（无 server/python/.venv）时自动跳过。
  */
@@ -39,180 +37,19 @@ function runPython(script) {
     return JSON.parse(out.trim().split('\n').pop());
 }
 
-/** 假 page：goto 后把 url 换成脚本给定的落点，模拟重定向。 */
-const PROBE = `
-import json, sys
-sys.path.insert(0, '.')
-from ops_cli.browser import _probe_flow_login
-
-class FakePage:
-    def __init__(self, landing):
-        self.url = 'about:blank'
-        self._landing = landing
-    def goto(self, url, **kwargs):
-        self.url = self._landing
-    def wait_for_timeout(self, ms):
-        pass
-
-cases = {
-    'signed-in': 'https://myaccount.google.com/?pli=1',
-    'redirect-to-accounts': 'https://accounts.google.com/ServiceLogin?continue=x',
-    'redirect-to-google': 'https://www.google.com/',
-}
-out = {}
-for name, landing in cases.items():
-    out[name] = _probe_flow_login(FakePage(landing))
-print(json.dumps(out))
-`;
-
-test('Flow 探针按重定向判定登录态', { skip: !ready }, () => {
-    const results = runPython(PROBE);
-
-    // 停在 myaccount 才算已登录。
-    assert.equal(results['signed-in'].authenticated, true);
-    assert.equal(results['signed-in'].reason, 'authenticated');
-
-    // 被重定向走 = 明确未登录，而不是含糊的 unconfirmed。
-    // 原实现在这两种情况下都只能报 unconfirmed，用户看到的就是「检查不出来」。
-    for (const key of ['redirect-to-accounts', 'redirect-to-google']) {
-        assert.equal(results[key].authenticated, false, key);
-        assert.equal(results[key].reason, 'not-authenticated', key);
-        assert.equal(results[key].evidence, 'redirected-to-signin', key);
-    }
-});
-
-test('Flow 探针不再依赖那个公开营销页', () => {
-    // 静态守卫：这条不需要 venv，任何机器都跑。
-    const source = fs.readFileSync(path.join(PYTHON_ROOT, 'ops_cli', 'browser.py'), 'utf8');
-    const probe = source.slice(
-        source.indexOf('def _probe_flow_login'),
-        source.indexOf('def _probe_jimeng_login')
-    );
-    assert.ok(probe.length > 0, '没找到 _probe_flow_login');
-
-    // 营销页对登录/未登录渲染相同，拿它判定必然失败。
-    assert.doesNotMatch(probe, /LOGIN_URLS\["google-flow"\]/);
-    assert.doesNotMatch(probe, /data-slate-editor/);
-    assert.match(probe, /GOOGLE_ACCOUNT_PROBE_URL/);
-});
-
-test('即梦探针只接受账号接口的明确身份，不把游客编辑器当成登录成功', { skip: !ready }, () => {
-    const script = `
-import json, sys
-sys.path.insert(0, '.')
-from ops_cli.browser import _probe_jimeng_login
-
-class FakePage:
-    url = 'about:blank'
-    def __init__(self, result):
-        self.result = result
-    def goto(self, url, **kwargs):
-        self.url = 'https://jimeng.jianying.com/ai-tool/home'
-    def evaluate(self, script, argument):
-        return self.result
-
-cases = {
-    'signed-in': {'httpStatus': 200, 'message': 'success', 'errorCode': 0, 'hasUserId': True},
-    'guest': {'httpStatus': 200, 'message': 'error', 'errorCode': 13, 'hasUserId': False},
-    'unknown': {'httpStatus': 503, 'message': '', 'errorCode': None, 'hasUserId': False},
-}
-print(json.dumps({name: _probe_jimeng_login(FakePage(result)) for name, result in cases.items()}))
-`;
-    const results = runPython(script);
-    assert.equal(results['signed-in'].authenticated, true);
-    assert.equal(results['signed-in'].evidence, 'account-api-user-id');
-    assert.equal(results.guest.authenticated, false);
-    assert.equal(results.guest.reason, 'not-authenticated');
-    assert.equal(results.guest.evidence, 'account-api-guest');
-    assert.equal(results.unknown.reason, 'unconfirmed');
-});
-
-test('Gemini 探针按重定向判定，不再依赖 Gemini 页面 DOM', { skip: !ready }, () => {
-    // 回归：原实现要求 gemini.google.com 上「输入框」与「账号态控件」同时可见才算登录。
-    // 账号头像由 One Google Bar 以 iframe 注入，主文档选不到 —— 已登录用户也永远落到
-    // unconfirmed，界面上就是那句「Gemini 页面结构异常，未获得可用登录证据」。
-    const script = `
-import json, sys
-sys.path.insert(0, '.')
-from ops_cli.platforms._gemini_web_common import probe_gemini_login
-
-class FakePage:
-    def __init__(self, landing):
-        self.url = 'about:blank'
-        self._landing = landing
-    def goto(self, url, **kwargs):
-        self.url = self._landing
-    def wait_for_timeout(self, ms):
-        pass
-
-cases = {
-    'signed-in': 'https://myaccount.google.com/?pli=1',
-    'redirect-to-accounts': 'https://accounts.google.com/ServiceLogin?continue=x',
-    'redirect-to-google': 'https://www.google.com/',
-}
-print(json.dumps({name: probe_gemini_login(FakePage(landing)) for name, landing in cases.items()}))
-`;
-    const results = runPython(script);
-    assert.equal(results['signed-in'].authenticated, true);
-    assert.equal(results['signed-in'].reason, 'authenticated');
-
-    for (const key of ['redirect-to-accounts', 'redirect-to-google']) {
-        assert.equal(results[key].authenticated, false, key);
-        // 明确未登录，而不是含糊的 unconfirmed —— 用户看到的才是可操作的提示。
-        assert.equal(results[key].reason, 'not-authenticated', key);
-        assert.equal(results[key].evidence, 'redirected-to-signin', key);
-    }
-});
-
-test('Gemini 探针不会因页面结构判 unconfirmed，且确认后回到 Gemini 页面', () => {
-    // 静态守卫：不需要 venv。
-    const source = fs.readFileSync(
-        path.join(PYTHON_ROOT, 'ops_cli', 'platforms', '_gemini_web_common.py'),
-        'utf8'
-    );
-    const probe = source.slice(
-        source.indexOf('def probe_gemini_login'),
-        source.indexOf('def _single_visible')
-    );
-    assert.ok(probe.length > 0, '没找到 probe_gemini_login');
-
-    // DOM 形状不能再参与判定，unconfirmed 只能来自探针超时。
-    assert.doesNotMatch(probe, /contenteditable/);
-    assert.doesNotMatch(probe, /gemini-page-unrecognized/);
-    assert.match(probe, /probe_google_account_login/);
-
-    // 探针停在 myaccount.google.com，_ensure_authenticated 必须导航回 Gemini，
-    // 否则后续找输入框/边栏会落在错误的站点上。
-    const ensure = probe.slice(probe.indexOf('def _ensure_authenticated'));
-    assert.match(ensure, /page\.goto\(GEMINI_HOME_URL/);
-});
-
-test('登录检查支持 Profile 缺失快速失败和进程内短期缓存', () => {
-    const pythonSource = fs.readFileSync(path.join(PYTHON_ROOT, 'ops_cli', 'browser.py'), 'utf8');
-    assert.match(pythonSource, /if not PROFILE_DIR\.exists\(\)/);
-    assert.match(pythonSource, /"evidence": "profile-missing"/);
-
-    const serverSource = fs.readFileSync(path.join(ROOT, 'server', 'index.js'), 'utf8');
-    const route = serverSource.slice(
-        serverSource.indexOf("app.post('/api/browser-sessions/check'"),
-        serverSource.indexOf("app.post('/api/browser/open'")
-    );
-    assert.match(route, /2 \* 60_000/);
-    assert.match(route, /evidence: 'session-cache'/);
-    assert.match(route, /req\.body\?\.force === true/);
-});
-
 test('已经是无头 CDP 实例时不重启浏览器', () => {
-    const source = fs.readFileSync(path.join(PYTHON_ROOT, 'ops_cli', 'browser.py'), 'utf8');
+    // 这条规则随登录检测一起从 browser.py 迁到了 HTTP 桥接层：
+    // 现在所有平台请求（含登录检测）都经由 webhttp._connect 拿到浏览器上下文。
+    const source = fs.readFileSync(path.join(PYTHON_ROOT, 'ops_cli', 'webhttp.py'), 'utf8');
     const block = source.slice(
-        source.indexOf('def check_browser_logins'),
-        source.indexOf('def browser_status')
+        source.indexOf('def _connect('),
+        source.indexOf('def _page_window_name(')
     );
 
     // 复用判定必须同时满足「无头」与「可被 Playwright 接管」。
     assert.match(block, /_instance_is_headless\(pid\)/);
     assert.match(block, /_instance_supports_playwright\(pid\)/);
-    assert.match(block, /if not reusable:\s*\n\s*stop_chrome\(\)/);
+    assert.match(block, /if not reusable:\s*\n\s*chrome_cdp\.stop_chrome\(\)/);
 
     // 但绝不能把 stop_chrome 整个删掉：可见登录实例没有 CDP，
     // 且用户刚登录完的 Cookie 要等它优雅退出才落盘，

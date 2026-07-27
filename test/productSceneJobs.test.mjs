@@ -314,3 +314,71 @@ test('建任务时就把画幅收敛到图片模型的能力表', async t => {
   const finished = await waitForTerminalJob(job.id, context);
   assert.equal(finished.aspectRatio, '16:9');
 });
+
+test('比例由用户指定并贯穿图片与视频；视频模型不支持时自动换模型', async t => {
+  // 之前图片比例从场景参考图推断、视频比例是另一个独立字段，两边可以静默不一致 ——
+  // 而替换图就是视频首帧，比例对不上时平台只会裁切或加黑边，还不报错。
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  // createProductSceneJob 会立刻 void executeJob，桩必须给全，
+  // 否则测试结束后后台还在跑真实的 Codex / 浏览器任务。
+  const context = {
+    dirs: env.dirs,
+    libraryDir: env.root,
+    runRecognition: async () => JSON.stringify({
+      sceneSpec: '客厅', personaSpec: '女性', compositionSpec: '半身', productSpec: '白色产品',
+    }),
+    generateImages: async () => [{ buffer: Buffer.from('image'), extension: 'png' }],
+    generateVideo: async () => ({ buffer: Buffer.from('video'), extension: 'mp4' }),
+  };
+
+  // 3:4：图片模型支持，但 Gemini Web 视频不支持 → 换成支持 3:4 的模型，比例保持不变
+  const switchedJob = createProductSceneJob({
+    ...payload, aspectRatio: '3:4', imageModel: 'google-flow-nano-banana-pro',
+    autoGenerateVideo: true, videoPrompt: '镜头推进', videoModel: 'gemini-web-video',
+  }, context);
+  assert.equal(switchedJob.aspectRatio, '3:4', '用户选的比例不能被改掉');
+  assert.equal(switchedJob.videoAspectRatio, '3:4', '视频比例必须等于替换图比例');
+  assert.notEqual(switchedJob.videoModel, 'gemini-web-video', '应自动换成支持 3:4 的模型');
+  assert.equal(switchedJob.videoModelSwitchedFrom, 'gemini-web-video', '换过模型要留痕');
+  await waitForTerminalJob(switchedJob.id, context);
+
+  // 9:16：Gemini Web 视频本来就支持 → 不动模型
+  const keptJob = createProductSceneJob({
+    ...payload, aspectRatio: '9:16', autoGenerateVideo: true,
+    videoPrompt: '镜头推进', videoModel: 'gemini-web-video',
+  }, context);
+  assert.equal(keptJob.videoModel, 'gemini-web-video');
+  assert.equal(keptJob.videoModelSwitchedFrom, undefined);
+  await waitForTerminalJob(keptJob.id, context);
+
+  // 缺省时用 9:16，不再回落到 1:1，也不再看场景图
+  const fallbackJob = createProductSceneJob({ ...payload, aspectRatio: undefined }, context);
+  assert.equal(fallbackJob.aspectRatio, '9:16');
+  await waitForTerminalJob(fallbackJob.id, context);
+});
+
+test('没有任何视频模型支持该比例时明确拒绝，不做静默裁切', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const context = {
+    dirs: env.dirs,
+    libraryDir: env.root,
+    runRecognition: async () => JSON.stringify({
+      sceneSpec: '客厅', personaSpec: '女性', compositionSpec: '半身', productSpec: '白色产品',
+    }),
+    generateImages: async () => [{ buffer: Buffer.from('image'), extension: 'png' }],
+  };
+  // 3:2 只有图片模型支持，视频侧一个都没有。
+  assert.throws(() => createProductSceneJob({
+    ...payload, aspectRatio: '3:2', imageModel: 'jimeng-image-5-0-pro',
+    autoGenerateVideo: true, videoPrompt: '镜头推进',
+  }, context), /没有支持 3:2 的图生视频模型/);
+
+  // 只出图不生成视频时，同样的比例应当允许。
+  const imageOnly = createProductSceneJob({
+    ...payload, aspectRatio: '3:2', imageModel: 'jimeng-image-5-0-pro', autoGenerateVideo: false,
+  }, context);
+  assert.equal(imageOnly.aspectRatio, '3:2');
+  await waitForTerminalJob(imageOnly.id, context);
+});

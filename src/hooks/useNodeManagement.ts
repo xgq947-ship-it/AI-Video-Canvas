@@ -58,14 +58,15 @@ export const useNodeManagement = () => {
         if (type === NodeType.PRODUCT_SCENE_REPLACE) {
             newNode.title = '产品短视频生成';
             newNode.imageModel = 'google-flow-nano-banana-pro';
-            newNode.aspectRatio = '1:1';
+            // 产品短视频以竖版投放为主；这一个比例同时决定替换图和短视频。
+            newNode.aspectRatio = '9:16';
             newNode.productDimensions = { length: 0, width: 0, height: 0, unit: 'cm' };
             newNode.preserveProductMarkings = true;
             newNode.productSceneRecognitionProvider = 'codex-cli';
             newNode.productSceneImageCount = 1;
             newNode.productSceneAutoGenerateVideo = false;
             newNode.productSceneVideoModel = 'gemini-web-video';
-            newNode.productSceneVideoAspectRatio = '16:9';
+            newNode.productSceneVideoAspectRatio = '9:16';
             newNode.productSceneVideoDuration = 8;
             newNode.productSceneVideoGenerateAudio = true;
         }
@@ -175,14 +176,14 @@ export const useNodeManagement = () => {
                 if (type === NodeType.PRODUCT_SCENE_REPLACE) {
                     newNode.title = '产品短视频生成';
                     newNode.imageModel = 'google-flow-nano-banana-pro';
-                    newNode.aspectRatio = '1:1';
+                    newNode.aspectRatio = '9:16';
                     newNode.productDimensions = { length: 0, width: 0, height: 0, unit: 'cm' };
                     newNode.preserveProductMarkings = true;
                     newNode.productSceneRecognitionProvider = 'codex-cli';
                     newNode.productSceneImageCount = 1;
                     newNode.productSceneAutoGenerateVideo = false;
                     newNode.productSceneVideoModel = 'gemini-web-video';
-                    newNode.productSceneVideoAspectRatio = '16:9';
+                    newNode.productSceneVideoAspectRatio = '9:16';
                     newNode.productSceneVideoDuration = 8;
                     newNode.productSceneVideoGenerateAudio = true;
                 }

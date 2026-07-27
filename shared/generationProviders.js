@@ -129,10 +129,9 @@ export function supportedImageOutputCounts(modelId) {
 /**
  * 把画幅收敛到该图片模型真正支持的取值。
  *
- * 产品短视频节点的画幅是从场景参考图**推断**出来的（inferProductSceneAspectRatio 只认
- * 16:9/4:3/1:1/3:4/9:16），并不受所选模型的能力约束。竖构图场景 + Gemini Web 图片 会推出
- * 3:4，而 Gemini Web 不支持 3:4 —— 结果是识图跑完好几分钟后才在 Python 侧抛
- * ASPECT_RATIO_NOT_SUPPORTED。这里在建任务时就收口，避免白跑一次生成。
+ * 产品短视频节点的画幅由用户统一指定，但模型可以随时切换（比如从即梦换到 Gemini Web，
+ * 后者不支持 3:4）。不收口的话，要等识图跑完好几分钟才在 Python 侧抛
+ * ASPECT_RATIO_NOT_SUPPORTED，白跑一次生成。
  */
 export function normalizeImageAspectRatio(modelId, value) {
   const ratios = getImageGenerationProvider(modelId)?.supportedAspectRatios || [];
@@ -148,4 +147,37 @@ export function normalizeVideoParameters(modelId, { aspectRatio, duration } = {}
     aspectRatio: ratios.includes(aspectRatio) ? aspectRatio : ratios[0],
     duration: durations.length === 0 ? undefined : durations.includes(Number(duration)) ? Number(duration) : durations[0],
   };
+}
+
+
+/**
+ * 按画幅挑一个能用的图生视频模型。
+ *
+ * 产品短视频链路里「比例」是用户唯一要决定的东西，替换图和短视频必须是同一个比例 ——
+ * 替换图就是视频的首帧，比例对不上时平台只会裁掉或加黑边，而且**不报错**，
+ * 要回看成片才发现构图被切了。
+ *
+ * 因此这里的取舍是：**比例是硬的，模型是软的**。所选模型撑不住这个比例，就换一个撑得住的，
+ * 而不是偷偷把用户选的比例改掉。
+ *
+ * 优先级：
+ * 1. 当前模型本身就支持 → 不动；
+ * 2. 浏览器模型优先（只要登录，不需要额外配置 API Key）；
+ * 3. 其余支持该比例的模型。
+ * 一个都没有时返回 null，由调用方明确拒绝，不做静默裁切。
+ */
+export function resolveVideoModelForAspectRatio(aspectRatio, preferredModelId) {
+  const usable = VIDEO_GENERATION_PROVIDERS.filter(model =>
+    model.supportsImageToVideo && model.supportedAspectRatios.includes(aspectRatio));
+  if (usable.length === 0) return null;
+  const preferred = usable.find(model => model.id === preferredModelId);
+  if (preferred) return { modelId: preferred.id, switched: false, from: preferredModelId };
+  const fallback = usable.find(model => model.browserProvider) || usable[0];
+  return { modelId: fallback.id, switched: true, from: preferredModelId || '' };
+}
+
+/** 该画幅下可选的图生视频模型；空数组表示没有模型支持它。 */
+export function videoModelsForAspectRatio(aspectRatio) {
+  return VIDEO_GENERATION_PROVIDERS.filter(model =>
+    model.supportsImageToVideo && model.supportedAspectRatios.includes(aspectRatio));
 }

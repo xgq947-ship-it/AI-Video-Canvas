@@ -17,17 +17,23 @@ import {
   buildProductAnalysisInstruction,
   buildProductScenePrompt,
   buildSceneAnalysisInstruction,
-  inferProductSceneAspectRatio,
   validateProductDimensions,
 } from '../../shared/productSceneReplacement.js';
 import { isMassageEquipmentName } from '../../shared/massageEquipmentCategories.js';
+
 import {
   clampImageOutputCount,
   getImageGenerationProvider,
   getVideoGenerationProvider,
   normalizeImageAspectRatio,
   normalizeVideoParameters,
+  resolveVideoModelForAspectRatio,
 } from '../../shared/generationProviders.js';
+
+// 产品短视频以竖版投放为主，默认 9:16。比例由用户在节点上统一指定，
+// 替换图与短视频共用同一个值，不再从场景参考图推断。
+export const DEFAULT_PRODUCT_SCENE_ASPECT_RATIO = '9:16';
+export const DEFAULT_PRODUCT_SCENE_VIDEO_MODEL = 'gemini-web-video';
 
 const activeJobs = new Set();
 
@@ -399,10 +405,18 @@ export function createProductSceneJob(payload, context) {
     throw new Error(`${imageProvider.name} 单次最多生成 ${imageProvider.maxOutputCount} 张图片`);
   }
   const recognitionProvider = payload.recognitionProvider === 'gemini-web' ? 'gemini-web' : 'codex-cli';
-  const videoProvider = getVideoGenerationProvider(payload.videoModel);
-  if (payload.autoGenerateVideo && !videoProvider?.supportsImageToVideo) {
-    throw new Error('自动生成视频需要选择支持图生视频的模型');
+  // 比例由用户在节点上统一指定，替换图和短视频用同一个值 —— 替换图就是视频首帧，
+  // 两者比例不一致时平台只会裁掉或加黑边，而且不报错。这里再按图片模型能力收一次口，
+  // 防止切换模型后留下它不支持的比例。
+  const aspectRatio = normalizeImageAspectRatio(payload.imageModel, String(payload.aspectRatio || DEFAULT_PRODUCT_SCENE_ASPECT_RATIO));
+  // 比例是硬的、模型是软的：所选视频模型撑不住这个比例就换一个撑得住的，
+  // 而不是把用户选的比例偷偷改掉。一个都没有时明确拒绝，不做静默裁切。
+  const videoChoice = resolveVideoModelForAspectRatio(aspectRatio, payload.videoModel || DEFAULT_PRODUCT_SCENE_VIDEO_MODEL);
+  if (payload.autoGenerateVideo && !videoChoice) {
+    throw new Error(`当前没有支持 ${aspectRatio} 的图生视频模型，请换一个比例或关闭「自动生成视频」`);
   }
+  const videoModel = videoChoice?.modelId || payload.videoModel || DEFAULT_PRODUCT_SCENE_VIDEO_MODEL;
+  const videoParameters = normalizeVideoParameters(videoModel, { aspectRatio, duration: payload.videoDuration });
   if (payload.autoGenerateVideo && !String(payload.videoPrompt || '').trim()) {
     throw new Error('自动生成视频已开启，请连接短视频提示词文本节点');
   }
@@ -464,17 +478,17 @@ export function createProductSceneJob(payload, context) {
     imageModel: payload.imageModel,
     imageCount,
     imageResolution: payload.imageResolution || 'Auto',
-    // 场景图推断出的画幅可能不在所选图片模型的能力表里（例如竖构图推出 3:4，
-    // 而 Gemini Web 只支持 16:9/9:16/1:1/3:2/4:3）。在建任务时收口，
-    // 否则要等识图跑完、真正提交生成时才在 Provider 侧硬失败。
-    aspectRatio: normalizeImageAspectRatio(payload.imageModel, inferProductSceneAspectRatio(payload.aspectRatio, '1:1')),
+    aspectRatio,
     recognitionProvider,
     recognitionModel: recognitionProvider === 'gemini-web' ? 'Gemini Web' : (context.recognitionModel || 'gpt-5.6-sol'),
     videoPrompt: String(payload.videoPrompt || '').trim(),
     videoPromptSourceId: String(payload.videoPromptSourceId || ''),
-    videoModel: payload.videoModel || 'gemini-web-video',
-    videoAspectRatio: normalizeVideoParameters(payload.videoModel || 'gemini-web-video', { aspectRatio: payload.videoAspectRatio, duration: payload.videoDuration }).aspectRatio,
-    videoDuration: normalizeVideoParameters(payload.videoModel || 'gemini-web-video', { aspectRatio: payload.videoAspectRatio, duration: payload.videoDuration }).duration,
+    videoModel,
+    // 视频比例不再单独存一份，永远等于替换图的比例。
+    videoAspectRatio: aspectRatio,
+    videoDuration: videoParameters.duration,
+    // 换过模型就记下来，界面据此说明「为什么跑的不是我选的那个模型」。
+    videoModelSwitchedFrom: videoChoice?.switched ? videoChoice.from : undefined,
     videoResolution: payload.videoResolution || '自动',
     videoGenerateAudio: payload.videoGenerateAudio !== false,
     autoGenerateVideo: payload.autoGenerateVideo === true,

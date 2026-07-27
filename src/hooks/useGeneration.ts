@@ -21,8 +21,8 @@ import {
     extractReferenceLabels,
     selectPromptReferences,
 } from '../utils/nodeReferences.js';
-import { inferProductSceneAspectRatio, validateProductDimensions } from '../../shared/productSceneReplacement.js';
-import { getImageGenerationProvider, getVideoGenerationProvider } from '../../shared/generationProviders.js';
+import { validateProductDimensions } from '../../shared/productSceneReplacement.js';
+import { getImageGenerationProvider, getVideoGenerationProvider, normalizeImageAspectRatio } from '../../shared/generationProviders.js';
 
 interface UseGenerationProps {
     nodes: NodeData[];
@@ -155,10 +155,12 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                 const productUrl = productNode?.resultUrl || productNode?.editorBackgroundUrl;
                 if (!sceneUrl || !productUrl) throw new Error('请连接并指定“场景参考”和“我方产品”两张图片');
                 if (sceneNode?.id === productNode?.id) throw new Error('场景参考与我方产品不能使用同一张图片');
-                const productAspectRatio = inferProductSceneAspectRatio(
-                    node.aspectRatio,
-                    inferProductSceneAspectRatio(sceneNode.resultAspectRatio || sceneNode.aspectRatio, '1:1')
-                );
+                // 比例由用户在节点上指定，替换图与短视频共用同一个值；
+                // 不再从场景参考图推断 —— 那会把用户选好的比例悄悄改掉。
+                const productAspectRatio = normalizeImageAspectRatio(
+                    node.imageModel || 'google-flow-nano-banana-pro',
+                    node.aspectRatio || '9:16'
+                ) || '9:16';
                 const videoPromptNode = nodes.find(parent => parent.id === node.productSceneVideoPromptSourceId && parent.type === NodeType.TEXT);
                 const job = await createProductSceneJob({
                     jobId: requestedProductSceneJobId,
@@ -181,7 +183,8 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                     videoPrompt: videoPromptNode?.prompt || '',
                     videoPromptSourceId: videoPromptNode?.id,
                     videoModel: node.productSceneVideoModel || 'gemini-web-video',
-                    videoAspectRatio: node.productSceneVideoAspectRatio || '16:9',
+                    // 视频比例永远等于替换图比例，服务端也按这个值解析视频模型。
+                    videoAspectRatio: productAspectRatio,
                     videoDuration: node.productSceneVideoDuration,
                     videoResolution: node.productSceneVideoResolution,
                     videoGenerateAudio: node.productSceneVideoGenerateAudio !== false,

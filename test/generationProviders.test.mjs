@@ -9,6 +9,8 @@ import {
   getVideoGenerationProvider,
   normalizeImageAspectRatio,
   normalizeVideoParameters,
+  resolveVideoModelForAspectRatio,
+  videoModelsForAspectRatio,
   supportedImageOutputCounts,
 } from '../shared/generationProviders.js';
 
@@ -49,4 +51,24 @@ test('画幅收敛到模型能力表：竖构图场景 + Gemini Web 不会带着
   assert.equal(normalizeImageAspectRatio('google-flow-nano-banana-pro', '3:4'), '3:4');
   // 未知模型不改写调用方的取值。
   assert.equal(normalizeImageAspectRatio('not-a-model', '3:4'), '3:4');
+});
+
+test('比例是硬的、模型是软的：视频模型跟着比例走', () => {
+  // 产品短视频链路里替换图就是视频首帧，两者比例必须一致。所选视频模型撑不住用户
+  // 选的比例时，应该换模型而不是偷偷改比例 —— 改比例会把构图裁掉且不报错。
+  assert.equal(resolveVideoModelForAspectRatio('9:16', 'gemini-web-video').modelId, 'gemini-web-video');
+  assert.equal(resolveVideoModelForAspectRatio('9:16', 'gemini-web-video').switched, false);
+
+  // Gemini Web 视频只支持 16:9 / 9:16；3:4 必须换成支持它的模型。
+  const switched = resolveVideoModelForAspectRatio('3:4', 'gemini-web-video');
+  assert.equal(switched.switched, true);
+  assert.equal(switched.from, 'gemini-web-video');
+  assert.ok(getVideoGenerationProvider(switched.modelId).supportedAspectRatios.includes('3:4'));
+  // 优先浏览器模型：换过去不该要求用户再去配 API Key。
+  assert.ok(getVideoGenerationProvider(switched.modelId).browserProvider);
+
+  // 一个都没有时返回 null，由调用方明确拒绝，不做静默裁切。
+  assert.equal(resolveVideoModelForAspectRatio('3:2', 'gemini-web-video'), null);
+  assert.deepEqual(videoModelsForAspectRatio('3:2'), []);
+  assert.ok(videoModelsForAspectRatio('9:16').length > 0);
 });

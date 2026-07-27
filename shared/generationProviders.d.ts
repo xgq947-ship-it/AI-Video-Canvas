@@ -15,5 +15,7 @@ export function getImageGenerationProvider(id?: string): ImageGenerationProvider
 export function getVideoGenerationProvider(id?: string): VideoGenerationProvider | null;
 export function clampImageOutputCount(modelId: string, requestedCount: unknown): number;
 export function supportedImageOutputCounts(modelId: string): number[];
+export function resolveVideoModelForAspectRatio(aspectRatio: string, preferredModelId?: string): { modelId: string; switched: boolean; from: string } | null;
+export function videoModelsForAspectRatio(aspectRatio: string): VideoGenerationProvider[];
 export function normalizeImageAspectRatio(modelId: string, value?: string): string | undefined;
 export function normalizeVideoParameters(modelId: string, values?: { aspectRatio?: string; duration?: number }): { aspectRatio?: string; duration?: number };

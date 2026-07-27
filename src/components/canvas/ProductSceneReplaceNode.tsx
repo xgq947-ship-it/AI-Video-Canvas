@@ -2,20 +2,21 @@ import React from 'react';
 import { Box, FileText, Film, Image as ImageIcon, Loader2, PackageCheck, Ruler, Tags, UserRound, WandSparkles, X } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { NodeConnectors } from './NodeConnectors';
-import {
-  inferProductSceneAspectRatio,
-  validateProductDimensions,
-} from '../../../shared/productSceneReplacement.js';
+import { validateProductDimensions } from '../../../shared/productSceneReplacement.js';
 import { MASSAGE_EQUIPMENT_SECTIONS } from '../../../shared/massageEquipmentCategories.js';
 import {
   IMAGE_GENERATION_PROVIDERS,
-  VIDEO_GENERATION_PROVIDERS,
   getImageGenerationProvider,
   getVideoGenerationProvider,
   normalizeImageAspectRatio,
+  resolveVideoModelForAspectRatio,
   supportedImageOutputCounts,
+  videoModelsForAspectRatio,
 } from '../../../shared/generationProviders.js';
 import { cancelProductSceneJob } from '../../services/generationService';
+
+// 与服务端同一个默认值：产品短视频以竖版投放为主。
+const DEFAULT_ASPECT_RATIO = '9:16';
 
 interface Props {
   workflowId?: string;
@@ -69,35 +70,44 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
     ? data.productSceneVideoPromptSourceId
     : connectedTextNodes[0]?.id || '';
   const promptNode = allNodes.find(node => node.id === promptSourceId);
-  const imageProvider = getImageGenerationProvider(data.imageModel) || IMAGE_GENERATION_PROVIDERS[1];
+  const imageProvider = getImageGenerationProvider(data.imageModel)
+    || getImageGenerationProvider('google-flow-nano-banana-pro')!;
   const imageCounts = supportedImageOutputCounts(imageProvider.id);
   const imageCount = Math.min(imageCounts[imageCounts.length - 1], Math.max(1, data.productSceneImageCount || 1));
-  const videoProvider = getVideoGenerationProvider(data.productSceneVideoModel) || VIDEO_GENERATION_PROVIDERS.find(model => model.id === 'gemini-web-video')!;
-  const videoRatios = videoProvider.supportedAspectRatios;
-  const videoDurations = videoProvider.supportedDurations;
+  // 用户指定的这一个比例同时决定替换图和短视频；不在图片模型能力表里时收口到它支持的值。
+  const aspectRatio = normalizeImageAspectRatio(imageProvider.id, data.aspectRatio || DEFAULT_ASPECT_RATIO)
+    || DEFAULT_ASPECT_RATIO;
+  // 比例是硬的、模型是软的：选的视频模型撑不住这个比例就自动换一个撑得住的。
+  const videoChoice = resolveVideoModelForAspectRatio(aspectRatio, data.productSceneVideoModel || 'gemini-web-video');
+  const videoProvider = videoChoice ? getVideoGenerationProvider(videoChoice.modelId) : null;
+  const videoCandidates = videoModelsForAspectRatio(aspectRatio);
+  const videoDurations = videoProvider?.supportedDurations || [];
   const dimensions = data.productDimensions || { length: 0, width: 0, height: 0, unit: 'cm' as const };
   const dimensionError = validateProductDimensions(dimensions);
   const missingVideoPrompt = data.productSceneAutoGenerateVideo && !promptNode?.prompt?.trim();
-  const canGenerate = Boolean(sceneNode && productNode && !dimensionError && !missingVideoPrompt && data.status !== NodeStatus.LOADING);
+  // 没有任何视频模型支持这个比例时不做静默裁切，直接不让生成，并在界面上说清楚。
+  const unsupportedVideoRatio = Boolean(data.productSceneAutoGenerateVideo && !videoProvider);
+  const canGenerate = Boolean(
+    sceneNode && productNode && !dimensionError && !missingVideoPrompt
+    && !unsupportedVideoRatio && data.status !== NodeStatus.LOADING
+  );
 
   React.useEffect(() => {
     const updates: Partial<NodeData> = {};
     if (sceneId !== (data.sceneReferenceId || '')) updates.sceneReferenceId = sceneId || undefined;
     if (productId !== (data.productReferenceId || '')) updates.productReferenceId = productId || undefined;
     if (promptSourceId !== (data.productSceneVideoPromptSourceId || '')) updates.productSceneVideoPromptSourceId = promptSourceId || undefined;
-    if (sceneId && data.sceneAspectReferenceId !== sceneId) {
-      updates.sceneAspectReferenceId = sceneId;
-      // 场景图推断出的画幅不一定在当前图片模型的能力表里，写回前先收口，
-      // 否则下拉显示的是收口后的值、真正提交的却是不支持的原值。
-      updates.aspectRatio = normalizeImageAspectRatio(
-        imageProvider.id,
-        inferProductSceneAspectRatio(sceneNode?.resultAspectRatio || sceneNode?.aspectRatio, '1:1')
-      );
+    // 比例只由用户决定，不再跟着场景参考图变 —— 之前换一张竖图就会把用户选好的
+    // 比例悄悄改掉，而视频那边的比例又是另一个独立字段，两边对不上就被平台裁切。
+    if (aspectRatio !== data.aspectRatio) updates.aspectRatio = aspectRatio;
+    // 视频模型跟着比例走，把自动换过的结果写回节点，界面与提交保持一致。
+    if (videoChoice && videoChoice.modelId !== data.productSceneVideoModel) {
+      updates.productSceneVideoModel = videoChoice.modelId;
     }
     if (Object.keys(updates).length > 0) {
       onUpdate(data.id, updates);
     }
-  }, [data.id, data.productReferenceId, data.productSceneVideoPromptSourceId, data.sceneAspectReferenceId, data.sceneReferenceId, imageProvider.id, onUpdate, productId, promptSourceId, sceneId, sceneNode?.aspectRatio, sceneNode?.resultAspectRatio]);
+  }, [aspectRatio, data.aspectRatio, data.id, data.productReferenceId, data.productSceneVideoModel, data.productSceneVideoPromptSourceId, data.sceneReferenceId, onUpdate, productId, promptSourceId, sceneId, videoChoice]);
 
   const handleCancel = async () => {
     if (!workflowId || !data.productSceneJobId) return;
@@ -255,8 +265,13 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
 
           <div className={`rounded-lg px-3 py-2 text-[11px] ${isDark ? 'bg-neutral-900 text-neutral-400' : 'bg-neutral-100 text-neutral-600'}`}>
             <div>识图：{data.productSceneRecognitionModel || (data.productSceneRecognitionProvider === 'gemini-web' ? 'Gemini Web' : 'Codex CLI · gpt-5.6-sol')}</div>
-            <div className="mt-0.5">生图：{imageProvider.name} · {imageCount} 张</div>
-            {data.productSceneAutoGenerateVideo && <div className="mt-0.5">视频：{videoProvider.name}</div>}
+            <div className="mt-0.5">生图：{imageProvider.name} · {imageCount} 张 · {aspectRatio}</div>
+            {data.productSceneAutoGenerateVideo && (
+              <div className="mt-0.5">
+                视频：{videoProvider ? `${videoProvider.name} · ${aspectRatio}` : `没有模型支持 ${aspectRatio}`}
+                {videoChoice?.switched && <span className="ml-1 text-amber-400">（已自动切换，所选模型不支持 {aspectRatio}）</span>}
+              </div>
+            )}
             {data.status === NodeStatus.LOADING && (
               <div className="mt-1 font-medium text-cyan-400">当前阶段：{data.productSceneStageLabel || '正在处理'}</div>
             )}
@@ -287,13 +302,17 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
               {IMAGE_GENERATION_PROVIDERS.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
             </select>
             <select
-              aria-label="输出画幅"
-              value={imageProvider.supportedAspectRatios.includes(data.aspectRatio) ? data.aspectRatio : imageProvider.supportedAspectRatios[0]}
+              aria-label="输出比例"
+              value={aspectRatio}
               onChange={event => onUpdate(data.id, { aspectRatio: event.target.value })}
               className={`rounded-xl border px-2 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}
-              title="默认匹配场景参考图，也可以手动修改"
+              title="替换图与短视频统一使用这个比例；所选视频模型不支持时会自动换用支持它的模型"
             >
-              {imageProvider.supportedAspectRatios.filter(ratio => ratio !== 'Auto').map(ratio => <option key={ratio} value={ratio}>{ratio}</option>)}
+              {imageProvider.supportedAspectRatios.filter(ratio => ratio !== 'Auto').map(ratio => (
+                <option key={ratio} value={ratio}>
+                  {ratio}{videoModelsForAspectRatio(ratio).length === 0 ? '（无视频模型）' : ''}
+                </option>
+              ))}
             </select>
             {imageCounts.length > 1 ? (
               <select
@@ -314,32 +333,38 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
             </label>
             {data.productSceneAutoGenerateVideo && (
               <div className="mt-3 grid grid-cols-3 gap-2">
+                {/* 只列出支持当前比例的模型：比例是硬的，模型跟着比例走。
+                    视频比例不再单独选 —— 替换图就是视频首帧，两边必须一致。 */}
                 <select
                   aria-label="视频模型"
-                  value={videoProvider.id}
+                  value={videoProvider?.id || ''}
                   onChange={event => {
                     const next = getVideoGenerationProvider(event.target.value)!;
                     onUpdate(data.id, {
                       productSceneVideoModel: next.id,
-                      productSceneVideoAspectRatio: next.supportedAspectRatios[0],
                       productSceneVideoDuration: next.supportedDurations[0],
                       productSceneVideoGenerateAudio: next.supportsNativeAudio,
                     });
                   }}
                   className={`col-span-3 rounded-lg border px-2 py-2 text-xs ${isDark ? 'border-neutral-700 bg-[#242424]' : 'border-neutral-300 bg-white'}`}
                 >
-                  {VIDEO_GENERATION_PROVIDERS.filter(model => model.supportsImageToVideo).map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
-                </select>
-                <select value={data.productSceneVideoAspectRatio || videoRatios[0]} onChange={event => onUpdate(data.id, { productSceneVideoAspectRatio: event.target.value })} className={`rounded-lg border px-2 py-2 text-xs ${isDark ? 'border-neutral-700 bg-[#242424]' : 'border-neutral-300 bg-white'}`}>
-                  {videoRatios.map(ratio => <option key={ratio} value={ratio}>{ratio}</option>)}
+                  {videoCandidates.length === 0
+                    ? <option value="">没有模型支持 {aspectRatio}</option>
+                    : videoCandidates.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
                 </select>
                 {videoDurations.length > 0 && <select value={data.productSceneVideoDuration || videoDurations[0]} onChange={event => onUpdate(data.id, { productSceneVideoDuration: Number(event.target.value) })} className={`rounded-lg border px-2 py-2 text-xs ${isDark ? 'border-neutral-700 bg-[#242424]' : 'border-neutral-300 bg-white'}`}>
                   {videoDurations.map(duration => <option key={duration} value={duration}>{duration} 秒</option>)}
                 </select>}
-                {videoProvider.supportsNativeAudio && <label className="flex items-center gap-1.5 text-[11px]"><input type="checkbox" checked={data.productSceneVideoGenerateAudio !== false} onChange={event => onUpdate(data.id, { productSceneVideoGenerateAudio: event.target.checked })} />原生音频</label>}
+                {videoProvider?.supportsNativeAudio && <label className="flex items-center gap-1.5 text-[11px]"><input type="checkbox" checked={data.productSceneVideoGenerateAudio !== false} onChange={event => onUpdate(data.id, { productSceneVideoGenerateAudio: event.target.checked })} />原生音频</label>}
               </div>
             )}
             {missingVideoPrompt && <p className="mt-2 text-[11px] text-amber-400">自动视频已开启，请连接包含短视频提示词的文本节点。</p>}
+            {unsupportedVideoRatio && (
+              <p className="mt-2 text-[11px] text-red-400">
+                当前没有支持 {aspectRatio} 的图生视频模型。请换一个比例，或关闭「自动生成视频」只出替换图 ——
+                强行生成只会被平台裁切，而且不会报错。
+              </p>
+            )}
           </div>
 
           <div className="flex gap-2">

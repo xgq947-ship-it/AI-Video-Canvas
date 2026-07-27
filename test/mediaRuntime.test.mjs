@@ -94,6 +94,73 @@ test('Chrome 版本解析兼容标准输出', () => {
     assert.equal(parseChromeVersion('Chromium 150.0.1'), null);
 });
 
+test('Chrome 版本解析不被启动噪声挤掉', () => {
+    // 探针把 stdout 与 stderr 拼在一起送进来，而 Linux/macOS 的 Chrome 常在版本行
+    // 之前先吐一行 Fontconfig/dbus 告警。锚定整段开头会让这一行噪声把探针判成
+    // probe-failed，Flow/即梦所有模型跟着一起置灰。
+    assert.deepEqual(
+        parseChromeVersion('[0727/103000.1:ERROR:bus.cc(407)] Failed to connect\nGoogle Chrome 150.0.7871.182\n'),
+        { version: '150.0.7871.182', major: 150 }
+    );
+    assert.deepEqual(
+        parseChromeVersion('Fontconfig warning: ignoring UTF-8\n150.0.7871.182'),
+        { version: '150.0.7871.182', major: 150 }
+    );
+    // 噪声里的裸数字不能被当成版本：只认带 Chrome 前缀的行，或整行仅有版本号的行。
+    assert.equal(parseChromeVersion('[0727/103000.1:ERROR:bus.cc(407)] 12 errors'), null);
+    assert.equal(parseChromeVersion('some noise 150.0.7871.182 trailing'), null);
+});
+
+test('Windows PowerShell 读不到版本时回退到 Chrome 的版本号目录', () => {
+    // 组策略禁用脚本宿主、或杀软拦下 powershell.exe 的机器上，FileVersion 这条路
+    // 会直接失败；今天那类机器会被判成 probe-failed 而完全无法使用 Evan。
+    // Chrome 在 chrome.exe 同级维护一个以版本号命名的目录，读目录名不启动任何进程。
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-chrome-win-fallback-'));
+    const executable = path.join(root, 'chrome.exe');
+    fs.writeFileSync(executable, '');
+    fs.mkdirSync(path.join(root, '149.0.7000.1'));
+    fs.mkdirSync(path.join(root, '150.0.7871.182'));
+    fs.mkdirSync(path.join(root, 'SetupMetrics'));
+    try {
+        const status = probeSystemChromeCompatibility(
+            { EVAN_CHROME_EXECUTABLE: executable, SystemRoot: 'C:\\Windows' },
+            {
+                platform: 'win32',
+                minMajor: 136,
+                spawnSyncImpl: () => ({ status: 1, stdout: '', stderr: '拒绝访问' })
+            }
+        );
+
+        assert.equal(status.ready, true);
+        // 升级期间新旧目录并存，必须取最大的那个，而不是目录列表的第一项。
+        assert.equal(status.version, '150.0.7871.182');
+        assert.equal(status.major, 150);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('PowerShell 与版本目录都失败时仍如实报 probe-failed', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-chrome-win-nofallback-'));
+    const executable = path.join(root, 'chrome.exe');
+    fs.writeFileSync(executable, '');
+    try {
+        const status = probeSystemChromeCompatibility(
+            { EVAN_CHROME_EXECUTABLE: executable, SystemRoot: 'C:\\Windows' },
+            {
+                platform: 'win32',
+                minMajor: 136,
+                spawnSyncImpl: () => ({ status: 1, stdout: '', stderr: '拒绝访问' })
+            }
+        );
+
+        assert.equal(status.ready, false);
+        assert.equal(status.reason, 'probe-failed');
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
 test('Windows Chrome 探针读取文件版本，不启动 chrome.exe', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-chrome-win-probe-'));
     const executable = path.join(root, 'chrome.exe');

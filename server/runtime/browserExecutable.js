@@ -49,13 +49,32 @@ export function resolveSystemChromeExecutable(environment = process.env, options
         .find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile()) || '';
 }
 
+const LABELLED_VERSION_LINE = /^(?:Google Chrome|Chrome)\s+(\d+(?:\.\d+){0,3})(?:\s|$)/i;
+const BARE_VERSION_LINE = /^(\d+(?:\.\d+){0,3})$/;
+
+/**
+ * 从探针输出里取版本号。
+ *
+ * 逐行匹配而不是锚定整段输出的开头：调用方把 stdout 和 stderr 拼在一起，而
+ * Linux/macOS 的 Chrome 常在版本行之前先吐一行 Fontconfig/dbus 之类的告警。
+ * 锚在开头会让这一行噪声把整个探针判成失败，Flow/即梦所有模型跟着一起置灰。
+ *
+ * 两条规则都很严，避免把噪声里的数字误当版本：要么带 "Google Chrome" 前缀
+ * （macOS/Linux 的 `--version`），要么整行只有版本号（Windows 读 FileVersion）。
+ */
 export function parseChromeVersion(output) {
-    const normalized = String(output || '').trim();
-    const match = normalized.match(/^(?:(?:Google Chrome|Chrome)\s+)?(\d+(?:\.\d+){0,3})(?:\s|$)/i);
-    if (!match) return null;
+    const lines = String(output || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    const version = lines.reduce(
+        (found, line) => found || (line.match(LABELLED_VERSION_LINE)?.[1] ?? null),
+        null
+    ) ?? lines.reduce(
+        (found, line) => found || (line.match(BARE_VERSION_LINE)?.[1] ?? null),
+        null
+    );
+    if (!version) return null;
     return {
-        version: match[1],
-        major: Number(match[1].split('.')[0])
+        version,
+        major: Number(version.split('.')[0])
     };
 }
 
@@ -73,9 +92,44 @@ function windowsPowerShellExecutable(environment) {
  * 调用转交给现有窗口并返回空输出。读取 PE 文件的 VersionInfo 不会启动 Chrome，也
  * 不会访问或锁定任何浏览器 Profile。
  */
+const WINDOWS_VERSION_DIR_NAME = /^\d+(?:\.\d+){1,3}$/;
+
+function compareVersionsDesc(left, right) {
+    const leftParts = left.split('.').map(Number);
+    const rightParts = right.split('.').map(Number);
+    for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+        const difference = (rightParts[index] || 0) - (leftParts[index] || 0);
+        if (difference) return difference;
+    }
+    return 0;
+}
+
+/**
+ * PowerShell 拿不到版本时的兜底。
+ *
+ * Chrome 在 chrome.exe 同级维护一个以版本号命名的目录（Application\141.0.7390.55\）。
+ * 读目录名不启动任何进程，因此组策略禁用了脚本宿主、或杀软拦下 powershell.exe 的
+ * 机器仍能通过检测 —— 那种机器上今天会被直接判成 probe-failed 而无法使用。
+ * 只在 FileVersion 失败后才走这里：FileVersion 才是权威来源。
+ */
+function windowsVersionFromInstallDir(executable, readdirImpl) {
+    let entries;
+    try {
+        entries = readdirImpl(path.dirname(executable), { withFileTypes: true });
+    } catch {
+        return null;
+    }
+    const versions = entries
+        .filter(entry => entry.isDirectory() && WINDOWS_VERSION_DIR_NAME.test(entry.name))
+        .map(entry => entry.name);
+    // 升级期间新旧版本目录会并存，取最大的那个才对应当前的 chrome.exe。
+    return versions.sort(compareVersionsDesc)[0] || null;
+}
+
 function readChromeVersion(executable, environment, {
     platform,
-    spawnSyncImpl
+    spawnSyncImpl,
+    readdirImpl
 }) {
     if (platform === 'win32') {
         const result = spawnSyncImpl(
@@ -100,10 +154,12 @@ function readChromeVersion(executable, environment, {
                 }
             }
         );
-        return {
-            result,
-            parsed: parseChromeVersion(`${result.stdout || ''}${result.stderr || ''}`)
-        };
+        const parsed = parseChromeVersion(`${result.stdout || ''}\n${result.stderr || ''}`);
+        if (parsed && !result.error && result.status === 0) return { result, parsed };
+
+        const fallbackVersion = windowsVersionFromInstallDir(executable, readdirImpl);
+        if (!fallbackVersion) return { result, parsed };
+        return { result: { status: 0 }, parsed: parseChromeVersion(fallbackVersion) };
     }
 
     const result = spawnSyncImpl(executable, ['--version'], {
@@ -111,9 +167,10 @@ function readChromeVersion(executable, environment, {
         windowsHide: true,
         timeout: 5_000
     });
+    // 用换行拼接：stdout 没有末尾换行时，直接相连会把 stderr 的第一行粘进版本行。
     return {
         result,
-        parsed: parseChromeVersion(`${result.stdout || ''}${result.stderr || ''}`)
+        parsed: parseChromeVersion(`${result.stdout || ''}\n${result.stderr || ''}`)
     };
 }
 
@@ -121,6 +178,7 @@ export function probeSystemChromeCompatibility(environment = process.env, {
     platform = process.platform,
     homeDir = os.homedir(),
     spawnSyncImpl = spawnSync,
+    readdirImpl = fs.readdirSync,
     minMajor = MIN_SUPPORTED_CHROME_MAJOR
 } = {}) {
     const executable = resolveSystemChromeExecutable(environment, { platform, homeDir });
@@ -138,7 +196,8 @@ export function probeSystemChromeCompatibility(environment = process.env, {
 
     const { result, parsed } = readChromeVersion(executable, environment, {
         platform,
-        spawnSyncImpl
+        spawnSyncImpl,
+        readdirImpl
     });
     if (result.error || result.status !== 0 || !parsed) {
         return {

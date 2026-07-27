@@ -2,7 +2,7 @@
   "name": "twitcanva",
   "productName": "Evan AI Video Canvas",
   "private": true,
-  "version": "0.2.5",
+  "version": "0.2.6",
   "main": "electron/main.js",
   "type": "module",
   "engines": {

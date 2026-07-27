@@ -1536,7 +1536,7 @@ export default function App() {
     if (updateNodeDrag(e, viewport, setNodes, selectedNodeIds)) return;
 
     // 3. Handle Connection Dragging
-    if (updateConnectionDrag(e, nodes, viewport, canvasOffsetRef.current)) return;
+    if (updateConnectionDrag(e)) return;
 
     // 4. Handle Canvas Panning (disabled when selection box is active)
     if (!isSelecting) {

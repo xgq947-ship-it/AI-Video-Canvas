@@ -22,6 +22,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { resolveClaudeBin, resolveCodexBin } from './cliPaths.js';
 import { decodeProcessOutput } from '../utils/processOutput.js';
+import { operationCancelledError } from './operationCancelled.js';
 import { runGeminiWebTextTask } from './geminiWebWorkflow.js';
 
 const CLI_TIMEOUT_MS = 180000;
@@ -29,13 +30,6 @@ const CLI_TIMEOUT_MS = 180000;
 function upstreamError(message, httpStatus) {
     const error = new Error(message);
     error.status = httpStatus >= 500 ? 502 : httpStatus;
-    return error;
-}
-
-function operationCancelledError(label) {
-    const error = new Error(`${label} 已取消`);
-    error.code = 'OPERATION_CANCELLED';
-    error.cancelled = true;
     return error;
 }
 

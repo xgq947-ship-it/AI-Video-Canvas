@@ -6,19 +6,14 @@
  */
 
 import React, { useState, useRef } from 'react';
-import { NodeData, NodeType, Viewport } from '../types';
+import { NodeData, NodeType } from '../types';
 // @ts-ignore — 纯 JS 共享模块，类型由 shared/connectionRules.d.ts 提供
 import { isValidNodeConnection } from '@/shared/connectionRules.js';
-import { resolveConnectionDropTarget } from '../utils/connectionDropTarget.js';
+import { resolveConnectionDropTarget, ConnectionDropCandidate } from '../utils/connectionDropTarget.js';
 
 interface ConnectionStart {
     nodeId: string;
     handle: 'left' | 'right';
-}
-
-interface CanvasOffset {
-    left: number;
-    top: number;
 }
 
 export const useConnectionDragging = () => {
@@ -42,19 +37,59 @@ export const useConnectionDragging = () => {
     // HELPERS
     // ============================================================================
 
-    /**
-     * Checks if mouse is hovering over a node (for connection target)
-     * Also determines which side (left or right connector) is being hovered
-     * @param mouseX - Screen X coordinate
-     * @param mouseY - Screen Y coordinate
-     * @param nodes - Array of all nodes
-     * @param viewport - Current viewport
-     */
+    /** 同步 hover 目标：ref 供同一帧内的命中判定读取，state 供渲染高亮。 */
     const setHoveredTarget = (target: { nodeId: string; side: 'left' | 'right' } | null) => {
         hoveredNodeIdRef.current = target?.nodeId || null;
         hoveredSideRef.current = target?.side || null;
         setHoveredNodeId(target?.nodeId || null);
         setHoveredSide(target?.side || null);
+    };
+
+    /**
+     * 全部节点矩形的每帧缓存。
+     *
+     * getBoundingClientRect() 会强制同步布局，而这里要对画布上**每个**节点各取一次。
+     * pointermove 在高回报率鼠标上一帧能来好几条（Windows 上尤其明显），逐条重算就是
+     * 拖线卡顿的来源。同一帧内不会有任何重绘，缓存一帧既省掉重复布局，也不会算错：
+     * 连线拖拽期间只有 tempConnectionEnd / hover 高亮在变，节点位置不动。
+     * 按帧而不是按整次拖拽缓存，是为了让拖拽中途的缩放、平移立刻生效。
+     */
+    const nodeRectCache = useRef<ConnectionDropCandidate[] | null>(null);
+    const nodeRectFrame = useRef<number | null>(null);
+
+    const invalidateNodeRects = () => {
+        nodeRectCache.current = null;
+        nodeRectFrame.current = null;
+    };
+
+    const readNodeRects = (): ConnectionDropCandidate[] => {
+        if (nodeRectCache.current) return nodeRectCache.current;
+
+        const candidates = Array.from(document.querySelectorAll<HTMLElement>('[data-node-id]'))
+            .map(element => {
+                const rect = element.getBoundingClientRect();
+                return {
+                    nodeId: element.dataset.nodeId || '',
+                    rect: {
+                        left: rect.left,
+                        top: rect.top,
+                        right: rect.right,
+                        bottom: rect.bottom,
+                        width: rect.width,
+                        height: rect.height,
+                    },
+                };
+            })
+            .filter(candidate => Boolean(candidate.nodeId));
+
+        // 只在拿得到 rAF 时才缓存：拿不到就没有可靠的作废时机，宁可每次重算。
+        if (typeof requestAnimationFrame === 'function') {
+            nodeRectCache.current = candidates;
+            if (nodeRectFrame.current === null) {
+                nodeRectFrame.current = requestAnimationFrame(invalidateNodeRects);
+            }
+        }
+        return candidates;
     };
 
     const resolveDropTargetAtPoint = (mouseX: number, mouseY: number, sourceNodeId: string) => {
@@ -73,25 +108,20 @@ export const useConnectionDragging = () => {
             ? { nodeId: connectorNodeId, side: connectorSide }
             : null;
 
-        const rootsAtPoint = elementsAtPoint
-            .map(element => element.closest<HTMLElement>('[data-node-id]'))
-            .filter((element): element is HTMLElement => Boolean(element));
-        const allRoots = Array.from(document.querySelectorAll<HTMLElement>('[data-node-id]'));
-        const orderedRoots = [...rootsAtPoint, ...allRoots];
-        const candidates = orderedRoots.map(element => {
-            const rect = element.getBoundingClientRect();
-            return {
-                nodeId: element.dataset.nodeId || '',
-                rect: {
-                    left: rect.left,
-                    top: rect.top,
-                    right: rect.right,
-                    bottom: rect.bottom,
-                    width: rect.width,
-                    height: rect.height,
-                },
-            };
-        }).filter(candidate => Boolean(candidate.nodeId));
+        // 指针正下方的节点排在最前，让重叠节点按「最上面的赢」定序；
+        // resolveConnectionDropTarget 内部按 nodeId 去重，重复项不影响结果。
+        const nodeIdsAtPoint = elementsAtPoint
+            .map(element => element.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId)
+            .filter((nodeId): nodeId is string => Boolean(nodeId));
+        const allCandidates = readNodeRects();
+        const candidates = nodeIdsAtPoint.length
+            ? [
+                ...nodeIdsAtPoint
+                    .map(nodeId => allCandidates.find(candidate => candidate.nodeId === nodeId))
+                    .filter((candidate): candidate is ConnectionDropCandidate => Boolean(candidate)),
+                ...allCandidates,
+            ]
+            : allCandidates;
 
         return resolveConnectionDropTarget({
             point: { x: mouseX, y: mouseY },
@@ -109,6 +139,7 @@ export const useConnectionDragging = () => {
     const resetConnectionDrag = () => {
         isDraggingConnectionRef.current = false;
         connectionStartRef.current = null;
+        invalidateNodeRects();
         setIsDraggingConnection(false);
         setConnectionStart(null);
         setTempConnectionEnd(null);
@@ -135,6 +166,7 @@ export const useConnectionDragging = () => {
         dragStartTime.current = Date.now();
         isDraggingConnectionRef.current = true;
         connectionStartRef.current = { nodeId, handle: side };
+        invalidateNodeRects();
         setIsDraggingConnection(true);
         setConnectionStart({ nodeId, handle: side });
         setTempConnectionEnd({ x: e.clientX, y: e.clientY });
@@ -143,12 +175,7 @@ export const useConnectionDragging = () => {
     /**
      * Updates temporary connection end point during drag
      */
-    const updateConnectionDrag = (
-        e: React.PointerEvent,
-        nodes: NodeData[],
-        viewport: Viewport,
-        canvasOffset?: CanvasOffset
-    ) => {
+    const updateConnectionDrag = (e: React.PointerEvent) => {
         if (!isDraggingConnectionRef.current) return false;
 
         setTempConnectionEnd({ x: e.clientX, y: e.clientY });

@@ -9,6 +9,7 @@ import { generateGeminiWebImage, generateGeminiWebVideo, isGeminiWebImageModel, 
 import { generateSeedanceVideo } from './seedance.js';
 import { createCodexImageJob, getCodexImageJob } from './codexImageJobs.js';
 import { getPromptOptimizerProvider } from './promptOptimizerProviders.js';
+import { isOperationCancelled, operationCancelledError } from './operationCancelled.js';
 import { resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
 import { resolveProjectMediaTarget } from '../utils/projectAssets.js';
 import {
@@ -112,12 +113,7 @@ const completeFromExistingMetadata = (job, dirs) => {
 
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
-const cancellationError = () => {
-  const error = new Error('产品短视频任务已取消');
-  error.code = 'OPERATION_CANCELLED';
-  error.cancelled = true;
-  return error;
-};
+const cancellationError = () => operationCancelledError('产品短视频任务');
 
 const assertJobActive = (job, dirs, signal) => {
   const current = readJob(job.id, job.workflowId, dirs);
@@ -381,7 +377,7 @@ async function executeJob(job, context) {
           type: 'videos', sourceJobId: job.id, sourceImageNodeId: task.imageNodeId,
         });
       } catch (videoError) {
-        if (videoError?.cancelled || videoError?.code === 'OPERATION_CANCELLED' || signal.aborted) {
+        if (isOperationCancelled(videoError) || signal.aborted) {
           throw videoError;
         }
         task.status = 'failed';
@@ -415,7 +411,7 @@ async function executeJob(job, context) {
     writeJob(job, dirs);
   } catch (error) {
     const latest = readJob(job.id, job.workflowId, dirs);
-    if (error?.cancelled || error?.code === 'OPERATION_CANCELLED' || latest?.status === 'cancelled') {
+    if (isOperationCancelled(error) || latest?.status === 'cancelled') {
       return;
     }
     job.status = 'failed';

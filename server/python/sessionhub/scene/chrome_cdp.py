@@ -262,6 +262,31 @@ def _instance_pid_windows() -> int | None:
     return details[0] if details else None
 
 
+_KERNEL32 = None
+
+
+def _kernel32():
+    """惰性加载并缓存 kernel32。
+
+    绝不能在模块导入时做：这个模块在 macOS 上也会被导入，``ctypes.WinDLL`` 只存在于
+    Windows。缓存则是因为下面两个轮询循环每 100~250ms 调一次，每次都重新 WinDLL +
+    重设 argtypes 纯属浪费。
+    """
+    global _KERNEL32
+    if _KERNEL32 is None:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
+        _KERNEL32 = kernel32
+    return _KERNEL32
+
+
 def _windows_pid_is_running(pid: int) -> bool | None:
     """用 Win32 进程句柄查询 PID，避免每 250ms 冷启动一次 PowerShell。
 
@@ -276,13 +301,7 @@ def _windows_pid_is_running(pid: int) -> bool | None:
         synchronize = 0x00100000
         wait_object_0 = 0x00000000
         wait_timeout = 0x00000102
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
-        kernel32.OpenProcess.restype = ctypes.c_void_p
-        kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-        kernel32.WaitForSingleObject.restype = ctypes.c_uint32
-        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-        kernel32.CloseHandle.restype = ctypes.c_int
+        kernel32 = _kernel32()
         handle = kernel32.OpenProcess(synchronize, False, int(pid))
         if not handle:
             # ERROR_INVALID_PARAMETER 表示 PID 已不存在；其它错误（例如拒绝访问）
@@ -583,6 +602,13 @@ def stop_chrome(known_pid: int | None = None) -> tuple[bool, str]:
             if _windows_pid_is_running(pid) is False and not is_port_open():
                 break
             time.sleep(0.1)
+        # 只有**确认还活着**才算失败。查不出来（None，多为权限受限）一律按已关闭处理：
+        # 那类机器上 OpenProcess 本来就拿不到句柄，报失败会把它们全部挡在启动之外。
+        if _windows_pid_is_running(pid) is True:
+            return False, (
+                f"无法结束 Evan 专属 Chrome 进程（PID {pid}）。"
+                "请在任务管理器中手动结束该 chrome.exe 后重试。"
+            )
         return True, "已强制关闭专用 Chrome"
 
     main_pid = _instance_pid()
@@ -649,7 +675,13 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
     # 19222 永远不会出现，最终报“已启动 Chrome，但 CDP 仍不可用”。
     if not ok and pid is not None:
         _debug_log("start_chrome.restart_existing_without_cdp", pid=pid)
-        stop_chrome(pid if IS_WINDOWS else None)
+        closed, close_message = stop_chrome(pid if IS_WINDOWS else None)
+        if not closed:
+            # 旧实例还占着同一个 Profile，硬着头皮启动只会被 Chrome 单实例机制吞掉：
+            # 用户要干等满 CDP 超时，最后拿到一句无从下手的通用错误。
+            # 直接把「没关掉、请去任务管理器结束」这条可执行的提示交回给用户。
+            _debug_log("start_chrome.stop_failed", pid=pid, message=close_message)
+            return False, close_message
         stopped_existing = True
         pid = None
         command = None
@@ -690,7 +722,9 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
         _debug_log("start_chrome.reuse", foreground=foreground, headless=headless, message=msg)
         return True, msg
     if force and not stopped_existing:
-        stop_chrome()
+        # 复用上面那次核验结果：Windows 上 stop_chrome() 不带 pid 会再跑一次
+        # Get-CimInstance Win32_Process，部分机器上要好几秒。
+        stop_chrome(pid if IS_WINDOWS else None)
     if not CHROME_BIN.exists():
         return False, f"找不到 Chrome：{CHROME_BIN}"
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)

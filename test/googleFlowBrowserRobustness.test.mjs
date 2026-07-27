@@ -203,3 +203,60 @@ test('_exact_count 会等待，而不是对刚点开的菜单取快照', () => {
   // 超时后仍要如实抛错，不能无限等下去。
   assert.match(block, /raise GoogleFlowError\(error_code, message\)/);
 });
+
+test('Windows 进程句柄查询复用 kernel32，且不在导入期加载', () => {
+  // _windows_pid_is_running 挂在两个轮询循环上（关闭等待 250ms 一次、启动等待 100ms
+  // 一次）。原实现每次调用都重新 WinDLL("kernel32") 并重设一遍 argtypes，
+  // 正是「Windows 关闭/切换专属 Chrome 很慢」要修的那类浪费。
+  assert.match(chromeRuntime, /_KERNEL32 = None/);
+  assert.match(chromeRuntime, /def _kernel32\(\)/);
+  // 缓存必须惰性：macOS 也会导入这个模块，而 ctypes.WinDLL 只存在于 Windows。
+  const loader = chromeRuntime.slice(
+    chromeRuntime.indexOf('def _kernel32()'),
+    chromeRuntime.indexOf('def _windows_pid_is_running')
+  );
+  assert.match(loader, /import ctypes/, 'ctypes 必须在函数内导入');
+  assert.doesNotMatch(
+    chromeRuntime.slice(0, chromeRuntime.indexOf('def _kernel32()')),
+    /ctypes\.WinDLL/,
+    '模块顶层不得加载 kernel32'
+  );
+});
+
+test('强杀后只有确认仍在运行才报失败', () => {
+  // _windows_pid_is_running 在权限受限时返回 None（查不出来），不是 False。
+  // 若把「循环走完」直接当成失败，那些今天能正常工作的受限机器会被挡在启动之外。
+  const block = chromeRuntime.slice(
+    chromeRuntime.indexOf('def stop_chrome'),
+    chromeRuntime.indexOf('def start_chrome')
+  );
+  assert.match(block, /_windows_pid_is_running\(pid\) is True/, '只认「确认仍在运行」');
+  assert.match(block, /return False, \(/, '确认没杀掉时必须如实返回失败');
+  assert.match(block, /任务管理器/, '失败提示要给出用户可执行的下一步');
+
+  // 光如实返回还不够：调用方丢掉返回值的话，仍会接着启动同 Profile 的第二个 Chrome，
+  // 被单实例机制吞掉，用户干等满 CDP 超时才拿到一句通用错误。
+  const starter = chromeRuntime.slice(
+    chromeRuntime.indexOf('def start_chrome'),
+    chromeRuntime.indexOf('def start_chrome') + 1200
+  );
+  assert.match(
+    starter,
+    /closed, close_message = stop_chrome\(pid if IS_WINDOWS else None\)\s*\n\s*if not closed:/,
+    'start_chrome 必须接住关闭失败，而不是丢掉返回值继续启动'
+  );
+  assert.match(starter, /return False, close_message/, '关闭失败要把可执行提示原样交回用户');
+});
+
+test('start_chrome 的 force 路径复用已核验的 PID，不重复跑 CIM 查询', () => {
+  // Get-CimInstance Win32_Process 在部分 Windows 机器上要好几秒；上面几行刚查过一次。
+  const block = chromeRuntime.slice(
+    chromeRuntime.indexOf('def start_chrome'),
+    chromeRuntime.indexOf('def start_chrome') + 3000
+  );
+  assert.match(
+    block,
+    /if force and not stopped_existing:\s*\n(?:\s*#[^\n]*\n)*\s*stop_chrome\(pid if IS_WINDOWS else None\)/,
+    'force 分支仍在调用无参 stop_chrome()'
+  );
+});

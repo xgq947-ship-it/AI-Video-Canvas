@@ -5,17 +5,13 @@
  * 必须**跨 provider 串行**执行，否则两个任务会互相切换页面、抢焦点并污染生成结果。
  */
 
+import { operationCancelledError } from './operationCancelled.js';
+
 let workflowQueue = Promise.resolve();
 // 已入队但还没跑完的任务，按入队顺序排列；队头就是当前占用 Chrome 的那个。
 const inFlight = [];
 
-export function browserWorkflowCancelledError(label = '浏览器任务') {
-    const error = new Error(`${label}已取消`);
-    error.code = 'OPERATION_CANCELLED';
-    error.cancelled = true;
-    error.submitted = false;
-    return error;
-}
+export const browserWorkflowCancelledError = (label = '浏览器任务') => operationCancelledError(label);
 
 export function enqueueGoogleFlowWorkflow(task, {
     label = '浏览器任务',
@@ -39,10 +35,14 @@ export function enqueueGoogleFlowWorkflow(task, {
     });
     workflowQueue = scheduled.catch(() => undefined);
 
-    if (!signal) {
-        scheduled.then(release, release);
-        return scheduled;
-    }
+    // release 只跟随任务本身的生命周期，**不能**跟随调用方的取消。
+    // 取消只表示「不再等这次结果」：task() 里的 ops_cli 子进程还在收尾，Chrome 仍被占用。
+    // 若在 abort 时就 release，browserWorkflowBusyLabel() 会提前报空闲，
+    // assertBrowserWorkflowIdle 随即放行「打开专属 Chrome / 检查登录」——
+    // 而这两个动作会 stop_chrome，正好打断还没退干净的那个任务。
+    scheduled.then(release, release);
+
+    if (!signal) return scheduled;
 
     return new Promise((resolve, reject) => {
         let settled = false;
@@ -50,7 +50,6 @@ export function enqueueGoogleFlowWorkflow(task, {
             if (settled) return;
             settled = true;
             signal.removeEventListener('abort', onAbort);
-            release();
             handler(value);
         };
         const onAbort = () => settle(reject, browserWorkflowCancelledError(label));

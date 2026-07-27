@@ -76,6 +76,53 @@ test('取消信号立即从浏览器队列移除任务，排队任务不会再�
   assert.equal(browserWorkflowBusyLabel(), '');
 });
 
+test('取消正在执行的任务后，队列在它真正收尾前仍然算忙', async () => {
+  // 取消只表示「调用方不再等结果」：ops_cli 子进程还在收尾，Chrome 仍被它占着。
+  // 早期实现在 abort 时就把条目移出 inFlight，于是 assertBrowserWorkflowIdle 立刻放行
+  // 「打开专属 Chrome / 检查登录」——而这两个动作都会 stop_chrome，正好把还没退干净的
+  // 那个任务打断。这正是这几个 Windows 修复要根除的生命周期问题。
+  assert.equal(browserWorkflowBusyLabel(), '');
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const controller = new AbortController();
+  let started = false;
+  const running = enqueueBrowserWorkflow(() => { started = true; return gate; }, {
+    label: '即梦视频生成',
+    signal: controller.signal
+  });
+
+  // 必须等任务体真的跑起来再取消：还在排队时取消应当立刻释放（另有用例覆盖），
+  // 这里要锁的是「已经在驱动 Chrome」的那一种。
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(started, true);
+  assert.equal(browserWorkflowBusyLabel(), '即梦视频生成');
+  controller.abort();
+  await assert.rejects(running, error => error.code === 'OPERATION_CANCELLED');
+
+  // 调用方已经拿到 reject，但任务体还没结束 —— 队列必须继续拒绝界面操作。
+  assert.equal(browserWorkflowBusyLabel(), '即梦视频生成');
+  assert.throws(() => assertBrowserWorkflowIdle('打开浏览器窗口'), /BROWSER_WORKFLOW_BUSY|中断当前生成/);
+
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(browserWorkflowBusyLabel(), '');
+});
+
+test('取消错误的形状对四层调用方一致：submitted 必须为 false', async () => {
+  // shouldRetryOpsFailure 与视频任务的 retryBlocked 都按 submitted 判定。
+  // 漏设会让「用户主动取消」被当成「已提交、状态未知」，界面就会让用户去平台
+  // 历史记录里找一个根本没提交过的任务。
+  const controller = new AbortController();
+  controller.abort();
+  const cancelled = enqueueBrowserWorkflow(() => {}, { label: '即梦图片生成', signal: controller.signal });
+  await assert.rejects(cancelled, error => {
+    assert.equal(error.code, 'OPERATION_CANCELLED');
+    assert.equal(error.cancelled, true);
+    assert.equal(error.submitted, false);
+    return true;
+  });
+});
+
 test('检查登录态在拒绝之前不得写入 checking 状态', () => {
   // 顺序反了的话，三个平台会永久停在「检查中」——和探针卡死表现完全一样。
   const source = fs.readFileSync(new URL('../server/index.js', import.meta.url), 'utf8');

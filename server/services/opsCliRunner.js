@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { RUNTIME_PATHS } from '../runtime/paths.js';
 import { getChromeCompatibility } from '../runtime/browserExecutable.js';
+import { isOperationCancelled, operationCancelledError } from './operationCancelled.js';
 import {
     browserSessionState,
     browserStateForError,
@@ -310,15 +311,6 @@ export function shouldRetryOpsFailure(error, { attempt, maxAttempts }) {
 // 不 unref：调用方正在 await 这个退避，unref 之后事件循环一空就再也不会被唤醒。
 const delay = (ms) => new Promise(resolve => { setTimeout(resolve, ms); });
 
-function operationCancelledError(label) {
-    const error = new Error(`${label}已取消`);
-    error.code = 'OPERATION_CANCELLED';
-    error.cancelled = true;
-    error.submitted = false;
-    error.sessionState = 'unknown';
-    return error;
-}
-
 function abortableDelay(ms, signal, label) {
     if (!signal) return delay(ms);
     if (signal.aborted) return Promise.reject(operationCancelledError(label));
@@ -521,7 +513,7 @@ export function runOpsCli({
 
         // 用户主动取消只代表“不再等待这次任务”，不代表登录失效或浏览器损坏。
         // 保留 provider 原来的 authenticated 状态，只释放活跃计数与空闲计时器。
-        if (lastError?.cancelled || lastError?.code === 'OPERATION_CANCELLED') {
+        if (isOperationCancelled(lastError)) {
             if (provider && trackSessionState) {
                 const restoreState = previousProviderState?.state === 'checking'
                     ? 'unknown'

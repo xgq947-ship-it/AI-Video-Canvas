@@ -90,9 +90,19 @@ test('结果图按长边判定尺寸，16:9 / 9:16 不能被短边卡掉', () =>
   // 即梦结果区缩略图统一按长边 360 渲染。1:1 是 360×360，两边都过；16:9 是 360×202，
   // 短边 202 被「两边都 ≥256」卡掉 —— 4 张结果一张也收不到，只能空等到 10 分钟超时，
   // 而平台那边图早就出好了。这条规则是整条链路能不能拿到结果的命门。
-  const filterExpression = provider
-    .split('.filter(item =>')[1]
-    .split(')\n           .map(item => item.src)')[0];
+  const extractFilterExpression = source => {
+    const match = source.match(
+      /\.filter\(item =>(?<expression>[\s\S]*?)\)\r?\n\s*\.map\(item => item\.src\)/
+    );
+    assert.ok(match?.groups?.expression, '应能提取图片尺寸过滤表达式');
+    return match.groups.expression;
+  };
+  const filterExpression = extractFilterExpression(provider);
+  assert.equal(
+    extractFilterExpression(provider.replace(/\r?\n/g, '\r\n')).replace(/\r\n/g, '\n'),
+    filterExpression.replace(/\r\n/g, '\n'),
+    'Windows CRLF 检出不能改变过滤表达式'
+  );
   const hit = (width, height, renderedWidth, renderedHeight) =>
     new Function('item', `return ${filterExpression}`)({
       src: 'https://p26-dreamina-sign.byteimg.com/x', width, height, renderedWidth, renderedHeight

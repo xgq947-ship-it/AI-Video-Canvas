@@ -33,6 +33,7 @@ from ops_cli.platforms.image_to_video.providers.jimeng import (
     FIELD_RESOLUTION,
     JIMENG_HOST,
     MAX_CONSECUTIVE_PAGE_READ_ERRORS,
+    NOT_SUBMITTED_ERROR_CODES,
     REJECTION_MARKERS,
     JimengError,
     _composer_image_count,
@@ -624,7 +625,14 @@ def _wait_for_images(
             queue_message = _queue_hint(page_text) or queue_message
             for marker in CREDITS_MARKERS:
                 if marker in page_text:
-                    raise JimengError("JIMENG_CREDITS_INSUFFICIENT", f"即梦积分不足（页面提示：{marker}）。")
+                    raise JimengError(
+                        "JIMENG_CREDITS_INSUFFICIENT",
+                        f"即梦积分不足（页面提示：{marker}）。",
+                        recovery_hint=(
+                            "请先到即梦账号充值积分或等待每日免费积分刷新，再重新生成。"
+                            "本次没有产生生成任务，不会重复扣费，也不需要去历史记录里找结果。"
+                        ),
+                    )
             for marker in REJECTION_MARKERS:
                 if marker in page_text:
                     raise JimengError(
@@ -830,7 +838,7 @@ def _execute_generation(
                 return _deliver_results(page, image_urls, output_dir)
     except JimengError as exc:
         # 提交后抛出的结构化错误同样要打上标记（下载失败、等待超时等）。
-        if submitted:
+        if submitted and exc.error_code not in NOT_SUBMITTED_ERROR_CODES:
             exc.submitted = True
         raise
     except Exception as exc:

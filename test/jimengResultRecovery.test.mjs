@@ -132,3 +132,43 @@ test('补收窗口必须塞得进 Node 侧的超时余量', () => {
     `补收 ${reclaimSeconds}s 必须留在 Node 余量 ${marginMinutes} 分钟之内并留出下载时间`
   );
 });
+
+test('积分不足要给出可执行提示，且不被标成「提交状态未知」', () => {
+  // 本机实测（2026-07-27）：即梦账号无积分时，链路一路走通到结果区，页面提示「积分不足」，
+  // 被正确识别成 JIMENG_CREDITS_INSUFFICIENT。但两处不对：
+  // 1) 兄弟错误码（SUBMISSION_UNKNOWN / JIMENG_CONTENT_REJECTED）都带 recovery_hint，
+  //    只有积分不足没有，用户看到的就是一句「积分不足。」没有下文。
+  // 2) 它发生在 _submit 之后，被 `if submitted: exc.submitted = True` 一刀切标成已提交，
+  //    产品短视频节点据此把任务标成「提交状态未知，请先检查平台历史记录」——
+  //    可积分不足根本没有产生生成任务，让用户去翻历史记录纯属误导。
+  for (const relative of [
+    'server/python/ops_cli/platforms/text_to_image/providers/jimeng.py',
+    'server/python/ops_cli/platforms/image_to_video/providers/jimeng.py',
+  ]) {
+    const source = fs.readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8');
+
+    // 精确锚在 raise 处：源码里还有一处同名字符串是 NOT_SUBMITTED_ERROR_CODES 的定义。
+    assert.match(
+      source,
+      /raise JimengError\(\s*\r?\n\s*"JIMENG_CREDITS_INSUFFICIENT",[\s\S]{0,400}?recovery_hint=\(/,
+      `${relative} 的积分不足缺少 recovery_hint`
+    );
+
+    // 一刀切打标必须给「平台明确拒绝」的码留出口。
+    assert.match(
+      source,
+      /if submitted and exc\.error_code not in NOT_SUBMITTED_ERROR_CODES:/,
+      `${relative} 仍在无条件把提交后的错误标成 submitted`
+    );
+  }
+
+  // 常量只定义一处，图片侧 import 复用，避免两边漂移。
+  const video = fs.readFileSync(
+    new URL('../server/python/ops_cli/platforms/image_to_video/providers/jimeng.py', import.meta.url), 'utf8'
+  );
+  assert.match(video, /^NOT_SUBMITTED_ERROR_CODES = frozenset\(\{"JIMENG_CREDITS_INSUFFICIENT"\}\)\r?$/m);
+  const image = fs.readFileSync(
+    new URL('../server/python/ops_cli/platforms/text_to_image/providers/jimeng.py', import.meta.url), 'utf8'
+  );
+  assert.match(image, /^\s*NOT_SUBMITTED_ERROR_CODES,\r?$/m, '图片侧应 import 同一个常量而不是各写一份');
+});

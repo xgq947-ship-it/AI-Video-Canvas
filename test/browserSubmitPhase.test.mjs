@@ -41,9 +41,13 @@ test('四个 provider 都在提交点翻转 submitted 标记', () => {
 test('提交后抛出的结构化错误会被打上 submitted 标记', () => {
   for (const [file, errorClass] of PROVIDERS) {
     const source = read(file);
+    // 允许附加一个排除条件（NOT_SUBMITTED_ERROR_CODES）：平台**明确拒绝**且不会留下
+    // 可补收结果的码（目前只有即梦积分不足）不该被标成已提交，否则界面会让用户去
+    // 平台历史记录里找一个根本没产生的任务。排除名单的具体内容由
+    // jimengResultRecovery.test.mjs 钉死，这里只放行「条件更严」这一种写法。
     assert.match(
       source,
-      new RegExp(`except ${errorClass} as exc:[\\s\\S]{0,240}?if submitted:[\\s\\S]{0,60}?exc\\.submitted = True`),
+      new RegExp(`except ${errorClass} as exc:[\\s\\S]{0,240}?if submitted(?: and [^\\n:]+)?:[\\s\\S]{0,60}?exc\\.submitted = True`),
       `${file} 的 ${errorClass} 重抛分支没有标记提交阶段`
     );
   }

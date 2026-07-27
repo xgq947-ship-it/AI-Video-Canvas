@@ -84,6 +84,14 @@ REJECTION_MARKERS = (
     "含有违规内容",
 )
 CREDITS_MARKERS = ("积分不足", "余额不足", "积分已用完")
+
+# 平台**明确拒绝、且不会留下任何可补收结果**的错误码。
+#
+# 这些即便发生在 _submit 之后，也不能打上 submitted=True：上层会据此把任务标成
+# 「提交状态未知，请先检查平台历史记录」，而积分不足根本没有产生生成任务，
+# 让用户去翻历史记录纯属误导。自动重试仍被 shouldRetryOpsFailure 的白名单挡着，
+# 因此这里放宽 submitted 不会带来二次提交风险。
+NOT_SUBMITTED_ERROR_CODES = frozenset({"JIMENG_CREDITS_INSUFFICIENT"})
 # 页面/浏览器被关闭是**不可恢复**的，不能当成 DOM 读取抖动去重试 5 次——
 # 那样只会把真实原因埋掉，最后报一个「连续 5 次读取失败」的无用错误。
 FATAL_PAGE_MARKERS = (
@@ -914,7 +922,14 @@ def _wait_for_videos(
             queue_hint = _queue_hint(page_text) or queue_hint
             for marker in CREDITS_MARKERS:
                 if marker in page_text:
-                    raise JimengError("JIMENG_CREDITS_INSUFFICIENT", f"即梦积分不足（页面提示：{marker}）。")
+                    raise JimengError(
+                        "JIMENG_CREDITS_INSUFFICIENT",
+                        f"即梦积分不足（页面提示：{marker}）。",
+                        recovery_hint=(
+                            "请先到即梦账号充值积分或等待每日免费积分刷新，再重新生成。"
+                            "本次没有产生生成任务，不会重复扣费，也不需要去历史记录里找结果。"
+                        ),
+                    )
             for marker in REJECTION_MARKERS:
                 if marker in page_text:
                     raise JimengError(
@@ -1107,7 +1122,7 @@ def _execute_generation(
                 return videos, screenshot_path
     except JimengError as exc:
         # 提交后抛出的结构化错误同样要打上标记（下载失败、等待超时等）。
-        if submitted:
+        if submitted and exc.error_code not in NOT_SUBMITTED_ERROR_CODES:
             exc.submitted = True
         raise
     except Exception as exc:

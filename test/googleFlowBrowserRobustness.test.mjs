@@ -223,26 +223,33 @@ test('Windows 进程句柄查询复用 kernel32，且不在导入期加载', () 
   );
 });
 
+/**
+ * 按 def 边界截出一个顶层函数体。
+ *
+ * 不能用「起点 + 固定字符数」：Windows 检出是 CRLF，每行多一个字符，同样的窗口
+ * 覆盖的行数更少，改动一多断言就会在 Windows 上莫名其妙落空（见 1bc4ecf）。
+ */
+function pythonFunction(source, name) {
+  const start = source.indexOf(`def ${name}(`);
+  assert.notEqual(start, -1, `没找到 def ${name}`);
+  const next = source.slice(start).search(/\r?\n(?:def |@)/);
+  return next === -1 ? source.slice(start) : source.slice(start, start + next);
+}
+
 test('强杀后只有确认仍在运行才报失败', () => {
   // _windows_pid_is_running 在权限受限时返回 None（查不出来），不是 False。
   // 若把「循环走完」直接当成失败，那些今天能正常工作的受限机器会被挡在启动之外。
-  const block = chromeRuntime.slice(
-    chromeRuntime.indexOf('def stop_chrome'),
-    chromeRuntime.indexOf('def start_chrome')
-  );
+  const block = pythonFunction(chromeRuntime, 'stop_chrome');
   assert.match(block, /_windows_pid_is_running\(pid\) is True/, '只认「确认仍在运行」');
   assert.match(block, /return False, \(/, '确认没杀掉时必须如实返回失败');
   assert.match(block, /任务管理器/, '失败提示要给出用户可执行的下一步');
 
   // 光如实返回还不够：调用方丢掉返回值的话，仍会接着启动同 Profile 的第二个 Chrome，
   // 被单实例机制吞掉，用户干等满 CDP 超时才拿到一句通用错误。
-  const starter = chromeRuntime.slice(
-    chromeRuntime.indexOf('def start_chrome'),
-    chromeRuntime.indexOf('def start_chrome') + 1200
-  );
+  const starter = pythonFunction(chromeRuntime, 'start_chrome');
   assert.match(
     starter,
-    /closed, close_message = stop_chrome\(pid if IS_WINDOWS else None\)\s*\n\s*if not closed:/,
+    /closed, close_message = stop_chrome\(pid if IS_WINDOWS else None\)\s*\r?\n\s*if not closed:/,
     'start_chrome 必须接住关闭失败，而不是丢掉返回值继续启动'
   );
   assert.match(starter, /return False, close_message/, '关闭失败要把可执行提示原样交回用户');
@@ -250,13 +257,10 @@ test('强杀后只有确认仍在运行才报失败', () => {
 
 test('start_chrome 的 force 路径复用已核验的 PID，不重复跑 CIM 查询', () => {
   // Get-CimInstance Win32_Process 在部分 Windows 机器上要好几秒；上面几行刚查过一次。
-  const block = chromeRuntime.slice(
-    chromeRuntime.indexOf('def start_chrome'),
-    chromeRuntime.indexOf('def start_chrome') + 3000
-  );
+  const block = pythonFunction(chromeRuntime, 'start_chrome');
   assert.match(
     block,
-    /if force and not stopped_existing:\s*\n(?:\s*#[^\n]*\n)*\s*stop_chrome\(pid if IS_WINDOWS else None\)/,
+    /if force and not stopped_existing:\s*\r?\n(?:\s*#[^\n]*\r?\n)*\s*stop_chrome\(pid if IS_WINDOWS else None\)/,
     'force 分支仍在调用无参 stop_chrome()'
   );
 });

@@ -119,6 +119,30 @@ test('结果图按长边判定尺寸，16:9 / 9:16 不能被短边卡掉', () =>
   assert.equal(hit(64, 64, 24, 24), false, '头像');
 });
 
+test('缺失的原图属性不能被解析成当前即梦会话地址', () => {
+  // 现场实测（evidence jimeng_image_wait_timeout_20260727_141128）：
+  // 结果区有 2 张合格 img，但 collected 只有 1。原因是 new URL('', location.href)
+  // 会返回当前 workspace URL；每张图缺失的 data-original/data-full-url 都覆盖了
+  // currentSrc，最终两个候选拥有同一个 identity。
+  const imageUrls = block(provider, 'def _image_urls', 'def _image_identity');
+  assert.match(imageUrls, /const raw = String\(value \|\| ''\)\.trim\(\);/);
+  assert.match(imageUrls, /if \(!raw\) return '';/);
+  assert.ok(
+    imageUrls.indexOf("if (!raw) return '';") < imageUrls.indexOf('new URL(raw, location.href)'),
+    '必须在按当前页面补全 URL 之前拒绝空属性'
+  );
+  assert.doesNotMatch(imageUrls, /new URL\(value, location\.href\)/);
+});
+
+test('新版结果卡没有 hover 下载按钮时进入详情页，且不代替用户接受水印条款', () => {
+  const download = block(provider, 'def _click_for_original_download', 'def _download_jimeng_image');
+  assert.match(download, /ai-generated-image-detail-card/);
+  assert.match(download, /_download_media_url\(/);
+  assert.match(download, /preview_url/);
+  assert.match(download, /page\.keyboard\.press\("Escape"\)/);
+  assert.doesNotMatch(download, /get_by_(?:text|role)\([^\n]*保存设置/);
+});
+
 test('补收窗口必须塞得进 Node 侧的超时余量', () => {
   // Python 判超时后才开始补收，两边余量给反了的话，兜底刚起步就被 kill，
   // 用户拿到的仍然是「执行超时」（本机 07:13 那次就是这么丢的）。

@@ -389,7 +389,13 @@ def _image_urls(page: Any) -> list[str]:
         """els => {
           const imageUrl = value => {
             try {
-              const url = new URL(value, location.href);
+              // ``new URL('', location.href)`` 会返回当前会话地址。结果卡通常没有
+              // data-original / data-full-url 等可选属性；若不先挡住空值，每个空
+              // 属性都会以“原图”高分覆盖真实 currentSrc，最终多张图都变成同一个
+              // workspace URL，并在 Python 侧被去重成 1 张。
+              const raw = String(value || '').trim();
+              if (!raw) return '';
+              const url = new URL(raw, location.href);
               return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '';
             } catch {
               return '';
@@ -516,7 +522,13 @@ def _save_browser_download(download: Any, output_dir: Path, filename_stem: str) 
 def _click_for_original_download(
     page: Any, image_url: str, output_dir: Path, filename_stem: str
 ) -> str | None:
-    """悬停指定结果卡片并下载它自己的原图，避免多图时反复点到最后一张。"""
+    """下载指定结果卡片，原图按钮不可用时至少交付详情页大图。
+
+    2026-07 页面不再在结果卡 hover 层暴露下载按钮，必须先点击卡片进入详情页。新账号
+    首次点击「下载」还会弹出 AI 水印设置确认；Evan 不能替用户接受条款，因此不点击
+    「保存设置」，而是回退下载详情页已加载的 1080px 预览。已完成该设置的账号仍会
+    通过浏览器 download 事件拿到真正的 2K/4K 原图。
+    """
     image = _result_image_locator(page, image_url)
     if image is None:
         return None
@@ -546,30 +558,74 @@ def _click_for_original_download(
         ),
         None,
     )
+    opened_detail = False
+    preview_url: str | None = None
     if control is None:
-        return None
+        try:
+            image.click(timeout=5000)
+            opened_detail = True
+            page.wait_for_timeout(700)
+            detail_images = page.locator(
+                "img[data-apm-action='ai-generated-image-detail-card']"
+            )
+            for index in range(detail_images.count()):
+                detail_image = detail_images.nth(index)
+                if not detail_image.is_visible():
+                    continue
+                candidate = detail_image.evaluate("el => el.currentSrc || el.src || ''")
+                if _image_identity(candidate) == _image_identity(image_url):
+                    preview_url = candidate
+                    break
+            control = next(
+                iter(_visible_download_controls(page, _DOWNLOAD_CONTROL_RE)),
+                None,
+            )
+        except Exception:
+            control = None
 
     try:
-        with page.expect_download(timeout=5000) as download_info:
-            control.click()
-        saved = _save_browser_download(download_info.value, output_dir, filename_stem)
-        if saved:
-            return saved
-    except Exception:
-        # 即梦有时先弹出「下载原图/无水印」菜单；第一次点击已负责打开菜单。
-        pass
+        if control is not None:
+            try:
+                with page.expect_download(timeout=5000) as download_info:
+                    control.click()
+                saved = _save_browser_download(download_info.value, output_dir, filename_stem)
+                if saved:
+                    return saved
+            except Exception:
+                # 可能是「下载原图」菜单，也可能是首次下载的 AI 水印设置确认。
+                # 后者属于用户条款，不能自动点击保存。
+                pass
 
-    options = _visible_download_controls(page, _ORIGINAL_DOWNLOAD_OPTION_RE)
-    for option in options:
-        try:
-            with page.expect_download(timeout=15_000) as download_info:
-                option.click()
-            saved = _save_browser_download(download_info.value, output_dir, filename_stem)
-            if saved:
-                return saved
-        except Exception:
-            continue
-    return None
+            options = _visible_download_controls(page, _ORIGINAL_DOWNLOAD_OPTION_RE)
+            for option in options:
+                try:
+                    with page.expect_download(timeout=15_000) as download_info:
+                        option.click()
+                    saved = _save_browser_download(download_info.value, output_dir, filename_stem)
+                    if saved:
+                        return saved
+                except Exception:
+                    continue
+
+        if preview_url:
+            return _download_media_url(
+                page,
+                preview_url,
+                output_dir,
+                filename_stem,
+                prefix="",
+                default_ext=".webp",
+            )
+        return None
+    finally:
+        if opened_detail:
+            # 先关可能出现的水印设置 dialog，再关图片详情，保证下一张仍能定位自己的卡片。
+            for _attempt in range(2):
+                try:
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(200)
+                except Exception:
+                    break
 
 
 def _download_jimeng_image(

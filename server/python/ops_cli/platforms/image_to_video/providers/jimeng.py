@@ -864,6 +864,15 @@ def _result_area_text(page: Any) -> str:
     """
     area = page.locator("[class*='record-list']")
     if area.count() > 0:
+        if not hasattr(area, "nth"):
+            return area.first.inner_text(timeout=5000)
+        for index in range(area.count()):
+            candidate = area.nth(index)
+            try:
+                if candidate.is_visible():
+                    return candidate.inner_text(timeout=5000)
+            except Exception:
+                continue
         return area.first.inner_text(timeout=5000)
     return page.locator("body").inner_text(timeout=5000)
 

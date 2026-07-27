@@ -35,7 +35,9 @@ import {
 export const DEFAULT_PRODUCT_SCENE_ASPECT_RATIO = '9:16';
 export const DEFAULT_PRODUCT_SCENE_VIDEO_MODEL = 'gemini-web-video';
 
-const activeJobs = new Set();
+// jobId -> AbortController。取消接口除了持久化状态，还会通过这里立即打断正在等待的
+// 浏览器 CLI / 网络请求；不能只等到下一条视频开始前再看 cancelRequested。
+const activeJobs = new Map();
 
 const atomicWriteJson = (filePath, value) => {
   const temporaryPath = `${filePath}.${process.pid}.tmp`;
@@ -110,10 +112,25 @@ const completeFromExistingMetadata = (job, dirs) => {
 
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
-async function waitForCodexResult(context, codexJobId, timeoutMs = 30 * 60_000) {
+const cancellationError = () => {
+  const error = new Error('产品短视频任务已取消');
+  error.code = 'OPERATION_CANCELLED';
+  error.cancelled = true;
+  return error;
+};
+
+const assertJobActive = (job, dirs, signal) => {
+  const current = readJob(job.id, job.workflowId, dirs);
+  if (signal?.aborted || current?.cancelRequested || current?.status === 'cancelled') {
+    throw cancellationError();
+  }
+};
+
+async function waitForCodexResult(context, codexJobId, timeoutMs = 30 * 60_000, signal) {
   context.codexAutomation?.notify?.();
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (signal?.aborted) throw cancellationError();
     const current = getCodexImageJob(context.codexJobsDir, codexJobId);
     if (current?.status === 'completed' && current.resultUrl) return current.resultUrl;
     if (current?.status === 'failed') throw new Error(current.error || 'Codex 生图任务失败');
@@ -122,7 +139,7 @@ async function waitForCodexResult(context, codexJobId, timeoutMs = 30 * 60_000) 
   throw new Error('Codex 生图任务超时');
 }
 
-async function generateProductImages(job, context) {
+async function generateProductImages(job, context, signal) {
   const provider = getImageGenerationProvider(job.imageModel);
   if (!provider) throw new Error(`未知图片模型：${job.imageModel}`);
   const count = clampImageOutputCount(job.imageModel, job.imageCount);
@@ -135,6 +152,7 @@ async function generateProductImages(job, context) {
     timeoutMinutes: 10,
     modelId: job.imageModel,
     count,
+    signal,
   };
   if (isGoogleFlowImageWorkflowModel(job.imageModel)) return (await generateGoogleFlowWorkflowImage(request)).images;
   if (isJimengImageWorkflowModel(job.imageModel)) return (await generateJimengWorkflowImage(request)).images;
@@ -154,14 +172,14 @@ async function generateProductImages(job, context) {
         workflowId: job.workflowId,
         projectDirName: target.projectDirName,
       });
-      results.push({ resultUrl: await waitForCodexResult(context, codexJob.id) });
+      results.push({ resultUrl: await waitForCodexResult(context, codexJob.id, undefined, signal) });
     }
     return results;
   }
   throw new Error(`产品短视频节点暂不支持图片模型：${job.imageModel}`);
 }
 
-async function generateProductVideo(job, imageUrl, index, context) {
+async function generateProductVideo(job, imageUrl, index, context, signal) {
   const model = getVideoGenerationProvider(job.videoModel);
   if (!model || !model.supportsImageToVideo) throw new Error('所选视频模型不支持图生视频');
   const parameters = normalizeVideoParameters(job.videoModel, { aspectRatio: job.videoAspectRatio, duration: job.videoDuration });
@@ -170,12 +188,14 @@ async function generateProductVideo(job, imageUrl, index, context) {
       prompt: job.videoPrompt, referenceImageInputs: [imageUrl], libraryDir: context.libraryDir,
       aspectRatio: parameters.aspectRatio, duration: parameters.duration || 8, timeoutMinutes: 15,
       nativeAudio: job.videoGenerateAudio !== false,
+      signal,
     });
   }
   if (isGoogleFlowWorkflowModelId(job.videoModel)) {
     return generateGoogleFlowWorkflowVideo({
       prompt: job.videoPrompt, firstFrameInput: imageUrl, referenceImageInputs: [], libraryDir: context.libraryDir,
       aspectRatio: parameters.aspectRatio, duration: parameters.duration, modelId: job.videoModel, timeoutMinutes: 15,
+      signal,
     });
   }
   if (isJimengWorkflowModelId(job.videoModel)) {
@@ -184,6 +204,7 @@ async function generateProductVideo(job, imageUrl, index, context) {
       model: resolveJimengModelLabel(job.videoModel), aspectRatio: parameters.aspectRatio,
       duration: parameters.duration || 5, resolution: job.videoResolution || '720P',
       libraryDir: context.libraryDir, timeoutMinutes: 15,
+      signal,
     });
   }
   if (job.videoModel?.startsWith('seedance-')) {
@@ -194,7 +215,7 @@ async function generateProductVideo(job, imageUrl, index, context) {
       duration: parameters.duration || 5, generateAudio: job.videoGenerateAudio !== false,
       apiKey: context.arkApiKey,
     });
-    const response = await fetch(remoteUrl);
+    const response = await fetch(remoteUrl, { signal });
     if (!response.ok) throw new Error(`Seedance 视频下载失败：HTTP ${response.status}`);
     return { buffer: Buffer.from(await response.arrayBuffer()), extension: 'mp4', source: 'url' };
   }
@@ -204,8 +225,11 @@ async function generateProductVideo(job, imageUrl, index, context) {
 async function executeJob(job, context) {
   const { dirs, libraryDir, recognitionModel = 'gpt-5.6-sol' } = context;
   if (activeJobs.has(job.id)) return;
-  activeJobs.add(job.id);
+  const controller = new AbortController();
+  const { signal } = controller;
+  activeJobs.set(job.id, controller);
   try {
+    assertJobActive(job, dirs, signal);
     if (completeFromExistingMetadata(job, dirs)) return;
 
     job.status = 'processing';
@@ -238,10 +262,12 @@ async function executeJob(job, context) {
           temperature: 0.1,
           maxTokens: 3500,
           libraryDir,
+          signal,
       };
       const text = context.runRecognition
         ? await context.runRecognition(recognitionRequest)
         : await provider.run(recognitionRequest);
+      assertJobActive(job, dirs, signal);
       Object.assign(job, parseStructuredAnalysis(text));
       job.recognitionModel = job.recognitionProvider === 'gemini-web' ? 'Gemini Web' : recognitionModel;
       writeJob(job, dirs);
@@ -267,19 +293,21 @@ async function executeJob(job, context) {
     const generatedImages = Array.isArray(job.resultUrls) && job.resultUrls.length
       ? job.resultUrls.map(resultUrl => ({ resultUrl }))
       : context.generateImages
-      ? await context.generateImages(job)
+      ? await context.generateImages(job, { signal })
         : context.generateImage
         ? [await context.generateImage({
             prompt: job.prompt, aspectRatio: job.aspectRatio,
             referenceImageInputs: [job.productImage], libraryDir,
-            timeoutMinutes: 10, modelId: job.imageModel, count: 1,
+            timeoutMinutes: 10, modelId: job.imageModel, count: 1, signal,
           })]
-        : await generateProductImages(job, context);
+        : await generateProductImages(job, context, signal);
+    assertJobActive(job, dirs, signal);
     if (!Array.isArray(generatedImages) || generatedImages.length === 0) {
       throw new Error('图片模型没有返回可保存的产品替换图');
     }
     const imageResults = [];
     for (let index = 0; index < Math.min(generatedImages.length, job.imageCount); index += 1) {
+      assertJobActive(job, dirs, signal);
       const result = generatedImages[index];
       const nodeId = job.resultNodeIds[index] || crypto.randomUUID();
       job.resultNodeIds[index] = nodeId;
@@ -341,8 +369,9 @@ async function executeJob(job, context) {
       writeJob(job, dirs);
       try {
         const video = context.generateVideo
-          ? await context.generateVideo({ job, image: imageResults[index], index })
-          : await generateProductVideo(job, imageResults[index].resultUrl, index, context);
+          ? await context.generateVideo({ job, image: imageResults[index], index, signal })
+          : await generateProductVideo(job, imageResults[index].resultUrl, index, context, signal);
+        assertJobActive(job, dirs, signal);
         const saved = saveBufferToFile(video.buffer, videoDir, 'vid', video.extension || 'mp4');
         task.status = 'success';
         task.resultUrl = `${videoPrefix}/${saved.filename}`;
@@ -352,6 +381,9 @@ async function executeJob(job, context) {
           type: 'videos', sourceJobId: job.id, sourceImageNodeId: task.imageNodeId,
         });
       } catch (videoError) {
+        if (videoError?.cancelled || videoError?.code === 'OPERATION_CANCELLED' || signal.aborted) {
+          throw videoError;
+        }
         task.status = 'failed';
         task.error = videoError instanceof Error ? videoError.message : String(videoError);
         task.errorCode = videoError?.code;
@@ -365,6 +397,7 @@ async function executeJob(job, context) {
       writeJob(job, dirs);
     }
 
+    assertJobActive(job, dirs, signal);
     const failedCount = job.videoTasks.filter(task => task.status === 'failed').length;
     const retryBlockedCount = job.videoTasks.filter(task => task.status === 'failed' && task.retryBlocked).length;
     const successCount = job.videoTasks.filter(task => task.status === 'success').length;
@@ -381,6 +414,10 @@ async function executeJob(job, context) {
         : failedCount ? `${failedCount} 条视频生成失败，已保留成功结果` : undefined;
     writeJob(job, dirs);
   } catch (error) {
+    const latest = readJob(job.id, job.workflowId, dirs);
+    if (error?.cancelled || error?.code === 'OPERATION_CANCELLED' || latest?.status === 'cancelled') {
+      return;
+    }
     job.status = 'failed';
     job.stage = 'failed';
     job.stageLabel = '任务失败';
@@ -550,6 +587,19 @@ export function cancelProductSceneJob(jobId, workflowId, context) {
   if (!job) return null;
   if (!['pending', 'processing'].includes(job.status)) return job;
   job.cancelRequested = true;
-  job.stageLabel = '正在结束当前任务，后续视频将不再提交';
-  return writeJob(job, context.dirs);
+  job.status = 'cancelled';
+  job.stage = 'cancelled';
+  job.stageLabel = '任务已取消';
+  job.error = '本地等待已停止；若请求已在平台提交，远端可能继续生成，请在对应平台历史记录中查看。';
+  job.completedAt = new Date().toISOString();
+  if (Array.isArray(job.videoTasks)) {
+    job.videoTasks = job.videoTasks.map(task =>
+      task.status === 'success' || task.status === 'failed'
+        ? task
+        : { ...task, status: 'cancelled', error: '已取消，未继续等待' }
+    );
+  }
+  const saved = writeJob(job, context.dirs);
+  activeJobs.get(job.id)?.abort();
+  return saved;
 }

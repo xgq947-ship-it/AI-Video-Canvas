@@ -54,7 +54,7 @@ export function buildGeminiWebVideoArgs({ prompt, aspectRatio, duration, referen
   return args;
 }
 
-async function executeImage({ prompt, aspectRatio = '1:1', referenceImageInputs = [], libraryDir, timeoutMinutes = 10 }) {
+async function executeImage({ prompt, aspectRatio = '1:1', referenceImageInputs = [], libraryDir, timeoutMinutes = 10, signal }) {
   if (!String(prompt || '').trim()) throw new Error('Gemini Web 图片提示词不能为空');
   const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-gemini-web-image-'));
   try {
@@ -62,6 +62,7 @@ async function executeImage({ prompt, aspectRatio = '1:1', referenceImageInputs 
     const references = await resolveBrowserReferenceImages(referenceImageInputs, libraryDir, taskDir, { providerName: 'Gemini Web' });
     const { data, runId } = await runOpsCli({
       label: 'Gemini Web 图片生成', timeoutMs: (timeoutMinutes + 2) * 60_000,
+      signal,
       args: buildGeminiWebImageArgs({ prompt, aspectRatio, referenceImages: references, outputDir, timeoutMinutes }),
     });
     const images = await loadBrowserImageResults(data, { providerName: 'Gemini Web 图片生成' });
@@ -69,7 +70,7 @@ async function executeImage({ prompt, aspectRatio = '1:1', referenceImageInputs 
   } finally { cleanupTaskDir(taskDir); }
 }
 
-async function executeVideo({ prompt, referenceImageInputs = [], aspectRatio = '16:9', duration = 8, libraryDir, timeoutMinutes = 15, cameraMovement = '', nativeAudio = true }) {
+async function executeVideo({ prompt, referenceImageInputs = [], aspectRatio = '16:9', duration = 8, libraryDir, timeoutMinutes = 15, cameraMovement = '', nativeAudio = true, signal }) {
   if (!String(prompt || '').trim()) throw new Error('Gemini Web 视频提示词不能为空');
   const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-gemini-web-video-'));
   try {
@@ -77,14 +78,21 @@ async function executeVideo({ prompt, referenceImageInputs = [], aspectRatio = '
     const references = await resolveBrowserReferenceImages(referenceImageInputs, libraryDir, taskDir, { providerName: 'Gemini Web' });
     const { data, runId } = await runOpsCli({
       label: 'Gemini Web 视频生成', timeoutMs: (timeoutMinutes + 2) * 60_000,
+      signal,
       args: buildGeminiWebVideoArgs({ prompt, aspectRatio, duration, referenceImages: references, outputDir, timeoutMinutes, cameraMovement, nativeAudio }),
     });
     return { ...(await loadVideoResult(data)), runId };
   } finally { cleanupTaskDir(taskDir); }
 }
 
-export const generateGeminiWebImage = options => enqueueBrowserWorkflow(() => executeImage(options), { label: 'Gemini Web 图片生成' });
-export const generateGeminiWebVideo = options => enqueueBrowserWorkflow(() => executeVideo(options), { label: 'Gemini Web 视频生成' });
+export const generateGeminiWebImage = options => enqueueBrowserWorkflow(
+  () => executeImage(options),
+  { label: 'Gemini Web 图片生成', signal: options?.signal }
+);
+export const generateGeminiWebVideo = options => enqueueBrowserWorkflow(
+  () => executeVideo(options),
+  { label: 'Gemini Web 视频生成', signal: options?.signal }
+);
 
 /**
  * 识图 / 提示词优化同样在驱动那一个 Evan 专属 Chrome，必须和生成走同一条串行队列。
@@ -97,15 +105,23 @@ export const generateGeminiWebVideo = options => enqueueBrowserWorkflow(() => ex
  * 因此这里入队不会产生嵌套死锁。
  */
 export const runGeminiWebTextTask = options =>
-  enqueueBrowserWorkflow(() => executeTextTask(options), { label: 'Gemini Web 识图' });
+  enqueueBrowserWorkflow(
+    () => executeTextTask(options),
+    { label: 'Gemini Web 识图', signal: options?.signal }
+  );
 
-async function executeTextTask({ prompt, referenceImageInputs = [], libraryDir, timeoutMinutes = 5 }) {
+async function executeTextTask({ prompt, referenceImageInputs = [], libraryDir, timeoutMinutes = 5, signal }) {
   const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-gemini-web-text-'));
   try {
     const references = await resolveBrowserReferenceImages(referenceImageInputs, libraryDir, taskDir, { providerName: 'Gemini Web' });
     const args = ['gemini-web', 'ask', '--prompt', String(prompt).trim(), '--timeout-minutes', String(timeoutMinutes)];
     references.forEach(value => args.push('--reference-image', value));
-    const { data } = await runOpsCli({ label: 'Gemini Web 文本任务', timeoutMs: (timeoutMinutes + 2) * 60_000, args });
+    const { data } = await runOpsCli({
+      label: 'Gemini Web 文本任务',
+      timeoutMs: (timeoutMinutes + 2) * 60_000,
+      args,
+      signal
+    });
     const text = String(data?.text || '').trim();
     if (!text) throw new Error('Gemini Web 没有返回文本回答');
     return text;

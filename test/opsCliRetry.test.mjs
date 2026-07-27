@@ -176,3 +176,30 @@ test('重试过程中不写失败态，避免画布闪「登录失效」', async
     // 只应有开头的 checking 和结尾的 authenticated，中间不能出现失败态。
     assert.deepEqual(states, ['checking', 'authenticated']);
 });
+
+test('重试退避期间取消也会释放任务并恢复原登录状态', async () => {
+    const controller = new AbortController();
+    const states = [];
+    const { spawnProcess, attempts } = scriptedSpawn([
+        failure('EDITOR_NOT_READY', { submitted: false })
+    ]);
+
+    const promise = runOpsCli({
+        args: ['text-to-image', 'jimeng', 'generate'],
+        timeoutMs: 30_000,
+        label: '即梦图片生成',
+        signal: controller.signal,
+        sessionStateStore: {
+            get: () => ({ state: 'authenticated' }),
+            transition: (_provider, state) => states.push(state)
+        },
+        retryBackoffMs: [60_000],
+        spawnProcess
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    controller.abort();
+
+    await assert.rejects(promise, error => error.code === 'OPERATION_CANCELLED');
+    assert.equal(attempts.length, 1);
+    assert.deepEqual(states, ['checking', 'authenticated']);
+});

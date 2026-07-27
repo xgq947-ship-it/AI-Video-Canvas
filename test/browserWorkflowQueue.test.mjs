@@ -52,6 +52,30 @@ test('任务失败也要释放队列，不能把后续操作永久锁死', async
   assert.equal(browserWorkflowBusyLabel(), '');
 });
 
+test('取消信号立即从浏览器队列移除任务，排队任务不会再启动', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const running = enqueueBrowserWorkflow(() => gate, { label: '前序生成' });
+  const controller = new AbortController();
+  let started = false;
+  const queued = enqueueBrowserWorkflow(() => {
+    started = true;
+  }, { label: '待取消生成', signal: controller.signal });
+
+  controller.abort();
+  await assert.rejects(queued, error =>
+    error.code === 'OPERATION_CANCELLED' && error.cancelled === true
+  );
+  assert.equal(started, false);
+  assert.equal(browserWorkflowBusyLabel(), '前序生成');
+
+  release();
+  await running;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(started, false);
+  assert.equal(browserWorkflowBusyLabel(), '');
+});
+
 test('检查登录态在拒绝之前不得写入 checking 状态', () => {
   // 顺序反了的话，三个平台会永久停在「检查中」——和探针卡死表现完全一样。
   const source = fs.readFileSync(new URL('../server/index.js', import.meta.url), 'utf8');

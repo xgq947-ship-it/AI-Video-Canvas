@@ -101,6 +101,34 @@ test('注入 spawnProcess 的调用不受本机 venv 是否就绪影响', async 
     assert.deepEqual(data, { ok: true });
 });
 
+test('AbortSignal 会立即终止正在等待的 Ops CLI 子进程', async () => {
+    const controller = new AbortController();
+    const states = [];
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => { child.killed = true; };
+
+    const promise = runOpsCli({
+        args: ['text-to-image', 'jimeng', 'generate'],
+        timeoutMs: 60_000,
+        label: '即梦生图',
+        signal: controller.signal,
+        sessionStateStore: {
+            get: () => ({ state: 'authenticated' }),
+            transition: (_provider, state) => states.push(state)
+        },
+        spawnProcess: () => child
+    });
+
+    controller.abort();
+    await assert.rejects(promise, error =>
+        error.code === 'OPERATION_CANCELLED' && error.cancelled === true
+    );
+    assert.equal(child.killed, true);
+    assert.deepEqual(states, ['checking', 'authenticated']);
+});
+
 test('真实 spawn 路径在可执行文件缺失时仍然拒绝执行', async () => {
     const previous = process.env.EVAN_OPS_EXECUTABLE;
     process.env.EVAN_OPS_EXECUTABLE = path.join(

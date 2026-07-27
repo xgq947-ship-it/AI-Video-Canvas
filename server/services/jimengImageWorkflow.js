@@ -86,7 +86,8 @@ async function executeJimengImageWorkflow({
     libraryDir,
     timeoutMinutes = 10,
     modelId,
-    count = 1
+    count = 1,
+    signal
 }) {
     if (!String(prompt || '').trim()) throw new Error('即梦图片提示词不能为空');
     if (!JIMENG_IMAGE_SUPPORTED_ASPECT_RATIOS.includes(aspectRatio)) {
@@ -108,6 +109,7 @@ async function executeJimengImageWorkflow({
         );
         const { data, runId } = await runOpsCli({
             label: '即梦图片生成',
+            signal,
             // +4 而不是 +2：Python 侧在第 timeoutMinutes 分钟判超时后，还要留出
             // 「只读补收」的时间把已经产出的结果收回来。余量给太紧的话，兜底刚开始
             // 跑就被这里 kill 掉，用户拿到的还是「执行超时」（本机 07:13 那次实测）。
@@ -141,5 +143,8 @@ async function executeJimengImageWorkflow({
 }
 
 export function generateJimengWorkflowImage(options) {
-    return enqueueBrowserWorkflow(() => executeJimengImageWorkflow(options), { label: '即梦图片生成' });
+    return enqueueBrowserWorkflow(
+        () => executeJimengImageWorkflow(options),
+        { label: '即梦图片生成', signal: options?.signal }
+    );
 }

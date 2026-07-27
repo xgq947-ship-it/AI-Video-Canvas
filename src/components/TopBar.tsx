@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, CircleHelp, Globe2, KeyRound, Loader2, Plus, Save, Settings, Trash2 } from 'lucide-react';
+import { ChevronDown, CircleHelp, Globe2, KeyRound, Loader2, Plus, RefreshCw, Save, Settings, Trash2 } from 'lucide-react';
 import { NodeData } from '../types';
 import { ApiKeySettingsModal } from './modals/ApiKeySettingsModal';
 import { StartupSetupGuideModal } from './modals/StartupSetupGuideModal';
@@ -22,6 +22,7 @@ interface TopBarProps {
     setEditingTitleValue: (value: string) => void;
     // Actions
     onSave: () => void | Promise<void>;
+    onRefresh: () => void | Promise<void>;
     onNew: () => void;
     hasUnsavedChanges: boolean;
     lastAutoSaveTime?: number;
@@ -43,6 +44,7 @@ export const TopBar: React.FC<TopBarProps> = ({
     setIsEditingTitle,
     setEditingTitleValue,
     onSave,
+    onRefresh,
     onNew,
     hasUnsavedChanges,
     lastAutoSaveTime,
@@ -55,6 +57,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 }) => {
     const [showNewConfirm, setShowNewConfirm] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const [showSettingsMenu, setShowSettingsMenu] = useState(false);
     const [showApiSettings, setShowApiSettings] = useState(false);
     const [showSetupGuide, setShowSetupGuide] = useState(true);
@@ -123,6 +126,19 @@ export const TopBar: React.FC<TopBarProps> = ({
     const handleDiscardAndNew = () => {
         setShowNewConfirm(false);
         onNew();
+    };
+
+    const handleRefreshCanvas = async () => {
+        if (isRefreshing) return;
+        setIsRefreshing(true);
+        try {
+            await onRefresh();
+        } catch (error) {
+            console.error('Failed to refresh current canvas:', error);
+            window.alert(error instanceof Error ? error.message : '刷新当前画布失败');
+        } finally {
+            setIsRefreshing(false);
+        }
     };
 
     const handleOpenBuiltInBrowser = async () => {
@@ -194,6 +210,18 @@ export const TopBar: React.FC<TopBarProps> = ({
                     >
                         <Save size={16} />
                         保存
+                    </button>
+                    <button
+                        onClick={() => void handleRefreshCanvas()}
+                        disabled={!workflowId || isRefreshing}
+                        className={`text-sm px-4 py-2.5 rounded-full flex items-center gap-2 transition-colors font-medium border disabled:cursor-not-allowed disabled:opacity-40 ${canvasTheme === 'dark'
+                            ? 'bg-neutral-800 hover:bg-neutral-700 text-white border-neutral-600'
+                            : 'bg-neutral-100 hover:bg-neutral-200 text-neutral-900 border-neutral-300 shadow-sm'
+                            }`}
+                        title="先保存，再从项目文件重新加载当前画布"
+                    >
+                        <RefreshCw size={16} className={isRefreshing ? 'animate-spin' : ''} />
+                        刷新画布
                     </button>
                     <button
                         onClick={handleNewClick}

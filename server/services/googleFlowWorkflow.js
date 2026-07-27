@@ -122,7 +122,8 @@ async function executeGoogleFlowWorkflow({
     duration,
     modelId = GOOGLE_FLOW_WORKFLOW_MODEL_ID,
     libraryDir,
-    timeoutMinutes = 15
+    timeoutMinutes = 15,
+    signal
 }) {
     if (!String(prompt || '').trim()) throw new Error('Google Flow 视频提示词不能为空');
     if (!GOOGLE_FLOW_SUPPORTED_ASPECT_RATIOS.includes(aspectRatio)) {
@@ -147,6 +148,7 @@ async function executeGoogleFlowWorkflow({
         const outputDir = path.join(taskDir, 'output');
         const { data, runId } = await runOpsCli({
             label: 'Google Flow 视频生成',
+            signal,
             timeoutMs: (timeoutMinutes + 2) * 60 * 1000,
             args: [
                 'image-to-video', 'google-flow', 'generate',
@@ -207,5 +209,8 @@ export function buildGoogleFlowWorkflowArgs({
 }
 
 export function generateGoogleFlowWorkflowVideo(options) {
-    return enqueueGoogleFlowWorkflow(() => executeGoogleFlowWorkflow(options), { label: 'Google Flow 视频生成' });
+    return enqueueGoogleFlowWorkflow(
+        () => executeGoogleFlowWorkflow(options),
+        { label: 'Google Flow 视频生成', signal: options?.signal }
+    );
 }

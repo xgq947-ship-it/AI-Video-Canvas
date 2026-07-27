@@ -218,7 +218,8 @@ async function executeGoogleFlowImageWorkflow({
     libraryDir,
     timeoutMinutes = 10,
     modelId,
-    count = 1
+    count = 1,
+    signal
 }) {
     if (!String(prompt || '').trim()) throw new Error('Google Flow 图片提示词不能为空');
     if (!GOOGLE_FLOW_IMAGE_SUPPORTED_ASPECT_RATIOS.includes(aspectRatio)) {
@@ -232,6 +233,7 @@ async function executeGoogleFlowImageWorkflow({
         const referenceImages = await resolveGoogleFlowReferenceImages(referenceImageInputs, libraryDir, taskDir);
         const { data, runId } = await runOpsCli({
             label: 'Google Flow 文生图',
+            signal,
             timeoutMs: (timeoutMinutes + 2) * 60 * 1000,
             args: [
                 'text-to-image', 'google-flow', 'generate',
@@ -270,5 +272,8 @@ async function executeGoogleFlowImageWorkflow({
 }
 
 export function generateGoogleFlowWorkflowImage(options) {
-    return enqueueGoogleFlowWorkflow(() => executeGoogleFlowImageWorkflow(options), { label: 'Google Flow 图片生成' });
+    return enqueueGoogleFlowWorkflow(
+        () => executeGoogleFlowImageWorkflow(options),
+        { label: 'Google Flow 图片生成', signal: options?.signal }
+    );
 }

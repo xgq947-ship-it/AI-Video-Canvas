@@ -22,7 +22,7 @@ const setup = () => {
 const waitForTerminalJob = async (jobId, context) => {
   for (let index = 0; index < 100; index += 1) {
     const job = getProductSceneJob(jobId, 'workflow-1', context);
-    if (['completed', 'partial_failed', 'failed'].includes(job?.status)) return job;
+    if (['completed', 'partial_failed', 'failed', 'cancelled'].includes(job?.status)) return job;
     await new Promise(resolve => setTimeout(resolve, 10));
   }
   throw new Error('job did not reach terminal state');
@@ -222,7 +222,7 @@ test('多图视频串行执行，单条失败保留成功结果，重试只补�
   assert.deepEqual(completed.videoTasks.map(task => task.status), ['success', 'success', 'success']);
 });
 
-test('取消视频队列只结束后续提交，并保留正在执行的成功结果', async t => {
+test('取消视频队列立即进入终态并中断当前本地等待', async t => {
   const env = setup();
   t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
   let releaseFirstVideo;
@@ -251,14 +251,18 @@ test('取消视频队列只结束后续提交，并保留正在执行的成功�
     if (current?.videoTasks?.[0]?.status === 'running') break;
     await new Promise(resolve => setTimeout(resolve, 5));
   }
-  cancelProductSceneJob(created.id, 'workflow-1', context);
-  releaseFirstVideo();
-  const cancelled = await waitForTerminalJob(created.id, context);
+  const cancelled = cancelProductSceneJob(created.id, 'workflow-1', context);
 
-  assert.equal(cancelled.status, 'partial_failed');
+  assert.equal(cancelled.status, 'cancelled');
   assert.deepEqual(videoCalls, [0]);
-  assert.deepEqual(cancelled.videoTasks.map(task => task.status), ['success', 'waiting']);
-  assert.match(cancelled.error, /队列已取消/);
+  assert.deepEqual(cancelled.videoTasks.map(task => task.status), ['cancelled', 'cancelled']);
+  assert.match(cancelled.error, /本地等待已停止/);
+  assert.equal(getProductSceneJob(created.id, 'workflow-1', context).status, 'cancelled');
+
+  // 测试替身没有消费 signal，放行后也不得把已取消状态覆盖成成功。
+  releaseFirstVideo();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(getProductSceneJob(created.id, 'workflow-1', context).status, 'cancelled');
 });
 
 test('视频提交状态未知时重试不会重复提交扣费', async t => {

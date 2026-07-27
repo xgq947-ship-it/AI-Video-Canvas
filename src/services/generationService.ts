@@ -81,8 +81,8 @@ export interface ProductSceneJob {
   workflowId: string;
   nodeId: string;
   resultNodeId: string;
-  status: 'pending' | 'processing' | 'completed' | 'partial_failed' | 'failed';
-  stage: 'queued' | 'analyzing' | 'generating_images' | 'images_completed' | 'generating_videos' | 'completed' | 'partial_failed' | 'failed';
+  status: 'pending' | 'processing' | 'completed' | 'partial_failed' | 'failed' | 'cancelled';
+  stage: 'queued' | 'analyzing' | 'generating_images' | 'images_completed' | 'generating_videos' | 'completed' | 'partial_failed' | 'failed' | 'cancelled';
   stageLabel: string;
   recognitionProvider: 'codex-cli' | 'gemini-web';
   recognitionModel: string;
@@ -104,7 +104,7 @@ export interface ProductSceneJob {
   videoAspectRatio?: string;
   videoDuration?: number;
   currentVideoIndex?: number;
-  videoTasks?: Array<{ index: number; imageNodeId: string; videoNodeId: string; status: 'waiting' | 'running' | 'success' | 'failed'; resultUrl?: string; error?: string; errorCode?: string; retryBlocked?: boolean }>;
+  videoTasks?: Array<{ index: number; imageNodeId: string; videoNodeId: string; status: 'waiting' | 'running' | 'success' | 'failed' | 'cancelled'; resultUrl?: string; error?: string; errorCode?: string; retryBlocked?: boolean }>;
   error?: string;
   createdAt: string;
   updatedAt?: string;

@@ -303,6 +303,10 @@ export default function App() {
     }
     if (trashDeleteInFlight.current) return;
 
+    // 图片文件移入回收站需要一次磁盘往返。先清掉选中态，让图片节点下方的提示词
+    // 控制面板立即消失；否则图片文件已经移动时，控制面板仍会留在画布上，看起来像
+    // “图片删了但文字节点删不掉”。真正节点仍在请求成功后统一删除。
+    setSelectedNodeIds(previous => previous.filter(id => !uniqueIds.includes(id)));
     trashDeleteInFlight.current = true;
     try {
       const response = await fetch(`/api/projects/${encodeURIComponent(workflowId!)}/trash`, {
@@ -318,7 +322,7 @@ export default function App() {
     } finally {
       trashDeleteInFlight.current = false;
     }
-  }, [workflowId, nodes, deleteNodes]);
+  }, [workflowId, nodes, deleteNodes, setSelectedNodeIds]);
 
   // Simple dirty flag for unsaved changes tracking
   const [isDirty, setIsDirty] = React.useState(false);
@@ -408,6 +412,14 @@ export default function App() {
     ignoreNextChange.current = true;
     await handleLoadWorkflow(id);
     setIsDirty(false);
+  };
+
+  const handleRefreshCurrentCanvas = async () => {
+    if (!workflowId) throw new Error('请先新建或打开项目');
+    // 刷新不是丢弃：先把当前改动完整保存，再从项目文件重载，以便恢复后台任务状态，
+    // 同时避免用户把“刷新画布”误当成浏览器刷新而丢掉一分钟内尚未自动保存的内容。
+    await handleSaveWithTracking();
+    await handleLoadWithTracking(workflowId);
   };
 
   const nodesRef = React.useRef(nodes);
@@ -1851,6 +1863,7 @@ export default function App() {
           setIsEditingTitle={setIsEditingTitle}
           setEditingTitleValue={setEditingTitleValue}
           onSave={handleSaveWithTracking}
+          onRefresh={handleRefreshCurrentCanvas}
           onNew={handleRequestNewProject}
           hasUnsavedChanges={hasUnsavedChanges}
           canvasTheme={canvasTheme}

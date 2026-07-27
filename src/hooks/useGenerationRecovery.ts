@@ -168,6 +168,22 @@ export const useGenerationRecovery = ({
             const node = nodesRef.current.find(item => item.id === nodeId);
             if (!node || node.productSceneJobId !== jobId) return;
 
+            if (job.status === 'cancelled') {
+                if (job.resultUrl || job.resultUrls?.length) {
+                    onProductSceneCompleted?.(node, job);
+                }
+                updateNode(nodeId, {
+                    status: job.resultUrl || job.resultUrls?.length ? NodeStatus.SUCCESS : NodeStatus.ERROR,
+                    productSceneJobStatus: 'cancelled',
+                    productSceneStage: 'cancelled',
+                    productSceneStageLabel: job.stageLabel,
+                    productSceneVideoTasks: job.videoTasks,
+                    errorMessage: job.error || '任务已取消',
+                    generationStartTime: undefined,
+                });
+                return;
+            }
+
             if (job.status === 'failed') {
                 updateNode(nodeId, {
                     status: NodeStatus.ERROR,
@@ -276,6 +292,17 @@ export const useGenerationRecovery = ({
                 productSceneVideoTasks: latest.videoTasks,
                 prompt: latest.prompt || node.prompt,
             };
+            if (latest.status === 'cancelled') {
+                updateNode(nodeId, {
+                    ...commonUpdates,
+                    status: latest.resultUrl || latest.resultUrls?.length ? NodeStatus.SUCCESS : NodeStatus.ERROR,
+                    productSceneStage: 'cancelled',
+                    productSceneStageLabel: latest.stageLabel,
+                    generationStartTime: undefined,
+                    errorMessage: latest.error || '任务已取消',
+                });
+                return;
+            }
             if ((latest.status === 'completed' || latest.status === 'partial_failed') && (latest.resultUrl || latest.resultUrls?.length)) {
                 onProductSceneCompleted?.(node, latest);
                 updateNode(nodeId, {

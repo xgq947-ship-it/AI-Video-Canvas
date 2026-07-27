@@ -423,14 +423,19 @@ class Images:
         return ["https://p11-dreamina-sign.byteimg.com/result.webp"]
 
 class Area:
+    def __init__(self, visible): self.visible = visible
+    def is_visible(self): return self.visible
     def locator(self, selector):
         assert selector == "img"
         return Images()
 
 class Areas:
-    def count(self): return 1
+    def __init__(self):
+        self.items = [Area(False), Area(True)]
+    def count(self): return len(self.items)
+    def nth(self, index): return self.items[index]
     @property
-    def first(self): return Area()
+    def first(self): return self.items[0]
 
 class Page:
     def locator(self, selector):

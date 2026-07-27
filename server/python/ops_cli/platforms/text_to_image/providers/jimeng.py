@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -328,6 +329,22 @@ def _attach_reference_images(page: Any, reference_paths: list[Path]) -> None:
 RESULT_AREA_SELECTOR = "[class*='record-list']"
 
 
+def _visible_result_area(page: Any) -> Any:
+    """选真正显示的结果区，兼容 Windows 下同时渲染桌面/响应式隐藏副本。"""
+    areas = page.locator(RESULT_AREA_SELECTOR)
+    # 测试替身与极少数兼容层 Locator 只暴露 first；真实 Playwright 始终有 nth。
+    if not hasattr(areas, "nth"):
+        return areas.first if areas.count() > 0 else page
+    for index in range(areas.count()):
+        area = areas.nth(index)
+        try:
+            if area.is_visible():
+                return area
+        except Exception:
+            continue
+    return areas.first if areas.count() > 0 else page
+
+
 def _page_disturbed(page: Any) -> str:
     """等待期间工作页是否被换掉了。
 
@@ -366,8 +383,7 @@ def _image_urls(page: Any) -> list[str]:
     # 全是 360×202、渲染 238×134，旧规则命中 0 张。
     # 短边下限 96 与「渲染长边 ≥96」用来挡掉侧栏会话缩略图（100×56）和 composer
     # 里的小预览（360×360 但只渲染 42×53）。
-    result_area = page.locator(RESULT_AREA_SELECTOR)
-    root = result_area.first if result_area.count() > 0 else page
+    root = _visible_result_area(page)
     candidates = root.locator("img").evaluate_all(
         """els => {
           const imageUrl = value => {
@@ -471,8 +487,7 @@ def _visible_download_controls(scope: Any, pattern: re.Pattern[str]) -> list[Any
 def _result_image_locator(page: Any, image_url: str) -> Any | None:
     """按媒体身份把高清候选 URL 定位回自己的结果卡片缩略图。"""
     target_identity = _image_identity(image_url)
-    result_area = page.locator(RESULT_AREA_SELECTOR)
-    root = result_area.first if result_area.count() > 0 else page
+    root = _visible_result_area(page)
     images = root.locator("img")
     for index in range(images.count()):
         image = images.nth(index)
@@ -756,7 +771,15 @@ def _execute_generation(
         with sync_playwright() as playwright:
             browser = playwright.chromium.connect_over_cdp(cdp_url)
             context = browser.contexts[0] if browser.contexts else browser.new_context()
-            with managed_work_page(context, "jimeng.image.generate", cleanup_before=True) as page:
+            # Windows 的 Chrome 在已有标签页较多时，创建新 CDP target 偶尔会长时间
+            # 卡住。优先复用专属 Profile 中现有的即梦页；没有才新建工作页。
+            existing_page = _existing_jimeng_page(context)
+            page_scope = (
+                nullcontext(existing_page)
+                if existing_page is not None
+                else managed_work_page(context, "jimeng.image.generate", cleanup_before=True)
+            )
+            with page_scope as page:
                 try:
                     page.goto(_generate_url(), wait_until="domcontentloaded", timeout=60_000)
                 except (PlaywrightError, PlaywrightTimeoutError) as exc:

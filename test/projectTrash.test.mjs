@@ -15,6 +15,8 @@ import {
     trashWorkflowNodes
 } from '../server/services/projectTrash.js';
 
+const appSource = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+
 const createFixture = (t) => {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-project-trash-'));
     t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
@@ -92,6 +94,48 @@ test('同一图片仍被其他画布节点引用时保留原文件，同时为�
     assert.equal(fs.existsSync(fixture.imagePath), true);
     assert.ok(getProjectTrashPreviewPath(fixture.projectRoot, result.entry.id));
     assert.deepEqual(fixture.workflow.nodes.map(node => node.id), ['image-2']);
+});
+
+test('删除项目图片时先清除选中态，提示词控制面板不会残留在画布上', () => {
+    const block = appSource.slice(
+        appSource.indexOf('const deleteNodesWithTrash'),
+        appSource.indexOf('// Simple dirty flag')
+    );
+    assert.ok(block.length > 0);
+    assert.ok(
+        block.indexOf('setSelectedNodeIds') < block.indexOf("fetch(`/api/projects/"),
+        '磁盘回收站请求前必须先关闭所删节点的控制面板'
+    );
+    assert.match(block, /deleteNodes\(uniqueIds\)/);
+});
+
+test('图片和文字节点一起删除时两者都进入回收站且可一起恢复', (t) => {
+    const fixture = createFixture(t);
+    const textNode = {
+        id: 'text-1',
+        type: 'Text',
+        title: '产品场景提示词',
+        x: 500,
+        y: 200,
+        prompt: '生成一张商业产品场景图'
+    };
+    fixture.workflow.nodes = [fixture.node, textNode];
+
+    const result = trashWorkflowNodes(
+        fixture.workflow,
+        [fixture.node, textNode],
+        [fixture.node.id, textNode.id],
+        fixture.projectRoot
+    );
+
+    assert.deepEqual(result.deletedNodes.map(node => node.id), ['image-1', 'text-1']);
+    assert.deepEqual(fixture.workflow.nodes, []);
+    const restored = restoreProjectTrashEntry(
+        fixture.workflow,
+        fixture.projectRoot,
+        result.entry.id
+    );
+    assert.deepEqual(restored.map(node => node.id), ['image-1', 'text-1']);
 });
 
 test('永久删除和七天到期清理只移除回收站副本', (t) => {

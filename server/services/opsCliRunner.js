@@ -310,6 +310,31 @@ export function shouldRetryOpsFailure(error, { attempt, maxAttempts }) {
 // 不 unref：调用方正在 await 这个退避，unref 之后事件循环一空就再也不会被唤醒。
 const delay = (ms) => new Promise(resolve => { setTimeout(resolve, ms); });
 
+function operationCancelledError(label) {
+    const error = new Error(`${label}已取消`);
+    error.code = 'OPERATION_CANCELLED';
+    error.cancelled = true;
+    error.submitted = false;
+    error.sessionState = 'unknown';
+    return error;
+}
+
+function abortableDelay(ms, signal, label) {
+    if (!signal) return delay(ms);
+    if (signal.aborted) return Promise.reject(operationCancelledError(label));
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            signal.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+        const onAbort = () => {
+            clearTimeout(timer);
+            reject(operationCancelledError(label));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+    });
+}
+
 /**
  * 调用 ops_cli 并返回 { data, runId }。
  *
@@ -325,6 +350,7 @@ export function runOpsCli({
     initialSessionState = 'checking',
     successSessionState = 'authenticated',
     trackSessionState = true,
+    signal,
     spawnProcess = spawn,
     sessionStateStore = browserSessionState,
     // 可注入，让测试不必真的等完整退避。
@@ -333,6 +359,9 @@ export function runOpsCli({
 }) {
     const provider = inferBrowserProvider(args);
     const tracksBrowser = Boolean(provider) || args[0] === 'browser';
+    const previousProviderState = provider && trackSessionState && typeof sessionStateStore.get === 'function'
+        ? sessionStateStore.get(provider)
+        : null;
     // ensureReady() 检查的是本机 venv/可执行文件是否存在，只对真实 spawn 有意义。
     // 调用方注入自己的 spawnProcess 时（测试替身）不该被本机环境左右，否则
     // 干净 checkout 上的 `npm test` 会因为没跑 setup:automation-runtime 而失败。
@@ -361,6 +390,10 @@ export function runOpsCli({
     // 一次尝试。刻意不在这里做 begin/finishBrowserOperation，也不写 session 状态：
     // 那些只能由 runOpsCli 在整轮重试的首尾各做一次。
     const runAttempt = (attempt) => new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(operationCancelledError(label));
+            return;
+        }
         const child = spawnProcess(command, commandArgs, {
             cwd: PYTHON_ROOT,
             env: {
@@ -375,10 +408,18 @@ export function runOpsCli({
         const stdoutChunks = [];
         const stderrChunks = [];
         let settled = false;
+        const onAbort = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            try { child.kill('SIGTERM'); } catch { /* process already exited */ }
+            reject(operationCancelledError(label));
+        };
 
         const timer = setTimeout(() => {
             if (settled) return;
             settled = true;
+            signal?.removeEventListener('abort', onAbort);
             child.kill('SIGTERM');
             const error = new Error(`${label}执行超时`);
             error.code = 'OPS_TIMEOUT';
@@ -386,6 +427,7 @@ export function runOpsCli({
             reject(error);
         }, timeoutMs);
 
+        signal?.addEventListener('abort', onAbort, { once: true });
         child.stdout.on('data', chunk => { stdoutChunks.push(Buffer.from(chunk)); });
         child.stderr.on('data', chunk => { stderrChunks.push(Buffer.from(chunk)); });
 
@@ -393,6 +435,7 @@ export function runOpsCli({
             if (settled) return;
             settled = true;
             clearTimeout(timer);
+            signal?.removeEventListener('abort', onAbort);
             const wrapped = new Error(`${label}无法启动 Python 进程：${error.message}`);
             wrapped.code = 'BROWSER_MODELS_NOT_READY';
             wrapped.sessionState = 'browser_unavailable';
@@ -403,6 +446,7 @@ export function runOpsCli({
             if (settled) return;
             settled = true;
             clearTimeout(timer);
+            signal?.removeEventListener('abort', onAbort);
 
             const stdout = decodeProcessOutput(stdoutChunks);
             const stderr = decodeProcessOutput(stderrChunks);
@@ -462,10 +506,33 @@ export function runOpsCli({
                 console.warn(
                     `[ops-cli] ${label} 第 ${attempt} 次失败（${error.code}），准备重试：${error.message}`
                 );
-                await delay(retryBackoffMs[attempt - 1] ?? retryBackoffMs[retryBackoffMs.length - 1] ?? 0);
+                try {
+                    await abortableDelay(
+                        retryBackoffMs[attempt - 1] ?? retryBackoffMs[retryBackoffMs.length - 1] ?? 0,
+                        signal,
+                        label
+                    );
+                } catch (delayError) {
+                    lastError = delayError;
+                    break;
+                }
             }
         }
 
+        // 用户主动取消只代表“不再等待这次任务”，不代表登录失效或浏览器损坏。
+        // 保留 provider 原来的 authenticated 状态，只释放活跃计数与空闲计时器。
+        if (lastError?.cancelled || lastError?.code === 'OPERATION_CANCELLED') {
+            if (provider && trackSessionState) {
+                const restoreState = previousProviderState?.state === 'checking'
+                    ? 'unknown'
+                    : previousProviderState?.state || successSessionState;
+                sessionStateStore.transition(provider, restoreState, {
+                    message: '当前任务已取消，登录状态未变'
+                });
+            }
+            if (tracksBrowser) finishBrowserOperation(idleDelayMs);
+            throw lastError;
+        }
         finalize(lastError?.sessionState || 'unknown', {
             errorCode: lastError?.code || 'OPS_FAILED',
             message: lastError?.message

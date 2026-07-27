@@ -41,3 +41,9 @@ test('启动指南读取真实登录、密钥与 Codex 状态而不是展示固�
   assert.match(guide, /DEEPSEEK_API_KEY/);
   assert.match(guide, /codex\.authenticated/);
 });
+
+test('顶部栏提供保存后重载当前画布的刷新入口', () => {
+  assert.match(topBar, /onRefresh/);
+  assert.match(topBar, /刷新画布/);
+  assert.match(topBar, /RefreshCw/);
+});

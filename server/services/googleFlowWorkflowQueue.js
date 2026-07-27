@@ -9,17 +9,57 @@ let workflowQueue = Promise.resolve();
 // 已入队但还没跑完的任务，按入队顺序排列；队头就是当前占用 Chrome 的那个。
 const inFlight = [];
 
-export function enqueueGoogleFlowWorkflow(task, { label = '浏览器任务' } = {}) {
+export function browserWorkflowCancelledError(label = '浏览器任务') {
+    const error = new Error(`${label}已取消`);
+    error.code = 'OPERATION_CANCELLED';
+    error.cancelled = true;
+    error.submitted = false;
+    return error;
+}
+
+export function enqueueGoogleFlowWorkflow(task, {
+    label = '浏览器任务',
+    signal
+} = {}) {
+    if (signal?.aborted) {
+        return Promise.reject(browserWorkflowCancelledError(label));
+    }
     const entry = { label };
     inFlight.push(entry);
-    const result = workflowQueue.then(task);
-    workflowQueue = result.catch(() => undefined);
     const release = () => {
         const index = inFlight.indexOf(entry);
         if (index >= 0) inFlight.splice(index, 1);
     };
-    result.then(release, release);
-    return result;
+
+    // scheduled 始终留在内部串行链上。若任务还在排队时被取消，对调用方立即 reject，
+    // 等前序任务结束后 scheduled 只做一次 aborted 检查，不会再启动浏览器进程。
+    const scheduled = workflowQueue.then(() => {
+        if (signal?.aborted) throw browserWorkflowCancelledError(label);
+        return task();
+    });
+    workflowQueue = scheduled.catch(() => undefined);
+
+    if (!signal) {
+        scheduled.then(release, release);
+        return scheduled;
+    }
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const settle = (handler, value) => {
+            if (settled) return;
+            settled = true;
+            signal.removeEventListener('abort', onAbort);
+            release();
+            handler(value);
+        };
+        const onAbort = () => settle(reject, browserWorkflowCancelledError(label));
+        signal.addEventListener('abort', onAbort, { once: true });
+        scheduled.then(
+            value => settle(resolve, value),
+            error => settle(reject, error)
+        );
+    });
 }
 
 // 语义化别名：队列锁定同一个 Evan 专属 Chrome，不是 Google Flow 专属。

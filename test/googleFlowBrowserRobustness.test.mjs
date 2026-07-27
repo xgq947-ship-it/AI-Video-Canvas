@@ -69,11 +69,19 @@ test('系统 Chrome 使用独立 Profile 和可被 Playwright 接管的低后台
   assert.match(opsRunner, /30 \* 60_000/);
 });
 
-test('每个 Flow 与即梦任务使用独立临时页并在结束后清理', () => {
+test('Flow 与即梦视频使用独立临时页，即梦生图在 Windows 优先复用已有页面', () => {
   assert.match(common, /managed_work_page\(context, owner, cleanup_before=True\)/);
   assert.doesNotMatch(common, /existing\s*=\s*_existing_project_page[\s\S]*yield existing/);
   assert.match(jimengImage, /managed_work_page\(context, "jimeng\.image\.generate", cleanup_before=True\)/);
+  assert.match(jimengImage, /existing_page = _existing_jimeng_page\(context\)/);
+  assert.match(jimengImage, /nullcontext\(existing_page\)/);
   assert.match(jimengVideo, /managed_work_page\(context, "jimeng\.video\.generate", cleanup_before=True\)/);
+});
+
+test('即梦生图只读取可见结果区，不能卡在 Windows 响应式隐藏副本', () => {
+  assert.match(jimengImage, /def _visible_result_area/);
+  assert.match(jimengImage, /if area\.is_visible\(\)/);
+  assert.match(jimengImage, /root = _visible_result_area\(page\)/);
 });
 
 test('主动登录使用普通 Chrome，且不把打开窗口误记为已认证', () => {

@@ -141,7 +141,8 @@ async function executeJimengWorkflow({
     resolution,
     model = JIMENG_DEFAULT_MODEL,
     libraryDir,
-    timeoutMinutes = 15
+    timeoutMinutes = 15,
+    signal
 }) {
     if (!String(prompt || '').trim()) throw new Error('即梦视频提示词不能为空');
     if (!JIMENG_SUPPORTED_ASPECT_RATIOS.includes(aspectRatio)) {
@@ -167,6 +168,7 @@ async function executeJimengWorkflow({
         const outputDir = path.join(taskDir, 'output');
         const { data, runId } = await runOpsCli({
             label: '即梦视频生成',
+            signal,
             timeoutMs: (timeoutMinutes + 2) * 60 * 1000,
             args: [
                 'image-to-video', 'jimeng', 'generate',
@@ -198,5 +200,8 @@ async function executeJimengWorkflow({
 }
 
 export function generateJimengWorkflowVideo(options) {
-    return enqueueBrowserWorkflow(() => executeJimengWorkflow(options), { label: '即梦视频生成' });
+    return enqueueBrowserWorkflow(
+        () => executeJimengWorkflow(options),
+        { label: '即梦视频生成', signal: options?.signal }
+    );
 }

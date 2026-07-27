@@ -21,7 +21,7 @@ export const NodeConnectors: React.FC<NodeConnectorsProps> = ({
 }) => {
     const isDark = canvasTheme === 'dark';
 
-    const buttonClassName = `absolute w-10 h-10 rounded-full border flex items-center justify-center transition-all opacity-0 group-hover/node:opacity-100 z-10 cursor-crosshair ${isDark
+    const buttonClassName = `absolute w-11 h-11 touch-none rounded-full border flex items-center justify-center transition-all opacity-0 group-hover/node:opacity-100 z-10 cursor-crosshair ${isDark
             ? 'border-neutral-700 bg-[#0f0f0f] text-neutral-400 hover:text-white hover:border-neutral-500'
             : 'border-neutral-300 bg-white text-neutral-500 hover:text-neutral-900 hover:border-neutral-400 shadow-sm'
         }`;
@@ -30,6 +30,10 @@ export const NodeConnectors: React.FC<NodeConnectorsProps> = ({
         <>
             {/* Left Connector */}
             <button
+                type="button"
+                aria-label="连接到左侧"
+                data-connector-node-id={nodeId}
+                data-connector-side="left"
                 onPointerDown={(e) => {
                     e.stopPropagation();
                     onConnectorDown(e, nodeId, 'left');
@@ -41,6 +45,10 @@ export const NodeConnectors: React.FC<NodeConnectorsProps> = ({
 
             {/* Right Connector */}
             <button
+                type="button"
+                aria-label="连接到右侧"
+                data-connector-node-id={nodeId}
+                data-connector-side="right"
                 onPointerDown={(e) => {
                     e.stopPropagation();
                     onConnectorDown(e, nodeId, 'right');

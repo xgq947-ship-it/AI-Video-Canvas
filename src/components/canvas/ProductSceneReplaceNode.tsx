@@ -112,8 +112,16 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
   const handleCancel = async () => {
     if (!workflowId || !data.productSceneJobId) return;
     try {
-      await cancelProductSceneJob(data.productSceneJobId, workflowId);
-      onUpdate(data.id, { productSceneStageLabel: '正在结束当前任务，后续视频将不再提交' });
+      const job = await cancelProductSceneJob(data.productSceneJobId, workflowId);
+      onUpdate(data.id, {
+        status: job.resultUrl || job.resultUrls?.length ? NodeStatus.SUCCESS : NodeStatus.ERROR,
+        productSceneJobStatus: 'cancelled',
+        productSceneStage: 'cancelled',
+        productSceneStageLabel: job.stageLabel,
+        productSceneVideoTasks: job.videoTasks,
+        generationStartTime: undefined,
+        errorMessage: job.error || '任务已取消'
+      });
     } catch (error) {
       onUpdate(data.id, { errorMessage: error instanceof Error ? error.message : '取消队列失败' });
     }

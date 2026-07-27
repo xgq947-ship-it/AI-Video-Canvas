@@ -152,9 +152,9 @@ export interface NodeData {
   personaAnalysis?: string;
   compositionAnalysis?: string;
   productAnalysis?: string;
-  productSceneStage?: 'analyzing' | 'generating_images' | 'images_completed' | 'generating_videos' | 'completed' | 'partial_failed';
+  productSceneStage?: 'analyzing' | 'generating_images' | 'images_completed' | 'generating_videos' | 'completed' | 'partial_failed' | 'cancelled';
   productSceneJobId?: string;
-  productSceneJobStatus?: 'pending' | 'processing' | 'completed' | 'partial_failed' | 'failed';
+  productSceneJobStatus?: 'pending' | 'processing' | 'completed' | 'partial_failed' | 'failed' | 'cancelled';
   productSceneStageLabel?: string;
   productSceneRecognitionModel?: string;
   productSceneRecognitionProvider?: 'codex-cli' | 'gemini-web';
@@ -172,7 +172,7 @@ export interface NodeData {
     index: number;
     imageNodeId: string;
     videoNodeId: string;
-    status: 'waiting' | 'running' | 'success' | 'failed';
+    status: 'waiting' | 'running' | 'success' | 'failed' | 'cancelled';
     resultUrl?: string;
     error?: string;
     errorCode?: string;

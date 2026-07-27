@@ -32,6 +32,13 @@ function upstreamError(message, httpStatus) {
     return error;
 }
 
+function operationCancelledError(label) {
+    const error = new Error(`${label} 已取消`);
+    error.code = 'OPERATION_CANCELLED';
+    error.cancelled = true;
+    return error;
+}
+
 function quoteWindowsCommandArg(value) {
     return `"${String(value).replaceAll('"', '""')}"`;
 }
@@ -60,13 +67,14 @@ export function buildCliInvocation(
 // ---------------------------------------------------------------------------
 
 // DeepSeek：OpenAI 兼容的 chat/completions 协议。
-async function runDeepSeek({ systemInstruction, userPrompt, apiKey, model, temperature, maxTokens }) {
+async function runDeepSeek({ systemInstruction, userPrompt, apiKey, model, temperature, maxTokens, signal }) {
     const response = await fetch('https://api.deepseek.com/chat/completions', {
         method: 'POST',
         headers: {
             'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json'
         },
+        signal,
         body: JSON.stringify({
             model,
             thinking: { type: 'disabled' },
@@ -91,8 +99,12 @@ async function runDeepSeek({ systemInstruction, userPrompt, apiKey, model, tempe
 
 // 通用子进程执行：隔离在临时目录运行避免文件副作用；继承环境变量以复用 CLI 的本机登录；
 // 立即关闭 stdin 发送 EOF —— 否则像 codex 这类会读 stdin 的 CLI 会一直卡住等待输入。
-function runCli(bin, args, label) {
+function runCli(bin, args, label, signal) {
     return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(operationCancelledError(label));
+            return;
+        }
         let child;
         try {
             const invocation = buildCliInvocation(bin, args);
@@ -102,9 +114,14 @@ function runCli(bin, args, label) {
                 maxBuffer: 32 * 1024 * 1024,
                 encoding: 'buffer',
                 env: process.env,
-                windowsHide: true
+                windowsHide: true,
+                signal
             }, (error, stdout, stderr) => {
                 if (error) {
+                    if (signal?.aborted || error.name === 'AbortError' || error.code === 'ABORT_ERR') {
+                        reject(operationCancelledError(label));
+                        return;
+                    }
                     if (error.code === 'ENOENT') {
                         reject(upstreamError(`未找到 ${label} 可执行文件（${bin}）。请安装并登录，或用对应的 *_CLI_PATH 环境变量指定绝对路径。`, 502));
                         return;
@@ -120,6 +137,10 @@ function runCli(bin, args, label) {
                 resolve(decodeProcessOutput(stdout).trim());
             });
         } catch (spawnError) {
+            if (signal?.aborted || spawnError.name === 'AbortError' || spawnError.code === 'ABORT_ERR') {
+                reject(operationCancelledError(label));
+                return;
+            }
             reject(upstreamError(`${label} 无法启动：${spawnError.message}`, 502));
             return;
         }
@@ -131,7 +152,7 @@ function runCli(bin, args, label) {
 // Claude Code CLI（`claude -p`）：无头文本生成，用本机已登录的 Claude 账号，无需 API key。
 // 不传 --dangerously-skip-permissions 时，print 模式下任何工具调用都无法被批准，因而不会读写项目文件，
 // 本调用是纯文本改写。默认从 PATH 找 claude，可用 CLAUDE_CLI_PATH 指定绝对路径。
-async function runClaudeCli({ systemInstruction, userPrompt, model, effort }) {
+async function runClaudeCli({ systemInstruction, userPrompt, model, effort, signal }) {
     const bin = resolveClaudeBin();
     const args = [
         '-p', userPrompt,
@@ -140,14 +161,14 @@ async function runClaudeCli({ systemInstruction, userPrompt, model, effort }) {
     ];
     if (model) args.push('--model', model);
     if (effort) args.push('--effort', effort); // low / medium / high / xhigh / max
-    return runCli(bin, args, 'Claude CLI');
+    return runCli(bin, args, 'Claude CLI', signal);
 }
 
 // Codex CLI（`codex exec`）：无头一次性执行，用本机已登录的 ChatGPT 账号，无需 API key。
 // Codex 没有独立的系统提示词参数，故把系统指令与待优化内容合并为单条 prompt。
 // read-only 沙箱 + 临时目录，纯文本改写不会触碰项目；--output-last-message 把最终答复单独写到文件，
 // 避免解析夹杂 agent 日志的 stdout。默认走 ChatGPT.app 内置 codex，可用 CODEX_CLI_PATH 指定绝对路径。
-async function runCodexCli({ systemInstruction, userPrompt, model, effort, imageDataUrl, imageDataUrls }) {
+async function runCodexCli({ systemInstruction, userPrompt, model, effort, imageDataUrl, imageDataUrls, signal }) {
     const bin = resolveCodexBin();
     const combined = `${systemInstruction}\n\n【待优化内容】\n${userPrompt}`;
     const outFile = path.join(os.tmpdir(), `codex-optimize-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.txt`);
@@ -179,7 +200,7 @@ async function runCodexCli({ systemInstruction, userPrompt, model, effort, image
     }
 
     try {
-        const stdout = await runCli(bin, args, 'Codex CLI');
+        const stdout = await runCli(bin, args, 'Codex CLI', signal);
         const fileText = await fs.readFile(outFile, 'utf8').catch(() => '');
         // 优先用 --output-last-message 的干净结果；万一没写成功再退回 stdout。
         return (fileText || stdout).trim();
@@ -189,13 +210,21 @@ async function runCodexCli({ systemInstruction, userPrompt, model, effort, image
     }
 }
 
-async function runGeminiWeb({ systemInstruction, userPrompt, imageDataUrl, imageDataUrls, libraryDir }) {
+async function runGeminiWeb({
+    systemInstruction,
+    userPrompt,
+    imageDataUrl,
+    imageDataUrls,
+    libraryDir,
+    signal
+}) {
     const references = (Array.isArray(imageDataUrls) ? imageDataUrls : [imageDataUrl]).filter(Boolean);
     return runGeminiWebTextTask({
         prompt: `${systemInstruction}\n\n【待处理内容】\n${userPrompt}`,
         referenceImageInputs: references,
         libraryDir,
-        timeoutMinutes: 5
+        timeoutMinutes: 5,
+        signal
     });
 }
 

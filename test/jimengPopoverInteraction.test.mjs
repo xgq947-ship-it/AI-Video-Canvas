@@ -226,6 +226,107 @@ print(json.dumps({
     assert.match(result.urls[1], /second/);
 });
 
+test('即梦高清候选能定位回对应缩略图卡片，媒体身份忽略 resize 变换', {
+    skip: ready ? false : '未配置 server/python/.venv'
+}, () => {
+    const result = runPython(`
+import json
+from ops_cli.platforms.text_to_image.providers import jimeng as j
+
+class Image:
+    def __init__(self, url): self.url = url
+    def evaluate(self, script): return self.url
+
+class Images:
+    def __init__(self, urls): self.items = [Image(url) for url in urls]
+    def count(self): return len(self.items)
+    def nth(self, index): return self.items[index]
+
+class Area:
+    def __init__(self, urls): self.urls = urls
+    def locator(self, selector):
+        assert selector == "img"
+        return Images(self.urls)
+
+class Areas:
+    def __init__(self, urls): self.urls = urls
+    def count(self): return 1
+    @property
+    def first(self): return Area(self.urls)
+
+class Page:
+    def locator(self, selector):
+        assert selector == "[class*='record-list']"
+        return Areas([
+            "https://p11-dreamina-sign.byteimg.com/tos-cn-i/first~resize:360.webp?sig=one",
+            "https://p11-dreamina-sign.byteimg.com/tos-cn-i/second~resize:360.webp?sig=two",
+        ])
+
+original = "https://p26-dreamina-sign.byteimg.com/tos-cn-i/second?sig=original"
+matched = j._result_image_locator(Page(), original)
+print(json.dumps({
+    "identity": j._image_identity(original),
+    "matched": matched.url if matched else None,
+}))
+`);
+
+    assert.equal(result.identity, '/tos-cn-i/second');
+    assert.match(result.matched, /second~resize:360/);
+});
+
+test('即梦下载优先交付原图，找不到原图时拒绝把 resize:360 缩略图当成结果', {
+    skip: ready ? false : '未配置 server/python/.venv'
+}, () => {
+    const result = runPython(`
+import json
+import tempfile
+from pathlib import Path
+from ops_cli.platforms.text_to_image.providers import jimeng as j
+
+calls = []
+j._click_for_original_download = lambda page, url, output, stem: calls.append(("original", url)) or "/tmp/full.png"
+j._download_media_url = lambda *args, **kwargs: calls.append(("http", args[1])) or "/tmp/http.png"
+with tempfile.TemporaryDirectory() as directory:
+    full = j._download_jimeng_image(
+        None,
+        "https://p11-dreamina-sign.byteimg.com/tos-cn-i/first~resize:360.webp?sig=one",
+        Path(directory),
+        "one",
+    )
+
+j._click_for_original_download = lambda *args, **kwargs: None
+with tempfile.TemporaryDirectory() as directory:
+    thumbnail = j._download_jimeng_image(
+        None,
+        "https://p11-dreamina-sign.byteimg.com/tos-cn-i/second~resize:360.webp?sig=two",
+        Path(directory),
+        "two",
+    )
+    direct = j._download_jimeng_image(
+        None,
+        "https://p11-dreamina-sign.byteimg.com/tos-cn-i/third.webp?sig=three",
+        Path(directory),
+        "three",
+    )
+
+print(json.dumps({
+    "full": full,
+    "thumbnail": thumbnail,
+    "direct": direct,
+    "calls": calls,
+}))
+`);
+
+    assert.equal(result.full, '/tmp/full.png');
+    assert.equal(result.thumbnail, null);
+    assert.equal(result.direct, '/tmp/http.png');
+    assert.deepEqual(
+        result.calls.map(([kind]) => kind),
+        ['original', 'http'],
+        '缩略图不能进入 HTTP 下载回退'
+    );
+});
+
 test('即梦图片模式把有效 @参考图标签转成可提交文本', {
     skip: ready ? false : '未配置 server/python/.venv'
 }, () => {

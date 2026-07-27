@@ -18,7 +18,10 @@ from urllib.parse import urlparse
 
 from ops_cli.output import CommandResponse
 from ops_cli.browser import managed_work_page
-from ops_cli.platforms._google_flow_common import _download_media, _import_browser_runtime
+from ops_cli.platforms._google_flow_common import (
+    _download_media as _download_media_url,
+    _import_browser_runtime,
+)
 from ops_cli.platforms._page_evidence import capture_page_evidence
 from ops_cli.platforms.image_to_video.providers.jimeng import (
     CREDITS_MARKERS,
@@ -67,6 +70,13 @@ _IGNORED_IMAGE_URL_PATTERNS = (
     "avatar",
 )
 _IMAGE_REFERENCE_TAG = re.compile(r"@(?P<label>(?:参考图|图片)\s*(?P<index>\d+))")
+_DOWNLOAD_CONTROL_RE = re.compile(r"下载|download", re.I)
+_ORIGINAL_DOWNLOAD_OPTION_RE = re.compile(
+    r"下载原图|原图下载|无水印|完整尺寸|高清原图|超清原图|"
+    r"download original|download full size|original",
+    re.I,
+)
+_THUMBNAIL_URL_RE = re.compile(r"(?:~|%7e)resize[:%3a_-]*\d+", re.I)
 
 
 def _default_output_dir() -> Path:
@@ -359,8 +369,43 @@ def _image_urls(page: Any) -> list[str]:
     result_area = page.locator(RESULT_AREA_SELECTOR)
     root = result_area.first if result_area.count() > 0 else page
     candidates = root.locator("img").evaluate_all(
-        """els => els.map(el => ({
-             src: el.currentSrc || el.src || '',
+        """els => {
+          const imageUrl = value => {
+            try {
+              const url = new URL(value, location.href);
+              return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '';
+            } catch {
+              return '';
+            }
+          };
+          const bestSource = el => {
+            const choices = [];
+            const add = (value, score) => {
+              const url = imageUrl(value);
+              if (url) choices.push({url, score});
+            };
+            add(el.currentSrc || el.src || '', 0);
+            for (const candidate of (el.getAttribute('srcset') || '').split(',')) {
+              const match = candidate.trim().match(/^(\\S+)(?:\\s+(\\d+(?:\\.\\d+)?)(w|x))?$/);
+              if (match) add(match[1], match[3] === 'w'
+                ? Number(match[2] || 0)
+                : Number(match[2] || 0) * 1000);
+            }
+            const originalAttrs = [
+              'data-original', 'data-original-src', 'data-origin-src',
+              'data-full-src', 'data-full-url', 'data-download-url',
+            ];
+            for (const attr of originalAttrs) add(el.getAttribute(attr) || '', 100000);
+            let ancestor = el;
+            for (let depth = 0; ancestor && depth < 6; depth += 1, ancestor = ancestor.parentElement) {
+              for (const attr of originalAttrs) add(ancestor.getAttribute?.(attr) || '', 90000 - depth);
+              if (ancestor instanceof HTMLAnchorElement) add(ancestor.href || '', 80000 - depth);
+            }
+            choices.sort((a, b) => b.score - a.score);
+            return choices[0]?.url || '';
+          };
+          return els.map(el => ({
+             src: bestSource(el),
              width: el.naturalWidth || 0,
              height: el.naturalHeight || 0,
              renderedWidth: el.getBoundingClientRect().width || 0,
@@ -370,7 +415,8 @@ def _image_urls(page: Any) -> list[str]:
              && Math.max(item.width, item.height) >= 256
              && Math.min(item.width, item.height) >= 96
              && Math.max(item.renderedWidth, item.renderedHeight) >= 96)
-           .map(item => item.src)"""
+           .map(item => item.src);
+        }"""
     )
     return [
         url
@@ -386,7 +432,151 @@ def _image_identity(url: str) -> str:
     但 path 中的媒体 UUID 相同。按完整 URL 去重会让 count=2 提前返回两份相同文件。
     """
     parsed = urlparse(str(url or ""))
-    return parsed.path or str(url or "")
+    # 同一媒体的缩略图、srcset 大图和下载原图可能只在 ``~resize:*`` 变换后缀上不同。
+    # 去掉变换后缀后再比较，才能既去重 CDN 副本，也能把高清资源定位回对应结果卡片。
+    path = parsed.path.split("~", 1)[0]
+    return path or str(url or "")
+
+
+def _control_label(control: Any) -> str:
+    parts: list[str] = []
+    for attribute in ("aria-label", "title", "data-tooltip"):
+        try:
+            parts.append(str(control.get_attribute(attribute) or ""))
+        except Exception:
+            pass
+    try:
+        parts.append(str(control.inner_text(timeout=1000) or ""))
+    except Exception:
+        pass
+    return " ".join(parts).strip()
+
+
+def _visible_download_controls(scope: Any, pattern: re.Pattern[str]) -> list[Any]:
+    try:
+        controls = scope.locator("button, [role='button'], [role='menuitem'], a[download]")
+    except Exception:
+        return []
+    matches: list[Any] = []
+    for index in range(controls.count()):
+        control = controls.nth(index)
+        try:
+            if control.is_visible() and pattern.search(_control_label(control)):
+                matches.append(control)
+        except Exception:
+            continue
+    return matches
+
+
+def _result_image_locator(page: Any, image_url: str) -> Any | None:
+    """按媒体身份把高清候选 URL 定位回自己的结果卡片缩略图。"""
+    target_identity = _image_identity(image_url)
+    result_area = page.locator(RESULT_AREA_SELECTOR)
+    root = result_area.first if result_area.count() > 0 else page
+    images = root.locator("img")
+    for index in range(images.count()):
+        image = images.nth(index)
+        try:
+            current_url = image.evaluate("el => el.currentSrc || el.src || ''")
+            if _image_identity(current_url) == target_identity:
+                return image
+        except Exception:
+            continue
+    return None
+
+
+def _save_browser_download(download: Any, output_dir: Path, filename_stem: str) -> str | None:
+    try:
+        suffix = Path(str(download.suggested_filename or "")).suffix or ".png"
+        destination = output_dir / f"{filename_stem}{suffix}"
+        download.save_as(str(destination))
+        if destination.is_file() and destination.stat().st_size > 0:
+            return str(destination)
+    except Exception:
+        pass
+    return None
+
+
+def _click_for_original_download(
+    page: Any, image_url: str, output_dir: Path, filename_stem: str
+) -> str | None:
+    """悬停指定结果卡片并下载它自己的原图，避免多图时反复点到最后一张。"""
+    image = _result_image_locator(page, image_url)
+    if image is None:
+        return None
+    try:
+        image.scroll_into_view_if_needed(timeout=5000)
+        image.hover(timeout=5000)
+        page.wait_for_timeout(300)
+    except Exception:
+        return None
+
+    # 工具栏通常位于图片上方若干层祖先中；从最小卡片向外找，避免命中别的结果。
+    scopes: list[Any] = []
+    scope = image
+    for _depth in range(7):
+        try:
+            scope = scope.locator("xpath=..")
+            scopes.append(scope)
+        except Exception:
+            break
+    scopes.append(page)
+
+    control = next(
+        (
+            candidate
+            for candidate_scope in scopes
+            for candidate in _visible_download_controls(candidate_scope, _DOWNLOAD_CONTROL_RE)
+        ),
+        None,
+    )
+    if control is None:
+        return None
+
+    try:
+        with page.expect_download(timeout=5000) as download_info:
+            control.click()
+        saved = _save_browser_download(download_info.value, output_dir, filename_stem)
+        if saved:
+            return saved
+    except Exception:
+        # 即梦有时先弹出「下载原图/无水印」菜单；第一次点击已负责打开菜单。
+        pass
+
+    options = _visible_download_controls(page, _ORIGINAL_DOWNLOAD_OPTION_RE)
+    for option in options:
+        try:
+            with page.expect_download(timeout=15_000) as download_info:
+                option.click()
+            saved = _save_browser_download(download_info.value, output_dir, filename_stem)
+            if saved:
+                return saved
+        except Exception:
+            continue
+    return None
+
+
+def _download_jimeng_image(
+    page: Any, image_url: str, output_dir: Path, stamp: str
+) -> str | None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    filename_stem = f"jimeng_img_{stamp}"
+    original = _click_for_original_download(page, image_url, output_dir, filename_stem)
+    if original:
+        return original
+
+    # srcset/data-original 已经给出高清直链时允许 HTTP 回退；明确的 resize:360 缩略图
+    # 不能再被当作成功结果，否则用户选择 2K/4K 最终仍只得到 360px 文件。
+    if _THUMBNAIL_URL_RE.search(image_url):
+        return None
+    return _download_media_url(
+        page,
+        image_url,
+        output_dir,
+        stamp,
+        prefix="jimeng_img_",
+        default_ext=".png",
+    )
 
 
 def _wait_for_images(
@@ -496,14 +686,7 @@ def _deliver_results(
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     images: list[dict[str, str | None]] = []
     for index, url in enumerate(image_urls, start=1):
-        saved = _download_media(
-            page,
-            url,
-            output_dir,
-            f"{stamp}_{index}",
-            prefix="jimeng_img_",
-            default_ext=".png",
-        )
+        saved = _download_jimeng_image(page, url, output_dir, f"{stamp}_{index}")
         images.append({"path": saved, "url": url})
     _ensure_result_delivery(images, error_code="IMAGE_DOWNLOAD_FAILED", media_label="图片")
     screenshot = output_dir / f"jimeng_img_{stamp}.png"

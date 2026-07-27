@@ -105,7 +105,8 @@ function chromeRequiredPage(status) {
 /**
  * Chrome 兼容性状态。
  *
- * 探针内部是同步的 spawnSync(chrome, ['--version'])，会阻塞主进程，所以默认走缓存。
+ * 探针会同步读取 Chrome 版本（Windows 不启动 Chrome，只读文件版本属性），所以默认
+ * 走缓存。
  * 用户「刚装完 Chrome，点重新检测」的场景必须 force，否则那个按钮会永远读到旧结论。
  */
 function currentChromeStatus({ force = false } = {}) {

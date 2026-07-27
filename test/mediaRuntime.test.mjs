@@ -87,7 +87,45 @@ test('Chrome 版本解析兼容标准输出', () => {
         version: '150.0.7871.182',
         major: 150
     });
+    assert.deepEqual(parseChromeVersion('150.0.7871.182'), {
+        version: '150.0.7871.182',
+        major: 150
+    });
     assert.equal(parseChromeVersion('Chromium 150.0.1'), null);
+});
+
+test('Windows Chrome 探针读取文件版本，不启动 chrome.exe', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-chrome-win-probe-'));
+    const executable = path.join(root, 'chrome.exe');
+    fs.writeFileSync(executable, '');
+    let invocation = null;
+    try {
+        const status = probeSystemChromeCompatibility(
+            {
+                EVAN_CHROME_EXECUTABLE: executable,
+                SystemRoot: 'C:\\Windows'
+            },
+            {
+                platform: 'win32',
+                minMajor: 136,
+                spawnSyncImpl: (command, args, options) => {
+                    invocation = { command, args, options };
+                    return { status: 0, stdout: '150.0.7871.182', stderr: '' };
+                }
+            }
+        );
+
+        assert.equal(status.ready, true);
+        assert.equal(status.version, '150.0.7871.182');
+        assert.equal(status.major, 150);
+        assert.equal(invocation.command, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+        assert.notEqual(invocation.command, executable);
+        assert.doesNotMatch(invocation.args.join(' '), /--version/);
+        assert.match(invocation.args.join(' '), /VersionInfo\.FileVersion/);
+        assert.equal(invocation.options.env.EVAN_CHROME_VERSION_TARGET, executable);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
 });
 
 // ---------------------------------------------------------------------------
@@ -95,9 +133,8 @@ test('Chrome 版本解析兼容标准输出', () => {
 // ---------------------------------------------------------------------------
 
 test('Chrome 探针结果会被缓存，不在热路径上反复同步启动 Chrome', () => {
-    // probeSystemChromeCompatibility 内部是 spawnSync(chrome, ['--version'])，
-    // 会同步阻塞整个事件循环（超时上限 5 秒）。它被挂在 opsEnvironment() 和
-    // ensureReady() 上，一次生成要付 2~4 次；退出路径上还会挤占关闭浏览器的预算。
+    // 版本探针是同步调用（超时上限 5 秒）。它被挂在 opsEnvironment() 和 ensureReady()
+    // 上，一次生成要付 2~4 次；退出路径上还会挤占关闭浏览器的预算。
     invalidateChromeCompatibility();
     let probes = 0;
     const options = {
@@ -157,7 +194,7 @@ test('用户点「重新检测」时必须绕开缓存', () => {
 });
 
 test('探测失败只短暂缓存，不会把模型平白置灰几分钟', () => {
-    // Windows 杀软拖慢一次 --version 就可能撞 5 秒超时。把这种瞬时失败
+    // Windows 杀软拖慢一次版本读取就可能撞 5 秒超时。把这种瞬时失败
     // 按「可用」的 TTL 缓存，会让 Flow/即梦所有模型灰掉一整段时间。
     invalidateChromeCompatibility();
     let probes = 0;

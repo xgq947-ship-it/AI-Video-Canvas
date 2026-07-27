@@ -50,11 +50,70 @@ export function resolveSystemChromeExecutable(environment = process.env, options
 }
 
 export function parseChromeVersion(output) {
-    const match = String(output || '').match(/(?:Google Chrome|Chrome)\s+(\d+)(?:\.(\d+)){0,3}/i);
+    const normalized = String(output || '').trim();
+    const match = normalized.match(/^(?:(?:Google Chrome|Chrome)\s+)?(\d+(?:\.\d+){0,3})(?:\s|$)/i);
     if (!match) return null;
     return {
-        version: String(output).trim().replace(/^Google Chrome\s+/i, ''),
-        major: Number(match[1])
+        version: match[1],
+        major: Number(match[1].split('.')[0])
+    };
+}
+
+function windowsPowerShellExecutable(environment) {
+    const windowsRoot = String(environment.SystemRoot || environment.WINDIR || '').trim();
+    return windowsRoot
+        ? path.win32.join(windowsRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+        : 'powershell.exe';
+}
+
+/**
+ * 读取 Chrome 版本。
+ *
+ * Windows 不能通过 `chrome.exe --version` 做探针：Chrome 已运行时，单实例机制可能把
+ * 调用转交给现有窗口并返回空输出。读取 PE 文件的 VersionInfo 不会启动 Chrome，也
+ * 不会访问或锁定任何浏览器 Profile。
+ */
+function readChromeVersion(executable, environment, {
+    platform,
+    spawnSyncImpl
+}) {
+    if (platform === 'win32') {
+        const result = spawnSyncImpl(
+            windowsPowerShellExecutable(environment),
+            [
+                '-NoLogo',
+                '-NoProfile',
+                '-NonInteractive',
+                '-ExecutionPolicy',
+                'Bypass',
+                '-Command',
+                '$version = (Get-Item -LiteralPath $env:EVAN_CHROME_VERSION_TARGET -ErrorAction Stop).VersionInfo.FileVersion; if (-not $version) { exit 2 }; [Console]::Out.Write($version)'
+            ],
+            {
+                encoding: 'utf8',
+                windowsHide: true,
+                timeout: 5_000,
+                env: {
+                    ...process.env,
+                    ...environment,
+                    EVAN_CHROME_VERSION_TARGET: executable
+                }
+            }
+        );
+        return {
+            result,
+            parsed: parseChromeVersion(`${result.stdout || ''}${result.stderr || ''}`)
+        };
+    }
+
+    const result = spawnSyncImpl(executable, ['--version'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 5_000
+    });
+    return {
+        result,
+        parsed: parseChromeVersion(`${result.stdout || ''}${result.stderr || ''}`)
     };
 }
 
@@ -77,12 +136,10 @@ export function probeSystemChromeCompatibility(environment = process.env, {
         };
     }
 
-    const result = spawnSyncImpl(executable, ['--version'], {
-        encoding: 'utf8',
-        windowsHide: true,
-        timeout: 5_000
+    const { result, parsed } = readChromeVersion(executable, environment, {
+        platform,
+        spawnSyncImpl
     });
-    const parsed = parseChromeVersion(`${result.stdout || ''}${result.stderr || ''}`);
     if (result.error || result.status !== 0 || !parsed) {
         return {
             ready: false,
@@ -120,10 +177,10 @@ export const resolveBundledBrowserExecutable = resolveSystemChromeExecutable;
 // ---------------------------------------------------------------------------
 // 带缓存的探针
 //
-// probeSystemChromeCompatibility 内部是 spawnSync(chrome, ['--version'])，会**同步
-// 阻塞整个事件循环**，超时上限 5 秒。而它被挂在了热路径上：opsEnvironment() 每次
-// spawn 都调一次（含每个重试尝试），ensureReady() 每次 runOpsCli 也调一次。一次生成
-// 因此要付 2~4 次阻塞式 Chrome 启动，期间后端无法响应生成状态轮询、保存等请求。
+// probeSystemChromeCompatibility 会同步读取版本（Windows 读取文件 VersionInfo，
+// macOS/Linux 执行 --version），超时上限 5 秒。而它被挂在了热路径上：
+// opsEnvironment() 每次 spawn 都调一次（含每个重试尝试），ensureReady() 每次
+// runOpsCli 也调一次。缓存可避免生成期间反复阻塞后端事件循环。
 //
 // 更要命的是退出路径：closeBrowserForShutdown 先探针（最多 5 秒）再关浏览器（8 秒），
 // 合计可能超过 desktop-entry.js 的 9.5 秒硬退出 —— Chrome 没关成就被强杀，
@@ -138,7 +195,7 @@ const CHROME_READY_TTL_MS = 5 * 60_000;
 /**
  * 探到「不可用」只缓存几秒。
  *
- * probe-failed 可能只是 Windows 杀软拖慢了一次 --version（撞 5 秒超时）。
+ * probe-failed 可能只是 Windows 杀软拖慢了一次文件版本读取（撞 5 秒超时）。
  * 把这种瞬时失败缓存几分钟，会让 Flow/即梦所有模型平白置灰一整段时间。
  */
 const CHROME_NOT_READY_TTL_MS = 3_000;

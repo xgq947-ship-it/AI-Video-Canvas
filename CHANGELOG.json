@@ -1,5 +1,17 @@
 [
   {
+    "version": "0.2.4",
+    "date": "2026-07-27",
+    "summary": "这一版修复 Windows 安装最新版 Evan 后首次启动时，明明已经安装 Google Chrome，却被错误阻断并提示无法读取 Chrome 版本的问题。",
+    "fixed": [
+      "Windows 通过启动 chrome.exe --version 检测版本时，会受 Chrome 单实例机制影响；日常 Chrome 已经运行时可能返回空输出，导致 Evan 把正常安装的 Chrome 误判为不可用。"
+    ],
+    "improved": [
+      "Windows 改为直接读取 chrome.exe 文件的 VersionInfo.FileVersion，不再为版本检测启动 Chrome，也不会访问或锁定日常 Chrome 与 Evan 专属 Profile。",
+      "新增 Windows Chrome 已运行场景的回归防线，确保后续不会重新使用 chrome.exe --version。"
+    ]
+  },
+  {
     "version": "0.2.3",
     "date": "2026-07-27",
     "summary": "这一版修复即梦生成图片保存后不清晰的问题：Evan 不再把结果区 360 像素缩略图当成最终成品，而是逐张获取对应的高清原图。产品短视频的画面比例也统一由场景比例控制，后续视频模型会自动跟随。",

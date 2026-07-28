@@ -10,6 +10,7 @@ import { runWithAuthRecovery, runWithExecutionMode } from './webhttp/index.js';
 import {
     generateGeminiImageHttp,
     generateGeminiVideoHttp,
+    runGeminiMediaTextTaskHttp,
     runGeminiTextTaskHttp
 } from './webhttp/gemini/provider.js';
 
@@ -74,5 +75,25 @@ export const runGeminiWebTextTask = options => runWithAuthRecovery({
             workflowId: options?.workflowId
         },
         http: async () => (await runGeminiTextTaskHttp(options)).text
+    })
+});
+
+/** 音视频语义/转写任务：自动复用 Gemini Web 登录，不要求用户额外填写 API Key。 */
+export const runGeminiWebMediaTextTask = options => runWithAuthRecovery({
+    provider: 'gemini-web',
+    label: 'Gemini Web 音频识别',
+    metadata: { prompt: options?.prompt },
+    run: () => runWithExecutionMode({
+        mode: options?.executionMode,
+        provider: 'gemini-web',
+        label: 'Gemini Web 音频识别',
+        signal: options?.signal,
+        metadata: {
+            kind: 'text',
+            modelId: 'gemini-web-audio-transcription',
+            nodeId: options?.nodeId,
+            workflowId: options?.workflowId
+        },
+        http: async () => (await runGeminiMediaTextTaskHttp(options)).text
     })
 });

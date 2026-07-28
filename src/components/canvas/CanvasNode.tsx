@@ -45,6 +45,7 @@ interface CanvasNodeProps {
   onImageToVideo?: (nodeId: string) => void;
   onChangeAngleGenerate?: (nodeId: string) => void;
   onExtractLastFrame?: (nodeId: string) => void;
+  onAutoSubtitle?: (nodeId: string) => void;
   zoom: number;
   // 悬停回调带上 nodeId，调用方才能传稳定的引用（否则每次 render 都是新箭头函数，
   // React.memo 会全部失效）。
@@ -96,6 +97,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   onImageToVideo,
   onChangeAngleGenerate,
   onExtractLastFrame,
+  onAutoSubtitle,
   zoom,
   onMouseEnter,
   onMouseLeave,
@@ -135,6 +137,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   ];
   const videoToolbarActions: NodeHoverToolbarAction[] = [
     ...(onExtractLastFrame ? ['lastFrame' as const, 'separator' as const] : []),
+    ...(onAutoSubtitle && !data.subtitleSourceNodeId ? ['autoSubtitle' as const, 'separator' as const] : []),
     'expand',
     'download',
   ];
@@ -541,12 +544,13 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
           <NodeHoverToolbar
             data={data}
             localScale={localScale}
-            topClassName="-top-20"
+            topClassName="-top-11"
             mediaType="video"
             actions={videoToolbarActions}
             onUpdate={onUpdate}
             onExpand={onExpand}
             onExtractLastFrame={onExtractLastFrame}
+            onAutoSubtitle={onAutoSubtitle}
           />
         )}
 
@@ -612,7 +616,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
 
         {/* Control Panel - Only show when single node is selected (not in group selection) */}
         {/* Hide controls for storyboard-generated scenes */}
-        {selected && showControls && data.type !== NodeType.TEXT && !(data.prompt && data.prompt.startsWith('Extract panel #')) && (
+        {selected && showControls && data.type !== NodeType.TEXT && !data.subtitleSourceNodeId && !(data.prompt && data.prompt.startsWith('Extract panel #')) && (
           <div className="absolute top-[calc(100%+12px)] left-1/2 -translate-x-1/2 w-[600px] flex justify-center z-[100]">
             <NodeControls
               workflowId={workflowId}

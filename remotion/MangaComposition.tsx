@@ -103,6 +103,7 @@ const SubtitleView: React.FC<{ text: string; durationInFrames: number }> = ({
   durationInFrames,
 }) => {
   const frame = useCurrentFrame();
+  const { height } = useVideoConfig();
   const opacity = interpolate(
     frame,
     [0, 4, Math.max(4, durationInFrames - 4), durationInFrames],
@@ -114,7 +115,7 @@ const SubtitleView: React.FC<{ text: string; durationInFrames: number }> = ({
       style={{
         justifyContent: "flex-end",
         alignItems: "center",
-        paddingBottom: 48,
+        paddingBottom: Math.round(height * 0.09),
         pointerEvents: "none",
       }}
     >
@@ -122,11 +123,13 @@ const SubtitleView: React.FC<{ text: string; durationInFrames: number }> = ({
         style={{
           color: "#f5f5f5",
           fontFamily: '"PingFang SC", "Microsoft YaHei", sans-serif',
-          fontSize: 32,
-          fontWeight: 500,
-          letterSpacing: 1.5,
-          lineHeight: 1.3,
-          textShadow: "0 2px 5px rgba(0,0,0,0.95), 0 0 2px #000",
+          fontSize: Math.round(Math.max(30, Math.min(68, height * 0.038))),
+          fontWeight: 700,
+          letterSpacing: 1,
+          lineHeight: 1.28,
+          WebkitTextStroke: `${Math.max(1.5, height * 0.0015)}px rgba(0,0,0,0.9)`,
+          paintOrder: "stroke fill",
+          textShadow: "0 2px 7px rgba(0,0,0,0.95)",
           opacity,
           maxWidth: "86%",
           textAlign: "center",

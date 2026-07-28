@@ -154,6 +154,18 @@ export async function uploadGeminiImages(inputs, libraryDir, { session, signal }
     return assets;
 }
 
+/** 上传调用方已经安全解析过的音频/视频文件，用于不消耗生成额度的媒体理解任务。 */
+export async function uploadGeminiMediaFiles(files, { session, signal } = {}) {
+    const list = (Array.isArray(files) ? files : []).filter(file =>
+        Buffer.isBuffer(file?.buffer) && file.buffer.length > 0 && file.fileName && file.mimeType
+    );
+    if (list.length === 0) return [];
+    const activeSession = session || await getGeminiSession({ signal });
+    const assets = [];
+    for (const file of list) assets.push(await uploadImage(file, { session: activeSession, signal }));
+    return assets;
+}
+
 /**
  * One StreamGenerate round trip.
  *
@@ -225,6 +237,30 @@ export async function runGeminiTextTaskHttp({
     const text = extractText(payloads);
     if (!text) {
         throw new WebProviderError(`${PROVIDER_NAME} 没有返回文本回答`, {
+            provider: PROVIDER, code: 'GENERATION_FAILED', submitted: false
+        });
+    }
+    return { text, conversation: extractConversation(payloads), channel: 'http' };
+}
+
+/** 音视频理解任务；与图片识图共用真实 StreamGenerate 协议，但附件由调用方提供。 */
+export async function runGeminiMediaTextTaskHttp({ prompt, files = [], conversation, signal }) {
+    const cleanPrompt = requireNonEmptyPrompt(prompt, PROVIDER_NAME);
+    const session = await getGeminiSession({ signal });
+    const assets = await uploadGeminiMediaFiles(files, { session, signal });
+    const payloads = await streamGenerate({
+        session,
+        prompt: cleanPrompt,
+        assets,
+        conversation,
+        mode: null,
+        submitted: false,
+        signal,
+        timeoutSeconds: 180
+    });
+    const text = extractText(payloads);
+    if (!text) {
+        throw new WebProviderError(`${PROVIDER_NAME} 没有返回媒体识别结果`, {
             provider: PROVIDER, code: 'GENERATION_FAILED', submitted: false
         });
     }

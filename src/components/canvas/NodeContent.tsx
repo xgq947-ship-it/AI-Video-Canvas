@@ -234,7 +234,7 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                         <div className="relative z-10 flex flex-col items-center gap-2">
                             <Loader2 size={32} className="animate-spin text-blue-400" />
                             <span className="text-xs text-neutral-500 font-medium">
-                                正在生成...
+                                {data.subtitleSourceNodeId ? '正在识别并烧录字幕...' : '正在生成...'}
                             </span>
                         </div>
                     ) : data.status === NodeStatus.ERROR ? (
@@ -244,13 +244,13 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                             </div>
                             <div>
                                 <div className="text-sm font-medium text-neutral-200">
-                                    {isVideoType ? '视频生成失败' : '图片生成失败'}
+                                    {data.subtitleSourceNodeId ? '字幕生成失败' : isVideoType ? '视频生成失败' : '图片生成失败'}
                                 </div>
                                 <div className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-500">
                                     {data.errorMessage || '生成任务未完成，请重新生成。'}
                                 </div>
                             </div>
-                            {onGenerate && (
+                            {onGenerate && !data.subtitleSourceNodeId && (
                                 <button
                                     onClick={(event) => {
                                         event.stopPropagation();

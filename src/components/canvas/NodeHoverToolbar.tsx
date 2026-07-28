@@ -4,6 +4,7 @@ import { NodeData } from '../../types';
 export type NodeHoverToolbarAction =
   | 'changeAngle'
   | 'lastFrame'
+  | 'autoSubtitle'
   | 'upload'
   | 'separator'
   | 'expand'
@@ -12,7 +13,7 @@ export type NodeHoverToolbarAction =
 interface NodeHoverToolbarProps {
   data: NodeData;
   localScale: number;
-  topClassName: '-top-12' | '-top-20';
+  topClassName: string;
   mediaType: 'image' | 'video';
   actions: NodeHoverToolbarAction[];
   onUpdate: (id: string, updates: Partial<NodeData>) => void;
@@ -20,6 +21,8 @@ interface NodeHoverToolbarProps {
   onExpand?: (imageUrl: string) => void;
   /** 用视频最后一帧生成一个图片节点 */
   onExtractLastFrame?: (nodeId: string) => void;
+  /** 识别视频人声并生成一个新的带字幕视频节点 */
+  onAutoSubtitle?: (nodeId: string) => void;
 }
 
 const downloadMedia = (resultUrl: string, nodeId: string, mediaType: 'image' | 'video') => {
@@ -69,6 +72,7 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
   onUpload,
   onExpand,
   onExtractLastFrame,
+  onAutoSubtitle,
 }) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const resultUrl = data.resultUrl!;
@@ -158,6 +162,22 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
                     <polyline points="21 15 16 10 5 21" />
                   </svg>
                   尾帧成图
+                </button>
+              );
+            case 'autoSubtitle':
+              return (
+                <button
+                  key={`${action}-${index}`}
+                  onClick={(event) => { event.stopPropagation(); onAutoSubtitle?.(data.id); }}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium text-neutral-200 transition-colors hover:bg-neutral-700 hover:text-white"
+                  title="自动识别人声并生成带字幕视频"
+                >
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="3" y="5" width="18" height="14" rx="2" />
+                    <path d="M7 10h4M7 14h7M16 10h1" />
+                  </svg>
+                  自动字幕
                 </button>
               );
             case 'expand':

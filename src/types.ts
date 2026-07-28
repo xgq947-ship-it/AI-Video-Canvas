@@ -59,6 +59,12 @@ export interface NodeData {
   videoDuration?: number; // Video duration in seconds (e.g., 5, 6, 8, 10)
   generateAudio?: boolean; // 是否生成原生音频（如 Seedance）
   inputUrl?: string; // Input URL for video generation (image-to-video)
+  subtitleSourceNodeId?: string; // 带字幕视频对应的源视频节点
+  subtitleJobId?: string;
+  subtitleJobStatus?: 'queued' | 'extracting' | 'transcribing' | 'rendering' | 'success' | 'failed' | 'cancelled';
+  subtitleJobStage?: string;
+  subtitleJobProgress?: number;
+  subtitleSegments?: Array<{ id: string; text: string; start: number; end: number }>;
 
   // Video Editor specific
   trimStart?: number; // Trim start time in seconds

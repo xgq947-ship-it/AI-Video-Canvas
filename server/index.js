@@ -18,6 +18,7 @@ import { processTikTokVideo, isValidTikTokUrl } from './tools/tiktok.js';
 import storyboardRoutes from './routes/storyboard.js';
 import audioRoutes from './routes/audio.js';
 import renderRoutes from './routes/render.js';
+import autoSubtitleRoutes from './routes/auto-subtitles.js';
 import codexImageJobRoutes from './routes/codex-image-jobs.js';
 import settingsRoutes from './routes/settings.js';
 import { applyApiKeysToApp, loadApiKeyOverrides } from './services/apiKeyStore.js';
@@ -333,6 +334,9 @@ app.use('/api/audio', audioRoutes);
 
 // Mount Render routes (通用 Remotion 成片渲染任务)
 app.use('/api/render', renderRoutes);
+
+// Mount automatic speech recognition + burned-in subtitle video jobs.
+app.use('/api/auto-subtitles', autoSubtitleRoutes);
 
 // --- Library Assets API ---
 

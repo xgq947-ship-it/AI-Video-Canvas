@@ -45,6 +45,7 @@ import { ToastStack } from './components/ToastStack';
 import { useAutoSave } from './hooks/useAutoSave';
 import { useGenerationRecovery } from './hooks/useGenerationRecovery';
 import { useVideoFrameExtraction } from './hooks/useVideoFrameExtraction';
+import { useAutoSubtitleRecovery } from './hooks/useAutoSubtitleRecovery';
 import { extractVideoLastFrame } from './utils/videoHelpers';
 import { createAdditionalImagePlacements } from './utils/imageBatchLayout';
 import { readApiResponse } from './utils/apiResponse';
@@ -867,6 +868,20 @@ export default function App() {
     onProductSceneCompleted: handleProductSceneCompleted,
   });
 
+  const handleSubtitleCompleted = React.useCallback(() => {
+    showToast('带字幕视频已生成');
+  }, [showToast]);
+  const handleSubtitleFailed = React.useCallback((message: string) => {
+    showToast(message, { tone: 'error', duration: 6500 });
+  }, [showToast]);
+
+  useAutoSubtitleRecovery({
+    nodes,
+    updateNode,
+    onCompleted: handleSubtitleCompleted,
+    onFailed: handleSubtitleFailed,
+  });
+
   // Video Frame Extraction (auto-extract lastFrame for videos missing thumbnails)
   useVideoFrameExtraction({
     nodes,
@@ -1539,6 +1554,89 @@ export default function App() {
     updateNode(id, updates);
   }, [updateNode]);
 
+  const subtitleLaunchesRef = useRef(new Set<string>());
+  const handleAutoSubtitle = React.useCallback(async (sourceNodeId: string) => {
+    if (!canvasEditLock.guard()) return;
+    const source = nodes.find(node => node.id === sourceNodeId);
+    if (!source?.resultUrl || source.type !== NodeType.VIDEO) {
+      showToast('当前节点没有可识别的视频', { tone: 'error' });
+      return;
+    }
+    if (!workflowId) {
+      showToast('请先新建或打开项目', { tone: 'error' });
+      return;
+    }
+    if (subtitleLaunchesRef.current.has(sourceNodeId) || nodes.some(node =>
+      node.subtitleSourceNodeId === sourceNodeId &&
+      node.status === NodeStatus.LOADING &&
+      ['queued', 'extracting', 'transcribing', 'rendering'].includes(node.subtitleJobStatus || 'queued')
+    )) {
+      showToast('这个视频正在生成字幕');
+      return;
+    }
+
+    subtitleLaunchesRef.current.add(sourceNodeId);
+    const resultNodeId = crypto.randomUUID();
+    const targetX = source.x + 485;
+    let targetY = source.y;
+    while (nodes.some(node => Math.abs(node.x - targetX) < 390 && Math.abs(node.y - targetY) < 280)) {
+      targetY += 320;
+    }
+    const resultNode: NodeData = {
+      id: resultNodeId,
+      type: NodeType.VIDEO,
+      title: '字幕视频',
+      x: targetX,
+      y: targetY,
+      prompt: '',
+      status: NodeStatus.LOADING,
+      parentIds: [sourceNodeId],
+      model: '自动字幕',
+      videoModel: '自动字幕',
+      videoDuration: source.videoDuration,
+      aspectRatio: source.aspectRatio || '16:9',
+      resolution: source.resolution || 'Auto',
+      subtitleSourceNodeId: sourceNodeId,
+      subtitleJobStatus: 'queued',
+      subtitleJobStage: 'queued',
+      subtitleJobProgress: 0,
+    };
+    setNodes(previous => [...previous, resultNode]);
+    setSelectedNodeIds([resultNodeId]);
+    showToast('正在识别人声并生成字幕视频…', { duration: 5000 });
+
+    try {
+      const response = await fetch('/api/auto-subtitles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workflowId,
+          sourceNodeId,
+          resultNodeId,
+          sourceVideoUrl: source.resultUrl,
+        }),
+      });
+      const job = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(job.error || '自动字幕任务提交失败');
+      updateNode(resultNodeId, {
+        subtitleJobId: job.jobId,
+        subtitleJobStatus: job.status,
+        subtitleJobStage: job.stage,
+        subtitleJobProgress: job.progress,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '自动字幕任务提交失败';
+      updateNode(resultNodeId, {
+        status: NodeStatus.ERROR,
+        subtitleJobStatus: 'failed',
+        errorMessage: message,
+      });
+      showToast(message, { tone: 'error', duration: 6500 });
+    } finally {
+      subtitleLaunchesRef.current.delete(sourceNodeId);
+    }
+  }, [canvasEditLock, nodes, setNodes, setSelectedNodeIds, showToast, updateNode, workflowId]);
+
   // ============================================================================
   // EVENT HANDLERS
   // ============================================================================
@@ -1752,6 +1850,7 @@ export default function App() {
     handleImageToVideo,
     handleChangeAngleGenerate,
     handleExtractLastFrame,
+    handleAutoSubtitle,
     handleDuplicate,
     handleNodePointerDown,
     setSelectedNodeIds,
@@ -1788,6 +1887,7 @@ export default function App() {
     onChangeAngleGenerate: (id: string) =>
       nodeCallbacksRef.current.handleChangeAngleGenerate(id),
     onExtractLastFrame: (id: string) => nodeCallbacksRef.current.handleExtractLastFrame(id),
+    onAutoSubtitle: (id: string) => nodeCallbacksRef.current.handleAutoSubtitle(id),
     onNodePointerDown: (e: React.PointerEvent, id: string) => {
       const current = nodeCallbacksRef.current;
       const currentSelection = current.selectedNodeIds;
@@ -2060,6 +2160,7 @@ export default function App() {
                 onImageToVideo={stableNodeHandlers.onImageToVideo}
                 onChangeAngleGenerate={stableNodeHandlers.onChangeAngleGenerate}
                 onExtractLastFrame={stableNodeHandlers.onExtractLastFrame}
+                onAutoSubtitle={stableNodeHandlers.onAutoSubtitle}
                 zoom={viewport.zoom}
                 onMouseEnter={handleNodeMouseEnter}
                 onMouseLeave={handleNodeMouseLeave}

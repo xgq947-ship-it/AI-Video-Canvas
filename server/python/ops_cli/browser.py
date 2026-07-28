@@ -46,18 +46,52 @@ def browser_status() -> CommandResponse:
     )
 
 
+def _flush_tabs_before_close(port: int) -> int:
+    """Close every real tab through the raw CDP HTTP endpoint before killing Chrome.
+
+    实测：Chrome 被 SIGTERM/SIGKILL 掉之后，同一个 profile 下次启动会把上次的标签页
+    全部恢复回来（哪怕是无头实例）。也就是说残留的标签页会跨重启复活，一直吃内存。
+    退出前先把它们关掉，恢复列表自然就是空的。
+
+    走 /json 而不是 Playwright：退出路径上不能依赖 Playwright 装好，也不能被它的
+    连接握手拖住；任何失败都只是少清一次，直接交给后面的 stop_chrome。
+    """
+    try:
+        with urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2) as response:
+            targets: Any = json.loads(response.read().decode("utf-8"))
+    except (OSError, URLError, json.JSONDecodeError):
+        return 0
+    if not isinstance(targets, list):
+        return 0
+
+    closed = 0
+    for target in targets:
+        if not isinstance(target, dict) or target.get("type") != "page":
+            continue
+        target_id = target.get("id")
+        if not target_id or _is_blank_url(str(target.get("url") or "")):
+            continue
+        try:
+            with urlopen(f"http://127.0.0.1:{port}/json/close/{target_id}", timeout=2):
+                closed += 1
+        except (OSError, URLError):
+            continue
+    return closed
+
+
 def close_browser() -> CommandResponse:
     sessionhub_root = Path(get_config().sessionhub_root).expanduser().resolve()
     if str(sessionhub_root) not in sys.path:
         sys.path.insert(0, str(sessionhub_root))
-    from scene.chrome_cdp import stop_chrome  # type: ignore
+    from scene.chrome_cdp import CDP_PORT, stop_chrome  # type: ignore
 
+    flushed = _flush_tabs_before_close(CDP_PORT)
     ok, message = stop_chrome()
     return CommandResponse(
         success=ok,
         platform="browser",
         command="close",
-        data={"message": message, "closed": ok},
+        data={"message": message, "closed": ok, "tabs_flushed": flushed},
     )
 
 

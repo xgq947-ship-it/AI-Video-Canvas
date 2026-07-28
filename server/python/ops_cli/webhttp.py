@@ -67,6 +67,21 @@ PROVIDER_COOKIE_URLS = {
 }
 
 WEBHTTP_WINDOW_PREFIX = "ops-cli:webhttp:"
+# 普通任务页的 marker 前缀（browser.managed_work_page）。回收常驻桥接页周边的
+# 残留标签时必须绕开它，否则会打断并行运行的浏览器工作流任务。
+MANAGED_WINDOW_PREFIX = "ops-cli:"
+
+# 平台在限流/风控时会把桥接页顶到这些中转页上。它们对业务毫无用处，但会顶着
+# 一个已经失去 window.name 的标签页不放，所以回收时按 host + 路径前缀识别。
+INTERSTITIAL_HOST_PATHS = {
+    "www.google.com": ("/sorry",),
+    "google.com": ("/sorry",),
+}
+
+# 快照类调用（读 window.name）遇到卡死的页面不能一直等：桥接页每次请求都要遍历
+# 全部标签页，默认 30 秒超时乘以标签数会把整个请求拖垮。
+PAGE_SNAPSHOT_TIMEOUT_MS = 2000
+PAGE_DEFAULT_TIMEOUT_MS = 30000
 
 # Base64 round-trips through page.evaluate as a JSON string. Multi-MB payloads
 # get slow and fragile long before they get impossible, so refuse early and let
@@ -506,10 +521,128 @@ def _connect(handler: Any) -> Any:
 
 
 def _page_window_name(page: Any) -> str:
+    has_timeout = hasattr(page, "set_default_timeout")
+    if has_timeout:
+        try:
+            page.set_default_timeout(PAGE_SNAPSHOT_TIMEOUT_MS)
+        except Exception:
+            has_timeout = False
     try:
         return str(page.evaluate("() => window.name || ''") or "")
     except Exception:
         return ""
+    finally:
+        if has_timeout:
+            try:
+                page.set_default_timeout(PAGE_DEFAULT_TIMEOUT_MS)
+            except Exception:
+                pass
+
+
+def _bridge_state_path() -> Path:
+    return Path(get_config().runtime_dir) / "webhttp_bridge_pages.json"
+
+
+def _page_target_id(context: Any, page: Any) -> str | None:
+    """CDP targetId：跨进程、跨导航都不变的标签页身份。
+
+    ``window.name`` 会在跨站导航时被 Chrome 清空（labs.google → google.com/sorry
+    就是一次跨站导航），一旦清空，旧实现既认不出这个页面、也不肯复用别的 host 上的
+    页面，于是每次请求都 ``new_page()``，标签页无上限增长。targetId 不受此影响。
+    """
+    try:
+        session = context.new_cdp_session(page)
+    except Exception:
+        return None
+    try:
+        info = session.send("Target.getTargetInfo") or {}
+        target_id = ((info.get("targetInfo") or {}).get("targetId")) or None
+        return str(target_id) if target_id else None
+    except Exception:
+        return None
+    finally:
+        try:
+            session.detach()
+        except Exception:
+            pass
+
+
+def _read_bridge_target_id(provider: str) -> str | None:
+    try:
+        payload = json.loads(_bridge_state_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(provider)
+    return str(value) if value else None
+
+
+def _write_bridge_target_id(provider: str, target_id: str | None) -> None:
+    if not target_id:
+        return
+    path = _bridge_state_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            payload = {}
+    except (OSError, ValueError):
+        payload = {}
+    if payload.get(provider) == target_id:
+        return
+    payload[provider] = target_id
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _is_reclaimable(url: str, expected_host: str) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    if host == expected_host:
+        return True
+    prefixes = INTERSTITIAL_HOST_PATHS.get(host)
+    return bool(prefixes and (parsed.path or "/").startswith(prefixes))
+
+
+def _reclaim_stray_pages(context: Any, provider: str, keep_page: Any) -> None:
+    """把本平台多余的标签页关掉，让标签数由结构保证有上限。
+
+    上面的复用逻辑只是「尽量」复用；一旦某个没预料到的分支再次漏出新标签页，
+    没有这一步就又是无上限增长。回收范围刻意收窄到「本平台域名」和限流中转页，
+    并跳过 ``ops-cli:<owner>:<ts>:<uuid>`` 任务页 —— 关掉后者正是
+    ``geminiWebWorkflow.js`` 记录过的那个 bug（会打断并行任务）。
+    """
+    expected_host = PROVIDER_HOSTS[provider]
+    marker = f"{WEBHTTP_WINDOW_PREFIX}{provider}"
+    for candidate in list(getattr(context, "pages", []) or []):
+        if candidate is keep_page:
+            continue
+        try:
+            if candidate.is_closed():
+                continue
+        except Exception:
+            continue
+        url = str(getattr(candidate, "url", "") or "")
+        if not _is_reclaimable(url, expected_host):
+            continue
+        window_name = _page_window_name(candidate)
+        if window_name.startswith(MANAGED_WINDOW_PREFIX) and not window_name.startswith(
+            WEBHTTP_WINDOW_PREFIX
+        ):
+            continue
+        # 别的平台的常驻桥接页也可能正卡在 /sorry 上。每次 ops_cli 调用都是独立进程，
+        # 三个平台真的会并发，关掉它等于把别人的请求打断。
+        if window_name.startswith(WEBHTTP_WINDOW_PREFIX) and window_name != marker:
+            continue
+        try:
+            candidate.close()
+        except Exception:
+            pass
 
 
 def _same_page_target(current: str, desired: str) -> bool:
@@ -538,6 +671,7 @@ def _provider_page(context: Any, provider: str, desired_url: str | None = None) 
     """
     marker = f"{WEBHTTP_WINDOW_PREFIX}{provider}"
     expected_host = PROVIDER_HOSTS[provider]
+    known_target_id = _read_bridge_target_id(provider)
 
     pages = []
     stale_marker = None
@@ -550,6 +684,12 @@ def _provider_page(context: Any, provider: str, desired_url: str | None = None) 
         current = str(getattr(candidate, "url", "") or "")
         host = (urlparse(current).hostname or "").lower()
         candidate_marker = _page_window_name(candidate) == marker
+        # 不按 host 过滤：labs.google 被顶到 accounts/consent.google.com 同样是跨站
+        # 导航（window.name 一样会被清空），而那些 host 不在中转页名单里。targetId
+        # 是精确身份，不会误判，多花的只是几次 CDP 往返。
+        if not candidate_marker and known_target_id:
+            # window.name 已被跨站导航清掉时，用持久化的 targetId 认回同一个标签页。
+            candidate_marker = _page_target_id(context, candidate) == known_target_id
         if candidate_marker and host != expected_host:
             stale_marker = candidate
         pages.append((candidate, current, host, candidate_marker))
@@ -573,6 +713,11 @@ def _provider_page(context: Any, provider: str, desired_url: str | None = None) 
 
     if page is None:
         page = stale_marker or context.new_page()
+
+    # 先记住身份再导航：下面的 goto 可能被顶到 /sorry 并抛错，那时也必须还能认回
+    # 这个标签页，否则每次失败重试都会新开一个。
+    _write_bridge_target_id(provider, _page_target_id(context, page))
+    _reclaim_stray_pages(context, provider, page)
 
     def mark_page() -> None:
         try:

@@ -68,6 +68,7 @@ import {
 import {
     BROWSER_MODELS_SETUP_HINT,
     browserRuntimeStatus,
+    closeBrowserForShutdown,
     runOpsCli
 } from './services/opsCliRunner.js';
 import { browserSessionState } from './services/browserSessionState.js';
@@ -2124,5 +2125,22 @@ export { app };
 
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
 if (invokedPath === __filename) {
-    startBackend();
+    const server = startBackend();
+
+    // 直接 `node server/index.js`（npm run dev / npm run server）时，桌面端的
+    // 退出链路（electron/main.js 的 before-quit → desktop-entry.js 的 shutdown）
+    // 完全不参与。Evan 专属 Chrome 是 detached 启动的，不加这段的话 Ctrl-C 之后
+    // 它会一直在后台占着几百 MB 内存。concurrently --kill-others-on-fail 发的
+    // SIGTERM 同样走这里。
+    let shuttingDown = false;
+    const shutdown = () => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        const finish = () => server.close(() => process.exit(0));
+        closeBrowserForShutdown({ timeoutMs: 8_000 }).then(finish, finish);
+        setTimeout(() => process.exit(1), 9_500).unref();
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+    process.on('SIGHUP', shutdown);
 }

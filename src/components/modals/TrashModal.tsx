@@ -129,6 +129,25 @@ export const TrashModal: React.FC<TrashModalProps> = ({
         }
     };
 
+    const purgeAll = async () => {
+        if (!workflowId || busyId || entries.length === 0) return;
+        if (!window.confirm(`确定永久删除回收站里的全部 ${entries.length} 项吗？此操作无法撤销。`)) return;
+        setBusyId('__all__');
+        setError(null);
+        try {
+            const response = await fetch(
+                `/api/projects/${encodeURIComponent(workflowId)}/trash`,
+                { method: 'DELETE' }
+            );
+            await readApiResponse(response, '清空回收站失败');
+            setEntries([]);
+        } catch (purgeError) {
+            setError(purgeError instanceof Error ? purgeError.message : '清空回收站失败');
+        } finally {
+            setBusyId(null);
+        }
+    };
+
     if (!isOpen) return null;
 
     return (
@@ -144,13 +163,23 @@ export const TrashModal: React.FC<TrashModalProps> = ({
                         </div>
                         <p className="mt-1 text-xs text-neutral-500">删除内容保留 7 天，到期后自动从本地清理。</p>
                     </div>
-                    <button
-                        onClick={onClose}
-                        className={`rounded-xl p-2 transition-colors ${isDark ? 'hover:bg-neutral-800' : 'hover:bg-neutral-100'}`}
-                        aria-label="关闭回收站"
-                    >
-                        <X size={20} />
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => void purgeAll()}
+                            disabled={entries.length === 0 || busyId !== null}
+                            className="flex items-center gap-1.5 rounded-xl border border-red-500/30 px-3 py-2 text-xs font-medium text-red-400 transition-colors hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            {busyId === '__all__' ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                            全部永久删除
+                        </button>
+                        <button
+                            onClick={onClose}
+                            className={`rounded-xl p-2 transition-colors ${isDark ? 'hover:bg-neutral-800' : 'hover:bg-neutral-100'}`}
+                            aria-label="关闭回收站"
+                        >
+                            <X size={20} />
+                        </button>
+                    </div>
                 </div>
 
                 <div className="min-h-[280px] overflow-y-auto p-5">

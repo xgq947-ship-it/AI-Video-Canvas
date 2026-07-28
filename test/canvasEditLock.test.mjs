@@ -64,16 +64,12 @@ test('新建项目后立即恢复编辑，不需要重启', () => {
     assert.equal(/useState/.test(LOCK), false, '编辑锁不应有自己的状态，否则可能与项目状态不同步');
 });
 
-test('启动配置页本次启动只自动检测一次', () => {
-    // 之前每次打开设置都会重新跑三平台 HTTP 登录检测，用户每次都要等数秒。
-    assert.match(GUIDE, /let hasAutoDetectedThisSession = false/);
-    assert.match(GUIDE, /const shouldAutoDetect = !hasAutoDetectedThisSession/);
-    assert.match(GUIDE, /hasAutoDetectedThisSession = true/);
-    assert.match(GUIDE, /void loadStatus\(shouldAutoDetect\)/);
-    // 标记必须在模块作用域：组件每次打开都会重新挂载，组件内的标记起不到作用。
-    const componentStart = GUIDE.indexOf('export const StartupSetupGuideModal');
-    assert.ok(GUIDE.indexOf('let hasAutoDetectedThisSession') < componentStart,
-        '一次性标记必须在组件外');
+test('启动配置页打开时不自动探测登录状态', () => {
+    // 三平台 HTTP 检测要唤醒专属 Chrome，好几秒起步。刚进画布就卡这么久，
+    // 而登录态几乎总是和上次一样 —— 打开面板只读缓存。
+    assert.match(GUIDE, /void loadStatus\(false\)/, '打开面板只读缓存');
+    assert.equal(/hasAutoDetectedThisSession/.test(GUIDE), false,
+        '不该再有「本次启动自动检测一次」的开关');
 });
 
 test('手动检测入口仍然保留', () => {

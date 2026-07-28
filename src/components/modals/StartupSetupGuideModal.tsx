@@ -110,18 +110,6 @@ function friendlyBrowserError(error: unknown) {
     return message || '登录页面打开失败';
 }
 
-/**
- * 进程级标记：App 本次启动是否已经自动检测过一次。
- *
- * 刻意放在模块作用域而不是组件 state —— 面板每次打开都会重新挂载，
- * 组件内的标记起不到「一次」的作用。
- */
-let hasAutoDetectedThisSession = false;
-
-/** 供测试与「重新登录后强制刷新」场景使用。 */
-export function resetStartupAutoDetection() {
-    hasAutoDetectedThisSession = false;
-}
 
 export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
     isOpen,
@@ -195,15 +183,13 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
 
     useEffect(() => {
         if (!isOpen) return;
-        // 本次 App 生命周期只自动检测一次。
+        // 一律只读缓存，永远不自动探测。
         //
-        // 之前每次打开这个面板都会 loadStatus(true)，也就是重新跑一遍三平台 HTTP
-        // 登录检测 —— 用户每点一次右上角设置就要等数秒，而登录态在两次点击之间
-        // 几乎不可能变。现在：首次进入检测并写入缓存，之后只读缓存；
-        // 需要刷新时由用户点「重新检查」或单个平台的「检查登录状态」。
-        const shouldAutoDetect = !hasAutoDetectedThisSession;
-        hasAutoDetectedThisSession = true;
-        void loadStatus(shouldAutoDetect);
+        // 三平台 HTTP 登录检测要唤醒专属 Chrome 并逐个发请求，好几秒起步；放在
+        // 「刚进画布」这个时刻，用户什么都还没做就先被卡住，而登录态绝大多数时候
+        // 和上次一样。需要最新状态时由用户点「重新检查」或单平台的「检查登录状态」，
+        // 那时等待是他自己要的。
+        void loadStatus(false);
     }, [isOpen]);
 
     useEffect(() => {

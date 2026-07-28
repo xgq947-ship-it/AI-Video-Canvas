@@ -324,6 +324,36 @@ export function permanentlyDeleteProjectTrashEntry(projectRoot, entryId) {
     });
 }
 
+/**
+ * 清空回收站。
+ *
+ * 复用逐条删除的那套路径处理（resolveWithin + files/<entryId>），不另开一条按目录
+ * 递归删除的分支 —— 那种写法一旦 entryId 不干净就会删到 .trash 之外。
+ *
+ * @returns {{ deleted: number }}
+ */
+export function purgeAllProjectTrash(projectRoot) {
+    const index = readTrashIndex(projectRoot);
+    const entries = [...index.entries];
+    if (!entries.length) return { deleted: 0 };
+    index.entries = [];
+    writeTrashIndex(projectRoot, index);
+    let deleted = 0;
+    for (const entry of entries) {
+        try {
+            fs.rmSync(resolveWithin(path.join(trashRoot(projectRoot), 'files'), entry.id), {
+                recursive: true,
+                force: true
+            });
+            deleted += 1;
+        } catch (error) {
+            // 索引已经清掉了，单个文件夹删不掉不该让整次清空失败；剩下的只是占磁盘。
+            console.error(`[回收站] 清空时删除 ${entry.id} 失败：${error.message}`);
+        }
+    }
+    return { deleted };
+}
+
 export function getProjectTrashPreviewPath(projectRoot, entryId) {
     const entry = readTrashIndex(projectRoot).entries.find(candidate => candidate.id === entryId);
     const file = entry?.files?.find(candidate => candidate.backupRelativePath);

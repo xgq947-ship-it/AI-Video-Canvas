@@ -44,7 +44,8 @@ import {
     permanentlyDeleteProjectTrashEntry,
     purgeExpiredProjectTrash,
     restoreProjectTrashEntry,
-    trashWorkflowNodes
+    trashWorkflowNodes,
+    purgeAllProjectTrash
 } from './services/projectTrash.js';
 import { execFile } from 'child_process';
 import {
@@ -930,6 +931,17 @@ app.post('/api/projects/:id/trash/:entryId/restore', (req, res) => {
         res.json({ success: true, restoredNodes });
     } catch (error) {
         const status = error.code === 'TRASH_NOT_FOUND' || error.code === 'PROJECT_NOT_FOUND' ? 404 : 500;
+        res.status(status).json({ error: error.message });
+    }
+});
+
+// 清空：路由放在 /:entryId 之前，否则 "all" 会被当成 entryId 匹配掉。
+app.delete('/api/projects/:id/trash', (req, res) => {
+    try {
+        const { projectRoot } = loadWorkflowForTrash(req.params.id);
+        res.json({ success: true, ...purgeAllProjectTrash(projectRoot) });
+    } catch (error) {
+        const status = error.code === 'PROJECT_NOT_FOUND' ? 404 : 500;
         res.status(status).json({ error: error.message });
     }
 });

@@ -14,6 +14,7 @@ import { ConnectionsLayer } from './components/canvas/ConnectionsLayer';
 import { ContextMenu } from './components/ContextMenu';
 import { ContextMenuState, isMangaNode, NodeData, NodeStatus, NodeType } from './types';
 import {
+  dismissProductSceneResultNodes,
   generateImage,
   generateImageBatch,
   generateVideo,
@@ -306,6 +307,13 @@ export default function App() {
       && typeof node.resultUrl === 'string'
       && /\/library\/projects\/[^/]+\/images\//.test(node.resultUrl)
     );
+
+    // 产品短视频任务的结果节点（图片和视频都算）删掉后要在任务里记一笔，否则画布恢复
+    // 逻辑会把它当成「结果还在但节点丢了」，下一轮就原样长回来 —— 表现就是删不掉。
+    // 视频节点走不到下面的回收站分支，所以这一步必须在分支之前做。
+    if (workflowId) {
+      void dismissProductSceneResultNodes(uniqueIds, workflowId);
+    }
 
     if (!hasProjectImage) {
       deleteNodes(uniqueIds);

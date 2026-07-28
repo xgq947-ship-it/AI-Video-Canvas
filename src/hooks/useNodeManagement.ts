@@ -5,7 +5,7 @@
  * Handles node creation, updates, selection, and deletion.
  */
 
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { NodeData, NodeType, NodeStatus, Viewport } from '../types';
 import { DEFAULT_NODE_WIDTH, paneToCanvas } from '@/shared/canvasCoords.js';
 
@@ -82,9 +82,12 @@ export const useNodeManagement = () => {
      * @param id - Node ID to update
      * @param updates - Partial node data to merge
      */
-    const updateNode = (id: string, updates: Partial<NodeData>) => {
+    // 必须是稳定引用：useGenerationRecovery 把它放进 useEffect 依赖里，每次渲染都换一个
+    // 新函数的话，那个「补回缺失结果节点」的 effect 会每帧都跑一遍 —— 既在持续打后端
+    // 接口，也会把用户刚删掉的结果节点立刻重建出来。
+    const updateNode = useCallback((id: string, updates: Partial<NodeData>) => {
         setNodes(prev => prev.map(n => n.id === id ? { ...n, ...updates } : n));
-    };
+    }, []);
 
     /**
      * Deletes a node by ID

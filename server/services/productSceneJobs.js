@@ -425,6 +425,31 @@ async function executeJob(job, context) {
   }
 }
 
+/**
+ * 这一轮结果节点用什么 id。
+ *
+ * 每一轮都用全新的 id：「再点一次生成」是在画布上**新增一版**子节点，而不是把上一版
+ * 覆盖掉 —— 上一版的图和视频要留在原地，方便对比、挑选。画布按节点 id 认人
+ * （upsertProductSceneResultNode），换一批 id 就是新增一批节点。
+ *
+ * 唯一的例外是重试部分失败的任务：那时是把同一版补完整，见 canReusePartialResults。
+ *
+ * @param {{ imageCount: number, newId?: () => string }} options
+ */
+export function resolveResultNodeIds({ imageCount, newId = () => crypto.randomUUID() }) {
+  return Array.from({ length: imageCount }, newId);
+}
+
+/**
+ * 这是这个节点的第几版结果（1 起）。
+ *
+ * 用来把新一版的子节点排在上一版下面，而不是原地叠在一起 —— 叠在一起看起来就像
+ * 「覆盖了」，实际上底下还压着旧的。
+ */
+export function resolveJobVersion(previousJobs) {
+  return (Array.isArray(previousJobs) ? previousJobs.length : 0) + 1;
+}
+
 export function createProductSceneJob(payload, context) {
   const dimensionError = validateProductDimensions(payload.dimensions);
   if (dimensionError) throw new Error(dimensionError);
@@ -471,9 +496,11 @@ export function createProductSceneJob(payload, context) {
     }
   }
 
+  // 重试用指定的那一份；普通的「再点一次生成」没有 retryJobId，就取这个节点上一次
+  // 的任务 —— 只为了拿回它的结果节点 id（见下面 reuseNodeIds），不复用任何结果。
   const previous = payload.retryJobId
     ? readJob(payload.retryJobId, payload.workflowId, context.dirs)
-    : null;
+    : findLatestJobForNode(payload.nodeId, payload.workflowId, context.dirs);
   const canReusePartialResults = previous?.status === 'partial_failed'
     && previous.imageModel === payload.imageModel
     && Number(previous.imageCount || 1) === imageCount
@@ -483,10 +510,14 @@ export function createProductSceneJob(payload, context) {
     && previous.resultUrls.length > 0;
   const reusableResultNodeIds = canReusePartialResults && Array.isArray(previous.resultNodeIds)
     ? previous.resultNodeIds
-    : Array.from({ length: imageCount }, () => crypto.randomUUID());
+    : resolveResultNodeIds({ imageCount });
   const reusableVideoResultNodeIds = canReusePartialResults && Array.isArray(previous.videoResultNodeIds)
     ? previous.videoResultNodeIds
-    : Array.from({ length: imageCount }, () => crypto.randomUUID());
+    : resolveResultNodeIds({ imageCount });
+  // 重试同一版时版本号不变，否则是新的一版。
+  const version = canReusePartialResults && previous?.version
+    ? previous.version
+    : resolveJobVersion(findJobsForNode(payload.nodeId, payload.workflowId, context.dirs));
   const reusableVideoTasks = canReusePartialResults && Array.isArray(previous.videoTasks)
     ? previous.videoTasks.map(task => task.status === 'success' || task.retryBlocked
         ? { ...task }
@@ -525,6 +556,7 @@ export function createProductSceneJob(payload, context) {
     videoResolution: payload.videoResolution || '自动',
     videoGenerateAudio: payload.videoGenerateAudio !== false,
     autoGenerateVideo: payload.autoGenerateVideo === true,
+    version,
     ...(canReusePartialResults ? {
       resultUrls: previous.resultUrls,
       resultUrl: previous.resultUrl,
@@ -549,10 +581,17 @@ export function createProductSceneJob(payload, context) {
   return job;
 }
 
-export function getLatestProductSceneJob(nodeId, workflowId, context) {
-  if (!nodeId || !workflowId) return null;
-  const { jobsDir } = getJobStorage(workflowId, context.dirs);
-  const latest = fs.readdirSync(jobsDir)
+function readAllJobs(workflowId, dirs) {
+  let jobsDir;
+  try {
+    ({ jobsDir } = getJobStorage(workflowId, dirs));
+  } catch {
+    // 项目目录解析不出来（项目已删/尚未落盘）时按「没有任务」处理：调用方是删除节点
+    // 和恢复画布这类旁路动作，不该因为读不到历史任务而失败。
+    return [];
+  }
+  if (!fs.existsSync(jobsDir)) return [];
+  return fs.readdirSync(jobsDir)
     .filter(name => name.endsWith('.json'))
     .map(name => {
       try {
@@ -561,8 +600,52 @@ export function getLatestProductSceneJob(nodeId, workflowId, context) {
         return null;
       }
     })
-    .filter(job => job?.workflowId === workflowId && job?.nodeId === nodeId)
-    .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')))[0] || null;
+    .filter(job => job?.workflowId === workflowId);
+}
+
+function findJobsForNode(nodeId, workflowId, dirs) {
+  if (!nodeId || !workflowId) return [];
+  return readAllJobs(workflowId, dirs)
+    .filter(job => job.nodeId === nodeId)
+    .sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')));
+}
+
+function findLatestJobForNode(nodeId, workflowId, dirs) {
+  return findJobsForNode(nodeId, workflowId, dirs)[0] || null;
+}
+
+/**
+ * 记下「这些结果节点被用户删掉了」。
+ *
+ * 画布恢复逻辑会拿已完成任务的结果去补画布上缺失的节点 —— 那是给「重启后结果还在但
+ * 节点没了」用的，可它分不清「还没恢复」和「用户主动删掉」。不记这一笔的话，用户删掉
+ * 的结果节点会在下一次恢复时原样长回来，看起来就像删不掉。
+ *
+ * 记在任务文件而不是节点上：判断本来就发生在读任务的那一侧，也不用担心画布保存时
+ * 把不认识的节点字段清掉。
+ */
+export function dismissProductSceneResultNodes(nodeIds, workflowId, context) {
+  const wanted = [...new Set((nodeIds || []).filter(Boolean))];
+  if (!wanted.length || !workflowId) return { dismissed: [] };
+  const dismissed = [];
+  for (const job of readAllJobs(workflowId, context.dirs)) {
+    const owned = wanted.filter(id =>
+      (job.resultNodeIds || []).includes(id)
+      || (job.videoResultNodeIds || []).includes(id)
+      || (job.videoTasks || []).some(task => task.videoNodeId === id));
+    if (!owned.length) continue;
+    const next = [...new Set([...(job.dismissedResultNodeIds || []), ...owned])];
+    if (next.length === (job.dismissedResultNodeIds || []).length) continue;
+    job.dismissedResultNodeIds = next;
+    writeJob(job, context.dirs);
+    dismissed.push(...owned);
+  }
+  return { dismissed: [...new Set(dismissed)] };
+}
+
+export function getLatestProductSceneJob(nodeId, workflowId, context) {
+  if (!nodeId || !workflowId) return null;
+  const latest = findLatestJobForNode(nodeId, workflowId, context.dirs);
   if (latest && (latest.status === 'pending' || latest.status === 'processing') && !activeJobs.has(latest.id)) {
     void executeJob(latest, context);
   }

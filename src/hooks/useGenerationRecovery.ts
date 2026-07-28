@@ -268,10 +268,13 @@ export const useGenerationRecovery = ({
             const latest = await getLatestProductSceneJob(nodeId, workflowId);
             const node = nodesRef.current.find(item => item.id === nodeId);
             if (!latest || !node) return;
+            // 被用户删掉的结果节点不参与「画布上缺了就补」的判断，否则每轮恢复都会
+            // 认定画布缺东西，把刚删掉的节点重新建出来。
+            const dismissed = new Set(latest.dismissedResultNodeIds || []);
             const availableResultIds = [
                 ...(latest.resultNodeIds || [latest.resultNodeId]).filter(Boolean),
                 ...(latest.videoTasks || []).filter(task => task.status === 'success').map(task => task.videoNodeId),
-            ];
+            ].filter(resultId => !dismissed.has(resultId));
             const hasResultNode = availableResultIds.length > 0
                 && availableResultIds.every(resultId => nodesRef.current.some(item => item.id === resultId));
             if (!hasResultNode && (latest.resultUrl || latest.resultUrls?.length)) {

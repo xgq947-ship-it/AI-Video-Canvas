@@ -58,7 +58,71 @@ export function readCodexFailureReason(logFile, { maxChars = 200 } = {}) {
     return reason.length > maxChars ? `${reason.slice(0, maxChars)}…` : reason;
 }
 
-export function buildCodexAutomationCommand(projectRoot, codexPath, queueCommand = '') {
+function isInside(parentDir, childDir) {
+    const relative = path.relative(parentDir, childDir);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+/**
+ * 需要额外授予 codex 写权限的目录（`--add-dir`）。
+ *
+ * codex exec 的 workspace-write 沙箱只放开 workdir（userData/data）、/tmp 和
+ * $TMPDIR。项目素材目录可以是指向沙箱外的符号链接（例：
+ * library/projects/<名字> -> ~/Desktop/<名字>），这时桥接命令把生成图复制进项目
+ * 素材目录会拿到 EPERM，任务被标记失败 —— 图其实已经生成好了。
+ *
+ * 沙箱按解析后的真实路径匹配，所以这里必须给 realpath，给符号链接本身没有用。
+ * 只放开确实落在沙箱外的目录：其余的本来就可写，重复声明没有意义。
+ */
+export function resolveExtraWritableRoots({
+    libraryDir,
+    workspaceDir,
+    realpath = fs.realpathSync,
+    readdir = fs.readdirSync,
+    stat = fs.statSync
+} = {}) {
+    if (!libraryDir || !workspaceDir) return [];
+
+    let resolvedWorkspace = workspaceDir;
+    try {
+        resolvedWorkspace = realpath(workspaceDir);
+    } catch {
+        // 目录还不存在时按原样比较即可。
+    }
+
+    const candidates = [libraryDir, path.join(libraryDir, 'projects')];
+    try {
+        const projectsDir = path.join(libraryDir, 'projects');
+        for (const entry of readdir(projectsDir)) {
+            candidates.push(path.join(projectsDir, entry));
+        }
+    } catch {
+        // 还没有任何项目目录。
+    }
+
+    const roots = [];
+    for (const candidate of candidates) {
+        let resolved;
+        try {
+            resolved = realpath(candidate);
+            if (!stat(resolved).isDirectory()) continue;
+        } catch {
+            continue;
+        }
+        if (isInside(resolvedWorkspace, resolved)) continue;
+        // 已经被父目录覆盖的就不再重复声明。
+        if (roots.some(root => isInside(root, resolved))) continue;
+        roots.push(resolved);
+    }
+    return roots;
+}
+
+export function buildCodexAutomationCommand(
+    projectRoot,
+    codexPath,
+    queueCommand = '',
+    { libraryDir = '', extraWritableRoots } = {}
+) {
     const command = resolveCodexBin({ projectRoot, configuredPath: codexPath });
     const prompt = [
         '使用 twitcanva-codex-images skill，自动处理当前 Evan 项目中的全部图片生成任务。',
@@ -68,11 +132,16 @@ export function buildCodexAutomationCommand(projectRoot, codexPath, queueCommand
         '严格只操作 library/codex-image-jobs、library/projects 下当前项目素材目录及兼容的 library/images，不修改项目源代码，不等待用户输入。'
     ].filter(Boolean).join('\n');
 
+    const writableRoots = extraWritableRoots
+        || resolveExtraWritableRoots({ libraryDir, workspaceDir: projectRoot });
+
     return {
         command,
         args: [
             'exec',
             '--ephemeral',
+            // 项目素材目录可能是指向沙箱外的符号链接，不放开就写不进去（EPERM）。
+            ...writableRoots.flatMap(root => ['--add-dir', root]),
             // 工作目录是 userData/data（放 library、codex-home 的地方），永远不是 git 仓库。
             // 少了这个参数，codex exec 直接拒绝启动：
             //   Not inside a trusted directory and --skip-git-repo-check was not specified.
@@ -108,7 +177,9 @@ export function createCodexImageAutomation({
         return buildCodexAutomationCommand(
             workspaceDir,
             typeof codexPath === 'function' ? codexPath() : codexPath,
-            environment?.EVAN_CODEX_QUEUE || ''
+            environment?.EVAN_CODEX_QUEUE || '',
+            // 每次运行都重新解析：期间新建或重新链接的项目目录都能覆盖到。
+            { libraryDir: environment?.EVAN_LIBRARY_DIR || '' }
         );
     };
     const initialCommandSpec = resolveCommandSpec();

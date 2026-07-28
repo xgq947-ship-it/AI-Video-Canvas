@@ -17,7 +17,7 @@ import { generateJimengWorkflowImage, isJimengImageWorkflowModel } from '../serv
 import { generateOpenAIImage } from '../services/openai.js';
 import { resolveAudioToBase64, resolveImageToBase64, saveBufferToFile } from '../utils/imageHelpers.js';
 import { resolveProjectMediaTarget } from '../utils/projectAssets.js';
-import { cancelProductSceneJob, createProductSceneJob, getLatestProductSceneJob, getProductSceneJob } from '../services/productSceneJobs.js';
+import { cancelProductSceneJob, createProductSceneJob, dismissProductSceneResultNodes, getLatestProductSceneJob, getProductSceneJob } from '../services/productSceneJobs.js';
 import {
     generateGeminiWebImage,
     generateGeminiWebVideo,
@@ -106,6 +106,19 @@ router.post('/product-scene-jobs/:jobId/cancel', (req, res) => {
         return res.json(job);
     } catch (error) {
         return res.status(400).json({ error: error.message || '取消任务失败' });
+    }
+});
+
+// 用户删掉结果节点后调这里；不记这一笔的话，画布恢复逻辑会把它当成「结果还在但节点
+// 丢了」，下一轮就原样长回来。
+router.post('/product-scene-jobs/dismiss-results', (req, res) => {
+    try {
+        const workflowId = String(req.body?.workflowId || '');
+        if (!workflowId) return res.status(400).json({ error: '缺少 workflowId' });
+        const nodeIds = Array.isArray(req.body?.nodeIds) ? req.body.nodeIds.map(String) : [];
+        return res.json(dismissProductSceneResultNodes(nodeIds, workflowId, productSceneContext(req.app.locals)));
+    } catch (error) {
+        return res.status(500).json({ error: error.message || '标记结果节点删除失败' });
     }
 });
 

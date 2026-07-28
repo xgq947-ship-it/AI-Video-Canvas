@@ -125,6 +125,8 @@ export interface ProductSceneJob {
   currentVideoIndex?: number;
   videoTasks?: Array<{ index: number; imageNodeId: string; videoNodeId: string; status: 'waiting' | 'running' | 'success' | 'failed' | 'cancelled'; resultUrl?: string; error?: string; errorCode?: string; retryBlocked?: boolean }>;
   error?: string;
+  /** 用户已删除的结果节点 id：恢复逻辑不再把它们补回画布。 */
+  dismissedResultNodeIds?: string[];
   createdAt: string;
   updatedAt?: string;
 }
@@ -179,6 +181,20 @@ export const getLatestProductSceneJob = async (nodeId: string, workflowId: strin
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || '无法读取最新产品场景替换任务');
   return data;
+};
+
+/** 告诉后端这些结果节点是用户删掉的，别再恢复回画布。失败只记日志：删除本身已经成功。 */
+export const dismissProductSceneResultNodes = async (nodeIds: string[], workflowId: string): Promise<void> => {
+  if (!nodeIds.length || !workflowId) return;
+  try {
+    await fetch('/api/product-scene-jobs/dismiss-results', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workflowId, nodeIds })
+    });
+  } catch (error) {
+    console.error('Failed to dismiss product scene result nodes:', error);
+  }
 };
 
 export const cancelProductSceneJob = async (jobId: string, workflowId: string): Promise<ProductSceneJob> => {

@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "provider": "jimeng",
+  "sanitized": true,
+  "imageHistory": {
+    "ret": "0",
+    "data": {
+      "history-image-1": {
+        "submit_id": "jimeng-submit-image-1",
+        "status": 45,
+        "total_image_count": 2,
+        "finished_image_count": 2,
+        "finish_time": 1785214707000,
+        "item_list": [
+          {
+            "common_attr": {
+              "id": "image-item-1",
+              "cover_url": "https://jimeng-content.invalid/preview-1.jpg"
+            },
+            "image": {
+              "large_images": [
+                {
+                  "image_url": "https://jimeng-content.invalid/original-1.png",
+                  "image_uri": "tos-cn-i/image-1",
+                  "width": 2048,
+                  "height": 2048,
+                  "format": "png",
+                  "size": 2400000
+                }
+              ]
+            }
+          },
+          {
+            "common_attr": {
+              "id": "image-item-2"
+            },
+            "image": {
+              "large_images": [
+                {
+                  "image_url": "https://jimeng-content.invalid/original-2.png",
+                  "image_uri": "tos-cn-i/image-2",
+                  "width": 2048,
+                  "height": 2048,
+                  "format": "png",
+                  "size": 2500000
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "polling_config": {
+        "interval_seconds": 3,
+        "timeout_seconds": 600
+      }
+    }
+  },
+  "videoHistory": {
+    "ret": "0",
+    "data": {
+      "history-video-1": {
+        "submit_id": "jimeng-submit-video-1",
+        "status": 50,
+        "finish_time": 1785214708000,
+        "item_list": [
+          {
+            "common_attr": {
+              "id": "video-item-1"
+            },
+            "video": {
+              "video_id": "video-1",
+              "cover_url": "https://jimeng-content.invalid/video-cover.jpg",
+              "duration_ms": 5000,
+              "has_audio": true,
+              "is_mute": false,
+              "transcoded_video": {
+                "origin": {
+                  "video_url": "https://jimeng-content.invalid/original-1.mp4",
+                  "width": 1280,
+                  "height": 720,
+                  "fps": 24,
+                  "format": "mp4",
+                  "size": 4200000,
+                  "md5": "00000000000000000000000000000000"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -148,6 +148,8 @@ async function generateProductImages(job, context, signal) {
     timeoutMinutes: 10,
     modelId: job.imageModel,
     count,
+    nodeId: job.nodeId,
+    workflowId: job.workflowId,
     signal,
   };
   if (isGoogleFlowImageWorkflowModel(job.imageModel)) return (await generateGoogleFlowWorkflowImage(request)).images;
@@ -184,6 +186,8 @@ async function generateProductVideo(job, imageUrl, index, context, signal) {
       prompt: job.videoPrompt, referenceImageInputs: [imageUrl], libraryDir: context.libraryDir,
       aspectRatio: parameters.aspectRatio, duration: parameters.duration || 8, timeoutMinutes: 15,
       nativeAudio: job.videoGenerateAudio !== false,
+      nodeId: job.nodeId,
+      workflowId: job.workflowId,
       signal,
     });
   }
@@ -191,6 +195,7 @@ async function generateProductVideo(job, imageUrl, index, context, signal) {
     return generateGoogleFlowWorkflowVideo({
       prompt: job.videoPrompt, firstFrameInput: imageUrl, referenceImageInputs: [], libraryDir: context.libraryDir,
       aspectRatio: parameters.aspectRatio, duration: parameters.duration, modelId: job.videoModel, timeoutMinutes: 15,
+      nodeId: job.nodeId, workflowId: job.workflowId,
       signal,
     });
   }
@@ -200,6 +205,7 @@ async function generateProductVideo(job, imageUrl, index, context, signal) {
       model: resolveJimengModelLabel(job.videoModel), aspectRatio: parameters.aspectRatio,
       duration: parameters.duration || 5, resolution: job.videoResolution || '720P',
       libraryDir: context.libraryDir, timeoutMinutes: 15,
+      videoModelId: job.videoModel, nodeId: job.nodeId, workflowId: job.workflowId,
       signal,
     });
   }

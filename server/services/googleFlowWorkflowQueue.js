@@ -6,6 +6,7 @@
  */
 
 import { operationCancelledError } from './operationCancelled.js';
+import { generationRuntimeBusyLabel } from './generationRuntime/scheduler.js';
 
 let workflowQueue = Promise.resolve();
 // 已入队但还没跑完的任务，按入队顺序排列；队头就是当前占用 Chrome 的那个。
@@ -66,7 +67,7 @@ export const enqueueBrowserWorkflow = enqueueGoogleFlowWorkflow;
 
 /** 当前占用 Chrome 的任务名；空闲时返回空串。 */
 export function browserWorkflowBusyLabel() {
-    return inFlight.length ? inFlight[0].label : '';
+    return inFlight.length ? inFlight[0].label : generationRuntimeBusyLabel();
 }
 
 /**

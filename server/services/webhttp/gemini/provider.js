@@ -6,6 +6,11 @@
  * the login, the bootstrap read and the `auto`-mode fallback.
  */
 
+import {
+    attachCurrentGenerationDetails,
+    runProviderDownload,
+    runProviderPoll
+} from '../../generationRuntime/scheduler.js';
 import { webContext, webFetch, webFetchOk, cookieHeaderFor, buildRequestSpec } from '../bridge.js';
 import { WebProviderError, classifyHttpFailure } from '../errors.js';
 import { downloadResultMedia, loadReferenceImageFiles, requireNonEmptyPrompt } from '../media.js';
@@ -226,18 +231,16 @@ export async function runGeminiTextTaskHttp({
     return { text, conversation: extractConversation(payloads), channel: 'http' };
 }
 
-async function downloadGeminiMedia(items, { session, expectedType }) {
-    const results = [];
-    for (const item of items) {
+async function downloadGeminiMedia(items, { session, expectedType, signal }) {
+    return Promise.all(items.map(item => runProviderDownload(PROVIDER, async () => {
         const downloaded = await downloadResultMedia(item.url, {
             providerName: PROVIDER_NAME,
             expectedType,
             cookieHeader: session.cookieHeader,
             recoveryHint: '请先到 Gemini 会话中下载本次结果，不要直接重新生成。'
         });
-        results.push({ ...downloaded, metadata: item });
-    }
-    return results;
+        return { ...downloaded, metadata: item };
+    }, { signal, label: `${PROVIDER_NAME} ${expectedType === 'video' ? '视频' : '图片'}下载` })));
 }
 
 export async function generateGeminiImageHttp({
@@ -288,7 +291,7 @@ export async function generateGeminiImageHttp({
             provider: PROVIDER, code: 'GENERATION_FAILED', submitted: true
         });
     }
-    const downloaded = await downloadGeminiMedia(images, { session, expectedType: 'image' });
+    const downloaded = await downloadGeminiMedia(images, { session, expectedType: 'image', signal });
     // 保留首图字段：产品场景等单图调用方一直按 { buffer, extension } 读取结果。
     return { images: downloaded, ...downloaded[0], channel: 'http' };
 }
@@ -322,11 +325,11 @@ async function waitForGeminiVideo({ session, conversationId, timeoutMinutes, sig
             sourcePath: `/app/${conversationId.replace(/^c_/, '')}`
         });
         try {
-            const response = await webFetch(PROVIDER, buildRequestSpec(spec), {
-                signal,
-                timeoutSeconds: 120,
-                submitted: true
-            });
+            const response = await runProviderPoll(PROVIDER, () => webFetch(
+                PROVIDER,
+                buildRequestSpec(spec),
+                { signal, timeoutSeconds: 120, submitted: true }
+            ), { signal, label: `${PROVIDER_NAME} 视频轮询` });
             if (!response.ok) {
                 throw new WebProviderError(`${PROVIDER_NAME} 视频状态查询失败：HTTP ${response.status}`, {
                     provider: PROVIDER,
@@ -410,6 +413,9 @@ export async function generateGeminiVideoHttp({
 
     let { videos } = extractGeneratedMedia(payloads);
     const conversation = extractConversation(payloads);
+    if (conversation.conversationId) {
+        attachCurrentGenerationDetails(PROVIDER, { conversationId: conversation.conversationId });
+    }
     if (videos.length === 0 && isGenerationPending(payloads)) {
         if (!conversation.conversationId) {
             throw new WebProviderError(
@@ -439,7 +445,7 @@ export async function generateGeminiVideoHttp({
             { provider: PROVIDER, code: 'GENERATION_FAILED', submitted: true }
         );
     }
-    const downloaded = await downloadGeminiMedia(videos, { session, expectedType: 'video' });
+    const downloaded = await downloadGeminiMedia(videos, { session, expectedType: 'video', signal });
     return {
         videos: downloaded,
         ...downloaded[0],

@@ -75,13 +75,20 @@ export function generateGoogleFlowWorkflowVideo(options) {
         label: 'Google Flow 视频生成',
         metadata: { prompt: options?.prompt },
         run: () => runWithExecutionMode({
-        mode: options?.executionMode,
-        provider: 'google-flow',
-        label: 'Google Flow 视频生成',
-        http: () => generateFlowVideoHttp({
-            ...options,
-            modelId: resolveProtocolModelId(options?.modelId, FLOW_BASELINE_VIDEO_MODEL)
-        })
+            mode: options?.executionMode,
+            provider: 'google-flow',
+            label: 'Google Flow 视频生成',
+            signal: options?.signal,
+            metadata: {
+                kind: 'video',
+                modelId: options?.modelId,
+                nodeId: options?.nodeId,
+                workflowId: options?.workflowId
+            },
+            http: () => generateFlowVideoHttp({
+                ...options,
+                modelId: resolveProtocolModelId(options?.modelId, FLOW_BASELINE_VIDEO_MODEL)
+            })
         })
     });
 }

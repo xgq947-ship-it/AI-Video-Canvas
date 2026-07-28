@@ -230,6 +230,8 @@ router.post('/generate-image', async (req, res) => {
                 timeoutMinutes: 10,
                 modelId: imageModel,
                 count: requestedCount,
+                nodeId,
+                workflowId,
                 executionMode: executionModeFor(req.app, imageModel)
             });
             workflowImages = result.images;
@@ -351,7 +353,7 @@ router.post('/generate-video', async (req, res) => {
                 error: `${videoProvider.name} 最多支持 ${videoProvider.maxReferenceImages} 张参考图`
             });
         }
-        // 两个 provider 都走 Evan 专属 Chrome workflow：输入是真实文件路径而非 base64。
+        // 三个平台都走 Evan 专属 Chrome workflow：输入是真实文件路径而非 base64。
         const isBrowserWorkflowModel = isGoogleFlowWorkflowModel || isJimengWorkflowModel || isGeminiWebWorkflowModel;
 
         // 页面 workflow 需要真实首帧路径；其他供应商继续使用 base64 输入。
@@ -381,6 +383,8 @@ router.post('/generate-video', async (req, res) => {
                 timeoutMinutes: 15,
                 cameraMovement: req.body.cameraMovement || '',
                 nativeAudio: req.body.generateAudio !== false,
+                nodeId,
+                workflowId,
                 executionMode: executionModeFor(req.app, videoModel)
             });
             videoBuffer = workflowResult.buffer;
@@ -405,6 +409,8 @@ router.post('/generate-video', async (req, res) => {
                 modelId: videoModel,
                 libraryDir: LIBRARY_DIR,
                 timeoutMinutes: 15,
+                nodeId,
+                workflowId,
                 executionMode: executionModeFor(req.app, videoModel)
             });
             videoBuffer = workflowResult.buffer;
@@ -442,6 +448,8 @@ router.post('/generate-video', async (req, res) => {
                 resolution: resolution || '720P',
                 libraryDir: LIBRARY_DIR,
                 timeoutMinutes: 15,
+                nodeId,
+                workflowId,
                 executionMode: executionModeFor(req.app, videoModel)
             });
             videoBuffer = workflowResult.buffer;

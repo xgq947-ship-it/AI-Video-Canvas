@@ -27,6 +27,13 @@ export const generateGeminiWebImage = options => runWithAuthRecovery({
         mode: options?.executionMode,
         provider: 'gemini-web',
         label: 'Gemini Web 图片生成',
+        signal: options?.signal,
+        metadata: {
+            kind: 'image',
+            modelId: GEMINI_WEB_IMAGE_MODEL_ID,
+            nodeId: options?.nodeId,
+            workflowId: options?.workflowId
+        },
         http: () => generateGeminiImageHttp(options)
     })
 });
@@ -39,6 +46,13 @@ export const generateGeminiWebVideo = options => runWithAuthRecovery({
         mode: options?.executionMode,
         provider: 'gemini-web',
         label: 'Gemini Web 视频生成',
+        signal: options?.signal,
+        metadata: {
+            kind: 'video',
+            modelId: GEMINI_WEB_VIDEO_MODEL_ID,
+            nodeId: options?.nodeId,
+            workflowId: options?.workflowId
+        },
         http: () => generateGeminiVideoHttp(options)
     })
 });
@@ -52,6 +66,13 @@ export const runGeminiWebTextTask = options => runWithAuthRecovery({
         mode: options?.executionMode,
         provider: 'gemini-web',
         label: 'Gemini Web 识图',
+        signal: options?.signal,
+        metadata: {
+            kind: 'text',
+            modelId: 'gemini-web-text',
+            nodeId: options?.nodeId,
+            workflowId: options?.workflowId
+        },
         http: async () => (await runGeminiTextTaskHttp(options)).text
     })
 });

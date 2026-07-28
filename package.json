@@ -18,6 +18,7 @@
     "server": "node server/index.js",
     "mcp:claude": "node mcp/twitcanva-mcp.js",
     "test": "node --test test/*.test.mjs",
+    "test:web-http:live": "node scripts/web-http-live-smoke.mjs",
     "typecheck": "tsc --noEmit",
     "generate:test-assets": "node scripts/generate-test-assets.mjs",
     "render:e2e-test": "node scripts/proof-manifest-render.mjs",

@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "provider": "gemini-web",
+  "sanitized": true,
+  "completed": [
+    [
+      [
+        "c_81a9e9a61590b3fb",
+        "r_238139396e725795",
+        "rc_6569e39b1c2d2c6a",
+        "AwAAAAAAAAAQANM7mBjXKZRpMoIo-hk"
+      ],
+      [
+        [
+          "sample-image.png",
+          "https://lh3.googleusercontent.com/gg-dl/sanitized-image",
+          "image/png",
+          1024,
+          1024,
+          1250000
+        ]
+      ],
+      [
+        [
+          "sample-video.mp4",
+          "https://lh3.googleusercontent.com/gg-dl/sanitized-video?filename=sample-video.mp4",
+          "https://lh3.googleusercontent.com/gg-dl/sanitized-video?filename=result.pb",
+          "video/mp4",
+          1280,
+          720,
+          1785214707,
+          2663169
+        ]
+      ]
+    ]
+  ],
+  "pending": [
+    [
+      "正在生成视频，请稍候",
+      "c_11111111aaaaaaaa"
+    ]
+  ]
+}

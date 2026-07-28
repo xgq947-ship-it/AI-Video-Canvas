@@ -17,6 +17,11 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { runOpsCli } from '../opsCliRunner.js';
+import { isOperationCancelled, operationCancelledError } from '../operationCancelled.js';
+import {
+    noteBillableRequestSettled,
+    noteBillableRequestStart
+} from '../generationRuntime/scheduler.js';
 import { asWebProviderError, classifyHttpFailure, WebProviderError } from './errors.js';
 
 export const WEB_HTTP_PROVIDERS = Object.freeze(['gemini-web', 'jimeng', 'google-flow']);
@@ -25,6 +30,83 @@ export const WEB_HTTP_PROVIDERS = Object.freeze(['gemini-web', 'jimeng', 'google
 export const MAX_BRIDGE_BODY_BYTES = 24 * 1024 * 1024;
 
 const DEFAULT_TIMEOUT_SECONDS = 120;
+const CDP_PORT = Number(process.env.SESSIONHUB_CDP_PORT) || 19222;
+
+export function isHeadlessBridgeVersion(version) {
+    const userAgent = version?.['User-Agent'] || version?.userAgent || '';
+    return String(userAgent).toLowerCase().includes('headlesschrome');
+}
+
+async function isBridgeBrowserReady() {
+    try {
+        const response = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`, {
+            signal: AbortSignal.timeout(500)
+        });
+        if (!response.ok) return false;
+        return isHeadlessBridgeVersion(await response.json());
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Cold-start mutex shared by every provider.
+ *
+ * Once CDP is healthy, calls bypass it and different providers remain
+ * parallel. When Chrome is absent or still a visible login instance, exactly
+ * one CLI invocation owns stop/start/connect; waiters re-check CDP afterwards
+ * and then fan out. This removes the cross-provider double-start race without
+ * serializing a long Gemini/Flow generation response.
+ */
+export function createBridgeStartupGuard({ isReady = isBridgeBrowserReady } = {}) {
+    let tail = Promise.resolve();
+    return async function withBridgeStartupGuard(task, { signal, label = '浏览器 HTTP 请求' } = {}) {
+        if (signal?.aborted) throw operationCancelledError(label);
+        if (await isReady()) return task();
+
+        const previous = tail;
+        let release;
+        tail = new Promise(resolve => { release = resolve; });
+        if (signal) {
+            try {
+                await new Promise((resolve, reject) => {
+                    let settled = false;
+                    const settle = handler => {
+                        if (settled) return;
+                        settled = true;
+                        signal.removeEventListener('abort', onAbort);
+                        handler();
+                    };
+                    const onAbort = () => settle(() => reject(operationCancelledError(label)));
+                    signal.addEventListener('abort', onAbort, { once: true });
+                    if (signal.aborted) onAbort();
+                    previous.then(() => settle(resolve), () => settle(resolve));
+                });
+            } catch (error) {
+                // This ticket must stay behind the current cold-start owner,
+                // but the cancelled caller should not have to wait for it.
+                previous.then(release, release);
+                throw error;
+            }
+        } else {
+            await previous;
+        }
+        try {
+            if (signal?.aborted) throw operationCancelledError(label);
+            // Returning the promise without awaiting it releases this startup
+            // slot immediately: CDP is already ready, so the actual requests
+            // may run in parallel.
+            if (await isReady()) return task();
+            // The cold-start owner holds the slot until its CLI invocation has
+            // finished start/connect, so no second process can race it.
+            return await task();
+        } finally {
+            release();
+        }
+    };
+}
+
+const withBridgeStartupGuard = createBridgeStartupGuard();
 
 /**
  * Per-provider serialization for bridge calls only.
@@ -105,7 +187,7 @@ export function buildRequestSpec({
 }
 
 /** Decoded view of one bridge response. */
-function decodeResponse(raw, provider) {
+export function decodeBridgeResponse(raw, provider, { submitted = false } = {}) {
     const buffer = Buffer.from(String(raw?.bodyBase64 || ''), 'base64');
     return {
         provider,
@@ -125,7 +207,7 @@ function decodeResponse(raw, provider) {
             } catch (error) {
                 throw new WebProviderError(
                     `${provider} 返回的不是合法 JSON（HTTP ${raw?.status}）`,
-                    { provider, code: 'PROTOCOL_CHANGED', submitted: false, cause: error }
+                    { provider, code: 'PROTOCOL_CHANGED', submitted, cause: error }
                 );
             }
         }
@@ -169,6 +251,7 @@ async function runWebFetch(provider, requests, { timeoutSeconds, signal, label, 
     const taskDir = makeTaskDir();
     const requestFile = path.join(taskDir, 'request.json');
     const responseFile = path.join(taskDir, 'response.json');
+    let billableStarted = false;
     try {
         fs.writeFileSync(requestFile, JSON.stringify({ requests }), 'utf8');
         // 单次调用的墙钟上限 = 请求超时 + 冷启动余量。
@@ -177,24 +260,35 @@ async function runWebFetch(provider, requests, { timeoutSeconds, signal, label, 
         // 导航重试。实测冷启动后第一个平台可以逼近 3 分钟，原来给 120 秒会让
         // 首次「检测登录状态」必定超时报错（后两个平台复用实例反而很快）。
         const wallClockMs = (timeoutSeconds + 300) * 1000;
-        await runOpsCli({
-            label: label || `${provider} HTTP 请求`,
-            signal,
-            timeoutMs: wallClockMs,
-            // 每次业务请求都写一次 session 状态会让画布上的登录指示灯疯狂闪烁；
-            // 登录态由 web-context / check-login 负责，这里只做数据通道。
-            trackSessionState: false,
-            args: [
-                'browser', 'web-fetch',
-                '--provider', provider,
-                '--request-file', requestFile,
-                '--response-file', responseFile,
-                '--timeout-seconds', String(timeoutSeconds)
-            ]
-        });
+        await withBridgeStartupGuard(() => {
+            if (submitted) {
+                billableStarted = true;
+                noteBillableRequestStart(provider);
+            }
+            return runOpsCli({
+                label: label || `${provider} HTTP 请求`,
+                signal,
+                timeoutMs: wallClockMs,
+                // 每次业务请求都写一次 session 状态会让画布上的登录指示灯疯狂闪烁；
+                // 登录态由 web-context / check-login 负责，这里只做数据通道。
+                trackSessionState: false,
+                args: [
+                    'browser', 'web-fetch',
+                    '--provider', provider,
+                    '--request-file', requestFile,
+                    '--response-file', responseFile,
+                    '--timeout-seconds', String(timeoutSeconds)
+                ]
+            });
+        }, { signal, label: label || `${provider} HTTP 请求` });
+
+        // A response file means the billable request crossed the platform
+        // boundary. Release the provider's atomic submit lane before parsing,
+        // polling or downloading so the next same-provider task may prepare.
+        if (submitted) noteBillableRequestSettled(provider);
 
         const payload = JSON.parse(fs.readFileSync(responseFile, 'utf8'));
-        const responses = (payload?.responses || []).map(item => decodeResponse(item, provider));
+        const responses = (payload?.responses || []).map(item => decodeBridgeResponse(item, provider, { submitted }));
         if (responses.length === 0) {
             throw new WebProviderError(`${provider} HTTP 通道没有返回任何响应`, {
                 provider, code: 'BRIDGE_UNAVAILABLE', submitted: false
@@ -202,21 +296,44 @@ async function runWebFetch(provider, requests, { timeoutSeconds, signal, label, 
         }
         return responses;
     } catch (error) {
-        if (error instanceof WebProviderError) throw error;
+        if (submitted && isOperationCancelled(error)) {
+            if (!billableStarted) {
+                error.submitted = false;
+                error.retryable = false;
+                throw error;
+            }
+            // The child process may have sent the request before cancellation
+            // reached it. Preserve cancellation semantics, but mark the
+            // outcome unknown so neither dispatcher nor recovery code retries.
+            error.submitted = true;
+            error.retryable = false;
+            noteBillableRequestSettled(provider, error.details, { unknown: true });
+            throw error;
+        }
+        if (error instanceof WebProviderError) {
+            if (submitted && error.submitted === true) {
+                noteBillableRequestSettled(provider, error.details, { unknown: true });
+            }
+            throw error;
+        }
         // Chrome 起不来 / Playwright 缺失 / 登录页重定向：这些确实发生在请求发出**之前**，
-        // 无论调用方是不是计费请求都算 submitted:false。
-        const beforeRequest = error?.code === 'AUTH_REQUIRED'
+        const beforeRequest = error?.submitted === false
+            || error?.code === 'AUTH_REQUIRED'
             || error?.code === 'BROWSER_MODELS_NOT_READY'
             || error?.code === 'BROWSER_CLOSED';
         const code = error?.code === 'AUTH_REQUIRED' ? 'AUTH_EXPIRED' : 'BRIDGE_UNAVAILABLE';
         // 其余传输层失败（CLI 超时、子进程被杀、页面中途关闭）结果未知：请求可能
         // 已经落到平台上了。计费请求在这种情况下必须按已提交处理，否则 auto 模式
         // 会用浏览器再生成一次，用户被扣两次费、拿到两份结果。
-        throw asWebProviderError(error, {
+        const mapped = asWebProviderError(error, {
             provider,
             code,
             submitted: beforeRequest ? false : Boolean(submitted)
         });
+        if (submitted && mapped.submitted === true) {
+            noteBillableRequestSettled(provider, mapped.details, { unknown: true });
+        }
+        throw mapped;
     } finally {
         cleanupTaskDir(taskDir);
     }
@@ -263,14 +380,14 @@ async function runWebContext(provider, { signal, timeoutMs, recaptchaAction }) {
     try {
         const args = ['browser', 'web-context', '--provider', provider, '--output-file', outputFile];
         if (recaptchaAction) args.push('--recaptcha-action', recaptchaAction);
-        await runOpsCli({
+        await withBridgeStartupGuard(() => runOpsCli({
             label: `${provider} 会话上下文`,
             signal,
             timeoutMs,
             // 这一步确实是登录探针：成功即代表页面可用且未被重定向到登录页。
             successSessionState: 'authenticated',
             args
-        });
+        }), { signal, label: `${provider} 会话上下文` });
         return JSON.parse(fs.readFileSync(outputFile, 'utf8'));
     } catch (error) {
         if (error instanceof WebProviderError) throw error;

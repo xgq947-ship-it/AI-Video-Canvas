@@ -66,6 +66,15 @@ import {
 import { crc32Hex, parseApplyUploadResponse, signImageXRequest } from '../server/services/webhttp/jimeng/imagex.js';
 import { WebProviderError, classifyHttpFailure, redactSecrets } from '../server/services/webhttp/errors.js';
 import { runWithExecutionMode } from '../server/services/webhttp/index.js';
+import {
+    createBridgeStartupGuard,
+    decodeBridgeResponse,
+    isHeadlessBridgeVersion
+} from '../server/services/webhttp/bridge.js';
+import {
+    noteBillableRequestSettled,
+    noteBillableRequestStart
+} from '../server/services/generationRuntime/scheduler.js';
 import { CANVAS_MODEL_PROTOCOL_IDS, resolveProtocolModelId } from '../server/services/webhttp/registry.js';
 
 // ---------------------------------------------------------------------------
@@ -818,6 +827,127 @@ test('已提交的失败绝不重试', async () => {
     );
     // 二次提交 = 用户被扣两次费。
     assert.equal(httpCalls, 1);
+});
+
+test('真实提交边界压过错误对象的旧 submitted:false，解析失败也绝不二次提交', async () => {
+    let calls = 0;
+    await assert.rejects(runWithExecutionMode({
+        mode: 'http',
+        provider: 'google-flow',
+        label: '提交边界测试',
+        http: () => {
+            calls += 1;
+            noteBillableRequestStart('google-flow');
+            noteBillableRequestSettled('google-flow', { batchId: 'batch-boundary' });
+            throw new WebProviderError('响应解析失败', {
+                provider: 'google-flow',
+                code: 'PROTOCOL_CHANGED',
+                submitted: false
+            });
+        }
+    }), error => error.code === 'PROTOCOL_CHANGED'
+        && error.submitted === true
+        && error.retryable === false);
+    assert.equal(calls, 1, '已经收到计费响应后不得因解析失败再次提交');
+});
+
+test('bridge JSON 解码继承调用方的计费语义', () => {
+    const raw = {
+        ok: true,
+        status: 200,
+        bodyBase64: Buffer.from('not-json').toString('base64')
+    };
+    assert.throws(
+        () => decodeBridgeResponse(raw, 'jimeng', { submitted: true }).json(),
+        error => error.code === 'PROTOCOL_CHANGED' && error.submitted === true
+    );
+    assert.throws(
+        () => decodeBridgeResponse(raw, 'jimeng', { submitted: false }).json(),
+        error => error.code === 'PROTOCOL_CHANGED' && error.submitted === false
+    );
+});
+
+test('启动闸门只把无头 Chrome 当作可并行生成实例', () => {
+    assert.equal(isHeadlessBridgeVersion({
+        'User-Agent': 'Mozilla/5.0 Chrome/140.0.0.0 Safari/537.36'
+    }), false, '可见登录实例仍需经过全局切换锁');
+    assert.equal(isHeadlessBridgeVersion({
+        'User-Agent': 'Mozilla/5.0 HeadlessChrome/140.0.0.0 Safari/537.36'
+    }), true);
+    assert.equal(isHeadlessBridgeVersion({}), false);
+});
+
+test('三平台冷启动只允许一个 CLI 启动 Chrome，CDP 就绪后恢复跨平台并行', async () => {
+    let ready = false;
+    let coldActive = 0;
+    let coldPeak = 0;
+    let warmActive = 0;
+    let warmPeak = 0;
+    let warmStarted = 0;
+    let releaseWarm;
+    let allWarmStarted;
+    const warmGate = new Promise(resolve => { releaseWarm = resolve; });
+    const warmReady = new Promise(resolve => { allWarmStarted = resolve; });
+    const guard = createBridgeStartupGuard({ isReady: async () => ready });
+
+    const tasks = Array.from({ length: 6 }, (unused, index) => guard(async () => {
+        if (!ready) {
+            coldActive += 1;
+            coldPeak = Math.max(coldPeak, coldActive);
+            await new Promise(resolve => setTimeout(resolve, 10));
+            ready = true;
+            coldActive -= 1;
+            return index;
+        }
+        warmActive += 1;
+        warmPeak = Math.max(warmPeak, warmActive);
+        warmStarted += 1;
+        if (warmStarted === 5) allWarmStarted();
+        await warmGate;
+        warmActive -= 1;
+        return index;
+    }));
+
+    await Promise.race([
+        warmReady,
+        new Promise((unused, reject) => setTimeout(() => reject(new Error('CDP 就绪后未恢复并行')), 300))
+    ]);
+    assert.equal(coldPeak, 1);
+    assert.equal(warmPeak, 5);
+    releaseWarm();
+    assert.deepEqual(await Promise.all(tasks), [0, 1, 2, 3, 4, 5]);
+});
+
+test('等待 Chrome 冷启动时取消会立即退出，且不会堵住后续平台', async () => {
+    let ready = false;
+    let releaseOwner;
+    let ownerStarted;
+    const ownerGate = new Promise(resolve => { releaseOwner = resolve; });
+    const ownerReady = new Promise(resolve => { ownerStarted = resolve; });
+    const guard = createBridgeStartupGuard({ isReady: async () => ready });
+    const owner = guard(async () => {
+        ownerStarted();
+        await ownerGate;
+        ready = true;
+    });
+    await ownerReady;
+
+    const controller = new AbortController();
+    let cancelledTaskStarted = false;
+    const cancelled = guard(async () => { cancelledTaskStarted = true; }, {
+        signal: controller.signal,
+        label: '待取消平台'
+    });
+    controller.abort();
+    await Promise.race([
+        assert.rejects(cancelled, error => error.code === 'OPERATION_CANCELLED' && error.submitted === false),
+        new Promise((unused, reject) => setTimeout(() => reject(new Error('冷启动排队取消未立即返回')), 100))
+    ]);
+    assert.equal(cancelledTaskStarted, false);
+
+    releaseOwner();
+    await owner;
+    assert.equal(await guard(async () => 'next-provider'), 'next-provider');
 });
 
 test('提交前失败会重试，重试用尽后如实抛出（不再回退浏览器）', async () => {

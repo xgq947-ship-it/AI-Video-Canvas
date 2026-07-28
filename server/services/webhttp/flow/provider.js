@@ -12,6 +12,11 @@
 
 import { randomUUID } from 'node:crypto';
 
+import {
+    attachCurrentGenerationDetails,
+    runProviderDownload,
+    runProviderPoll
+} from '../../generationRuntime/scheduler.js';
 import { webContext, webFetchOk, cookieHeaderFor, buildRequestSpec } from '../bridge.js';
 import { WebProviderError } from '../errors.js';
 import { downloadResultMedia, loadReferenceImageFiles, requireNonEmptyPrompt } from '../media.js';
@@ -163,6 +168,8 @@ export async function generateFlowImageHttp({
     // Mint after uploads so the action-bound, single-use token is as fresh as possible.
     const auth = await getFlowAuth({ signal, forceRefresh: true, recaptchaAction: 'IMAGE_GENERATION' });
 
+    const batchId = randomUUID();
+    attachCurrentGenerationDetails(PROVIDER, { batchId, projectId: auth.projectId });
     const spec = buildGenerateImagesRequest({
         auth,
         prompt: cleanPrompt,
@@ -170,7 +177,7 @@ export async function generateFlowImageHttp({
         aspectRatio,
         count,
         referenceMediaIds,
-        batchId: randomUUID()
+        batchId
     });
     // Everything up to here is pre-submit; this call is the one that bills.
     const response = await webFetchOk(PROVIDER, buildRequestSpec(spec), {
@@ -187,17 +194,20 @@ export async function generateFlowImageHttp({
             { provider: PROVIDER, code: 'GENERATION_FAILED', submitted: true }
         );
     }
+    attachCurrentGenerationDetails(PROVIDER, {
+        projectId: auth.projectId,
+        mediaIds: results.map(item => item.mediaId).filter(Boolean)
+    });
 
-    const images = [];
-    for (const item of results) {
+    const images = await Promise.all(results.map(item => runProviderDownload(PROVIDER, async () => {
         const downloaded = await downloadResultMedia(item.imageUrl, {
             providerName: `${PROVIDER_NAME} 文生图`,
             expectedType: 'image',
             cookieHeader: auth.labsCookie,
             recoveryHint: '请先到 Flow 项目历史中下载本次结果，不要直接重新生成。'
         });
-        images.push({ ...downloaded, metadata: item });
-    }
+        return { ...downloaded, metadata: item };
+    }, { signal, label: `${PROVIDER_NAME} 图片下载` })));
     // 首图字段保持与浏览器实现一致，产品场景等单图调用方无需改动。
     return { images, ...images[0], channel: 'http' };
 }
@@ -230,6 +240,8 @@ export async function generateFlowVideoHttp({
     const mediaIds = files.length ? await uploadReferenceImages(uploadAuth, files, { signal }) : [];
     const auth = await getFlowAuth({ signal, forceRefresh: true, recaptchaAction: 'VIDEO_GENERATION' });
 
+    const batchId = randomUUID();
+    attachCurrentGenerationDetails(PROVIDER, { batchId, projectId: auth.projectId });
     const spec = buildGenerateVideoRequest({
         auth,
         prompt: cleanPrompt,
@@ -237,7 +249,7 @@ export async function generateFlowVideoHttp({
         aspectRatio,
         duration,
         count,
-        batchId: randomUUID(),
+        batchId,
         firstFrameMediaId: firstFrameInput ? mediaIds[0] : '',
         referenceMediaIds: firstFrameInput ? mediaIds.slice(1) : mediaIds
     });
@@ -255,19 +267,22 @@ export async function generateFlowVideoHttp({
             { provider: PROVIDER, code: 'GENERATION_FAILED', submitted: true }
         );
     }
+    attachCurrentGenerationDetails(PROVIDER, {
+        projectId: auth.projectId,
+        mediaIds: media.map(item => item.mediaId).filter(Boolean)
+    });
 
     media = await waitForFlowVideos(media, auth, { timeoutMinutes, signal });
 
-    const videos = [];
-    for (const item of media) {
+    const videos = await Promise.all(media.map(item => runProviderDownload(PROVIDER, async () => {
         const downloaded = await downloadResultMedia(buildFlowMediaUrl(item.mediaId), {
             providerName: PROVIDER_NAME,
             expectedType: 'video',
             cookieHeader: auth.labsCookie,
             recoveryHint: '请先到 Flow 项目历史中下载本次结果，不要直接重新生成。'
         });
-        videos.push({ ...downloaded, metadata: item });
-    }
+        return { ...downloaded, metadata: item };
+    }, { signal, label: `${PROVIDER_NAME} 视频下载` })));
     return {
         videos,
         ...videos[0],
@@ -307,7 +322,11 @@ async function waitForFlowVideos(media, auth, { timeoutMinutes, signal }) {
         try {
             const wantedIds = current.map(item => item.mediaId);
             const spec = buildProjectMediaRequest({ auth, mediaIds: wantedIds });
-            const payload = await fetchFlowProjectMedia(spec, { signal });
+            const payload = await runProviderPoll(
+                PROVIDER,
+                () => fetchFlowProjectMedia(spec, { signal }),
+                { signal, label: `${PROVIDER_NAME} 视频轮询` }
+            );
             const refreshed = collectMediaEntries(payload).map(parseFlowVideoMedia).filter(item => item.mediaId);
             const wanted = new Set(wantedIds);
             const matches = refreshed.filter(item => wanted.has(item.mediaId));

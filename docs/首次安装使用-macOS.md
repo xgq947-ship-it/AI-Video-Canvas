@@ -1,7 +1,7 @@
 # Evan macOS 首次安装与使用
 
 适用于普通使用者。安装版不要求安装 Node.js、Python、FFmpeg 或 Chrome Beta，但需要正式版 Google Chrome。
-Codex CLI 只用于可选的“Codex 生图”等能力，不影响普通画布、Flow/即梦或本地渲染。
+Codex CLI 只用于可选的“Codex 生图”等能力，不影响普通画布、Flow/Gemini Web/即梦或本地渲染。
 
 ## 1. 安装
 
@@ -36,18 +36,19 @@ Evan AI Video Canvas-<版本>-mac-arm64.dmg
 其中：
 
 - `library/`：项目、图片、视频、音频和渲染成片。
-- `browser-profile/`：Google Flow 与即梦登录状态。
+- `browser-profile/`：Google Flow、Gemini Web 与即梦登录状态。
 - `runtime/`：自动化运行状态。
 - `logs/`：本地日志。
 
 更新或替换应用程序不会覆盖这些数据。
 
-## 3. 登录 Google Flow 和即梦
+## 3. 登录 Google Flow、Gemini Web 和即梦
 
 1. 打开画布右上角“设置”。
 2. 选择“打开 Evan 专属 Chrome”。
 3. 在该浏览器中访问并登录：
    - Google Flow：`https://labs.google/fx/tools/flow`
+   - Gemini Web：`https://gemini.google.com/app`
    - 即梦：`https://jimeng.jianying.com`
 4. 登录完成后回到 Evan，点击“检查登录状态”。探针通过后才会显示“已验证”。
 
@@ -60,16 +61,16 @@ Evan AI Video Canvas-<版本>-mac-arm64.dmg
 2. 在“存放位置”中保留 Evan 默认目录，或点击“选择文件夹”放到桌面、其他磁盘等位置。
    Evan 会在所选位置下创建一个与项目同名的完整项目文件夹。
 3. 新建图片或视频节点。
-4. 选择 Google Flow、即梦或已经配置密钥的 API 模型。
+4. 选择 Google Flow、Gemini Web、即梦或已经配置密钥的 API 模型。
 5. 输入提示词、画面比例、分辨率及生成数量。
 6. 点击生成。
 
-Flow/即梦图片一次可生成 1—4 张：第一张写回当前节点，其余图片在右侧水平创建独立
-节点，不自动添加连接线。
+图片数量按模型能力限制：Flow 最多 4 张、Gemini Web 1 张、即梦图片 5.0 Pro 最多 4 张、
+5.0 Lite 最多 8 张。第一张写回当前节点，其余图片在右侧水平创建独立节点，不自动添加连接线。
 
 ## 5. 可选配置
 
-- Flow 与即梦使用用户自己的账号、权限和额度。
+- Flow、Gemini Web 与即梦使用用户自己的账号、权限和额度；即梦图片 5.0 Lite 当前不消耗额度。
 - Gemini、OpenAI、火山方舟等 API 能力需要在设置中填写对应密钥。
 - Codex/Claude 仅用于可选的高级编排能力，不影响应用启动、浏览器生成或本地渲染。
 
@@ -102,7 +103,7 @@ Evan 为安装版创建独立的 `CODEX_HOME`，登录资料和画布 Skill 保�
 | 现象 | 处理 |
 |---|---|
 | macOS 提示无法验证开发者 | 当前测试包未签名，按“安装”章节从隐私与安全性允许。 |
-| Flow/即梦提示需要登录 | 设置 → 打开 Evan 专属 Chrome，登录对应网站后重试。 |
+| Flow/Gemini Web/即梦提示需要登录 | 设置 → 打开 Evan 专属 Chrome，登录对应网站后重试。 |
 | 生成时没有浏览器窗口 | 正常，自动生成默认后台无头运行。 |
 | 想查看浏览器执行情况 | 主动打开 Evan 专属 Chrome 用于登录/调试；不要在任务提交过程中切换浏览器模式。 |
 | Codex 模型是灰色 | 安装/更新 Codex CLI，然后在“设置 → Codex 服务”选择路径并登录。 |

@@ -17,6 +17,7 @@ import {
   browserWorkflowBusyLabel,
   enqueueBrowserWorkflow
 } from '../server/services/googleFlowWorkflowQueue.js';
+import { runScheduledGeneration } from '../server/services/generationRuntime/scheduler.js';
 
 test('生成占用 Chrome 期间，界面操作立刻拿到可读的拒绝而不是干等', async () => {
   assert.equal(browserWorkflowBusyLabel(), '');
@@ -49,6 +50,33 @@ test('生成占用 Chrome 期间，界面操作立刻拿到可读的拒绝而不
 test('任务失败也要释放队列，不能把后续操作永久锁死', async () => {
   const failing = enqueueBrowserWorkflow(() => Promise.reject(new Error('生成失败')), { label: '即梦视频生成' });
   await assert.rejects(failing, /生成失败/);
+  assert.equal(browserWorkflowBusyLabel(), '');
+});
+
+test('HTTP 生成运行时占用期间同样拒绝打开或重启专属 Chrome', async () => {
+  let release;
+  let started;
+  const startedPromise = new Promise(resolve => { started = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const running = runScheduledGeneration({
+    provider: 'jimeng',
+    label: '即梦 HTTP 图片生成',
+    task: async () => {
+      started();
+      await gate;
+    }
+  });
+
+  await startedPromise;
+  assert.equal(browserWorkflowBusyLabel(), '即梦 HTTP 图片生成');
+  assert.throws(() => assertBrowserWorkflowIdle('打开浏览器窗口'), error => {
+    assert.equal(error.code, 'BROWSER_WORKFLOW_BUSY');
+    assert.match(error.message, /即梦 HTTP 图片生成/);
+    return true;
+  });
+
+  release();
+  await running;
   assert.equal(browserWorkflowBusyLabel(), '');
 });
 
@@ -140,7 +168,7 @@ test('检查登录态在拒绝之前不得写入 checking 状态', () => {
 test('生成链路不再占用浏览器串行队列', () => {
   // 曾经所有生成都要排队抢那一个 Chrome：识图没入队还会关掉正在用的页面。
   // DOM 生成删除后，队列只服务「打开浏览器 / 登录」这类真正独占的操作，
-  // HTTP 生成由 bridge 内部按 provider 串行，轮询与下载完全并行。
+  // HTTP 生成由 Generation Scheduler 管理任务级提交边界；打开/登录队列不执行生成。
   const files = [
     '../server/services/geminiWebWorkflow.js',
     '../server/services/googleFlowWorkflow.js',

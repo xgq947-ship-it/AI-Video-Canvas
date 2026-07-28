@@ -15,7 +15,7 @@ npm run setup
 
 `npm install` 会安装项目锁定的原生 FFmpeg / FFprobe，开发机不需要再通过 Homebrew 安装。
 
-需要调试 Google Flow、即梦时，再安装锁定的 Python 自动化运行时：
+需要调试 Google Flow、Gemini Web、即梦时，再安装锁定的 Python 自动化运行时：
 
 ```bash
 npm run setup:automation-runtime
@@ -38,8 +38,8 @@ npm run build
 
 > **不要同时运行 `npm run dev` 和已安装的桌面应用。**
 > 两者共用同一份 `browser-profile`（登录一次两边都能用，见「浏览器自动化」），
-> 因此也共用同一个 Evan 专属 Chrome 实例。而串行队列
-> （`googleFlowWorkflowQueue`）只在单个后端进程内生效，跨进程不排队：
+> 因此也共用同一个 Evan 专属 Chrome 实例。生成调度器和浏览器独占队列都只在单个
+> 后端进程内生效，跨进程不排队：
 > 两个后端会互相切换页面、抢焦点，正在等结果的一方会拿到
 > `SUBMISSION_UNKNOWN`——积分已扣但结果收不回来。调试时请先退出桌面应用。
 
@@ -74,6 +74,11 @@ Python 虚拟环境或 `node_modules/` 提交进 Git。
 正式分发前还需要 macOS 签名/公证、Windows Authenticode 签名和生产更新源。详细边界见
 [桌面运行时架构](desktop-runtime-architecture.md)。
 
+Flow、Gemini Web、即梦的 HTTP Provider 分层、并发策略、健康接口和真实冒烟方式见
+[三平台生成运行时架构](generation-runtime-architecture.md)。日常 `npm test` 只跑脱敏协议
+样本与合成压力测试，不访问三家平台、不产生额度。`npm run test:web-http:live` 默认也只列
+计划，只有环境变量和 `--execute` 同时存在时才允许真实生成。
+
 ## 目录职责
 
 - `src/`：React 画布
@@ -87,13 +92,13 @@ Python 虚拟环境或 `node_modules/` 提交进 Git。
 ## 浏览器自动化
 
 安装包不再携带 Chromium。Evan 检测系统正式版 Google Chrome，并通过独立
-`browser-profile/` 保存 Flow/即梦登录态；应用更新不会覆盖。兼容性探针会阻止缺失或
+`browser-profile/` 保存 Flow/Gemini Web/即梦登录态；应用更新不会覆盖。兼容性探针会阻止缺失或
 版本过低的 Chrome 启动自动化。Remotion 使用同一个系统 Chrome 可执行文件，不会首次
 渲染时联网下载浏览器。
 
 `browser-profile/` 的位置**不随后端从哪个目录启动而变**，源码模式与桌面应用落在
 同一处（`app.getPath('userData')/data/browser-profile`），所以在桌面应用里登录过
-即梦/Flow 后，`npm run dev` 直接可用，无需重新登录。三处默认值必须保持一致：
+Flow/Gemini Web/即梦后，`npm run dev` 直接可用，无需重新登录。三处默认值必须保持一致：
 `package.json` 的 `productName`、`server/runtime/paths.js` 的
 `defaultBrowserProfileDir()`、`server/python/sessionhub/scene/chrome_cdp.py` 的
 `_default_profile_dir()`——任一处改名都会让另外两处指向旧目录，症状是

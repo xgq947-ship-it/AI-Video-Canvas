@@ -32,6 +32,8 @@ import {
     persistAuthStatus,
     toBrowserSessionState
 } from '../services/webhttp/auth.js';
+import { getGenerationRuntimeHealth } from '../services/generationRuntime/health.js';
+import { generationJobJournal } from '../services/generationRuntime/jobJournal.js';
 
 const router = express.Router();
 
@@ -212,6 +214,34 @@ router.get('/models', async (req, res) => {
     } catch (error) {
         res.status(500).json({ error: error.message || '读取模型注册表失败' });
     }
+});
+
+/**
+ * Unified, read-only provider health endpoint.
+ *
+ * Default reads local state only. `?probe=1` performs real login/session
+ * probes but never submits generation or spends quota.
+ */
+router.get('/provider-health', async (req, res) => {
+    try {
+        res.json(await getGenerationRuntimeHealth({ probe: req.query.probe === '1' }));
+    } catch (error) {
+        res.status(500).json({ error: error.message || '平台健康检查失败' });
+    }
+});
+
+/** Credential-free runtime journal for diagnostics/recovery UI. */
+router.get('/generation-jobs', (req, res) => {
+    const states = typeof req.query.state === 'string'
+        ? req.query.state.split(',').map(value => value.trim()).filter(Boolean)
+        : undefined;
+    res.json({
+        jobs: generationJobJournal.list({
+            limit: Number(req.query.limit) || 50,
+            states
+        }),
+        summary: generationJobJournal.summary()
+    });
 });
 
 router.get('/codex', (req, res) => {

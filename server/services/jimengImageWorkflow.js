@@ -68,13 +68,20 @@ export function generateJimengWorkflowImage(options) {
         label: '即梦图片生成',
         metadata: { prompt: options?.prompt },
         run: () => runWithExecutionMode({
-        mode: options?.executionMode,
-        provider: 'jimeng',
-        label: '即梦图片生成',
-        http: () => generateJimengImageHttp({
-            ...options,
-            modelId: resolveProtocolModelId(options?.modelId, JIMENG_BASELINE_IMAGE_MODEL)
-        })
+            mode: options?.executionMode,
+            provider: 'jimeng',
+            label: '即梦图片生成',
+            signal: options?.signal,
+            metadata: {
+                kind: 'image',
+                modelId: options?.modelId,
+                nodeId: options?.nodeId,
+                workflowId: options?.workflowId
+            },
+            http: () => generateJimengImageHttp({
+                ...options,
+                modelId: resolveProtocolModelId(options?.modelId, JIMENG_BASELINE_IMAGE_MODEL)
+            })
         })
     });
 }

@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "provider": "google-flow",
+  "sanitized": true,
+  "image": {
+    "media": [
+      {
+        "name": "flow-image-media-1",
+        "workflowId": "flow-workflow-1",
+        "image": {
+          "generatedImage": {
+            "mediaId": "flow-image-media-1",
+            "fifeUrl": "https://flow-content.invalid/image-1.png",
+            "prompt": "sanitized protocol sample",
+            "modelNameType": "NARWHAL",
+            "aspectRatio": "IMAGE_ASPECT_RATIO_SQUARE",
+            "seed": 12345
+          },
+          "dimensions": {
+            "width": 1024,
+            "height": 1024
+          }
+        }
+      },
+      {
+        "name": "flow-image-media-2",
+        "workflowId": "flow-workflow-1",
+        "image": {
+          "generatedImage": {
+            "mediaId": "flow-image-media-2",
+            "fifeUrl": "https://flow-content.invalid/image-2.png",
+            "modelNameType": "NARWHAL",
+            "seed": 12346
+          },
+          "dimensions": {
+            "width": 1024,
+            "height": 1024
+          }
+        }
+      }
+    ]
+  },
+  "video": {
+    "media": [
+      {
+        "name": "flow-video-media-1",
+        "workflowId": "flow-workflow-2",
+        "mediaMetadata": {
+          "mediaStatus": {
+            "mediaGenerationStatus": "MEDIA_GENERATION_STATUS_SUCCESSFUL"
+          },
+          "mediaBlobSize": "2457600",
+          "requestData": {
+            "videoGenerationRequestData": {
+              "videoModelControlInput": {
+                "videoResolution": "VIDEO_RESOLUTION_720P",
+                "videoGenerationMode": "VIDEO_GENERATION_MODE_TEXT_TO_VIDEO"
+              }
+            }
+          }
+        },
+        "video": {
+          "dimensions": {
+            "length": "8s"
+          },
+          "generatedVideo": {
+            "model": "veo_3_1_lite_t2v",
+            "prompt": "sanitized protocol sample",
+            "seed": 9876,
+            "aspectRatio": "VIDEO_ASPECT_RATIO_LANDSCAPE",
+            "isLooped": false
+          }
+        }
+      },
+      {
+        "name": "flow-video-media-2",
+        "mediaMetadata": {
+          "mediaStatus": {
+            "mediaGenerationStatus": "MEDIA_GENERATION_STATUS_PENDING"
+          }
+        },
+        "video": {
+          "dimensions": {
+            "length": "8s"
+          }
+        }
+      }
+    ]
+  }
+}

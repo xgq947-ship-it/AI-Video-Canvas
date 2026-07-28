@@ -36,18 +36,19 @@ Evan AI Video Canvas-<版本>-win-x64.exe
 主要目录：
 
 - `library\`：项目与全部素材。
-- `browser-profile\`：Flow/即梦登录状态。
+- `browser-profile\`：Flow/Gemini Web/即梦登录状态。
 - `runtime\`：任务运行状态。
 - `logs\`：本地日志。
 
 安装升级和卸载程序默认不删除用户数据。
 
-## 3. 登录 Google Flow 和即梦
+## 3. 登录 Google Flow、Gemini Web 和即梦
 
 1. 打开 Evan 右上角“设置”。
 2. 点击“打开 Evan 专属 Chrome”。
 3. 登录：
    - Google Flow：`https://labs.google/fx/tools/flow`
+   - Gemini Web：`https://gemini.google.com/app`
    - 即梦：`https://jimeng.jianying.com`
 4. 登录完成后返回 Evan，点击“检查登录状态”。探针通过后才会显示“已验证”。
 
@@ -63,7 +64,8 @@ Evan AI Video Canvas-<版本>-win-x64.exe
 4. 配置提示词、比例、清晰度和生成数量。
 5. 点击生成。
 
-Flow/即梦图片支持一次 1—4 张；第一张更新当前节点，其余结果在右侧创建无连线图片节点。
+图片数量按模型能力限制：Flow 最多 4 张、Gemini Web 1 张、即梦图片 5.0 Pro 最多 4 张、
+5.0 Lite 最多 8 张；第一张更新当前节点，其余结果在右侧创建无连线图片节点。
 
 ## 5. Windows 兼容说明
 
@@ -78,7 +80,7 @@ Flow/即梦图片支持一次 1—4 张；第一张更新当前节点，其余�
 ## 6. 可选：连接 Codex CLI
 
 Codex 只用于画布中的可选 Codex 模型。Evan 不内置固定版本，以免安装包中的 CLI 很快
-过期；普通画布、Flow/即梦和本地渲染不受影响。
+过期；普通画布、Flow/Gemini Web/即梦和本地渲染不受影响。
 
 1. 按 OpenAI 当前官方方式在 Windows 安装或更新 Codex CLI。
 2. 打开 Evan“设置 → Codex 服务”。
@@ -106,7 +108,7 @@ Evan 安装版使用 `%APPDATA%\Evan AI Video Canvas\data\codex-home\` 保存独
 | 现象 | 处理 |
 |---|---|
 | SmartScreen 拦截 | 当前测试包未签名；确认来源后选择“更多信息 → 仍要运行”。 |
-| Flow/即梦需要登录 | 设置 → 打开 Evan 专属 Chrome，登录后重试。 |
+| Flow/Gemini Web/即梦需要登录 | 设置 → 打开 Evan 专属 Chrome，登录后重试。 |
 | 生成时没有浏览器窗口 | 正常，生成默认在后台无头运行。 |
 | 浏览器模型一直不可用 | 更新 Google Chrome，并检查 Defender/安全软件是否隔离 Ops CLI。 |
 | Codex 模型是灰色 | 安装/更新 Codex CLI，在“设置 → Codex 服务”选择 `codex.exe`/`.cmd` 并登录。 |

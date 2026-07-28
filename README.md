@@ -4,21 +4,21 @@
 </div>
 
 Evan 是一个本地优先的 AI 图片、视频与漫剧生产桌面应用。画布、项目、素材、浏览器
-登录资料和本地渲染都保存在用户电脑；Google Flow、即梦及 API 模型的生成计算由对应
-官方服务完成。
+登录资料和本地渲染都保存在用户电脑；Google Flow、Gemini Web、即梦及 API 模型的
+生成计算由对应官方服务完成。
 
 ## 普通用户
 
 安装版已经内置 Electron 后端、FFmpeg/FFprobe 和独立自动化运行时，不要求用户安装
-Node.js、Python 或 Chrome Beta，但电脑必须安装可自动更新的正式版 Google Chrome。普通画布、Flow/即梦和本地渲染不
-依赖 Codex；只有选择“Codex 生图”等可选高级能力时，才需要用户单独安装并登录最新版
-Codex CLI。Evan 不捆绑固定 Codex 版本。
+Node.js、Python 或 Chrome Beta，但电脑必须安装可自动更新的正式版 Google Chrome。
+普通画布、Flow/Gemini Web/即梦和本地渲染不依赖 Codex；只有选择“Codex 生图”等可选
+高级能力时，才需要用户单独安装并登录最新版 Codex CLI。Evan 不捆绑固定 Codex 版本。
 
 - [macOS 首次安装与使用](docs/首次安装使用-macOS.md)
 - [Windows 首次安装与使用](docs/首次安装使用-Windows.md)
 - [当前项目说明](docs/项目说明.md)
 
-首次使用 Google Flow 或即梦时，从应用设置中打开 Evan 专属 Chrome 登录，完成后点击
+首次使用 Google Flow、Gemini Web 或即梦时，从应用设置中打开 Evan 专属 Chrome 登录，完成后点击
 “检查登录状态”。只有真实页面探针确认账号已登录，界面才显示“已验证”。
 之后生图和生视频默认在后台无头运行；登录过期时画布会提示重新登录，不会自动抢占前台。
 这个实例使用独立 `browser-profile`，不会读取或占用用户日常 Chrome 的 Profile。
@@ -47,8 +47,9 @@ npm run desktop:dist:win   # 必须在 Windows x64 上运行
 平台运行时包含平台相关二进制，不能在 macOS 上直接生成可信的 Windows 完整安装包。
 仓库提供 `.github/workflows/desktop-installers.yml`，会分别在原生 macOS/Windows runner
 生成安装介质、创建 GitHub Release，并在发布成功后删除 Actions 临时产物。完整说明见
-[开发指南](docs/development.md)、[发布与跨电脑开发](docs/发布与跨电脑开发.md) 和
-[桌面运行时架构](docs/desktop-runtime-architecture.md)。
+[开发指南](docs/development.md)、[发布与跨电脑开发](docs/发布与跨电脑开发.md)、
+[桌面运行时架构](docs/desktop-runtime-architecture.md) 和
+[三平台生成运行时架构](docs/generation-runtime-architecture.md)。
 
 ## 文档
 
@@ -57,5 +58,6 @@ npm run desktop:dist:win   # 必须在 Windows x64 上运行
 - [项目数据格式](docs/项目数据格式.md)
 - [视频剪辑节点](docs/video-editor-node.md)
 - [Modal 相机角度服务](docs/modal-camera-integration.md)
+- [三平台生成运行时架构](docs/generation-runtime-architecture.md)
 
 Copyright © 2025 SankaiAI. Licensed under the Apache License, Version 2.0.

@@ -195,14 +195,21 @@ export function generateGoogleFlowWorkflowImage(options) {
         label: 'Google Flow 图片生成',
         metadata: { prompt: options?.prompt },
         run: () => runWithExecutionMode({
-        mode: options?.executionMode,
-        provider: 'google-flow',
-        label: 'Google Flow 图片生成',
-        http: () => generateFlowImageHttp({
-            ...options,
-            // 画布模型 id → Flow 协议 imageModelName；未知 id 退回已验证样本。
-            modelId: resolveProtocolModelId(options?.modelId, FLOW_BASELINE_IMAGE_MODEL)
-        })
+            mode: options?.executionMode,
+            provider: 'google-flow',
+            label: 'Google Flow 图片生成',
+            signal: options?.signal,
+            metadata: {
+                kind: 'image',
+                modelId: options?.modelId,
+                nodeId: options?.nodeId,
+                workflowId: options?.workflowId
+            },
+            http: () => generateFlowImageHttp({
+                ...options,
+                // 画布模型 id → Flow 协议 imageModelName；未知 id 退回已验证样本。
+                modelId: resolveProtocolModelId(options?.modelId, FLOW_BASELINE_IMAGE_MODEL)
+            })
         })
     });
 }

@@ -12,6 +12,11 @@
 
 import { randomUUID } from 'node:crypto';
 
+import {
+    attachCurrentGenerationDetails,
+    runProviderDownload,
+    runProviderPoll
+} from '../../generationRuntime/scheduler.js';
 import { buildRequestSpec, webContext, webFetch } from '../bridge.js';
 import { WebProviderError, classifyHttpFailure } from '../errors.js';
 import { downloadResultMedia, loadReferenceImageFiles, requireNonEmptyPrompt } from '../media.js';
@@ -178,6 +183,7 @@ async function submitDraft({
 }) {
     // Generated before the request so an ambiguous outcome stays recoverable.
     const submitId = randomUUID();
+    attachCurrentGenerationDetails(PROVIDER, { submitId, projectId: workspaceId });
     // babi_param（放在 URL 上）携带功能与权益描述符，缺了它服务端直接
     // permission denied；webId 取自 _tea_web_id Cookie，同样是必填。
     const { webId } = await getJimengClientContext({ signal });
@@ -218,7 +224,11 @@ async function waitForTask(task, { isCompleted, parseResults, timeoutMinutes, si
         await sleep(interval, signal);
         let payload;
         try {
-            payload = await getHistoryByIds([task.submitId], { signal });
+            payload = await runProviderPoll(
+                PROVIDER,
+                () => getHistoryByIds([task.submitId], { signal }),
+                { signal, label: `${PROVIDER_NAME}${what}轮询` }
+            );
             consecutiveErrors = 0;
         } catch (error) {
             // Quota is already spent; keep waiting through transient failures.
@@ -349,6 +359,7 @@ export async function generateJimengImageHttp({
         generateType: references.length > 0 ? 12 : 1,
         kind: 'image'
     });
+    attachCurrentGenerationDetails(PROVIDER, task);
     const results = await waitForTask(task, {
         isCompleted: isJimengImageCompleted,
         parseResults: parseJimengImageResults,
@@ -357,15 +368,14 @@ export async function generateJimengImageHttp({
         what: '图片生成'
     });
 
-    const images = [];
-    for (const item of results) {
+    const images = await Promise.all(results.map(item => runProviderDownload(PROVIDER, async () => {
         const downloaded = await downloadResultMedia(item.imageUrl, {
             providerName: `${PROVIDER_NAME}图片生成`,
             expectedType: 'image',
             recoveryHint: '请先到即梦历史记录中下载本次结果，不要直接重新生成。'
         });
-        images.push({ ...downloaded, metadata: item });
-    }
+        return { ...downloaded, metadata: item };
+    }, { signal, label: `${PROVIDER_NAME}图片下载` })));
     return { images, ...images[0], task, runId: task.submitId, channel: 'http' };
 }
 
@@ -468,6 +478,7 @@ export async function generateJimengVideoHttp({
         generateType: 10,
         kind: 'video'
     });
+    attachCurrentGenerationDetails(PROVIDER, task);
     const results = await waitForTask(task, {
         isCompleted: isJimengVideoCompleted,
         parseResults: parseJimengVideoResults,
@@ -476,15 +487,14 @@ export async function generateJimengVideoHttp({
         what: '视频生成'
     });
 
-    const videos = [];
-    for (const item of results) {
+    const videos = await Promise.all(results.map(item => runProviderDownload(PROVIDER, async () => {
         const downloaded = await downloadResultMedia(item.videoUrl, {
             providerName: PROVIDER_NAME,
             expectedType: 'video',
             recoveryHint: '请先到即梦历史记录中下载本次结果，不要直接重新生成。'
         });
-        videos.push({ ...downloaded, metadata: item });
-    }
+        return { ...downloaded, metadata: item };
+    }, { signal, label: `${PROVIDER_NAME}视频下载` })));
     return { videos, ...videos[0], task, runId: task.submitId, channel: 'http' };
 }
 

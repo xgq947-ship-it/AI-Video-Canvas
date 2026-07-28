@@ -1,7 +1,7 @@
 /**
  * 「用户主动取消」的统一错误形状。
  *
- * 取消会穿过四层：浏览器串行队列 → runOpsCli 的重试循环 → 各 provider →
+ * 取消会穿过四层：生成调度器/bridge 队列 → runOpsCli 的重试循环 → 各 provider →
  * 产品短视频任务编排。之前每一层各造一个形状略有出入的错误对象（有的不设
  * `submitted`，有的消息里多一个空格），而下游是**按字段**判定的：
  * - `shouldRetryOpsFailure` 看 `submitted`，漏设会让取消走进自动重试；

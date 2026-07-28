@@ -36,6 +36,25 @@ export interface GenerateVideoParams {
   nodeId?: string; // ID of the node initiating generation
 }
 
+export interface GenerationRequestError extends Error {
+  code?: string;
+  submitted?: boolean;
+  retryable?: boolean;
+  details?: Record<string, unknown>;
+}
+
+const readGenerationError = async (response: Response): Promise<GenerationRequestError> => {
+  const data = await response.json().catch(() => ({})) as Record<string, unknown>;
+  const error = new Error(String(data.error || response.statusText)) as GenerationRequestError;
+  if (typeof data.code === 'string') error.code = data.code;
+  if (typeof data.submitted === 'boolean') error.submitted = data.submitted;
+  if (typeof data.retryable === 'boolean') error.retryable = data.retryable;
+  if (data.details && typeof data.details === 'object') {
+    error.details = data.details as Record<string, unknown>;
+  }
+  return error;
+};
+
 export type CodexImageJobStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
 export interface CodexImageJob {
@@ -208,8 +227,7 @@ export const generateImageBatch = async (params: GenerateImageParams): Promise<s
     });
 
     if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error || response.statusText);
+      throw await readGenerationError(response);
     }
 
     const data = await response.json();
@@ -246,8 +264,7 @@ export const generateVideo = async (params: GenerateVideoParams): Promise<string
     });
 
     if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error || response.statusText);
+      throw await readGenerationError(response);
     }
 
     const data = await response.json();

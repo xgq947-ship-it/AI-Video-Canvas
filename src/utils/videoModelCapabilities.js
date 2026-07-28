@@ -7,6 +7,8 @@
 
 export const GOOGLE_FLOW_VIDEO_MODEL = 'google-flow-omni-flash';
 export const GOOGLE_FLOW_VEO_3_1_LITE_VIDEO_MODEL = 'google-flow-veo-3-1-lite';
+export const GOOGLE_FLOW_VEO_3_1_FAST_VIDEO_MODEL = 'google-flow-veo-3-1-fast';
+export const GOOGLE_FLOW_VEO_3_1_QUALITY_VIDEO_MODEL = 'google-flow-veo-3-1-quality';
 export const JIMENG_VIDEO_MODEL = 'jimeng-seedance-2-0';
 export const JIMENG_FAST_VIDEO_MODEL = 'jimeng-seedance-2-0-fast';
 export const JIMENG_MINI_VIDEO_MODEL = 'jimeng-seedance-2-0-mini';
@@ -25,6 +27,8 @@ const JIMENG_VIDEO_MODELS = new Set([
 export const BROWSER_WORKFLOW_VIDEO_MODELS = new Set([
     GOOGLE_FLOW_VIDEO_MODEL,
     GOOGLE_FLOW_VEO_3_1_LITE_VIDEO_MODEL,
+    GOOGLE_FLOW_VEO_3_1_FAST_VIDEO_MODEL,
+    GOOGLE_FLOW_VEO_3_1_QUALITY_VIDEO_MODEL,
     ...JIMENG_VIDEO_MODELS,
     GEMINI_WEB_VIDEO_MODEL
 ]);

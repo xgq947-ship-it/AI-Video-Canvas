@@ -224,15 +224,27 @@ async (spec) => {
 # is ever persisted by this module.
 _CONTEXT_SCRIPTS = {
     # Gemini's bootstrap lives in the app document itself. Re-fetching the app
-    # page same-origin gives a fresh `at` / `bl` / `f.sid` without a reload.
+    # page is only a fallback: current Gemini can reject an HTML fetch while the
+    # already-loaded app and its generation RPCs remain valid.
     "gemini-web": """
     async () => {
-      const response = await fetch('https://gemini.google.com/app', {
-        credentials: 'include',
-        headers: { 'cache-control': 'no-cache' }
-      });
-      const html = await response.text();
+      const wiz = window.WIZ_global_data || {};
+      let html = document.documentElement ? document.documentElement.innerHTML : '';
+      let status = 200;
+      if (!wiz.SNlM0e || !wiz.cfb2h || !wiz.FdrFJe || !wiz.S06Grb) {
+        try {
+          const response = await fetch('https://gemini.google.com/app', {
+            credentials: 'include',
+            headers: { 'cache-control': 'no-cache' }
+          });
+          status = response.status;
+          html = await response.text();
+        } catch (error) {
+          status = 0;
+        }
+      }
       const pick = (key) => {
+        if (wiz[key] !== undefined && wiz[key] !== null) return String(wiz[key]);
         const patterns = [
           new RegExp('"' + key + '"\\\\s*:\\\\s*"([^"]+)"'),
           new RegExp("'" + key + "'\\\\s*:\\\\s*'([^']+)'"),
@@ -255,7 +267,7 @@ _CONTEXT_SCRIPTS = {
         (html.match(/feeds\\/[a-zA-Z0-9]{6,}/g) || [])
       )).slice(0, 5);
       return {
-        status: response.status,
+        status,
         at,
         bl,
         fSid,
@@ -271,8 +283,9 @@ _CONTEXT_SCRIPTS = {
     # the current /project/<id> route or the app's own storage; the reCAPTCHA
     # token is minted per call from the site key the page already loaded.
     "google-flow": """
-    async () => {
+    async (options) => {
       const result = { projectId: '', accessToken: '', recaptchaToken: '', sessionId: '', email: '' };
+      const recaptchaAction = String(options && options.recaptchaAction || '');
       try {
         const response = await fetch('/fx/api/auth/session', { credentials: 'include' });
         if (response.ok) {
@@ -284,6 +297,25 @@ _CONTEXT_SCRIPTS = {
           result.expires = session?.expires || '';
         }
       } catch (error) { result.sessionError = String(error && error.message || error); }
+
+      // Flow exposes the account's currently healthy video families through
+      // the same authenticated endpoint used by the model picker. Keep the
+      // response raw: Node normalizes only reviewed protocol families.
+      if (result.accessToken) {
+        try {
+          const response = await fetch('https://aisandbox-pa.googleapis.com/v1/flow/models/statuses', {
+            credentials: 'include',
+            headers: {
+              authorization: 'Bearer ' + result.accessToken,
+              'cache-control': 'no-cache'
+            }
+          });
+          result.modelStatusHttpStatus = response.status;
+          if (response.ok) result.modelConfig = await response.json();
+        } catch (error) {
+          result.modelConfigError = String(error && error.message || error);
+        }
+      }
 
       // projectId 只能从已登录会话里读，不能猜。按可靠度依次尝试：
       // 当前路由 → 页面上的项目链接 → 本地存储。项目列表是客户端渲染的，
@@ -332,13 +364,16 @@ _CONTEXT_SCRIPTS = {
       const siteKey = siteKeyFrom();
       result.recaptchaSiteKey = siteKey ? 'present' : '';
       const grecaptcha = window.grecaptcha && (window.grecaptcha.enterprise || window.grecaptcha);
-      if (siteKey && grecaptcha && typeof grecaptcha.execute === 'function') {
+      // reCAPTCHA enterprise tokens are action-bound and single-use. Auth probes
+      // deliberately do not mint one; generation asks for the exact current
+      // Flow action immediately before its billable request.
+      if (recaptchaAction && siteKey && grecaptcha && typeof grecaptcha.execute === 'function') {
         try {
           await new Promise((resolve) => {
             if (typeof grecaptcha.ready === 'function') grecaptcha.ready(resolve);
             else resolve();
           });
-          result.recaptchaToken = await grecaptcha.execute(siteKey, { action: 'generate' });
+          result.recaptchaToken = await grecaptcha.execute(siteKey, { action: recaptchaAction });
         } catch (error) {
           result.recaptchaError = String(error && error.message || error);
         }
@@ -504,19 +539,42 @@ def _provider_page(context: Any, provider: str, desired_url: str | None = None) 
     marker = f"{WEBHTTP_WINDOW_PREFIX}{provider}"
     expected_host = PROVIDER_HOSTS[provider]
 
-    page = None
+    pages = []
+    stale_marker = None
     for candidate in list(getattr(context, "pages", []) or []):
         try:
             if candidate.is_closed():
                 continue
         except Exception:
             continue
-        if _page_window_name(candidate) == marker:
+        current = str(getattr(candidate, "url", "") or "")
+        host = (urlparse(current).hostname or "").lower()
+        candidate_marker = _page_window_name(candidate) == marker
+        if candidate_marker and host != expected_host:
+            stale_marker = candidate
+        pages.append((candidate, current, host, candidate_marker))
+
+    # Sites are allowed to overwrite window.name and redirects can strand an
+    # old marker on google.com/sorry. Prefer a healthy origin page over marker
+    # identity, and only reuse a redirected marker if no healthy page exists.
+    page = None
+    for require_marker, require_target in ((True, True), (False, True), (True, False), (False, False)):
+        for candidate, current, host, candidate_marker in reversed(pages):
+            if host != expected_host:
+                continue
+            if require_marker and not candidate_marker:
+                continue
+            if require_target and desired_url and not _same_page_target(current, desired_url):
+                continue
             page = candidate
+            break
+        if page is not None:
             break
 
     if page is None:
-        page = context.new_page()
+        page = stale_marker or context.new_page()
+
+    def mark_page() -> None:
         try:
             page.evaluate("(name) => { window.name = name; }", marker)
         except Exception:
@@ -530,11 +588,13 @@ def _provider_page(context: Any, provider: str, desired_url: str | None = None) 
     # permission denied。所以调用方可以指定必须待在哪个工具页上。
     if host == expected_host:
         if not desired_url or _same_page_target(current, desired_url):
+            mark_page()
             return page
         page.goto(desired_url, wait_until="domcontentloaded", timeout=PAGE_READY_TIMEOUT_MS)
         # 应用要把安全 SDK 和工具页初始化完才会给请求补签名；实测 3 秒不够，
         # 太早发出的请求会被判 permission denied。
         page.wait_for_timeout(9000)
+        mark_page()
         return page
 
     # A single redirect is not proof of a logout: these apps intermittently bounce
@@ -552,6 +612,7 @@ def _provider_page(context: Any, provider: str, desired_url: str | None = None) 
         )
         host = (urlparse(str(getattr(page, "url", "") or "")).hostname or "").lower()
         if host == expected_host:
+            mark_page()
             return page
 
     raise WebHttpBridgeError(
@@ -661,7 +722,7 @@ def run_web_fetch(
     )
 
 
-def run_web_context(*, provider: str, output_file: str) -> CommandResponse:
+def run_web_context(*, provider: str, output_file: str, recaptcha_action: str = "") -> CommandResponse:
     """Collect the provider's runtime auth/bootstrap context into ``output_file``."""
     _require_provider(provider)
     script = _CONTEXT_SCRIPTS[provider]
@@ -669,7 +730,7 @@ def run_web_context(*, provider: str, output_file: str) -> CommandResponse:
     def _run(context: Any) -> dict[str, Any]:
         page = _provider_page(context, provider)
         page.set_default_timeout(60_000)
-        payload = page.evaluate(script)
+        payload = page.evaluate(script, {"recaptchaAction": recaptcha_action})
         cookies = context.cookies(PROVIDER_COOKIE_URLS[provider])
         payload["cookies"] = [
             {

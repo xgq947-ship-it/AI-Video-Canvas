@@ -12,19 +12,21 @@
 export const GEMINI_ORIGIN = 'https://gemini.google.com';
 export const GEMINI_STREAM_PATH =
     '/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate';
+export const GEMINI_BATCH_PATH = '/_/BardChatUi/data/batchexecute';
+export const GEMINI_VIDEO_POLL_RPC = 'hNvQHb';
 export const GEMINI_UPLOAD_ENDPOINT = 'https://push.clients6.google.com/upload/';
 
 /**
  * Observed generation-mode values, kept together so a Gemini Web build change
  * is a one-line edit. Versioned so a future adapter can branch on it.
  */
-export const GEMINI_PROTOCOL_VERSION = '2026-07-web';
+export const GEMINI_PROTOCOL_VERSION = '2026-07-web-97';
 export const GEMINI_MODE = Object.freeze({
     image: 14,
     video: 11,
-    videoCapability: 17,
-    /** Structure the doc records for video requests; `2`'s meaning is unknown. */
-    videoExtra: [null, null, null, null, null, null, [[null, null, null, 2]]]
+    videoCapability: 16,
+    /** Current Videos tool marker nested in the message tuple. */
+    videoMessage: [null, null, null, null, null, null, [[null, null, null, 1]]]
 });
 
 /** Bootstrap keys as they appear in the Gemini app document. */
@@ -100,19 +102,51 @@ export function buildStreamPayload({ prompt, assets = [], conversation = {}, mod
     const attachments = buildAttachments(assets);
     const message = [String(prompt ?? ''), 0, null, attachments, null, null, 0];
 
-    // 实测结论（2026-07-28，真实账号）：图片 / 视频请求与普通文本请求**结构完全相同**。
+    const base = [message, [language], buildConversationTuple(conversation)];
+
+    // 图片请求实测不再接受旧的 mode=14 字段；意图由 Prompt 识别。
     //
-    // 协议文档 §15/§21 记录了 14 / 11 / 17 这些数值，据此推断请求里应当附带「生成模式」
-    // 字段。实测把它们按任何位置追加进 payload，StreamGenerate 一律返回：
-    //   HTTP 400 [["er",null,...,400,...]]
-    // 而不带任何模式字段、只把意图写在 prompt 里时返回 200，模型正常按图片请求响应
-    // （本次因账号额度耗尽答复「一旦您的额度重置，我就可以创建更多图片」，
-    //  说明请求已被正确识别为生图）。
+    // 视频不同：当前 Videos 工具使用 97 项请求信封。mode=11 位于索引 49，
+    // capability=16 位于索引 55；把旧字段直接追加到三项基础 payload 会得到
+    // HTTP 400，而只发三项则会被当成普通文本问答。
     //
-    // 结论：Gemini Web 是对话式的 —— 生成什么由 prompt 决定，14/11/17 是**响应侧**的
-    // 标记而非请求字段。文档本身也规定「最终抓包事实 > 文档」，故以实测为准。
-    // GEMINI_MODE 保留下来供响应解析与将来协议变化参考，但不再注入请求。
-    return [message, [language], buildConversationTuple(conversation)];
+    // 这些数字只留在 protocol 层，不向路由/UI 暴露。
+    if (mode === GEMINI_MODE.video) {
+        message.push(null, null, GEMINI_MODE.videoMessage);
+        const payload = Array(97).fill(null);
+        payload[0] = message;
+        payload[1] = base[1];
+        payload[2] = base[2];
+        // The live UI sends an optional opaque client-context blob at index 3.
+        // It is not part of auth and the server accepts ordinary requests without
+        // it, so HTTP mode deliberately leaves it null instead of scraping an
+        // unstable Angular object.
+        payload[4] = crypto.randomUUID().replaceAll('-', '');
+        payload[6] = [0];
+        payload[7] = 1;
+        payload[10] = 1;
+        payload[11] = 0;
+        payload[17] = [[0]];
+        payload[18] = 0;
+        payload[27] = 1;
+        payload[30] = [4];
+        payload[41] = [1];
+        payload[49] = GEMINI_MODE.video;
+        payload[53] = 0;
+        payload[54] = [];
+        payload[55] = [[GEMINI_MODE.videoCapability]];
+        payload[59] = crypto.randomUUID().toUpperCase();
+        payload[61] = [];
+        payload[67] = 0;
+        payload[68] = 1;
+        payload[79] = 1;
+        payload[80] = 1;
+        payload[91] = 0;
+        payload[96] = 0;
+        return payload;
+    }
+
+    return base;
 }
 
 /** Serialize the payload into the `f.req` + `at` form body. */
@@ -132,6 +166,33 @@ export function buildStreamUrl({ bl, fSid, reqId, language = 'en' }) {
         rt: 'c'
     });
     return `${GEMINI_ORIGIN}${GEMINI_STREAM_PATH}?${query.toString()}`;
+}
+
+/** Current batchexecute envelope used to poll an asynchronous video turn. */
+export function buildBatchRpcRequest({ bl, fSid, reqId, at, rpcId, args, sourcePath = '/app', language = 'en' }) {
+    const query = new URLSearchParams({
+        rpcids: rpcId,
+        'source-path': sourcePath,
+        bl,
+        'f.sid': fSid,
+        hl: language,
+        _reqid: String(reqId),
+        rt: 'c'
+    });
+    const body = new URLSearchParams();
+    body.set('f.req', JSON.stringify([[[rpcId, JSON.stringify(args), null, 'generic']]]));
+    body.set('at', at);
+    return {
+        url: `${GEMINI_ORIGIN}${GEMINI_BATCH_PATH}?${query.toString()}`,
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+        body: body.toString()
+    };
+}
+
+/** Current conversation lookup arguments used while an async video is running. */
+export function buildVideoPollArgs(conversationId) {
+    return [conversationId, 10, null, 1, [0], [4], null, 1];
 }
 
 /** `_reqid` is a per-request sequence; the web app seeds it randomly. */
@@ -366,27 +427,47 @@ export function extractGeneratedMedia(payloads) {
         }
     });
 
-    const images = [];
-    const videos = [];
+    const imagesByUrl = new Map();
+    const videosByUrl = new Map();
     for (const [url, candidate] of byUrl) {
         const { flat, mime, fileName } = candidate;
         const isVideo = VIDEO_MIME.test(mime) || /\.(mp4|webm)$/i.test(fileName);
+        const downloadUrls = candidate.urls.filter(candidateUrl => {
+            try {
+                const declared = new URL(candidateUrl).searchParams.get('filename') || '';
+                if (!declared) return true;
+                return isVideo ? /\.(mp4|webm)$/i.test(declared) : /\.(png|jpe?g|webp)$/i.test(declared);
+            } catch {
+                return true;
+            }
+        });
+        if (!downloadUrls.includes(url)) continue;
+        const preferredUrl = downloadUrls.find(candidateUrl => {
+            try {
+                return /usercontent\.google\.com$/i.test(new URL(candidateUrl).hostname)
+                    && Boolean(new URL(candidateUrl).searchParams.get('filename'));
+            } catch {
+                return false;
+            }
+        }) || url;
         const dimensions = flat.numbers.filter(value => value >= 16 && value <= 16_384);
         const sizeCandidates = flat.numbers.filter(value => value > 16_384);
         const entry = {
             fileName: fileName || (isVideo ? 'video.mp4' : 'image.png'),
             mimeType: mime || (isVideo ? 'video/mp4' : 'image/png'),
-            url,
-            downloadUrls: candidate.urls,
+            url: preferredUrl,
+            downloadUrls,
             width: dimensions[0],
             height: dimensions[1],
-            sizeBytes: sizeCandidates.length ? Math.max(...sizeCandidates) : undefined
+            // Current media tuples put byte size last; max() incorrectly selects
+            // the epoch timestamp (about 1.7e9) for 2–4 MB videos.
+            sizeBytes: sizeCandidates.length ? sizeCandidates.at(-1) : undefined
         };
-        if (isVideo) videos.push(entry);
-        else images.push(entry);
+        const target = isVideo ? videosByUrl : imagesByUrl;
+        if (!target.has(preferredUrl)) target.set(preferredUrl, entry);
     }
 
-    return { images, videos };
+    return { images: [...imagesByUrl.values()], videos: [...videosByUrl.values()] };
 }
 
 /**

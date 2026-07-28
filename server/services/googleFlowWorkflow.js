@@ -15,9 +15,13 @@ import { FLOW_BASELINE_VIDEO_MODEL } from './webhttp/flow/protocol.js';
 
 export const GOOGLE_FLOW_WORKFLOW_MODEL_ID = 'google-flow-omni-flash';
 export const GOOGLE_FLOW_VEO_3_1_LITE_WORKFLOW_MODEL_ID = 'google-flow-veo-3-1-lite';
+export const GOOGLE_FLOW_VEO_3_1_FAST_WORKFLOW_MODEL_ID = 'google-flow-veo-3-1-fast';
+export const GOOGLE_FLOW_VEO_3_1_QUALITY_WORKFLOW_MODEL_ID = 'google-flow-veo-3-1-quality';
 export const GOOGLE_FLOW_WORKFLOW_MODELS = {
     [GOOGLE_FLOW_WORKFLOW_MODEL_ID]: 'Omni Flash',
-    [GOOGLE_FLOW_VEO_3_1_LITE_WORKFLOW_MODEL_ID]: 'Veo 3.1 - Lite'
+    [GOOGLE_FLOW_VEO_3_1_LITE_WORKFLOW_MODEL_ID]: 'Veo 3.1 - Lite',
+    [GOOGLE_FLOW_VEO_3_1_FAST_WORKFLOW_MODEL_ID]: 'Veo 3.1 - Fast',
+    [GOOGLE_FLOW_VEO_3_1_QUALITY_WORKFLOW_MODEL_ID]: 'Veo 3.1 - Quality'
 };
 export const GOOGLE_FLOW_SUPPORTED_DURATIONS = [4, 6, 8, 10];
 // 部分 Flow 模型（如 Veo 3.1 - Lite）不提供时长选择，前端也就不会传 duration。

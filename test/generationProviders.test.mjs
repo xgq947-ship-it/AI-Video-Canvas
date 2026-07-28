@@ -4,12 +4,16 @@ import test from 'node:test';
 import {
   IMAGE_GENERATION_PROVIDERS,
   VIDEO_GENERATION_PROVIDERS,
+  applyDiscoveredModelRegistry,
   clampImageOutputCount,
   getImageGenerationProvider,
   getVideoGenerationProvider,
+  listImageGenerationProviders,
+  listVideoGenerationProviders,
   normalizeImageAspectRatio,
   normalizeVideoParameters,
   resolveVideoModelForAspectRatio,
+  resetDiscoveredModelRegistry,
   videoModelsForAspectRatio,
   supportedImageOutputCounts,
 } from '../shared/generationProviders.js';
@@ -26,19 +30,59 @@ test('图片与视频模型注册表使用唯一 ID，并包含 Gemini Web capab
 
   const video = getVideoGenerationProvider('gemini-web-video');
   assert.deepEqual(video.supportedAspectRatios, ['16:9', '9:16']);
-  assert.deepEqual(video.supportedDurations, [8]);
-  assert.equal(video.maxReferenceImages, 3);
+  assert.deepEqual(video.supportedDurations, [10]);
+  assert.equal(video.maxReferenceImages, 1);
+  assert.equal(video.supportsMultipleReferenceImages, false);
   assert.equal(video.supportsNativeAudio, true);
   assert.equal(video.supportsExtend, true);
 });
 
+test('Flow 能力表覆盖文本、首帧、多参考图，且只展示可路由模型', () => {
+  const omni = getVideoGenerationProvider('google-flow-omni-flash');
+  assert.equal(omni.supportsTextToVideo, true);
+  assert.equal(omni.supportsImageToVideo, true);
+  assert.equal(omni.maxReferenceImages, 7);
+  assert.equal(omni.supportsNativeAudio, true);
+
+  const fast = getVideoGenerationProvider('google-flow-veo-3-1-fast');
+  assert.equal(fast.supportsTextToVideo, true);
+  assert.equal(fast.supportsImageToVideo, true);
+  assert.equal(fast.supportsMultipleReferenceImages, true);
+  assert.equal(fast.maxReferenceImages, 3);
+  assert.equal(fast.supportsNativeAudio, true);
+
+  const quality = getVideoGenerationProvider('google-flow-veo-3-1-quality');
+  assert.equal(quality.supportsImageToVideo, true);
+  assert.equal(quality.supportsMultipleReferenceImages, false);
+  assert.equal(quality.maxReferenceImages, 1);
+
+  resetDiscoveredModelRegistry();
+  applyDiscoveredModelRegistry({
+    models: [{
+      provider: 'google-flow', id: 'future-unmapped-model', type: 'video',
+      displayName: 'Future', inputModes: ['text']
+    }]
+  });
+  assert.equal(listImageGenerationProviders().some(item => item.id === 'future-unmapped-model'), false);
+  assert.equal(listVideoGenerationProviders().some(item => item.id === 'future-unmapped-model'), false);
+  assert.equal(getVideoGenerationProvider('future-unmapped-model'), null);
+  resetDiscoveredModelRegistry();
+});
+
 test('产品节点的数量与视频参数完全由统一 capability 约束', () => {
   assert.deepEqual(supportedImageOutputCounts('google-flow-nano-banana-2'), [1, 2, 3, 4]);
+  assert.deepEqual(supportedImageOutputCounts('jimeng-image-5-0-lite'), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(supportedImageOutputCounts('jimeng-image-5-0-pro'), [1, 2, 3, 4]);
+  assert.deepEqual(getImageGenerationProvider('jimeng-image-5-0-pro').resolutions, ['1K', '2K', '4K']);
+  assert.equal(getImageGenerationProvider('jimeng-image-5-0-pro').maxReferenceImages, 10);
+  assert.deepEqual(getVideoGenerationProvider('jimeng-seedance-2-0').resolutions, ['720P', '1080P', '4K']);
+  assert.deepEqual(getVideoGenerationProvider('jimeng-seedance-2-0-fast').resolutions, ['720P']);
+  assert.equal(getVideoGenerationProvider('jimeng-seedance-2-0-standard').maxReferenceImages, 9);
   assert.deepEqual(supportedImageOutputCounts('gemini-web-image'), [1]);
   assert.equal(clampImageOutputCount('gemini-web-image', 4), 1);
   assert.deepEqual(normalizeVideoParameters('gemini-web-video', { aspectRatio: '1:1', duration: 10 }), {
     aspectRatio: '16:9',
-    duration: 8,
+    duration: 10,
   });
 });
 

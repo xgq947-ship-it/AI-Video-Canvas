@@ -250,24 +250,26 @@ export async function webFetchOk(provider, spec, { submitted = false, what = '�
  * The returned object holds live credentials (Gemini `at`, Flow Bearer, cookies).
  * Callers keep it in memory only — never persist it, never log it.
  */
-export async function webContext(provider, { signal, timeoutMs = 180_000 } = {}) {
+export async function webContext(provider, { signal, timeoutMs = 180_000, recaptchaAction = '' } = {}) {
     if (!WEB_HTTP_PROVIDERS.includes(provider)) {
         throw new WebProviderError(`未知的 HTTP 通道平台：${provider}`, { provider, code: 'UNKNOWN', submitted: false });
     }
-    return enqueueBridgeCall(provider, () => runWebContext(provider, { signal, timeoutMs }));
+    return enqueueBridgeCall(provider, () => runWebContext(provider, { signal, timeoutMs, recaptchaAction }));
 }
 
-async function runWebContext(provider, { signal, timeoutMs }) {
+async function runWebContext(provider, { signal, timeoutMs, recaptchaAction }) {
     const taskDir = makeTaskDir();
     const outputFile = path.join(taskDir, 'context.json');
     try {
+        const args = ['browser', 'web-context', '--provider', provider, '--output-file', outputFile];
+        if (recaptchaAction) args.push('--recaptcha-action', recaptchaAction);
         await runOpsCli({
             label: `${provider} 会话上下文`,
             signal,
             timeoutMs,
             // 这一步确实是登录探针：成功即代表页面可用且未被重定向到登录页。
             successSessionState: 'authenticated',
-            args: ['browser', 'web-context', '--provider', provider, '--output-file', outputFile]
+            args
         });
         return JSON.parse(fs.readFileSync(outputFile, 'utf8'));
     } catch (error) {

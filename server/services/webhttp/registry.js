@@ -19,7 +19,8 @@ import { discoverGeminiModels } from './gemini/provider.js';
 import { discoverJimengModels } from './jimeng/provider.js';
 import {
     JIMENG_BASELINE_IMAGE_MODEL,
-    JIMENG_BASELINE_VIDEO_MODEL
+    JIMENG_BASELINE_VIDEO_MODEL,
+    JIMENG_PRO_IMAGE_MODEL
 } from './jimeng/protocol.js';
 import { FLOW_BASELINE_IMAGE_MODEL, FLOW_BASELINE_VIDEO_MODEL } from './flow/protocol.js';
 
@@ -44,17 +45,19 @@ export const WEB_PROVIDER_IDS = Object.freeze(['gemini-web', 'jimeng', 'google-f
  */
 export const CANVAS_MODEL_PROTOCOL_IDS = Object.freeze({
     'jimeng-image-5-0-lite': JIMENG_BASELINE_IMAGE_MODEL,          // 图片 5.0 Lite
-    'jimeng-image-5-0-pro': 'high_aes_general_v50p_large',          // 图片 5.0 Pro
+    'jimeng-image-5-0-pro': JIMENG_PRO_IMAGE_MODEL,                 // 图片 5.0 Pro
     'jimeng-seedance-2-0-mini': JIMENG_BASELINE_VIDEO_MODEL,        // 即梦 Seedance 2.0 mini
     'jimeng-seedance-2-0': 'dreamina_seedance_40_pro_vision',       // 即梦 Seedance 2.0 VIP
     'jimeng-seedance-2-0-fast': 'dreamina_seedance_40_vision',      // 即梦 Seedance 2.0 Fast VIP
     'jimeng-seedance-2-0-standard': 'dreamina_seedance_40_pro',     // 即梦 Seedance 2.0
     'jimeng-seedance-2-0-fast-standard': 'dreamina_seedance_40',    // 即梦 Seedance 2.0 Fast
+    'google-flow-nano-banana-pro': 'GEM_PIX_2',
     'google-flow-nano-banana-2': FLOW_BASELINE_IMAGE_MODEL,
-    'google-flow-nano-banana-pro': 'GEM_PIX_2_PRO',
-    'google-flow-nano-banana-2-lite': 'GEM_PIX_2_LITE',
+    'google-flow-nano-banana-2-lite': 'HARBOR_SEAL',
     'google-flow-omni-flash': FLOW_BASELINE_VIDEO_MODEL,
-    'google-flow-veo-3-1-lite': 'veo_3_1_lite'
+    'google-flow-veo-3-1-lite': 'veo_3_1_lite',
+    'google-flow-veo-3-1-fast': 'veo_3_1_fast',
+    'google-flow-veo-3-1-quality': 'veo_3_1_quality'
 });
 
 export function resolveProtocolModelId(canvasModelId, fallback) {
@@ -83,44 +86,102 @@ const BASELINE_MODELS = [
         provider: 'gemini-web', id: 'gemini-web-image', displayName: 'Gemini Web 生图', type: 'image',
         inputModes: ['text', 'reference-image', 'multi-reference'],
         aspectRatios: ['1:1', '16:9', '9:16', '4:3', '3:4'],
-        maxReferenceImages: 12, maxBatchCount: 1
+        maxReferenceImages: 5, maxBatchCount: 1
     },
     {
         provider: 'gemini-web', id: 'gemini-web-video', displayName: 'Gemini Web 生视频', type: 'video',
         inputModes: ['text', 'image-to-video', 'reference-image'],
-        aspectRatios: ['16:9', '9:16'], durations: [8],
+        aspectRatios: ['16:9', '9:16'], durations: [10],
         maxReferenceImages: 1, maxBatchCount: 1, supportsAudio: true
     },
     {
         provider: 'jimeng', id: 'jimeng-image-5-0-lite', displayName: '图片 5.0 Lite', type: 'image',
         inputModes: ['text', 'reference-image', 'multi-reference', 'unified-edit'],
         aspectRatios: ['21:9', '16:9', '3:2', '4:3', '1:1', '3:4', '2:3', '9:16'],
-        resolutions: ['2K', '4K'], maxReferenceImages: 12, maxBatchCount: 4
+        resolutions: ['2K', '4K'], maxReferenceImages: 12, maxBatchCount: 8
     },
     {
         provider: 'jimeng', id: 'jimeng-image-5-0-pro', displayName: '图片 5.0 Pro', type: 'image',
         inputModes: ['text', 'reference-image', 'multi-reference', 'unified-edit'],
         aspectRatios: ['21:9', '16:9', '3:2', '4:3', '1:1', '3:4', '2:3', '9:16'],
-        resolutions: ['2K', '4K'], maxReferenceImages: 12, maxBatchCount: 4
+        resolutions: ['1K', '2K', '4K'], maxReferenceImages: 10, maxBatchCount: 4
     },
     {
         provider: 'jimeng', id: 'jimeng-seedance-2-0-mini', displayName: '即梦 Seedance 2.0 mini', type: 'video',
         inputModes: ['text', 'unified-edit', 'first-frame', 'last-frame', 'multi-reference'],
         aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
-        resolutions: ['720P'], durations: [4, 5, 6, 8, 10, 15],
+        resolutions: ['720P'], durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
         maxReferenceImages: 9, maxBatchCount: 4, supportsAudio: true
+    },
+    {
+        provider: 'jimeng', id: 'jimeng-seedance-2-0-fast', displayName: '即梦 Seedance 2.0 Fast VIP', type: 'video',
+        inputModes: ['text', 'reference-image', 'multi-reference', 'image-to-video', 'first-frame', 'last-frame', 'unified-edit'],
+        aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+        resolutions: ['720P'], durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        maxReferenceImages: 9
+    },
+    {
+        provider: 'jimeng', id: 'jimeng-seedance-2-0', displayName: '即梦 Seedance 2.0 VIP', type: 'video',
+        inputModes: ['text', 'reference-image', 'multi-reference', 'image-to-video', 'first-frame', 'last-frame', 'unified-edit'],
+        aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+        resolutions: ['720P', '1080P', '4K'], durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        maxReferenceImages: 9
+    },
+    {
+        provider: 'jimeng', id: 'jimeng-seedance-2-0-fast-standard', displayName: '即梦 Seedance 2.0 Fast', type: 'video',
+        inputModes: ['text', 'reference-image', 'multi-reference', 'image-to-video', 'first-frame', 'last-frame', 'unified-edit'],
+        aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+        resolutions: ['720P'], durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        maxReferenceImages: 9
+    },
+    {
+        provider: 'jimeng', id: 'jimeng-seedance-2-0-standard', displayName: '即梦 Seedance 2.0', type: 'video',
+        inputModes: ['text', 'reference-image', 'multi-reference', 'image-to-video', 'first-frame', 'last-frame', 'unified-edit'],
+        aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
+        resolutions: ['720P'], durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        maxReferenceImages: 9
+    },
+    {
+        provider: 'google-flow', id: 'google-flow-nano-banana-pro', displayName: 'Nano Banana Pro', type: 'image',
+        inputModes: ['text', 'reference-image', 'multi-reference'],
+        aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16'],
+        maxReferenceImages: 10, maxBatchCount: 4
     },
     {
         provider: 'google-flow', id: 'google-flow-nano-banana-2', displayName: 'Nano Banana 2', type: 'image',
         inputModes: ['text', 'reference-image', 'multi-reference'],
         aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16'],
-        maxReferenceImages: 3, maxBatchCount: 4
+        maxReferenceImages: 10, maxBatchCount: 4
+    },
+    {
+        provider: 'google-flow', id: 'google-flow-nano-banana-2-lite', displayName: 'Nano Banana 2 Lite', type: 'image',
+        inputModes: ['text', 'reference-image', 'multi-reference'],
+        aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16'],
+        maxReferenceImages: 10, maxBatchCount: 4
     },
     {
         provider: 'google-flow', id: 'google-flow-omni-flash', displayName: 'Omni Flash', type: 'video',
         inputModes: ['text', 'image-to-video', 'first-frame', 'multi-reference'],
         aspectRatios: ['16:9', '9:16'], durations: [4, 6, 8, 10],
+        maxReferenceImages: 7, maxBatchCount: 1, supportsAudio: true
+    },
+    {
+        provider: 'google-flow', id: 'google-flow-veo-3-1-lite', displayName: 'Veo 3.1 - Lite', type: 'video',
+        inputModes: ['text', 'image-to-video', 'first-frame', 'multi-reference'],
+        aspectRatios: ['16:9', '9:16'], durations: [8],
         maxReferenceImages: 3, maxBatchCount: 1, supportsAudio: true
+    },
+    {
+        provider: 'google-flow', id: 'google-flow-veo-3-1-fast', displayName: 'Veo 3.1 - Fast', type: 'video',
+        inputModes: ['text', 'image-to-video', 'first-frame', 'multi-reference'],
+        aspectRatios: ['16:9', '9:16'], durations: [8],
+        maxReferenceImages: 3, maxBatchCount: 1, supportsAudio: true
+    },
+    {
+        provider: 'google-flow', id: 'google-flow-veo-3-1-quality', displayName: 'Veo 3.1 - Quality', type: 'video',
+        inputModes: ['text', 'image-to-video', 'first-frame'],
+        aspectRatios: ['16:9', '9:16'], durations: [8],
+        maxReferenceImages: 1, maxBatchCount: 1, supportsAudio: true
     }
 ];
 

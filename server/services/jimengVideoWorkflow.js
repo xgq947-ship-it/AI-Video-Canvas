@@ -5,8 +5,8 @@
  *
  * 与 Google Flow 适配器的差异：
  * - 即梦是「文字为主、参考素材可选」：节点不接图也能生成（纯文生视频）。
- * - 没有首帧概念，连进来的图一律作为参考素材（最多 12 个）。
- * - 多一个分辨率维度（720P/1080P/4K）。
+ * - 连进来的图可以作为统一编辑素材（当前 2.0 模型最多 9 个）。
+ * - 分辨率按具体模型能力约束，只有 VIP 档开放 1080P/4K。
  * 两个 provider 共用同一个 Evan 专属 Chrome 串行队列。
  */
 
@@ -38,10 +38,10 @@ export function isJimengWorkflowModelId(videoModel) {
 export function resolveJimengModelLabel(videoModel) {
     return JIMENG_MODEL_LABELS[videoModel] || JIMENG_DEFAULT_MODEL;
 }
-export const JIMENG_SUPPORTED_DURATIONS = [4, 5, 6, 8, 10, 15];
+export const JIMENG_SUPPORTED_DURATIONS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 export const JIMENG_SUPPORTED_ASPECT_RATIOS = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'];
 export const JIMENG_SUPPORTED_RESOLUTIONS = ['720P', '1080P', '4K'];
-export const JIMENG_MAX_REFERENCE_IMAGES = 12;
+export const JIMENG_MAX_REFERENCE_IMAGES = 9;
 
 export function normalizeJimengResolution(input) {
     const value = String(input || '').trim().toUpperCase();
@@ -62,7 +62,7 @@ export function generateJimengWorkflowVideo(options) {
         label: '即梦视频生成',
         http: () => generateJimengVideoHttp({
             ...options,
-            // 浏览器路径按下拉文案传 model；HTTP 需要 model_req_key。
+            // HTTP 需要页面模型表里的精确 model_req_key。
             modelId: resolveProtocolModelId(options?.videoModelId, JIMENG_BASELINE_VIDEO_MODEL)
         })
         })

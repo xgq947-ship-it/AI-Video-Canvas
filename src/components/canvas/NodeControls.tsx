@@ -378,7 +378,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const workflowVideoModels = VIDEO_MODELS.filter(model => model.provider === 'workflow');
 
     const getVideoModelUnavailableReason = (model: VideoModelOption) => {
-        // 浏览器自动化模型（Flow / 即梦）需要本机 Python 运行时，未装时先于能力判断置灰。
+        // 网页 HTTP 模型需要本机 Python 连接 Chrome 登录态，未装时先于能力判断置灰。
         if (isModelUnavailable(model.id)) {
             return browserModelsHint;
         }
@@ -585,7 +585,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     useEffect(() => {
         if (data.type !== NodeType.IMAGE && data.type !== NodeType.IMAGE_EDITOR) return;
 
-        // 这里额外排掉未配置的浏览器自动化模型：availableImageModels 还要喂下拉渲染
+        // 这里额外排掉未配置的网页 HTTP 模型：availableImageModels 还要喂下拉渲染
         // （需要显示但置灰），所以不能在上面的过滤里直接去掉。
         const selectable = availableImageModels.filter(m => !isModelUnavailable(m.id));
         const isCurrentModelAvailable = selectable.some(m => m.id === data.imageModel);

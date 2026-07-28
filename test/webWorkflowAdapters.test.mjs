@@ -55,6 +55,7 @@ import {
     normalizeJimengResolution,
     resolveJimengModelLabel
 } from '../server/services/jimengVideoWorkflow.js';
+import { isBrowserWorkflowVideoModel } from '../src/utils/videoModelCapabilities.js';
 
 // ---------------------------------------------------------------------------
 // 模型识别
@@ -88,11 +89,25 @@ test('即梦五个视频模型都映射到页面上的精确文案', () => {
 test('Flow 模型映射稳定，未知 id 回落默认', () => {
     assert.equal(isGoogleFlowWorkflowModelId('google-flow-omni-flash'), true);
     assert.equal(resolveGoogleFlowModelLabel('google-flow-veo-3-1-lite'), 'Veo 3.1 - Lite');
+    assert.equal(resolveGoogleFlowModelLabel('google-flow-veo-3-1-fast'), 'Veo 3.1 - Fast');
+    assert.equal(resolveGoogleFlowModelLabel('google-flow-veo-3-1-quality'), 'Veo 3.1 - Quality');
+    assert.equal(Object.keys(GOOGLE_FLOW_WORKFLOW_MODELS).length, 4);
     assert.equal(resolveGoogleFlowModelLabel('未知'), GOOGLE_FLOW_WORKFLOW_MODELS['google-flow-omni-flash']);
 
     assert.equal(isGoogleFlowImageWorkflowModel('google-flow-nano-banana-2'), true);
     assert.equal(Object.keys(GOOGLE_FLOW_IMAGE_WORKFLOW_MODELS).length, 3);
     assert.equal(resolveGoogleFlowImageModelName('未知'), 'Nano Banana 2');
+});
+
+test('Flow 四个视频档位都属于网页 HTTP 模型', () => {
+    for (const modelId of [
+        'google-flow-omni-flash',
+        'google-flow-veo-3-1-lite',
+        'google-flow-veo-3-1-fast',
+        'google-flow-veo-3-1-quality'
+    ]) {
+        assert.equal(isBrowserWorkflowVideoModel(modelId), true, `${modelId} 未登记运行时能力`);
+    }
 });
 
 test('即梦图片只接入 5.0 Pro 与 5.0 Lite', () => {
@@ -110,7 +125,7 @@ test('各平台的比例 / 时长取值与页面一致', () => {
     assert.deepEqual([...GOOGLE_FLOW_SUPPORTED_ASPECT_RATIOS], ['16:9', '9:16']);
     assert.deepEqual([...GOOGLE_FLOW_SUPPORTED_DURATIONS], [4, 6, 8, 10]);
     assert.deepEqual([...GOOGLE_FLOW_IMAGE_SUPPORTED_ASPECT_RATIOS], ['16:9', '4:3', '1:1', '3:4', '9:16']);
-    assert.deepEqual([...JIMENG_SUPPORTED_DURATIONS], [4, 5, 6, 8, 10, 15]);
+    assert.deepEqual([...JIMENG_SUPPORTED_DURATIONS], [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
     assert.deepEqual([...JIMENG_SUPPORTED_ASPECT_RATIOS], ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16']);
     assert.deepEqual([...JIMENG_IMAGE_SUPPORTED_RESOLUTIONS], ['2K', '4K']);
     assert.equal(JIMENG_IMAGE_SUPPORTED_ASPECT_RATIOS.length, 8);
@@ -126,16 +141,23 @@ test('即梦分辨率归一化：Auto 回落 720P，非法值报错', () => {
     assert.equal(normalizeJimengImageResolution('auto'), '2K');
     assert.equal(normalizeJimengImageResolution('4k'), '4K');
     assert.throws(() => normalizeJimengImageResolution('1K'), /只支持/);
+    assert.equal(normalizeJimengImageResolution('1K', 'jimeng-image-5-0-pro'), '1K');
 });
 
-test('单次生成张数限制为 1-4，越界直接报错而不是静默截断', () => {
+test('单次生成张数按模型限制，越界直接报错而不是静默截断', () => {
     // 静默截断会让用户以为要 4 张却只拿到 1 张，还找不到原因。
     for (const count of [1, 2, 3, 4]) {
         assert.equal(normalizeJimengImageCount(count), count);
         assert.equal(normalizeGoogleFlowImageCount(count), count);
     }
+    for (const count of [5, 6, 7, 8]) {
+        assert.equal(normalizeJimengImageCount(count), count);
+    }
+    for (const bad of [0, 9, -1, 2.5]) {
+        assert.throws(() => normalizeJimengImageCount(bad), /1-8/);
+    }
     for (const bad of [0, 5, -1, 2.5]) {
-        assert.throws(() => normalizeJimengImageCount(bad), /1-4/);
+        assert.throws(() => normalizeJimengImageCount(bad, 'jimeng-image-5-0-pro'), /1-4/);
         assert.throws(() => normalizeGoogleFlowImageCount(bad), /1-4/);
     }
 });

@@ -41,7 +41,24 @@ export const JIMENG_CLIENT = Object.freeze({
 
 /** Verified sample models — the discovery baseline, never the whole list. */
 export const JIMENG_BASELINE_IMAGE_MODEL = 'high_aes_general_v50';
+export const JIMENG_PRO_IMAGE_MODEL = 'high_aes_general_v50p_large';
 export const JIMENG_BASELINE_VIDEO_MODEL = 'dreamina_seedance_40_mini';
+export const JIMENG_IMAGE_LITE_MAX_BATCH_COUNT = 8;
+export const JIMENG_IMAGE_DEFAULT_MAX_BATCH_COUNT = 4;
+
+/**
+ * 图片 5.0 Lite 的当前网页模型表开放 1-8 张，Pro 开放 1-4 张。
+ * 未识别的新模型保守按 4 张处理，等动态模型表确认后再放宽。
+ */
+export function jimengImageMaxBatchCount(model = JIMENG_BASELINE_IMAGE_MODEL) {
+    return model === JIMENG_BASELINE_IMAGE_MODEL
+        ? JIMENG_IMAGE_LITE_MAX_BATCH_COUNT
+        : JIMENG_IMAGE_DEFAULT_MAX_BATCH_COUNT;
+}
+
+export function jimengImageSupportedResolutions(model = JIMENG_BASELINE_IMAGE_MODEL) {
+    return model === JIMENG_PRO_IMAGE_MODEL ? ['1k', '2k', '4k'] : ['2k', '4k'];
+}
 
 // ---------------------------------------------------------------------------
 // Ratio and resolution tables (doc §6)
@@ -56,6 +73,11 @@ const IMAGE_SIZE_2K = Object.freeze({
     '9:16': [1440, 2560], '2:3': [1664, 2496], '3:2': [2496, 1664], '21:9': [3024, 1296]
 });
 
+const IMAGE_SIZE_1K = Object.freeze({
+    '1:1': [1024, 1024], '3:4': [768, 1024], '16:9': [1024, 576], '4:3': [1024, 768],
+    '9:16': [576, 1024], '2:3': [682, 1024], '3:2': [1024, 682], '21:9': [1195, 512]
+});
+
 const IMAGE_SIZE_4K = Object.freeze({
     '1:1': [4096, 4096], '3:4': [3520, 4693], '16:9': [5404, 3040], '4:3': [4693, 3520],
     '9:16': [3040, 5404], '2:3': [3328, 4992], '3:2': [4992, 3328], '21:9': [6197, 2656]
@@ -64,21 +86,56 @@ const IMAGE_SIZE_4K = Object.freeze({
 export const JIMENG_IMAGE_RATIOS = Object.freeze(Object.keys(JIMENG_IMAGE_RATIO));
 export const JIMENG_IMAGE_RESOLUTIONS = Object.freeze(['2k', '4k']);
 
+const JIMENG_VIDEO_DURATIONS = Object.freeze([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+const JIMENG_VIDEO_RATIOS = Object.freeze(['21:9', '16:9', '4:3', '1:1', '3:4', '9:16']);
+const JIMENG_VIDEO_720P = Object.freeze(['720P']);
+const JIMENG_VIDEO_VIP_RESOLUTIONS = Object.freeze(['720P', '1080P', '4K']);
+
+/** 当前画布已接入的五个 Seedance 2.0 协议模型能力。 */
+export const JIMENG_VIDEO_MODEL_CAPABILITIES = Object.freeze({
+    dreamina_seedance_40_mini: Object.freeze({
+        durations: JIMENG_VIDEO_DURATIONS, aspectRatios: JIMENG_VIDEO_RATIOS,
+        resolutions: JIMENG_VIDEO_720P, maxReferenceImages: 9
+    }),
+    dreamina_seedance_40_vision: Object.freeze({
+        durations: JIMENG_VIDEO_DURATIONS, aspectRatios: JIMENG_VIDEO_RATIOS,
+        resolutions: JIMENG_VIDEO_720P, maxReferenceImages: 9
+    }),
+    dreamina_seedance_40_pro_vision: Object.freeze({
+        durations: JIMENG_VIDEO_DURATIONS, aspectRatios: JIMENG_VIDEO_RATIOS,
+        resolutions: JIMENG_VIDEO_VIP_RESOLUTIONS, maxReferenceImages: 9
+    }),
+    dreamina_seedance_40: Object.freeze({
+        durations: JIMENG_VIDEO_DURATIONS, aspectRatios: JIMENG_VIDEO_RATIOS,
+        resolutions: JIMENG_VIDEO_720P, maxReferenceImages: 9
+    }),
+    dreamina_seedance_40_pro: Object.freeze({
+        durations: JIMENG_VIDEO_DURATIONS, aspectRatios: JIMENG_VIDEO_RATIOS,
+        resolutions: JIMENG_VIDEO_720P, maxReferenceImages: 9
+    })
+});
+
+export function jimengVideoCapabilities(model = JIMENG_BASELINE_VIDEO_MODEL) {
+    return JIMENG_VIDEO_MODEL_CAPABILITIES[model]
+        || JIMENG_VIDEO_MODEL_CAPABILITIES[JIMENG_BASELINE_VIDEO_MODEL];
+}
+
 export function normalizeRatio(ratio) {
     const value = String(ratio || '').trim();
     return JIMENG_IMAGE_RATIO[value] ? value : '1:1';
 }
 
-export function normalizeResolution(resolution) {
+export function normalizeResolution(resolution, model = JIMENG_BASELINE_IMAGE_MODEL) {
     const value = String(resolution || '2k').trim().toLowerCase();
-    return value === '4k' ? '4k' : '2k';
+    return jimengImageSupportedResolutions(model).includes(value) ? value : '2k';
 }
 
 /** Ratio enum + concrete pixel size. The doc is explicit: do not rely on prompt text. */
-export function resolveImageSize(ratio, resolution) {
+export function resolveImageSize(ratio, resolution, model = JIMENG_BASELINE_IMAGE_MODEL) {
     const key = normalizeRatio(ratio);
-    const type = normalizeResolution(resolution);
-    const [width, height] = (type === '4k' ? IMAGE_SIZE_4K : IMAGE_SIZE_2K)[key];
+    const type = normalizeResolution(resolution, model);
+    const sizeTable = type === '1k' ? IMAGE_SIZE_1K : type === '4k' ? IMAGE_SIZE_4K : IMAGE_SIZE_2K;
+    const [width, height] = sizeTable[key];
     return {
         image_ratio: JIMENG_IMAGE_RATIO[key],
         // large_image_info 同样是 draft 节点树的一员，必须带 type/id（实测请求如此）。
@@ -154,15 +211,15 @@ function componentMetadata() {
 }
 
 function referenceMaterial(image) {
-    const info = {
+    const info = node({
         source_from: 'upload',
         platform_type: 1,
         image_uri: image.imageUri,
         uri: image.imageUri
-    };
+    });
     if (image.width) info.width = image.width;
     if (image.height) info.height = image.height;
-    const material = { material_type: 'image', image_info: info };
+    const material = node({ material_type: 'image', image_info: info });
     // Assets that came from 即梦's own history carry an item id; optional by design.
     if (image.aigcItemId) material.aigc_image = { item_id: image.aigcItemId };
     return material;
@@ -177,7 +234,8 @@ export function buildImageDraft({
     count = 1,
     seed,
     negativePrompt = '',
-    sampleStrength = 0.5
+    sampleStrength = 0.5,
+    maxCount = jimengImageMaxBatchCount(model)
 }) {
     return draftRoot(node({
         type: 'image_base_component',
@@ -193,7 +251,7 @@ export function buildImageDraft({
                     negative_prompt: negativePrompt,
                     seed: seed ?? randomSeed(),
                     sample_strength: sampleStrength,
-                    ...resolveImageSize(ratio, resolution),
+                    ...resolveImageSize(ratio, resolution, model),
                     intelligent_ratio: false,
                     generate_type: 0
                 })
@@ -203,7 +261,7 @@ export function buildImageDraft({
             gen_option: node({
                 // The only field that actually controls output count;
                 // metrics_extra.generateCount is telemetry (doc §5.2).
-                gen_count: Math.min(4, Math.max(1, Number(count) || 1)),
+                gen_count: Math.min(maxCount, Math.max(1, Number(count) || 1)),
                 generate_all: false
             })
         })
@@ -225,56 +283,56 @@ export function buildBlendDraft({
     resolution = '2k',
     count = 1,
     seed,
-    sampleStrength = 0.5
+    sampleStrength = 0.5,
+    maxCount = jimengImageMaxBatchCount(model)
 }) {
     const uris = images.map(image => image.imageUri).filter(Boolean);
     const text = String(prompt);
     const promptWithPlaceholder = text.startsWith('##image') ? text : `##image${text}`;
 
-    return {
-        type: 'draft',
-        component_list: [{
-            type: 'image_base_component',
-            aigc_mode: 'workbench',
-            generate_type: 'blend',
-            abilities: {
-                blend: {
-                    core_param: {
-                        model,
-                        prompt: promptWithPlaceholder,
-                        sample_strength: sampleStrength,
-                        seed: seed ?? randomSeed(),
-                        ...resolveImageSize(ratio, resolution)
-                    },
-                    ability_list: [{
-                        name: 'byte_edit',
-                        image_uri_list: uris,
-                        image_list: images.map(image => ({
-                            source_from: 'upload',
-                            platform_type: 1,
-                            image_uri: image.imageUri,
-                            uri: image.imageUri
+    return draftRoot(node({
+        type: 'image_base_component',
+        min_version: DRAFT_MIN_VERSION,
+        aigc_mode: 'workbench',
+        metadata: componentMetadata(),
+        generate_type: 'blend',
+        abilities: node({
+            blend: node({
+                core_param: node({
+                    model,
+                    prompt: promptWithPlaceholder,
+                    sample_strength: sampleStrength,
+                    seed: seed ?? randomSeed(),
+                    ...resolveImageSize(ratio, resolution, model)
+                }),
+                ability_list: [node({
+                    name: 'byte_edit',
+                    image_uri_list: uris,
+                    image_list: images.map(image => node({
+                        source_from: 'upload',
+                        platform_type: 1,
+                        image_uri: image.imageUri,
+                        uri: image.imageUri
+                    })),
+                    strength: sampleStrength
+                })],
+                unified_edit_input: node({
+                    material_list: images.map(referenceMaterial),
+                    meta_list: [
+                        ...images.map((unused, index) => node({
+                            meta_type: 'image',
+                            material_ref: node({ material_idx: index })
                         })),
-                        strength: sampleStrength
-                    }],
-                    unified_edit_input: {
-                        material_list: images.map(referenceMaterial),
-                        meta_list: [
-                            ...images.map((unused, index) => ({
-                                meta_type: 'image',
-                                material_ref: { material_idx: index }
-                            })),
-                            { meta_type: 'text', text }
-                        ]
-                    },
-                    gen_option: {
-                        gen_count: Math.min(4, Math.max(1, Number(count) || 1)),
-                        generate_all: false
-                    }
-                }
-            }
-        }]
-    };
+                        node({ meta_type: 'text', text })
+                    ]
+                })
+            }),
+            gen_option: node({
+                gen_count: Math.min(maxCount, Math.max(1, Number(count) || 1)),
+                generate_all: false
+            })
+        })
+    }));
 }
 
 export const JIMENG_VIDEO_INPUT_MODES = Object.freeze(['unified_edit', 'prompt', 'first_frame', 'end_frame']);
@@ -330,28 +388,27 @@ export function buildVideoDraft({
         input.end_frame_image = { image_uri: endFrame.imageUri, uri: endFrame.imageUri };
     }
 
-    return {
-        type: 'draft',
-        component_list: [{
-            type: 'video_base_component',
-            aigc_mode: 'workbench',
-            generate_type: 'gen_video',
-            abilities: {
-                gen_video: {
-                    text_to_video_params: {
-                        video_gen_inputs: Array.from(
-                            { length: Math.min(4, Math.max(1, Number(batchCount) || 1)) },
-                            () => ({ ...input })
-                        ),
-                        video_aspect_ratio: String(ratio),
-                        seed: seed ?? randomSeed(),
-                        model_req_key: model,
-                        priority: 0
-                    }
-                }
-            }
-        }]
-    };
+    return draftRoot(node({
+        type: 'video_base_component',
+        min_version: DRAFT_MIN_VERSION,
+        aigc_mode: 'workbench',
+        metadata: componentMetadata(),
+        generate_type: 'gen_video',
+        abilities: node({
+            gen_video: node({
+                text_to_video_params: node({
+                    video_gen_inputs: Array.from(
+                        { length: Math.min(4, Math.max(1, Number(batchCount) || 1)) },
+                        () => node({ ...input })
+                    ),
+                    video_aspect_ratio: String(ratio),
+                    seed: seed ?? randomSeed(),
+                    model_req_key: model,
+                    priority: 0
+                })
+            })
+        })
+    }));
 }
 
 /**

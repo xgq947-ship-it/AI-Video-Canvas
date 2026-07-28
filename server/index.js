@@ -1210,7 +1210,7 @@ app.delete('/api/workflows/:id', async (req, res) => {
 app.get('/api/capabilities', (req, res) => {
     const chrome = browserRuntimeStatus();
     res.json({
-        // Google Flow / 即梦 依赖 server/python 下的浏览器自动化运行时，
+        // 网页 HTTP 模型仍依赖 server/python 连接 Evan 专属 Chrome 取得登录态与签名；
         // 未安装时这些模型不可用，但其余官方 API 模型照常工作。
         browserModels: {
             ready: chrome.ready,
@@ -1219,6 +1219,8 @@ app.get('/api/capabilities', (req, res) => {
             models: [
                 'google-flow-omni-flash',
                 'google-flow-veo-3-1-lite',
+                'google-flow-veo-3-1-fast',
+                'google-flow-veo-3-1-quality',
                 'google-flow-nano-banana-pro',
                 'google-flow-nano-banana-2',
                 'google-flow-nano-banana-2-lite',

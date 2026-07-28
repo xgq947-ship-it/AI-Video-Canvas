@@ -14,10 +14,12 @@ import {
     GEMINI_MODE,
     applyAspectRatio,
     buildAttachments,
+    buildBatchRpcRequest,
     buildConversationTuple,
     buildStreamBody,
     buildStreamPayload,
     buildStreamUrl,
+    buildVideoPollArgs,
     detectRefusal,
     extractConversation,
     extractGeminiBootstrap,
@@ -37,6 +39,7 @@ import {
     extractJimengModels,
     isJimengImageCompleted,
     isJimengVideoCompleted,
+    jimengVideoCapabilities,
     jimengBusinessError,
     parseJimengImageResults,
     parseJimengVideoResults,
@@ -50,11 +53,13 @@ import {
     buildGenerateImagesRequest,
     buildGenerateVideoRequest,
     buildFlowMediaUrl,
+    buildProjectMediaRequest,
     extractFlowModels,
     isFlowVideoCompleted,
     parseGenerateImagesResponse,
     parseGenerateVideoResponse,
     parseUploadImageResponse,
+    resolveFlowVideoVariant,
     toFlowImageAspectRatio
 } from '../server/services/webhttp/flow/protocol.js';
 
@@ -107,23 +112,26 @@ test('多图附件与单图共用同一结构', () => {
     assert.equal(buildAttachments([]), null);
 });
 
-test('图片 / 视频 / 文本请求结构一致，不得注入生成模式字段', () => {
-    // 实测（2026-07-28，真实账号）：把 14 / 11 / 17 按任何位置塞进 payload，
-    // StreamGenerate 一律 400；不塞则 200，且模型正确按生图请求响应。
-    // 所以三种请求的 payload 必须完全同构 —— 生成什么由 prompt 决定。
+test('Gemini 图片走对话意图，视频使用当前 97 项 mode/capability 信封', () => {
+    // 图片实测不再接受旧 mode=14；视频当前抓包要求 message marker、
+    // index 49 的 mode=11 与 index 55 的 capability=16。
     const text = buildStreamPayload({ prompt: 'p', mode: null });
     const image = buildStreamPayload({ prompt: 'p', mode: GEMINI_MODE.image });
     const video = buildStreamPayload({ prompt: 'p', mode: GEMINI_MODE.video });
 
     assert.equal(text.length, 3);
     assert.deepEqual(image, text);
-    assert.deepEqual(video, text);
+    assert.equal(video.length, 97);
+    assert.deepEqual(video[0].at(-1), GEMINI_MODE.videoMessage);
+    assert.equal(video[49], GEMINI_MODE.video);
+    assert.deepEqual(video[54], []);
+    assert.deepEqual(video[55], [[GEMINI_MODE.videoCapability]]);
+    assert.match(video[4], /^[0-9a-f]{32}$/);
+    assert.match(video[59], /^[0-9A-F-]{36}$/);
 
-    // 回归防线：这些数值绝不能重新出现在请求体里。
+    // mode=14 仍不能回到图片请求。
     const serialized = JSON.stringify(image);
-    for (const value of [GEMINI_MODE.image, GEMINI_MODE.video, GEMINI_MODE.videoCapability]) {
-        assert.equal(serialized.includes(String(value)), false, `payload 不应包含模式值 ${value}`);
-    }
+    assert.equal(serialized.includes(String(GEMINI_MODE.image)), false);
 });
 
 test('Gemini 用自然语言拒绝时被识别为额度 / 策略问题', () => {
@@ -149,6 +157,22 @@ test('f.req 与 URL 按协议拼装，且不硬编码 _reqid', () => {
     assert.equal(url.searchParams.get('f.sid'), 'sid1');
     assert.equal(url.searchParams.get('_reqid'), '424242');
     assert.equal(url.searchParams.get('rt'), 'c');
+});
+
+test('Gemini 异步视频轮询使用当前 hNvQHb conversation 信封', () => {
+    const request = buildBatchRpcRequest({
+        bl: 'build', fSid: 'sid', reqId: 123, at: 'token',
+        rpcId: 'hNvQHb', args: buildVideoPollArgs('c_abc'), sourcePath: '/app/abc'
+    });
+    const url = new URL(request.url);
+    assert.equal(url.searchParams.get('rpcids'), 'hNvQHb');
+    assert.equal(url.searchParams.get('source-path'), '/app/abc');
+    const body = new URLSearchParams(request.body);
+    assert.equal(body.get('at'), 'token');
+    assert.deepEqual(
+        JSON.parse(body.get('f.req')),
+        [[['hNvQHb', '["c_abc",10,null,1,[0],[4],null,1]', null, 'generic']]]
+    );
 });
 
 /** Synthetic batchexecute frame in the real wire shape. */
@@ -203,6 +227,20 @@ test('图片/视频结果按 mimeType 与文件名识别，位置变化不影响
     assert.equal(videos[0].fileName, 'video.mp4');
 });
 
+test('Gemini 视频结果去掉 protobuf 旁路、URL 去重，并把末位数字当真实字节数', () => {
+    const videoUrl = 'https://lh3.googleusercontent.com/gg-dl/live?filename=video.mp4';
+    const protobufUrl = 'https://lh3.googleusercontent.com/gg-dl/live?filename=result.pb';
+    const payloads = [[
+        ['video.mp4', videoUrl, protobufUrl, 'video/mp4', 1280, 720, 1_785_214_707, 2_663_169],
+        ['duplicate wrapper', ['video.mp4', videoUrl, protobufUrl, 'video/mp4', 1280, 720, 1_785_214_707, 2_663_169]]
+    ]];
+    const { videos } = extractGeneratedMedia(payloads);
+    assert.equal(videos.length, 1);
+    assert.equal(videos[0].url, videoUrl);
+    assert.deepEqual(videos[0].downloadUrls, [videoUrl]);
+    assert.equal(videos[0].sizeBytes, 2_663_169);
+});
+
 test('结果解析忽略非媒体域名的链接', () => {
     const payloads = [[[['thing.png', 'https://example.com/thing.png', 'image/png']]]];
     assert.deepEqual(extractGeneratedMedia(payloads), { images: [], videos: [] });
@@ -250,11 +288,16 @@ test('比例枚举与 2K/4K 尺寸表按协议文档取值', () => {
     assert.equal(uhd.large_image_info.width, 6197);
     assert.equal(uhd.large_image_info.height, 2656);
 
+    const proSd = resolveImageSize('16:9', '1k', 'high_aes_general_v50p_large');
+    assert.equal(proSd.large_image_info.width, 1024);
+    assert.equal(proSd.large_image_info.height, 576);
+    assert.equal(proSd.large_image_info.resolution_type, '1k');
+
     // 未知比例回落到 1:1 而不是抛错，保证旧画布还能打开。
     assert.equal(resolveImageSize('7:5', '2k').image_ratio, 1);
 });
 
-test('图片张数由 gen_count 控制，且 gen_option 是 abilities 的兄弟节点', () => {
+test('图片张数由 gen_count 控制，Lite 上限 8、Pro 上限 4', () => {
     const draft = buildImageDraft({ prompt: 'p', count: 3 });
     const abilities = draft.component_list[0].abilities;
 
@@ -264,8 +307,11 @@ test('图片张数由 gen_count 控制，且 gen_option 是 abilities 的兄弟�
     assert.equal(abilities.generate.gen_option, undefined, 'gen_option 不能嵌在 generate 里');
     assert.ok(abilities.generate.core_param, 'core_param 仍在 generate 内');
 
-    // 上限 4，越界收敛而不是发出去被服务端拒绝。
+    // 当前真实模型表：免费 Lite 开放 1-8 张。
     assert.equal(buildImageDraft({ prompt: 'p', count: 9 })
+        .component_list[0].abilities.gen_option.gen_count, 8);
+    // Pro 的真实选项仍是 1-4 张。
+    assert.equal(buildImageDraft({ prompt: 'p', model: 'high_aes_general_v50p_large', count: 8 })
         .component_list[0].abilities.gen_option.gen_count, 4);
 });
 
@@ -293,6 +339,10 @@ test('参考图 URI 同时写入三处，并自动补 ##image 前缀', () => {
         images: [{ imageUri: 'tos-cn-i-tb4s082cfz/abc' }]
     });
     const blend = draft.component_list[0].abilities.blend;
+    assert.equal(draft.min_version, '3.0.2');
+    assert.equal(draft.main_component_id, draft.component_list[0].id);
+    assert.equal(typeof blend.id, 'string');
+    assert.equal(typeof blend.core_param.id, 'string');
     assert.equal(draft.component_list[0].generate_type, 'blend');
     assert.equal(blend.core_param.prompt, '##image换成黑色');
     assert.deepEqual(blend.ability_list[0].image_uri_list, ['tos-cn-i-tb4s082cfz/abc']);
@@ -309,7 +359,10 @@ test('已经带 ##image 的提示词不会被重复加前缀', () => {
 
 test('纯文生视频移除 unified_edit_input，带素材时才写入', () => {
     const textOnly = buildVideoDraft({ prompt: '白猫奔跑', durationSec: 5 });
+    assert.equal(textOnly.min_version, '3.0.2');
+    assert.equal(textOnly.main_component_id, textOnly.component_list[0].id);
     const textInput = textOnly.component_list[0].abilities.gen_video.text_to_video_params.video_gen_inputs[0];
+    assert.equal(typeof textInput.id, 'string');
     assert.equal(textInput.unified_edit_input, undefined);
     assert.equal(textInput.duration_ms, 5000);
     assert.equal(textInput.fps, 24);
@@ -317,6 +370,20 @@ test('纯文生视频移除 unified_edit_input，带素材时才写入', () => {
     const withImage = buildVideoDraft({ prompt: 'p', images: [{ imageUri: 'tos/x' }] });
     const materialInput = withImage.component_list[0].abilities.gen_video.text_to_video_params.video_gen_inputs[0];
     assert.equal(materialInput.unified_edit_input.material_list[0].image_info.image_uri, 'tos/x');
+});
+
+test('即梦五个 2.0 模型按真实表约束时长、分辨率和参考图', () => {
+    const vip = jimengVideoCapabilities('dreamina_seedance_40_pro_vision');
+    assert.deepEqual(vip.resolutions, ['720P', '1080P', '4K']);
+    assert.deepEqual(vip.durations, [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+    assert.equal(vip.maxReferenceImages, 9);
+
+    for (const model of [
+        'dreamina_seedance_40_mini', 'dreamina_seedance_40_vision',
+        'dreamina_seedance_40', 'dreamina_seedance_40_pro'
+    ]) {
+        assert.deepEqual(jimengVideoCapabilities(model).resolutions, ['720P']);
+    }
 });
 
 test('首帧 / 尾帧模式各自写入对应字段', () => {
@@ -406,6 +473,12 @@ test('生成请求必须带 babi_param 权益描述符与 webId', () => {
     assert.equal(babi.scenario, 'image_video_generation');
     assert.equal(babi.feature_entrance_detail, 'to-generate-high_aes_general_v50');
     assert.equal(babi.extra_param.model_id, 'high_aes_general_v50');
+
+    const blendUrl = new URL(buildGenerateUrl({
+        model: 'high_aes_general_v50', webId: '76667375525102566', generateType: 12
+    }));
+    const blendBabi = JSON.parse(decodeURIComponent(blendUrl.searchParams.get('babi_param')));
+    assert.equal(blendBabi.extra_param.generate_type, '12');
 
     // generate_id 每次都要变，不能是固定值。
     const again = new URL(buildGenerateUrl({ model: 'high_aes_general_v50' }));
@@ -510,6 +583,12 @@ test('SigV4 签名确定性且带上临时 STS token', () => {
     assert.equal(headers['x-amz-date'], '20260727T100000Z');
     assert.equal(headers['x-amz-security-token'], 'STS-TOKEN');
     assert.match(headers.authorization, /^AWS4-HMAC-SHA256 Credential=AKIDTEST\/20260727\/cn-north-1\/imagex\/aws4_request/);
+    // 回归线上 SignatureDoesNotMatch：canonicalHeaders 和 SignedHeaders 都必须
+    // 以 host 开头，不能一边把 host 放末尾、一边声明它排在最前。
+    assert.equal(headers.authorization,
+        'AWS4-HMAC-SHA256 Credential=AKIDTEST/20260727/cn-north-1/imagex/aws4_request, '
+        + 'SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, '
+        + 'Signature=0fc3d94bc4891c4fafddd6107436fff1f257fd8b5df635bd5d0bce9d7894cb25');
 
     const again = signImageXRequest({
         method: 'GET',
@@ -568,24 +647,97 @@ test('Flow 文生图请求带 recaptcha / projectId，参考图走 mediaId', () 
     assert.equal(body.requests.length, 2, '每张图一个 request');
     assert.equal(body.requests[0].imageAspectRatio, 'IMAGE_ASPECT_RATIO_PORTRAIT');
     assert.deepEqual(body.requests[0].imageInputs, [
-        { imageInputType: 'IMAGE_INPUT_TYPE_REFERENCE', mediaId: 'media-a' }
+        { imageInputType: 'IMAGE_INPUT_TYPE_REFERENCE', name: 'media-a' }
     ]);
     // 同一批次内 seed 必须不同，否则多张结果会一模一样。
     assert.notEqual(body.requests[0].seed, body.requests[1].seed);
 });
 
-test('Flow 图生视频在带首帧时才注入图片字段', () => {
+test('Flow 视频按文本 / 首帧 / 多参考图切换真实 endpoint 与模型 key', () => {
     const auth = { accessToken: 't', projectId: 'p', sessionId: ';1', recaptchaToken: 'r' };
-    const textOnly = JSON.parse(buildGenerateVideoRequest({ auth, prompt: 'p', batchId: 'b' }).body);
-    assert.equal(textOnly.requests[0].imageInput, undefined);
-    assert.equal(textOnly.requests[0].baseImageMediaGenerationId, undefined);
+    const textSpec = buildGenerateVideoRequest({
+        auth, prompt: 'p', batchId: 'b', modelFamily: 'abra', duration: 4
+    });
+    const textOnly = JSON.parse(textSpec.body);
+    assert.match(textSpec.url, /video:batchAsyncGenerateVideoText$/);
+    assert.equal(textOnly.requests[0].videoModelKey, 'abra_t2v_4s');
+    assert.equal(textOnly.requests[0].startImage, undefined);
 
-    const imageToVideo = JSON.parse(buildGenerateVideoRequest({
-        auth, prompt: 'p', batchId: 'b', firstFrameMediaId: 'media-1'
-    }).body);
-    assert.equal(imageToVideo.requests[0].imageInput.mediaId, 'media-1');
-    assert.equal(imageToVideo.requests[0].baseImageMediaGenerationId, 'media-1');
-    assert.equal(imageToVideo.requests[0].videoGenerationMode, 'VIDEO_GENERATION_MODE_IMAGE_TO_VIDEO');
+    const startSpec = buildGenerateVideoRequest({
+        auth, prompt: 'p', batchId: 'b', modelFamily: 'abra', duration: 6,
+        firstFrameMediaId: 'media-1'
+    });
+    const imageToVideo = JSON.parse(startSpec.body);
+    assert.match(startSpec.url, /video:batchAsyncGenerateVideoStartImage$/);
+    assert.equal(imageToVideo.requests[0].videoModelKey, 'abra_i2v_6s');
+    assert.deepEqual(imageToVideo.requests[0].startImage, { mediaId: 'media-1' });
+
+    const referencesSpec = buildGenerateVideoRequest({
+        auth, prompt: 'p', batchId: 'b', modelFamily: 'veo_3_1_lite', duration: 8,
+        referenceMediaIds: ['media-a', 'media-b']
+    });
+    const references = JSON.parse(referencesSpec.body);
+    assert.match(referencesSpec.url, /video:batchAsyncGenerateVideoReferenceImages$/);
+    assert.equal(references.requests[0].videoModelKey, 'veo_3_1_r2v_lite');
+    assert.deepEqual(references.requests[0].referenceImages, [
+        { mediaId: 'media-a', imageUsageType: 'IMAGE_USAGE_TYPE_ASSET' },
+        { mediaId: 'media-b', imageUsageType: 'IMAGE_USAGE_TYPE_ASSET' }
+    ]);
+
+    assert.throws(() => buildGenerateVideoRequest({
+        auth, prompt: 'p', batchId: 'b', firstFrameMediaId: 'media-1', referenceMediaIds: ['media-a']
+    }), /不能在同一请求中混用/);
+});
+
+test('Flow 三个 Veo 3.1 档位使用页面抓到的精确模式 key', () => {
+    assert.deepEqual(resolveFlowVideoVariant({
+        modelFamily: 'veo_3_1_lite', mode: 'text', duration: 8
+    }), {
+        modelKey: 'veo_3_1_t2v_lite',
+        apiPathname: 'batchAsyncGenerateVideoText',
+        duration: 8
+    });
+    assert.equal(resolveFlowVideoVariant({
+        modelFamily: 'veo_3_1_lite', mode: 'start-image', duration: 8
+    }).modelKey, 'veo_3_1_i2v_lite');
+    assert.throws(() => resolveFlowVideoVariant({
+        modelFamily: 'veo_3_1_lite', mode: 'text', duration: 4
+    }), /支持 8 秒/);
+
+    assert.equal(resolveFlowVideoVariant({
+        modelFamily: 'veo_3_1_fast', mode: 'text', duration: 8
+    }).modelKey, 'veo_3_1_t2v_fast');
+    assert.equal(resolveFlowVideoVariant({
+        modelFamily: 'veo_3_1_fast', mode: 'start-image', duration: 8
+    }).modelKey, 'veo_3_1_i2v_s_fast');
+    assert.equal(resolveFlowVideoVariant({
+        modelFamily: 'veo_3_1_fast', mode: 'reference-images', duration: 8, aspectRatio: '16:9'
+    }).modelKey, 'veo_3_1_r2v_fast_landscape');
+    assert.equal(resolveFlowVideoVariant({
+        modelFamily: 'veo_3_1_fast', mode: 'reference-images', duration: 8, aspectRatio: '9:16'
+    }).modelKey, 'veo_3_1_r2v_fast_portrait');
+
+    assert.equal(resolveFlowVideoVariant({
+        modelFamily: 'veo_3_1_quality', mode: 'text', duration: 8
+    }).modelKey, 'veo_3_1_t2v');
+    assert.equal(resolveFlowVideoVariant({
+        modelFamily: 'veo_3_1_quality', mode: 'start-image', duration: 8
+    }).modelKey, 'veo_3_1_i2v_s');
+    assert.throws(() => resolveFlowVideoVariant({
+        modelFamily: 'veo_3_1_quality', mode: 'reference-images', duration: 8
+    }), /不支持 Ingredients/);
+});
+
+test('Flow 视频轮询走项目页面真实 projectInitialData，避开 fetchMedia CORS', () => {
+    const spec = buildProjectMediaRequest({
+        auth: { projectId: 'project-1', labsCookie: 'session=cookie' }, mediaIds: ['m1', 'm2']
+    });
+    assert.match(spec.url, /\/fx\/api\/trpc\/flow\.projectInitialData\?input=/);
+    const input = JSON.parse(decodeURIComponent(new URL(spec.url).searchParams.get('input')));
+    assert.deepEqual(input, { json: { projectId: 'project-1' } });
+    assert.equal(spec.method, 'GET');
+    assert.equal(spec.headers.cookie, 'session=cookie');
+    assert.deepEqual(spec.mediaIds, ['m1', 'm2']);
 });
 
 test('Flow 图片结果取 fifeUrl，视频结果按成功状态判定', () => {
@@ -619,6 +771,8 @@ test('Flow 媒体地址按 mediaId 拼装并做 URL 编码', () => {
         'https://labs.google/fx/api/trpc/media.getMediaUrlRedirect?name=a%20b%2Fc'
     );
     assert.equal(toFlowImageAspectRatio('未知'), 'IMAGE_ASPECT_RATIO_UNSPECIFIED');
+    assert.equal(toFlowImageAspectRatio('4:3'), 'IMAGE_ASPECT_RATIO_LANDSCAPE_FOUR_THREE');
+    assert.equal(toFlowImageAspectRatio('3:4'), 'IMAGE_ASPECT_RATIO_PORTRAIT_THREE_FOUR');
 });
 
 test('Flow 模型发现能认出新的 videoModelKey', () => {
@@ -627,6 +781,21 @@ test('Flow 模型发现能认出新的 videoModelKey', () => {
     assert.equal(model.displayName, 'Abra 8s');
     assert.deepEqual(model.durations, [8], '时长可从 key 推出');
     assert.equal(model.supportsImageToVideo, true);
+});
+
+test('Flow 模型健康接口按已审协议族补齐真实 capability', () => {
+    const { videos } = extractFlowModels({
+        modelStatus: [
+            { modelKey: 'abra', status: 'MODEL_HEALTH_STATUS_HEALTHY' },
+            { modelKey: 'veo_3_1_fast', status: 'MODEL_HEALTH_STATUS_HEALTHY' },
+            { modelKey: 'veo_3_1_quality', status: 'MODEL_HEALTH_STATUS_UNAVAILABLE' }
+        ]
+    });
+    assert.deepEqual(videos.map(item => item.id).sort(), ['abra', 'veo_3_1_fast']);
+    const fast = videos.find(item => item.id === 'veo_3_1_fast');
+    assert.equal(fast.displayName, 'Veo 3.1 - Fast');
+    assert.equal(fast.maxReferenceImages, 3);
+    assert.equal(fast.supportsAudio, true);
 });
 
 // ---------------------------------------------------------------------------
@@ -667,6 +836,29 @@ test('提交前失败会重试，重试用尽后如实抛出（不再回退浏�
         error => error.code === 'AUTH_EXPIRED'
     );
     assert.equal(httpCalls, 2, 'HTTP 重试上限 2 次');
+});
+
+test('额度拒绝可标记为未扣费但不可重试，避免重复撞平台风控', async () => {
+    let calls = 0;
+    await assert.rejects(
+        runWithExecutionMode({
+            mode: 'http', provider: 'gemini-web', label: '额度测试',
+            http: () => {
+                calls += 1;
+                throw new WebProviderError('额度待重置', {
+                    provider: 'gemini-web', code: 'QUOTA_EXHAUSTED',
+                    submitted: false, retryable: false,
+                    details: { conversationId: 'c_safe' }
+                });
+            }
+        }),
+        error => error.code === 'QUOTA_EXHAUSTED'
+            && error.submitted === false
+            && error.retryable === false
+            && error.canFallbackToBrowser === false
+            && error.details.conversationId === 'c_safe'
+    );
+    assert.equal(calls, 1);
 });
 
 test('http 模式同样只走 HTTP', async () => {
@@ -796,10 +988,17 @@ test('日志脱敏覆盖三个平台的凭证形态', () => {
 
 test('旧画布模型 id 能映射到协议模型，未知 id 回落基线而不是崩溃', () => {
     assert.equal(resolveProtocolModelId('jimeng-image-5-0-lite', 'fallback'), 'high_aes_general_v50');
-    assert.equal(resolveProtocolModelId('google-flow-nano-banana-2', 'fallback'), 'GEM_PIX_2');
+    assert.equal(resolveProtocolModelId('google-flow-nano-banana-pro', 'fallback'), 'GEM_PIX_2');
+    assert.equal(resolveProtocolModelId('google-flow-nano-banana-2', 'fallback'), 'NARWHAL');
+    assert.equal(resolveProtocolModelId('google-flow-nano-banana-2-lite', 'fallback'), 'HARBOR_SEAL');
+    assert.equal(resolveProtocolModelId('google-flow-veo-3-1-fast', 'fallback'), 'veo_3_1_fast');
+    assert.equal(resolveProtocolModelId('google-flow-veo-3-1-quality', 'fallback'), 'veo_3_1_quality');
     assert.equal(resolveProtocolModelId('某个未来才有的模型', 'fallback'), 'fallback');
     // 映射表必须覆盖当前画布里所有即梦 / Flow 模型 id。
-    for (const id of ['jimeng-seedance-2-0', 'jimeng-seedance-2-0-fast', 'google-flow-veo-3-1-lite']) {
+    for (const id of [
+        'jimeng-seedance-2-0', 'jimeng-seedance-2-0-fast',
+        'google-flow-veo-3-1-lite', 'google-flow-veo-3-1-fast', 'google-flow-veo-3-1-quality'
+    ]) {
         assert.ok(CANVAS_MODEL_PROTOCOL_IDS[id], `缺少 ${id} 的协议映射`);
     }
 });

@@ -67,7 +67,7 @@ export const useNodeManagement = () => {
             newNode.productSceneAutoGenerateVideo = false;
             newNode.productSceneVideoModel = 'gemini-web-video';
             newNode.productSceneVideoAspectRatio = '9:16';
-            newNode.productSceneVideoDuration = 8;
+            newNode.productSceneVideoDuration = 10;
             newNode.productSceneVideoGenerateAudio = true;
         }
 
@@ -184,7 +184,7 @@ export const useNodeManagement = () => {
                     newNode.productSceneAutoGenerateVideo = false;
                     newNode.productSceneVideoModel = 'gemini-web-video';
                     newNode.productSceneVideoAspectRatio = '9:16';
-                    newNode.productSceneVideoDuration = 8;
+                    newNode.productSceneVideoDuration = 10;
                     newNode.productSceneVideoGenerateAudio = true;
                 }
 

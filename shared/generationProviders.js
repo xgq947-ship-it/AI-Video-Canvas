@@ -30,26 +30,26 @@ export const IMAGE_GENERATION_PROVIDERS = Object.freeze([
     browserProvider: 'google-flow',
     supportsImageToImage: true,
     supportsMultipleReferenceImages: true,
-    maxReferenceImages: 12,
+    maxReferenceImages: 10,
     supportsMultipleOutputs: true,
     maxOutputCount: 4,
     resolutions: ['自动'],
     supportedAspectRatios: ['1:1', '16:9', '4:3', '3:4', '9:16'],
   })),
   ...[
-    ['jimeng-image-5-0-pro', '即梦 · 图片 5.0 Pro'],
-    ['jimeng-image-5-0-lite', '即梦 · 图片 5.0 Lite'],
-  ].map(([id, name]) => ({
+    ['jimeng-image-5-0-pro', '即梦 · 图片 5.0 Pro', 4, 10, ['1K', '2K', '4K']],
+    ['jimeng-image-5-0-lite', '即梦 · 图片 5.0 Lite', 8, 12, ['2K', '4K']],
+  ].map(([id, name, maxOutputCount, maxReferenceImages, resolutions]) => ({
     id,
     name,
     provider: 'workflow',
     browserProvider: 'jimeng',
     supportsImageToImage: true,
     supportsMultipleReferenceImages: true,
-    maxReferenceImages: 12,
+    maxReferenceImages,
     supportsMultipleOutputs: true,
-    maxOutputCount: 4,
-    resolutions: ['2K', '4K'],
+    maxOutputCount,
+    resolutions,
     supportedAspectRatios: ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '21:9'],
   })),
   {
@@ -71,27 +71,39 @@ export const IMAGE_GENERATION_PROVIDERS = Object.freeze([
 export const VIDEO_GENERATION_PROVIDERS = Object.freeze([
   {
     id: 'google-flow-omni-flash', name: 'Google Flow · Omni Flash', provider: 'workflow', browserProvider: 'google-flow',
-    supportsTextToVideo: false, supportsImageToVideo: true, supportsMultipleReferenceImages: true,
-    maxReferenceImages: 4, supportsNativeAudio: false, supportsExtend: false,
+    supportsTextToVideo: true, supportsImageToVideo: true, supportsMultipleReferenceImages: true,
+    maxReferenceImages: 7, supportsNativeAudio: true, supportsExtend: false,
     supportedDurations: [4, 6, 8, 10], resolutions: ['自动'], supportedAspectRatios: ['16:9', '9:16'],
   },
   {
     id: 'google-flow-veo-3-1-lite', name: 'Google Flow · Veo 3.1 - Lite', provider: 'workflow', browserProvider: 'google-flow',
-    supportsTextToVideo: false, supportsImageToVideo: true, supportsMultipleReferenceImages: true,
-    maxReferenceImages: 4, supportsNativeAudio: false, supportsExtend: false,
-    supportedDurations: [], resolutions: ['自动'], supportedAspectRatios: ['16:9', '9:16'],
+    supportsTextToVideo: true, supportsImageToVideo: true, supportsMultipleReferenceImages: true,
+    maxReferenceImages: 3, supportsNativeAudio: true, supportsExtend: false,
+    supportedDurations: [8], resolutions: ['自动'], supportedAspectRatios: ['16:9', '9:16'],
+  },
+  {
+    id: 'google-flow-veo-3-1-fast', name: 'Google Flow · Veo 3.1 - Fast', provider: 'workflow', browserProvider: 'google-flow',
+    supportsTextToVideo: true, supportsImageToVideo: true, supportsMultipleReferenceImages: true,
+    maxReferenceImages: 3, supportsNativeAudio: true, supportsExtend: false,
+    supportedDurations: [8], resolutions: ['自动'], supportedAspectRatios: ['16:9', '9:16'],
+  },
+  {
+    id: 'google-flow-veo-3-1-quality', name: 'Google Flow · Veo 3.1 - Quality', provider: 'workflow', browserProvider: 'google-flow',
+    supportsTextToVideo: true, supportsImageToVideo: true, supportsMultipleReferenceImages: false,
+    maxReferenceImages: 1, supportsNativeAudio: true, supportsExtend: false,
+    supportedDurations: [8], resolutions: ['自动'], supportedAspectRatios: ['16:9', '9:16'],
   },
   ...[
-    ['jimeng-seedance-2-0-mini', '即梦 · Seedance 2.0 mini'],
-    ['jimeng-seedance-2-0-fast', '即梦 · Seedance 2.0 Fast VIP'],
-    ['jimeng-seedance-2-0', '即梦 · Seedance 2.0 VIP'],
-    ['jimeng-seedance-2-0-fast-standard', '即梦 · Seedance 2.0 Fast'],
-    ['jimeng-seedance-2-0-standard', '即梦 · Seedance 2.0'],
-  ].map(([id, name]) => ({
+    ['jimeng-seedance-2-0-mini', '即梦 · Seedance 2.0 mini', ['720P']],
+    ['jimeng-seedance-2-0-fast', '即梦 · Seedance 2.0 Fast VIP', ['720P']],
+    ['jimeng-seedance-2-0', '即梦 · Seedance 2.0 VIP', ['720P', '1080P', '4K']],
+    ['jimeng-seedance-2-0-fast-standard', '即梦 · Seedance 2.0 Fast', ['720P']],
+    ['jimeng-seedance-2-0-standard', '即梦 · Seedance 2.0', ['720P']],
+  ].map(([id, name, resolutions]) => ({
     id, name, provider: 'workflow', browserProvider: 'jimeng',
     supportsTextToVideo: true, supportsImageToVideo: true, supportsMultipleReferenceImages: true,
-    maxReferenceImages: 12, supportsNativeAudio: false, supportsExtend: false,
-    supportedDurations: [4, 5, 6, 8, 10, 15], resolutions: ['720P', '1080P', '4K'],
+    maxReferenceImages: 9, supportsNativeAudio: false, supportsExtend: false,
+    supportedDurations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], resolutions,
     supportedAspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
   })),
   {
@@ -103,11 +115,11 @@ export const VIDEO_GENERATION_PROVIDERS = Object.freeze([
   },
   {
     id: 'gemini-web-video', name: 'Gemini Web · 视频', provider: 'workflow', browserProvider: 'gemini-web',
-    supportsTextToVideo: true, supportsImageToVideo: true, supportsMultipleReferenceImages: true,
-    // 官方当前支持最多 5 张；产品工作流按需求保守使用 1~3 张。
-    maxReferenceImages: 3, supportsNativeAudio: true, supportsExtend: true,
-    // Gemini 网页没有稳定公开的时长选择器，本轮只提交当前通用 8 秒能力。
-    supportedDurations: [8], resolutions: ['自动'], supportedAspectRatios: ['16:9', '9:16'],
+    supportsTextToVideo: true, supportsImageToVideo: true, supportsMultipleReferenceImages: false,
+    // 当前 Gemini 网页视频入口只暴露一个文件输入，不宣称未经页面支持的多参考图能力。
+    maxReferenceImages: 1, supportsNativeAudio: true, supportsExtend: true,
+    // 当前网页没有时长选择器；两次真实 HTTP 结果都固定为 10.005 秒。
+    supportedDurations: [10], resolutions: ['自动'], supportedAspectRatios: ['16:9', '9:16'],
   },
 ]);
 
@@ -123,8 +135,6 @@ export const VIDEO_GENERATION_PROVIDERS = Object.freeze([
  * 链路，必须由代码而不是远端数据决定。
  */
 const capabilityOverlay = new Map();
-/** 平台新增、静态表里还没有的模型。 */
-const discoveredExtras = { image: [], video: [] };
 
 const CAPABILITY_KEYS = new Set([
   'name', 'maxReferenceImages', 'maxOutputCount', 'supportsMultipleOutputs',
@@ -187,50 +197,32 @@ export function applyDiscoveredModelRegistry(registry) {
       capabilityOverlay.set(model.id, filtered);
       continue;
     }
-    // 平台新模型：登记为可选项，链路按 provider 决定。
-    const bucket = model.type === 'video' ? discoveredExtras.video : discoveredExtras.image;
-    if (bucket.some(item => item.id === model.id)) continue;
-    const base = model.type === 'video'
-      ? {
-        id: model.id, name: model.displayName || model.id, provider: 'workflow',
-        browserProvider: model.provider, supportsTextToVideo: true, supportsImageToVideo: true,
-        supportsMultipleReferenceImages: true, maxReferenceImages: 12, supportsNativeAudio: true,
-        supportsExtend: false, supportedDurations: [5], resolutions: ['自动'], supportedAspectRatios: ['16:9', '9:16']
-      }
-      : {
-        id: model.id, name: model.displayName || model.id, provider: 'workflow',
-        browserProvider: model.provider, supportsImageToImage: true, supportsMultipleReferenceImages: true,
-        maxReferenceImages: 12, supportsMultipleOutputs: true, maxOutputCount: 4,
-        resolutions: ['自动'], supportedAspectRatios: ['1:1', '16:9', '9:16']
-      };
-    bucket.push({ ...base, ...filtered, discovered: true });
+    // Unknown protocol ids are intentionally not exposed. The generation route
+    // can only dispatch canvas ids with a reviewed protocol mapping; showing an
+    // unrouteable discovery result would silently send it to the wrong provider.
   }
 }
 
 /** 测试与「刷新模型」用：回到纯基线状态。 */
 export function resetDiscoveredModelRegistry() {
   capabilityOverlay.clear();
-  discoveredExtras.image.length = 0;
-  discoveredExtras.video.length = 0;
 }
 
-/** 节点下拉的完整可选项：基线（已叠加能力）+ 运行时新发现的模型。 */
+/** 节点下拉只展示有明确协议路由的模型；发现数据只叠加 capability。 */
 export function listImageGenerationProviders() {
-  return [...IMAGE_GENERATION_PROVIDERS.map(withOverlay), ...discoveredExtras.image];
+  return IMAGE_GENERATION_PROVIDERS.map(withOverlay);
 }
 
 export function listVideoGenerationProviders() {
-  return [...VIDEO_GENERATION_PROVIDERS.map(withOverlay), ...discoveredExtras.video];
+  return VIDEO_GENERATION_PROVIDERS.map(withOverlay);
 }
 
 export const getImageGenerationProvider = id =>
   withOverlay(IMAGE_GENERATION_PROVIDERS.find(item => item.id === id))
-  || discoveredExtras.image.find(item => item.id === id)
   || null;
 
 export const getVideoGenerationProvider = id =>
   withOverlay(VIDEO_GENERATION_PROVIDERS.find(item => item.id === id))
-  || discoveredExtras.video.find(item => item.id === id)
   || null;
 
 export function clampImageOutputCount(modelId, requestedCount) {

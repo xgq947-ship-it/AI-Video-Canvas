@@ -18,6 +18,7 @@ import { downloadResultMedia, loadReferenceImageFiles, requireNonEmptyPrompt } f
 import {
     FLOW_BASELINE_IMAGE_MODEL,
     FLOW_BASELINE_VIDEO_MODEL,
+    FLOW_VIDEO_FAMILY_CAPABILITIES,
     buildGenerateImagesRequest,
     buildGenerateVideoRequest,
     buildFlowMediaUrl,
@@ -51,11 +52,11 @@ export function clearFlowAuthCache() {
     cachedAuthAt = 0;
 }
 
-export async function getFlowAuth({ signal, forceRefresh = false } = {}) {
-    if (!forceRefresh && cachedAuth && Date.now() - cachedAuthAt < AUTH_TTL_MS) {
+export async function getFlowAuth({ signal, forceRefresh = false, recaptchaAction = '' } = {}) {
+    if (!recaptchaAction && !forceRefresh && cachedAuth && Date.now() - cachedAuthAt < AUTH_TTL_MS) {
         return cachedAuth;
     }
-    const context = await webContext(PROVIDER, { signal });
+    const context = await webContext(PROVIDER, { signal, recaptchaAction });
     if (!context?.accessToken) {
         throw new WebProviderError(
             `${PROVIDER_NAME} 未能获取访问令牌，请在 Evan 专属 Chrome 中重新登录 Google 账号`,
@@ -68,24 +69,40 @@ export async function getFlowAuth({ signal, forceRefresh = false } = {}) {
             { provider: PROVIDER, code: 'AUTH_EXPIRED', submitted: false }
         );
     }
-    cachedAuth = {
+    const baseAuth = {
         accessToken: context.accessToken,
         projectId: context.projectId,
         sessionId: context.sessionId || `;${Date.now()}`,
-        recaptchaToken: context.recaptchaToken || '',
         userPaygateTier: context.userPaygateTier || 'PAYGATE_TIER_ONE',
         labsCookie: cookieHeaderFor(context, ['labs.google', 'google.com']),
         rawModelConfig: context.modelConfig || null
     };
+    // Never cache a reCAPTCHA token. Flow binds it to an action and rejects
+    // reuse; the caller receives it only for the immediately following submit.
+    cachedAuth = baseAuth;
     cachedAuthAt = Date.now();
-    return cachedAuth;
+    if (recaptchaAction && !context.recaptchaToken) {
+        throw new WebProviderError(`${PROVIDER_NAME} 未能生成 ${recaptchaAction} 验证令牌，请刷新 Flow 页面后重试`, {
+            provider: PROVIDER, code: 'AUTH_EXPIRED', submitted: false
+        });
+    }
+    return recaptchaAction
+        ? { ...baseAuth, recaptchaToken: context.recaptchaToken }
+        : baseAuth;
 }
 
 
 export async function discoverFlowModels({ signal } = {}) {
     const baseline = {
-        images: [{ id: FLOW_BASELINE_IMAGE_MODEL, displayName: 'Nano Banana 2 (GEM_PIX_2)' }],
-        videos: [{ id: FLOW_BASELINE_VIDEO_MODEL, displayName: 'Flow Video 4s', durations: [4] }]
+        images: [
+            { id: 'GEM_PIX_2', displayName: 'Nano Banana Pro', maxReferenceImages: 10, maxBatchCount: 4 },
+            { id: FLOW_BASELINE_IMAGE_MODEL, displayName: 'Nano Banana 2', maxReferenceImages: 10, maxBatchCount: 4 },
+            { id: 'HARBOR_SEAL', displayName: 'Nano Banana 2 Lite', maxReferenceImages: 10, maxBatchCount: 4 }
+        ],
+        videos: Object.entries(FLOW_VIDEO_FAMILY_CAPABILITIES).map(([id, capabilities]) => ({
+            id,
+            ...capabilities
+        }))
     };
     try {
         const auth = await getFlowAuth({ signal });
@@ -140,9 +157,11 @@ export async function generateFlowImageHttp({
     signal
 }) {
     const cleanPrompt = requireNonEmptyPrompt(prompt, `${PROVIDER_NAME} 图片`);
-    const auth = await getFlowAuth({ signal, forceRefresh: true });
     const files = await loadReferenceImageFiles(referenceImageInputs, libraryDir, { providerName: PROVIDER_NAME });
-    const referenceMediaIds = files.length ? await uploadReferenceImages(auth, files, { signal }) : [];
+    const uploadAuth = files.length ? await getFlowAuth({ signal, forceRefresh: true }) : null;
+    const referenceMediaIds = files.length ? await uploadReferenceImages(uploadAuth, files, { signal }) : [];
+    // Mint after uploads so the action-bound, single-use token is as fresh as possible.
+    const auth = await getFlowAuth({ signal, forceRefresh: true, recaptchaAction: 'IMAGE_GENERATION' });
 
     const spec = buildGenerateImagesRequest({
         auth,
@@ -197,6 +216,7 @@ export async function generateFlowVideoHttp({
     firstFrameInput,
     referenceImageInputs = [],
     aspectRatio = '16:9',
+    duration = 4,
     count = 1,
     modelId,
     libraryDir,
@@ -204,17 +224,18 @@ export async function generateFlowVideoHttp({
     signal
 }) {
     const cleanPrompt = requireNonEmptyPrompt(prompt, `${PROVIDER_NAME} 视频`);
-    const auth = await getFlowAuth({ signal, forceRefresh: true });
-
     const frameInputs = [firstFrameInput, ...referenceImageInputs].filter(Boolean);
     const files = await loadReferenceImageFiles(frameInputs, libraryDir, { providerName: PROVIDER_NAME });
-    const mediaIds = files.length ? await uploadReferenceImages(auth, files, { signal }) : [];
+    const uploadAuth = files.length ? await getFlowAuth({ signal, forceRefresh: true }) : null;
+    const mediaIds = files.length ? await uploadReferenceImages(uploadAuth, files, { signal }) : [];
+    const auth = await getFlowAuth({ signal, forceRefresh: true, recaptchaAction: 'VIDEO_GENERATION' });
 
     const spec = buildGenerateVideoRequest({
         auth,
         prompt: cleanPrompt,
-        modelKey: modelId || FLOW_BASELINE_VIDEO_MODEL,
+        modelFamily: modelId || FLOW_BASELINE_VIDEO_MODEL,
         aspectRatio,
+        duration,
         count,
         batchId: randomUUID(),
         firstFrameMediaId: firstFrameInput ? mediaIds[0] : '',
@@ -247,7 +268,12 @@ export async function generateFlowVideoHttp({
         });
         videos.push({ ...downloaded, metadata: item });
     }
-    return { videos, ...videos[0], channel: 'http' };
+    return {
+        videos,
+        ...videos[0],
+        runId: media.map(item => item.mediaId).filter(Boolean).join(','),
+        channel: 'http'
+    };
 }
 
 /**
@@ -279,13 +305,13 @@ async function waitForFlowVideos(media, auth, { timeoutMinutes, signal }) {
         await sleep(VIDEO_POLL_INTERVAL_MS, signal);
 
         try {
-            const spec = buildProjectMediaRequest({ auth, mediaIds: current.map(item => item.mediaId) });
-            const response = await webFetchOk(PROVIDER, buildRequestSpec(spec), {
-                signal, submitted: true, what: '视频状态查询'
-            });
-            const payload = response.json();
+            const wantedIds = current.map(item => item.mediaId);
+            const spec = buildProjectMediaRequest({ auth, mediaIds: wantedIds });
+            const payload = await fetchFlowProjectMedia(spec, { signal });
             const refreshed = collectMediaEntries(payload).map(parseFlowVideoMedia).filter(item => item.mediaId);
-            if (refreshed.length > 0) current = refreshed;
+            const wanted = new Set(wantedIds);
+            const matches = refreshed.filter(item => wanted.has(item.mediaId));
+            if (matches.length > 0) current = matches;
         } catch (error) {
             // Poll endpoints change shape more often than generate endpoints do;
             // a lookup failure must not discard an already-billed generation.
@@ -295,10 +321,46 @@ async function waitForFlowVideos(media, auth, { timeoutMinutes, signal }) {
 
     const done = current.filter(isFlowVideoCompleted);
     if (done.length > 0) return done;
+    const mediaIds = current.map(item => item.mediaId).filter(Boolean);
+    const recoveryText = mediaIds.length ? ` 任务 ID：${mediaIds.join(', ')}。` : '';
     throw new WebProviderError(
-        `${PROVIDER_NAME} 视频在 ${timeoutMinutes} 分钟内未完成。生成配额已经消耗，请到 Flow 项目历史中查看结果，不要直接重新生成。`,
-        { provider: PROVIDER, code: 'POLL_TIMEOUT', submitted: true }
+        `${PROVIDER_NAME} 视频在 ${timeoutMinutes} 分钟内未完成。生成配额已经消耗。${recoveryText}`
+        + '请到 Flow 项目历史中查看结果，不要直接重新生成。',
+        {
+            provider: PROVIDER,
+            code: 'POLL_TIMEOUT',
+            submitted: true,
+            details: { mediaIds }
+        }
     );
+}
+
+/** Poll Flow's own project hydration endpoint directly from Node. */
+async function fetchFlowProjectMedia(spec, { signal } = {}) {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(signal?.reason);
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => controller.abort(new Error('Flow project poll timeout')), 30_000);
+    try {
+        const response = await fetch(spec.url, {
+            method: spec.method,
+            headers: spec.headers,
+            redirect: 'follow',
+            signal: controller.signal
+        });
+        if (!response.ok) {
+            throw new WebProviderError(`${PROVIDER_NAME} 视频状态查询失败：HTTP ${response.status}`, {
+                provider: PROVIDER,
+                code: response.status === 401 || response.status === 403 ? 'AUTH_EXPIRED' : 'GENERATION_FAILED',
+                submitted: true
+            });
+        }
+        return response.json();
+    } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+    }
 }
 
 /** tRPC wraps payloads differently across versions; find media arrays anywhere. */
@@ -312,10 +374,21 @@ function collectMediaEntries(payload, depth = 0) {
 
 function sleep(ms, signal) {
     return new Promise((resolve, reject) => {
-        const timer = setTimeout(resolve, ms);
-        signal?.addEventListener('abort', () => {
+        const cancelled = () => new WebProviderError(
+            '任务已取消', { provider: PROVIDER, code: 'UNKNOWN', submitted: true }
+        );
+        if (signal?.aborted) {
+            reject(cancelled());
+            return;
+        }
+        const onAbort = () => {
             clearTimeout(timer);
-            reject(new WebProviderError('任务已取消', { provider: PROVIDER, code: 'UNKNOWN', submitted: true }));
-        }, { once: true });
+            reject(cancelled());
+        };
+        const timer = setTimeout(() => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+        signal?.addEventListener('abort', onAbort, { once: true });
     });
 }

@@ -24,6 +24,7 @@ import {
     JIMENG_BASELINE_VIDEO_MODEL,
     JIMENG_IMAGE_RATIOS,
     JIMENG_IMAGE_RESOLUTIONS,
+    JIMENG_IMAGE_LITE_MAX_BATCH_COUNT,
     JIMENG_VIDEO_INPUT_MODES,
     apiUrl,
     buildBlendDraft,
@@ -34,6 +35,9 @@ import {
     isJimengImageCompleted,
     isJimengTaskFailed,
     isJimengVideoCompleted,
+    jimengImageMaxBatchCount,
+    jimengImageSupportedResolutions,
+    jimengVideoCapabilities,
     jimengBusinessError,
     parseJimengImageResults,
     parseJimengVideoResults,
@@ -160,7 +164,18 @@ export async function uploadJimengReferenceImages(inputs, libraryDir, { signal }
 // Task submission + polling
 // ---------------------------------------------------------------------------
 
-async function submitDraft({ draft, workspaceId, model, signal, what, generateCount = 1, toolId, featureKey, kind = 'image' }) {
+async function submitDraft({
+    draft,
+    workspaceId,
+    model,
+    signal,
+    what,
+    generateCount = 1,
+    toolId,
+    featureKey,
+    generateType,
+    kind = 'image'
+}) {
     // Generated before the request so an ambiguous outcome stays recoverable.
     const submitId = randomUUID();
     // babi_param（放在 URL 上）携带功能与权益描述符，缺了它服务端直接
@@ -171,7 +186,7 @@ async function submitDraft({ draft, workspaceId, model, signal, what, generateCo
         buildGenerateBody({ draft, submitId, workspaceId, model, generateCount }),
         {
             signal, submitted: true, what, timeoutSeconds: 180,
-            url: buildGenerateUrl({ model, webId, toolId, featureKey }),
+            url: buildGenerateUrl({ model, webId, toolId, featureKey, generateType }),
             pageUrl: toolPageUrl(kind, workspaceId)
         }
     );
@@ -245,8 +260,13 @@ async function waitForTask(task, { isCompleted, parseResults, timeoutMinutes, si
 
     throw new WebProviderError(
         `${PROVIDER_NAME}${what}在 ${timeoutMinutes} 分钟内未完成。生成配额已经消耗，`
-        + '请到即梦历史记录中查看结果，不要直接重新生成。',
-        { provider: PROVIDER, code: 'POLL_TIMEOUT', submitted: true }
+        + `任务 ID：${task.submitId}。请到即梦历史记录中查看结果，不要直接重新生成。`,
+        {
+            provider: PROVIDER,
+            code: 'POLL_TIMEOUT',
+            submitted: true,
+            details: { submitId: task.submitId }
+        }
     );
 }
 
@@ -288,17 +308,46 @@ export async function generateJimengImageHttp({
 }) {
     const cleanPrompt = requireNonEmptyPrompt(prompt, `${PROVIDER_NAME}图片`);
     const model = modelId || JIMENG_BASELINE_IMAGE_MODEL;
+    const requestedCount = Number(count ?? 1);
+    const maxCount = jimengImageMaxBatchCount(model);
+    if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > maxCount) {
+        throw new WebProviderError(
+            `${PROVIDER_NAME}该图片模型单次生成数量只支持 1-${maxCount}`,
+            { provider: PROVIDER, code: 'INVALID_INPUT', submitted: false, retryable: false }
+        );
+    }
+    const requestedResolution = String(resolution || '2K').trim().toLowerCase();
+    const normalizedResolution = !requestedResolution || requestedResolution === 'auto' || requestedResolution === '自动'
+        ? '2k'
+        : requestedResolution;
+    const supportedResolutions = jimengImageSupportedResolutions(model);
+    if (!supportedResolutions.includes(normalizedResolution)) {
+        throw new WebProviderError(
+            `${PROVIDER_NAME}该图片模型分辨率只支持 ${supportedResolutions.map(item => item.toUpperCase()).join(' / ')}`,
+            { provider: PROVIDER, code: 'INVALID_INPUT', submitted: false, retryable: false }
+        );
+    }
 
     const references = await uploadJimengReferenceImages(referenceImageInputs, libraryDir, { signal });
     const workspace = await ensureWorkspace(workspaceId, { signal });
 
     const draft = references.length > 0
-        ? buildBlendDraft({ prompt: cleanPrompt, images: references, model, ratio: aspectRatio, resolution, count })
-        : buildImageDraft({ prompt: cleanPrompt, model, ratio: aspectRatio, resolution, count });
+        ? buildBlendDraft({
+            prompt: cleanPrompt, images: references, model, ratio: aspectRatio, resolution: normalizedResolution,
+            count: requestedCount, maxCount
+        })
+        : buildImageDraft({
+            prompt: cleanPrompt, model, ratio: aspectRatio, resolution: normalizedResolution,
+            count: requestedCount, maxCount
+        });
 
     const task = await submitDraft({
         draft, workspaceId: workspace, model, signal, what: '图片生成',
-        generateCount: Number(count) || 1, toolId: 'tool_image', featureKey: 'aigc_to_image', kind: 'image'
+        generateCount: requestedCount,
+        toolId: 'tool_image',
+        featureKey: 'aigc_to_image',
+        generateType: references.length > 0 ? 12 : 1,
+        kind: 'image'
     });
     const results = await waitForTask(task, {
         isCompleted: isJimengImageCompleted,
@@ -317,7 +366,7 @@ export async function generateJimengImageHttp({
         });
         images.push({ ...downloaded, metadata: item });
     }
-    return { images, ...images[0], task, channel: 'http' };
+    return { images, ...images[0], task, runId: task.submitId, channel: 'http' };
 }
 
 export async function generateJimengVideoHttp({
@@ -346,6 +395,47 @@ export async function generateJimengVideoHttp({
         });
     }
 
+    const capabilities = jimengVideoCapabilities(model);
+    const requestedCount = Number(count ?? 1);
+    if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > 4) {
+        throw new WebProviderError(`${PROVIDER_NAME}视频生成数量只支持 1-4`, {
+            provider: PROVIDER, code: 'INVALID_INPUT', submitted: false, retryable: false
+        });
+    }
+    const requestedDuration = Number(duration ?? 5);
+    if (!Number.isInteger(requestedDuration) || !capabilities.durations.includes(requestedDuration)) {
+        throw new WebProviderError(
+            `${PROVIDER_NAME}该视频模型时长只支持 ${capabilities.durations.join(' / ')} 秒`,
+            { provider: PROVIDER, code: 'INVALID_INPUT', submitted: false, retryable: false }
+        );
+    }
+    const requestedRatio = String(aspectRatio || '16:9');
+    if (!capabilities.aspectRatios.includes(requestedRatio)) {
+        throw new WebProviderError(
+            `${PROVIDER_NAME}该视频模型不支持 ${requestedRatio} 画幅`,
+            { provider: PROVIDER, code: 'INVALID_INPUT', submitted: false, retryable: false }
+        );
+    }
+    const resolutionValue = String(resolution || capabilities.resolutions[0]).trim().toUpperCase();
+    const requestedResolution = !resolutionValue || resolutionValue === 'AUTO' || resolutionValue === '自动'
+        ? capabilities.resolutions[0]
+        : resolutionValue;
+    if (!capabilities.resolutions.includes(requestedResolution)) {
+        throw new WebProviderError(
+            `${PROVIDER_NAME}该视频模型分辨率只支持 ${capabilities.resolutions.join(' / ')}`,
+            { provider: PROVIDER, code: 'INVALID_INPUT', submitted: false, retryable: false }
+        );
+    }
+    const materialCount = referenceImageInputs.filter(Boolean).length
+        + (firstFrameInput ? 1 : 0)
+        + (endFrameInput ? 1 : 0);
+    if (materialCount > capabilities.maxReferenceImages) {
+        throw new WebProviderError(
+            `${PROVIDER_NAME}该视频模型最多支持 ${capabilities.maxReferenceImages} 张参考图`,
+            { provider: PROVIDER, code: 'INVALID_INPUT', submitted: false, retryable: false }
+        );
+    }
+
     const uploads = await uploadJimengReferenceImages(
         [firstFrameInput, ...referenceImageInputs, endFrameInput].filter(Boolean),
         libraryDir,
@@ -364,15 +454,19 @@ export async function generateJimengVideoHttp({
         firstFrame,
         endFrame,
         model,
-        durationSec: duration,
-        ratio: aspectRatio,
-        resolution: String(resolution).toLowerCase(),
-        batchCount: count
+        durationSec: requestedDuration,
+        ratio: requestedRatio,
+        resolution: requestedResolution.toLowerCase(),
+        batchCount: requestedCount
     });
 
     const task = await submitDraft({
         draft, workspaceId: workspace, model, signal, what: '视频生成',
-        generateCount: Number(count) || 1, toolId: 'tool_video', featureKey: 'aigc_to_video', kind: 'video'
+        generateCount: requestedCount,
+        toolId: 'tool_video',
+        featureKey: 'aigc_to_video',
+        generateType: 10,
+        kind: 'video'
     });
     const results = await waitForTask(task, {
         isCompleted: isJimengVideoCompleted,
@@ -391,7 +485,7 @@ export async function generateJimengVideoHttp({
         });
         videos.push({ ...downloaded, metadata: item });
     }
-    return { videos, ...videos[0], task, channel: 'http' };
+    return { videos, ...videos[0], task, runId: task.submitId, channel: 'http' };
 }
 
 // ---------------------------------------------------------------------------
@@ -412,7 +506,7 @@ export async function discoverJimengModels({ signal } = {}) {
             type: 'image',
             aspectRatios: [...JIMENG_IMAGE_RATIOS],
             resolutions: [...JIMENG_IMAGE_RESOLUTIONS],
-            maxBatchCount: 4,
+            maxBatchCount: JIMENG_IMAGE_LITE_MAX_BATCH_COUNT,
             supportsReferenceImage: true
         }],
         videos: [{
@@ -469,10 +563,21 @@ function findFirstValue(node, matches, depth = 0) {
 
 function sleep(ms, signal) {
     return new Promise((resolve, reject) => {
-        const timer = setTimeout(resolve, ms);
-        signal?.addEventListener('abort', () => {
+        const cancelled = () => new WebProviderError(
+            '任务已取消', { provider: PROVIDER, code: 'UNKNOWN', submitted: true }
+        );
+        if (signal?.aborted) {
+            reject(cancelled());
+            return;
+        }
+        const onAbort = () => {
             clearTimeout(timer);
-            reject(new WebProviderError('任务已取消', { provider: PROVIDER, code: 'UNKNOWN', submitted: true }));
-        }, { once: true });
+            reject(cancelled());
+        };
+        const timer = setTimeout(() => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+        signal?.addEventListener('abort', onAbort, { once: true });
     });
 }

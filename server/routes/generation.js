@@ -2,7 +2,7 @@
  * generation.js
  * 
  * Routes for AI image and video generation.
- * Supports Gemini, Veo, Seedance, browser workflows, and OpenAI GPT Image providers.
+ * Supports Gemini, Veo, Seedance, Web HTTP workflows, and OpenAI GPT Image providers.
  */
 
 import express from 'express';
@@ -24,7 +24,7 @@ import {
     isGeminiWebImageModel,
     isGeminiWebVideoModel
 } from '../services/geminiWebWorkflow.js';
-import { getVideoGenerationProvider } from '../../shared/generationProviders.js';
+import { getImageGenerationProvider, getVideoGenerationProvider } from '../../shared/generationProviders.js';
 import { resolveWebExecutionMode } from '../services/webhttp/index.js';
 
 const router = express.Router();
@@ -46,6 +46,22 @@ function webProviderForModel(modelId) {
 function executionModeFor(app, modelId) {
     const provider = webProviderForModel(modelId);
     return provider ? resolveWebExecutionMode(app, provider) : undefined;
+}
+
+function sendGenerationError(res, error, fallbackMessage) {
+    const code = typeof error?.code === 'string' ? error.code : undefined;
+    const status = code === 'INVALID_INPUT' ? 400
+        : code === 'AUTH_EXPIRED' ? 401
+            : code === 'RATE_LIMIT' || code === 'QUOTA_EXHAUSTED' ? 429
+                : code === 'CONTENT_POLICY' ? 422
+                    : 500;
+    return res.status(status).json({
+        error: error?.message || fallbackMessage,
+        ...(code ? { code } : {}),
+        ...(typeof error?.submitted === 'boolean' ? { submitted: error.submitted } : {}),
+        ...(typeof error?.retryable === 'boolean' ? { retryable: error.retryable } : {}),
+        ...(error?.details && typeof error.details === 'object' ? { details: error.details } : {})
+    });
 }
 
 const productSceneContext = appLocals => ({
@@ -149,17 +165,25 @@ router.post('/generate-image', async (req, res) => {
         const isGoogleFlowWorkflowModel = isGoogleFlowImageWorkflowModel(imageModel);
         const isJimengWorkflowModel = isJimengImageWorkflowModel(imageModel);
         const isGeminiWebWorkflowModel = isGeminiWebImageModel(imageModel);
+        const isBrowserImageWorkflowModel = isJimengWorkflowModel
+            || isGoogleFlowWorkflowModel
+            || isGeminiWebWorkflowModel;
+        const imageProvider = isBrowserImageWorkflowModel
+            ? getImageGenerationProvider(imageModel)
+            : null;
         const requestedCount = rawCount === undefined ? 1 : Number(rawCount);
         if (!Number.isInteger(requestedCount) || requestedCount < 1) {
             return res.status(400).json({ error: '图片生成数量必须是正整数' });
         }
-        if ((isJimengWorkflowModel || isGoogleFlowWorkflowModel) && requestedCount > 4) {
-            return res.status(400).json({ error: '浏览器图片模型单次生成数量最多为 4 张' });
+        if (isBrowserImageWorkflowModel && !imageProvider) {
+            return res.status(400).json({ error: '当前图片模型没有可用的能力配置' });
         }
-        if (isGeminiWebWorkflowModel && requestedCount !== 1) {
-            return res.status(400).json({ error: 'Gemini Web 网页单次只支持生成 1 张图片' });
+        if (imageProvider && requestedCount > imageProvider.maxOutputCount) {
+            return res.status(400).json({
+                error: `${imageProvider.name} 单次最多生成 ${imageProvider.maxOutputCount} 张图片`
+            });
         }
-        if (!isJimengWorkflowModel && !isGoogleFlowWorkflowModel && !isGeminiWebWorkflowModel && requestedCount !== 1) {
+        if (!isBrowserImageWorkflowModel && requestedCount !== 1) {
             return res.status(400).json({ error: '当前图片模型暂不支持单次多图生成' });
         }
 
@@ -168,12 +192,17 @@ router.post('/generate-image', async (req, res) => {
         let workflowImages = null;
 
         if (isGoogleFlowWorkflowModel || isJimengWorkflowModel || isGeminiWebWorkflowModel) {
-            // --- LOCAL BROWSER TEXT-TO-IMAGE WORKFLOW (FLOW / 即梦 / GEMINI WEB) ---
+            // --- WEB HTTP TEXT/REFERENCE-TO-IMAGE (FLOW / 即梦 / GEMINI WEB) ---
             const referenceImages = rawImageBase64
                 ? (Array.isArray(rawImageBase64) ? rawImageBase64 : [rawImageBase64]).filter(Boolean)
                 : [];
+            if (imageProvider && referenceImages.length > imageProvider.maxReferenceImages) {
+                return res.status(400).json({
+                    error: `${imageProvider.name} 最多支持 ${imageProvider.maxReferenceImages} 张参考图`
+                });
+            }
 
-            console.log(`Using browser workflow for image: ${imageModel}`);
+            console.log(`Using Web HTTP workflow for image: ${imageModel}`);
             const workflow = isJimengWorkflowModel
                 ? generateJimengWorkflowImage
                 : isGeminiWebWorkflowModel
@@ -270,7 +299,7 @@ router.post('/generate-image', async (req, res) => {
 
     } catch (error) {
         console.error("Server Image Gen Error:", error);
-        res.status(500).json({ error: error.message || "Image generation failed" });
+        return sendGenerationError(res, error, 'Image generation failed');
     }
 });
 
@@ -298,8 +327,11 @@ router.post('/generate-video', async (req, res) => {
         const isJimengWorkflowModel = isJimengWorkflowModelId(videoModel);
         const isGeminiWebWorkflowModel = isGeminiWebVideoModel(videoModel);
         const videoProvider = getVideoGenerationProvider(videoModel);
-        const providedVisualCount = Array.isArray(rawReferenceImages)
-            ? rawReferenceImages.filter(Boolean).length
+        const explicitReferences = Array.isArray(rawReferenceImages)
+            ? rawReferenceImages.filter(Boolean)
+            : [];
+        const providedVisualCount = explicitReferences.length > 0
+            ? explicitReferences.length
             : [rawImageBase64, rawLastFrameBase64].filter(Boolean).length;
         if (videoProvider && providedVisualCount > videoProvider.maxReferenceImages) {
             return res.status(400).json({
@@ -331,7 +363,7 @@ router.post('/generate-video', async (req, res) => {
                 prompt,
                 referenceImageInputs,
                 aspectRatio: aspectRatio || '16:9',
-                duration: duration || 8,
+                duration: duration || videoProvider?.supportedDurations?.[0] || 10,
                 libraryDir: LIBRARY_DIR,
                 timeoutMinutes: 15,
                 cameraMovement: req.body.cameraMovement || '',
@@ -343,24 +375,20 @@ router.post('/generate-video', async (req, res) => {
             workflowRunId = workflowResult.runId;
         } else if (isGoogleFlowWorkflowModel) {
             // 连 2 张以上图片 → Ingredients 多参考图模式；否则用单张首帧。
-            const referenceImageInputs = Array.isArray(rawReferenceImages)
-                ? rawReferenceImages.filter(Boolean)
-                : [];
+            const referenceImageInputs = explicitReferences;
             const useIngredients = referenceImageInputs.length >= 2;
             if (!useIngredients) {
-                if (!rawImageBase64) {
-                    return res.status(400).json({ error: 'Google Flow workflow 需连接一张首帧图片，或连接 2 张以上图片走多参考图（Ingredients）' });
-                }
                 if (rawLastFrameBase64) {
                     return res.status(400).json({ error: 'Google Flow workflow 单图模式暂不支持尾帧；请只连一张首帧，或连 2 张以上走多参考图' });
                 }
             }
             const workflowResult = await generateGoogleFlowWorkflowVideo({
                 prompt,
-                firstFrameInput: useIngredients ? null : rawImageBase64,
+                // 无图 = 文生视频；1 张 = 首帧；2 张及以上 = References。
+                firstFrameInput: useIngredients ? null : (rawImageBase64 || referenceImageInputs[0] || null),
                 referenceImageInputs: useIngredients ? referenceImageInputs : [],
                 aspectRatio: aspectRatio || '16:9',
-                duration: duration || 4,
+                duration: duration || videoProvider?.supportedDurations?.[0] || 4,
                 modelId: videoModel,
                 libraryDir: LIBRARY_DIR,
                 timeoutMinutes: 15,
@@ -394,7 +422,7 @@ router.post('/generate-video', async (req, res) => {
                 referenceImageInputs: jimengReferenceInputs,
                 referenceLabels: jimengReferenceLabels,
                 model: resolveJimengModelLabel(videoModel),
-                // 浏览器路径按下拉文案匹配，HTTP 路径需要画布 id 去查 model_req_key。
+                // HTTP 路径使用画布 id 去查精确 model_req_key。
                 videoModelId: videoModel,
                 aspectRatio: aspectRatio || '16:9',
                 duration: duration || 5,
@@ -478,7 +506,7 @@ router.post('/generate-video', async (req, res) => {
 
     } catch (error) {
         console.error("Server Video Gen Error:", error);
-        res.status(500).json({ error: error.message || "Video generation failed" });
+        return sendGenerationError(res, error, 'Video generation failed');
     }
 });
 

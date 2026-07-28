@@ -6,7 +6,7 @@
  * platform, the user's quota is spent. Retrying or falling back to the browser
  * at that point produces a second charge and a second result. So:
  *
- *   submitted === false → safe to retry / safe to fall back to browser
+ *   submitted === false → no quota was spent; retryable still decides whether retrying is useful
  *   submitted === true  → surface the failure, never re-run
  */
 
@@ -23,6 +23,7 @@ export const WEB_PROVIDER_ERROR_CODES = Object.freeze([
     'POLL_TIMEOUT',
     'PROTOCOL_CHANGED',
     'BRIDGE_UNAVAILABLE',
+    'INVALID_INPUT',
     'UNKNOWN'
 ]);
 
@@ -35,7 +36,8 @@ const PRE_SUBMIT_CODES = new Set([
     'RECAPTCHA_REQUIRED',
     'SIGN_FAILED',
     'PROTOCOL_CHANGED',
-    'BRIDGE_UNAVAILABLE'
+    'BRIDGE_UNAVAILABLE',
+    'INVALID_INPUT'
 ]);
 
 /**
@@ -68,7 +70,7 @@ export class WebProviderError extends Error {
      * @param {string} options.code      one of WEB_PROVIDER_ERROR_CODES
      * @param {boolean} [options.submitted] override the code-derived default
      */
-    constructor(message, { provider, code = 'UNKNOWN', submitted, retryable, cause } = {}) {
+    constructor(message, { provider, code = 'UNKNOWN', submitted, retryable, details, cause } = {}) {
         // 在构造点统一脱敏：这条 message 最终会进后端日志、API 响应和画布错误提示，
         // 而平台的错误体经常把请求原样回显（即梦回显含 msToken 的 query，
         // Google 某些 400 会回显 Authorization）。只在打印处脱敏必然会漏掉某条路径。
@@ -80,12 +82,13 @@ export class WebProviderError extends Error {
         // click regenerate once than to silently bill them twice.
         this.submitted = submitted === undefined ? !PRE_SUBMIT_CODES.has(this.code) : Boolean(submitted);
         this.retryable = retryable === undefined ? !this.submitted : Boolean(retryable);
+        if (details && typeof details === 'object') this.details = details;
         if (cause) this.cause = cause;
     }
 
-    /** Can `auto` mode fall back to the browser workflow after this failure? */
+    /** Legacy compatibility flag: whether failure happened before submit and remains retryable. */
     get canFallbackToBrowser() {
-        return this.submitted === false;
+        return this.submitted === false && this.retryable !== false;
     }
 }
 

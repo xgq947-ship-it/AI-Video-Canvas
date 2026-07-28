@@ -2,24 +2,25 @@
  * Google Labs Flow HTTP protocol — request builders and response parsers.
  *
  * Pure functions only: no network, no browser, no clock. Everything here is
- * driven by `Flow-Web-HTTP-最终改造数据.md`; anything the document marked as
- * unverified is kept behind a capability flag rather than hard-coded.
+ * driven by current Flow runtime requests captured on 2026-07-28. The page's
+ * model table is family-based: one visible video model resolves to a different
+ * protocol key and endpoint for text, start-image and reference-image modes.
  */
 
 export const FLOW_TOOL = 'PINHOLE';
 export const FLOW_API_ORIGIN = 'https://aisandbox-pa.googleapis.com';
 export const FLOW_LABS_ORIGIN = 'https://labs.google';
 
-/** Verified sample from the protocol doc; used only as a discovery fallback. */
-export const FLOW_BASELINE_IMAGE_MODEL = 'GEM_PIX_2';
-export const FLOW_BASELINE_VIDEO_MODEL = 'abra_t2v_4s';
+/** Current visible model defaults, used only when model discovery is unavailable. */
+export const FLOW_BASELINE_IMAGE_MODEL = 'NARWHAL';
+export const FLOW_BASELINE_VIDEO_MODEL = 'abra';
 
 const IMAGE_ASPECT_RATIOS = Object.freeze({
     '1:1': 'IMAGE_ASPECT_RATIO_SQUARE',
     '16:9': 'IMAGE_ASPECT_RATIO_LANDSCAPE',
     '9:16': 'IMAGE_ASPECT_RATIO_PORTRAIT',
-    '4:3': 'IMAGE_ASPECT_RATIO_FULL',
-    '3:4': 'IMAGE_ASPECT_RATIO_PORTRAIT_FULL'
+    '4:3': 'IMAGE_ASPECT_RATIO_LANDSCAPE_FOUR_THREE',
+    '3:4': 'IMAGE_ASPECT_RATIO_PORTRAIT_THREE_FOUR'
 });
 
 const VIDEO_ASPECT_RATIOS = Object.freeze({
@@ -107,7 +108,7 @@ export function buildGenerateImagesRequest({
     const context = clientContext(auth);
     const imageInputs = referenceMediaIds.filter(Boolean).map(mediaId => ({
         imageInputType: 'IMAGE_INPUT_TYPE_REFERENCE',
-        mediaId
+        name: mediaId
     }));
 
     const requests = Array.from({ length: Math.max(1, count) }, (unused, index) => ({
@@ -153,21 +154,125 @@ export function parseGenerateImagesResponse(payload) {
     }).filter(item => item.imageUrl);
 }
 
-/**
- * batchAsyncGenerateVideoText.
- *
- * Image-to-video: the doc could not capture it, so rather than inventing a
- * field name we send every candidate the response schema already names —
- * `imageInput.mediaId` plus the `baseImageMediaGenerationId` that appears in
- * the verified text-to-video *response*. Flow ignores unknown request fields,
- * and `detectImageToVideoShape` records which one the platform echoed back so
- * the next call can narrow down. Marked unverified-in-production.
- */
+const FLOW_VIDEO_ENDPOINTS = Object.freeze({
+    text: 'batchAsyncGenerateVideoText',
+    'start-image': 'batchAsyncGenerateVideoStartImage',
+    'reference-images': 'batchAsyncGenerateVideoReferenceImages'
+});
+
+const FLOW_VIDEO_DURATIONS = Object.freeze({
+    abra: Object.freeze({
+        text: [4, 6, 8, 10],
+        'start-image': [4, 6, 8, 10],
+        'reference-images': [4, 6, 8, 10]
+    }),
+    veo_3_1_lite: Object.freeze({
+        text: [8],
+        'start-image': [8],
+        'reference-images': [8]
+    }),
+    veo_3_1_fast: Object.freeze({
+        text: [8],
+        'start-image': [8],
+        'reference-images': [8]
+    }),
+    veo_3_1_quality: Object.freeze({
+        text: [8],
+        'start-image': [8]
+    })
+});
+
+/** Families returned by Flow's authenticated /v1/flow/models/statuses endpoint. */
+export const FLOW_VIDEO_FAMILY_CAPABILITIES = Object.freeze({
+    abra: Object.freeze({
+        displayName: 'Omni Flash', durations: [4, 6, 8, 10],
+        aspectRatios: ['16:9', '9:16'], supportsImageToVideo: true,
+        supportsFirstFrame: true, maxReferenceImages: 7, maxBatchCount: 1, supportsAudio: true
+    }),
+    veo_3_1_lite: Object.freeze({
+        displayName: 'Veo 3.1 - Lite', durations: [8],
+        aspectRatios: ['16:9', '9:16'], supportsImageToVideo: true,
+        supportsFirstFrame: true, maxReferenceImages: 3, maxBatchCount: 1, supportsAudio: true
+    }),
+    veo_3_1_fast: Object.freeze({
+        displayName: 'Veo 3.1 - Fast', durations: [8],
+        aspectRatios: ['16:9', '9:16'], supportsImageToVideo: true,
+        supportsFirstFrame: true, maxReferenceImages: 3, maxBatchCount: 1, supportsAudio: true
+    }),
+    veo_3_1_quality: Object.freeze({
+        displayName: 'Veo 3.1 - Quality', durations: [8],
+        aspectRatios: ['16:9', '9:16'], supportsImageToVideo: true,
+        supportsFirstFrame: true, maxReferenceImages: 1, maxBatchCount: 1, supportsAudio: true
+    })
+});
+
+function normalizeFlowVideoDuration(modelFamily, mode, duration) {
+    const supported = FLOW_VIDEO_DURATIONS[modelFamily]?.[mode];
+    if (!supported) return Number(duration) || 8;
+    const requested = Number(duration) || supported[0];
+    if (!supported.includes(requested)) {
+        throw new Error(
+            `Google Flow ${modelFamily} 的 ${mode} 模式不支持 ${requested} 秒；支持 ${supported.join('/')} 秒`
+        );
+    }
+    return requested;
+}
+
+/** Resolve a visible Flow video family to the exact current request key/API. */
+export function resolveFlowVideoVariant({
+    modelFamily = FLOW_BASELINE_VIDEO_MODEL,
+    mode = 'text',
+    duration,
+    aspectRatio = '16:9'
+}) {
+    const endpoint = FLOW_VIDEO_ENDPOINTS[mode];
+    if (!endpoint) throw new Error(`Google Flow 不支持的视频输入模式：${mode}`);
+
+    // Compatibility for protocol ids stored by development builds before the
+    // family-aware resolver existed.
+    if (/^(abra_|veo_3_1_).*(?:t2v|i2v|r2v)/.test(modelFamily)) {
+        return { modelKey: modelFamily, apiPathname: endpoint, duration: Number(duration) || undefined };
+    }
+
+    if (modelFamily === 'veo_3_1_quality' && mode === 'reference-images') {
+        throw new Error('Google Flow Veo 3.1 - Quality 当前不支持 Ingredients 多参考图模式');
+    }
+    const seconds = normalizeFlowVideoDuration(modelFamily, mode, duration);
+    if (modelFamily === 'abra') {
+        const kind = mode === 'text' ? 't2v' : mode === 'start-image' ? 'i2v' : 'r2v';
+        return { modelKey: `abra_${kind}_${seconds}s`, apiPathname: endpoint, duration: seconds };
+    }
+    if (modelFamily === 'veo_3_1_lite') {
+        let modelKey;
+        if (mode === 'text') modelKey = 'veo_3_1_t2v_lite';
+        if (mode === 'start-image') modelKey = 'veo_3_1_i2v_lite';
+        if (mode === 'reference-images') modelKey = 'veo_3_1_r2v_lite';
+        return { modelKey, apiPathname: endpoint, duration: seconds };
+    }
+    if (modelFamily === 'veo_3_1_fast') {
+        let modelKey;
+        if (mode === 'text') modelKey = 'veo_3_1_t2v_fast';
+        if (mode === 'start-image') modelKey = 'veo_3_1_i2v_s_fast';
+        if (mode === 'reference-images') {
+            modelKey = aspectRatio === '9:16'
+                ? 'veo_3_1_r2v_fast_portrait'
+                : 'veo_3_1_r2v_fast_landscape';
+        }
+        return { modelKey, apiPathname: endpoint, duration: seconds };
+    }
+    if (modelFamily === 'veo_3_1_quality') {
+        const modelKey = mode === 'text' ? 'veo_3_1_t2v' : 'veo_3_1_i2v_s';
+        return { modelKey, apiPathname: endpoint, duration: seconds };
+    }
+    throw new Error(`Google Flow 未识别的视频模型族：${modelFamily}`);
+}
+
 export function buildGenerateVideoRequest({
     auth,
     prompt,
-    modelKey = FLOW_BASELINE_VIDEO_MODEL,
+    modelFamily = FLOW_BASELINE_VIDEO_MODEL,
     aspectRatio,
+    duration,
     count = 1,
     seed,
     batchId,
@@ -175,30 +280,33 @@ export function buildGenerateVideoRequest({
     referenceMediaIds = []
 }) {
     const context = clientContext(auth);
-    const baseImageId = firstFrameMediaId || referenceMediaIds.filter(Boolean)[0] || '';
+    const references = referenceMediaIds.filter(Boolean);
+    if (firstFrameMediaId && references.length > 0) {
+        throw new Error('Google Flow 首帧模式与多参考图模式不能在同一请求中混用');
+    }
+    const mode = references.length > 0 ? 'reference-images' : firstFrameMediaId ? 'start-image' : 'text';
+    const variant = resolveFlowVideoVariant({ modelFamily, mode, duration, aspectRatio });
 
     const requests = Array.from({ length: Math.max(1, count) }, (unused, index) => {
         const request = {
             aspectRatio: toFlowVideoAspectRatio(aspectRatio),
             textInput: { structuredPrompt: { parts: [{ text: String(prompt || '') }] } },
-            videoModelKey: modelKey,
+            videoModelKey: variant.modelKey,
             seed: (seed || randomSeed()) + index,
             metadata: {}
         };
-        if (baseImageId) {
-            request.imageInput = { mediaId: baseImageId };
-            request.baseImageMediaGenerationId = baseImageId;
-            request.videoGenerationMode = 'VIDEO_GENERATION_MODE_IMAGE_TO_VIDEO';
-        }
-        const extraReferences = referenceMediaIds.filter(Boolean).filter(id => id !== baseImageId);
-        if (extraReferences.length > 0) {
-            request.referenceMediaIds = extraReferences;
+        if (firstFrameMediaId) request.startImage = { mediaId: firstFrameMediaId };
+        if (references.length > 0) {
+            request.referenceImages = references.map(mediaId => ({
+                mediaId,
+                imageUsageType: 'IMAGE_USAGE_TYPE_ASSET'
+            }));
         }
         return request;
     });
 
     return {
-        url: `${FLOW_API_ORIGIN}/v1/video:batchAsyncGenerateVideoText`,
+        url: `${FLOW_API_ORIGIN}/v1/video:${variant.apiPathname}`,
         method: 'POST',
         headers: {
             authorization: `Bearer ${auth.accessToken}`,
@@ -264,11 +372,18 @@ export function buildFlowMediaUrl(mediaId) {
  * field. The Labs project media list is the authoritative status source.
  */
 export function buildProjectMediaRequest({ auth, mediaIds = [] }) {
-    const input = encodeURIComponent(JSON.stringify({ json: { projectId: auth.projectId, mediaIds } }));
+    const input = encodeURIComponent(JSON.stringify({ json: { projectId: auth.projectId } }));
     return {
-        url: `${FLOW_LABS_ORIGIN}/fx/api/trpc/media.fetchMedia?input=${input}`,
+        // This is the same endpoint the Flow project page uses on hydration.
+        // Unlike aisandbox's internal video:fetchMedia it is CORS-independent
+        // and can be polled directly from Node with the Labs session cookie.
+        url: `${FLOW_LABS_ORIGIN}/fx/api/trpc/flow.projectInitialData?input=${input}`,
         method: 'GET',
-        headers: { accept: 'application/json' }
+        headers: {
+            accept: 'application/json',
+            cookie: auth.labsCookie
+        },
+        mediaIds: mediaIds.filter(Boolean)
     };
 }
 
@@ -295,7 +410,13 @@ export function extractFlowModels(raw) {
         const key = node.videoModelKey || node.modelKey || node.key || node.name || node.id;
         const display = node.displayName || node.label || node.title || '';
         if (typeof key === 'string' && key) {
-            if (/^abra_|_t2v_|_i2v_|^veo/i.test(key)) {
+            const family = FLOW_VIDEO_FAMILY_CAPABILITIES[key];
+            const status = String(node.status || '');
+            if (family) {
+                if (!/UNHEALTHY|DISABLED|UNAVAILABLE/.test(status)) {
+                    videos.set(key, { id: key, ...family });
+                }
+            } else if (/^abra_|_t2v_|_i2v_|_r2v_|^veo/i.test(key)) {
                 videos.set(key, {
                     id: key,
                     displayName: display || key,

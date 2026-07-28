@@ -15,10 +15,9 @@
  *   - Every request is *issued* through the page so the Origin matches what the
  *     ImageX and TOS endpoints CORS-allow.
  *
- * Doc §12.2 marks the binary upload step as high-confidence but not replayed.
- * `uploadReferenceImage` therefore reports a distinguishable UPLOAD_FAILED with
- * `submitted:false`, which lets `auto` mode fall back to the browser workflow
- * instead of failing the user's task.
+ * Upload failures are reported as UPLOAD_FAILED with `submitted:false`: the
+ * generator has not been billed, so the HTTP dispatcher may safely retry the
+ * upload. DOM-click fallback no longer exists.
  */
 
 import crypto from 'node:crypto';
@@ -55,6 +54,7 @@ export function signImageXRequest({ method, url, body = '', credentials, now = n
     const payloadHash = sha256Hex(body || '');
 
     const headers = {
+        host: target.host,
         'x-amz-date': full,
         'x-amz-content-sha256': payloadHash
     };
@@ -63,8 +63,8 @@ export function signImageXRequest({ method, url, body = '', credentials, now = n
     const canonicalHeaders = Object.keys(headers)
         .sort()
         .map(key => `${key}:${String(headers[key]).trim()}\n`)
-        .join('') + `host:${target.host}\n`;
-    const signedHeaders = [...Object.keys(headers), 'host'].sort().join(';');
+        .join('');
+    const signedHeaders = Object.keys(headers).sort().join(';');
 
     const canonicalQuery = [...target.searchParams.entries()]
         .map(([key, value]) => [encodeURIComponent(key), encodeURIComponent(value)])
@@ -90,8 +90,9 @@ export function signImageXRequest({ method, url, body = '', credentials, now = n
     );
     const signature = crypto.createHmac('sha256', signingKey).update(stringToSign).digest('hex');
 
+    const { host: _host, ...requestHeaders } = headers;
     return {
-        ...headers,
+        ...requestHeaders,
         authorization: `AWS4-HMAC-SHA256 Credential=${credentials.accessKeyId}/${scope}, `
             + `SignedHeaders=${signedHeaders}, Signature=${signature}`
     };

@@ -1,9 +1,9 @@
 /**
  * useBrowserModels.ts
  *
- * 探测「浏览器自动化模型」（Google Flow / 即梦）是否可用。
+ * 探测「网页 HTTP 模型」（Google Flow / 即梦 / Gemini）是否可用。
  *
- * 这类模型不走官方 API，而是驱动系统 Google Chrome 的 Evan 专属 Profile。
+ * 生成请求走 HTTP；正式 Chrome 的 Evan 专属 Profile 只提供登录态、签名和验证令牌。
  * 源码开发需要先跑 `npm run setup:automation-runtime`，安装包已自带 Python 运行时。
  * 未安装时不应让用户点了才报错，而是直接在模型列表里置灰。
  *
@@ -26,6 +26,8 @@ interface BrowserModelsState {
 const FALLBACK_MODELS = [
     'google-flow-omni-flash',
     'google-flow-veo-3-1-lite',
+    'google-flow-veo-3-1-fast',
+    'google-flow-veo-3-1-quality',
     'google-flow-nano-banana-pro',
     'google-flow-nano-banana-2',
     'google-flow-nano-banana-2-lite',

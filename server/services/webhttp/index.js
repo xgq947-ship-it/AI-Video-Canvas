@@ -62,8 +62,10 @@ export async function runWithExecutionMode({
                 ? error
                 : new WebProviderError(error?.message || String(error), { provider, submitted: true, cause: error });
 
-            // 已提交 → 平台可能已经在生成（并且已经扣费）。直接抛出，绝不重试。
-            if (webError.submitted) throw webError;
+            // 已提交 → 平台可能已经在生成（并且已经扣费），绝不重试。
+            // 额度耗尽等拒绝虽然 submitted=false（没有生成/扣费），但 retryable=false：
+            // 立刻重试只会重复撞额度并抬高网页风控概率。
+            if (webError.submitted || webError.retryable === false) throw webError;
 
             if (attempt >= Math.max(1, httpAttempts)) {
                 // 提交前失败且重试用尽：如实抛出。

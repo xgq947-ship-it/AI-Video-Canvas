@@ -57,6 +57,56 @@ test('已经是无头 CDP 实例时不重启浏览器', () => {
     assert.match(block, /stop_chrome\(\)/);
 });
 
+test('HTTP 页面复用优先选择健康 origin，不会被风控页上的旧 marker 劫持', { skip: !ready }, () => {
+    const script = `
+import json
+from ops_cli.webhttp import WEBHTTP_WINDOW_PREFIX, _provider_page
+
+class FakePage:
+    def __init__(self, url, name=''):
+        self.url = url
+        self.name = name
+        self.navigations = []
+    def is_closed(self): return False
+    def evaluate(self, script, arg=None):
+        if 'window.name ||' in script: return self.name
+        if arg is not None: self.name = arg
+        return None
+    def goto(self, url, **kwargs):
+        self.navigations.append(url)
+        self.url = url
+    def wait_for_timeout(self, value): pass
+
+marker = WEBHTTP_WINDOW_PREFIX + 'gemini-web'
+bad = FakePage('https://www.google.com/sorry/index', marker)
+good = FakePage('https://gemini.google.com/app')
+context = type('Context', (), {'pages': [bad, good], 'new_page': lambda self: FakePage('about:blank')})()
+chosen = _provider_page(context, 'gemini-web')
+print(json.dumps({
+    'picked_good': chosen is good,
+    'good_marked': good.name == marker,
+    'bad_navigations': len(bad.navigations),
+}))
+`;
+    const result = runPython(script);
+    assert.deepEqual(result, { picked_good: true, good_marked: true, bad_navigations: 0 });
+});
+
+test('Flow reCAPTCHA action 由计费请求显式传入，认证探针不会预生成 token', () => {
+    const pythonSource = fs.readFileSync(path.join(PYTHON_ROOT, 'ops_cli', 'webhttp.py'), 'utf8');
+    const bridgeSource = fs.readFileSync(path.join(ROOT, 'server', 'services', 'webhttp', 'bridge.js'), 'utf8');
+    const providerSource = fs.readFileSync(path.join(ROOT, 'server', 'services', 'webhttp', 'flow', 'provider.js'), 'utf8');
+
+    assert.doesNotMatch(pythonSource, /action:\s*['"]generate['"]/);
+    assert.match(pythonSource, /recaptchaAction/);
+    assert.match(bridgeSource, /--recaptcha-action/);
+    assert.match(providerSource, /recaptchaAction:\s*'IMAGE_GENERATION'/);
+    assert.match(providerSource, /recaptchaAction:\s*'VIDEO_GENERATION'/);
+    assert.match(providerSource, /Never cache a reCAPTCHA token/);
+    assert.match(pythonSource, /\/v1\/flow\/models\/statuses/);
+    assert.match(pythonSource, /result\.modelConfig\s*=\s*await response\.json\(\)/);
+});
+
 test('可见登录实例占用 Profile 时，生成先关闭它再启动无头 CDP', { skip: !ready }, () => {
     const script = `
 import json, sys, tempfile

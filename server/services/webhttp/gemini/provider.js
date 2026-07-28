@@ -12,10 +12,13 @@ import { downloadResultMedia, loadReferenceImageFiles, requireNonEmptyPrompt } f
 import {
     GEMINI_MODE,
     GEMINI_PROTOCOL_VERSION,
+    GEMINI_VIDEO_POLL_RPC,
     applyAspectRatio,
+    buildBatchRpcRequest,
     buildStreamBody,
     buildStreamPayload,
     buildStreamUrl,
+    buildVideoPollArgs,
     buildUploadFinalizeRequest,
     buildUploadStartRequest,
     extractConversation,
@@ -246,9 +249,15 @@ export async function generateGeminiImageHttp({
     signal
 }) {
     const cleanPrompt = requireNonEmptyPrompt(prompt, `${PROVIDER_NAME} 图片`);
+    const references = referenceImageInputs.filter(Boolean);
+    if (references.length > 5) {
+        throw new WebProviderError(`${PROVIDER_NAME} 图片当前最多支持 5 张参考图`, {
+            provider: PROVIDER, code: 'INVALID_INPUT', submitted: false
+        });
+    }
     const session = await getGeminiSession({ signal, forceRefresh: true });
-    const assets = referenceImageInputs.length
-        ? await uploadGeminiImages(referenceImageInputs, libraryDir, { session, signal })
+    const assets = references.length
+        ? await uploadGeminiImages(references, libraryDir, { session, signal })
         : [];
 
     const payloads = await streamGenerate({
@@ -269,7 +278,7 @@ export async function generateGeminiImageHttp({
         const refusal = detectRefusal(payloads);
         if (refusal) {
             throw new WebProviderError(`${PROVIDER_NAME}：${refusal.message}`, {
-                provider: PROVIDER, code: refusal.code, submitted: false
+                provider: PROVIDER, code: refusal.code, submitted: false, retryable: false
             });
         }
         const hint = isGenerationPending(payloads)
@@ -284,21 +293,111 @@ export async function generateGeminiImageHttp({
     return { images: downloaded, ...downloaded[0], channel: 'http' };
 }
 
+const VIDEO_POLL_INTERVAL_MS = 60_000;
+const VIDEO_POLL_SESSION_REFRESH_MS = 90_000;
+
+/**
+ * Gemini acknowledges video generation immediately, then exposes the finished
+ * turn through the hNvQHb conversation RPC. Each poll is a short authenticated
+ * request; it never re-submits the prompt and therefore cannot double bill.
+ */
+async function waitForGeminiVideo({ session, conversationId, timeoutMinutes, signal }) {
+    const deadline = Date.now() + timeoutMinutes * 60_000;
+    let activeSession = session;
+    let refreshedAt = Date.now();
+    while (Date.now() < deadline) {
+        await sleep(VIDEO_POLL_INTERVAL_MS, signal);
+        if (Date.now() - refreshedAt >= VIDEO_POLL_SESSION_REFRESH_MS) {
+            activeSession = await getGeminiSession({ signal, forceRefresh: true });
+            refreshedAt = Date.now();
+        }
+        requestIdSeed = nextRequestId(requestIdSeed);
+        const spec = buildBatchRpcRequest({
+            bl: activeSession.bl,
+            fSid: activeSession.fSid,
+            reqId: requestIdSeed,
+            at: activeSession.at,
+            rpcId: GEMINI_VIDEO_POLL_RPC,
+            args: buildVideoPollArgs(conversationId),
+            sourcePath: `/app/${conversationId.replace(/^c_/, '')}`
+        });
+        try {
+            const response = await webFetch(PROVIDER, buildRequestSpec(spec), {
+                signal,
+                timeoutSeconds: 120,
+                submitted: true
+            });
+            if (!response.ok) {
+                throw new WebProviderError(`${PROVIDER_NAME} 视频状态查询失败：HTTP ${response.status}`, {
+                    provider: PROVIDER,
+                    code: response.status === 401 || response.status === 403 ? 'AUTH_EXPIRED' : 'GENERATION_FAILED',
+                    submitted: true
+                });
+            }
+            const payloads = extractStreamPayloads(response.text);
+            if (payloads.length === 0) continue;
+            if (extractGeneratedMedia(payloads).videos.length > 0) {
+                return { payloads, session: activeSession };
+            }
+
+            const refusal = detectRefusal(payloads);
+            if (refusal) {
+                throw new WebProviderError(`${PROVIDER_NAME}：${refusal.message}`, {
+                    provider: PROVIDER, code: refusal.code, submitted: true
+                });
+            }
+        } catch (error) {
+            if (error instanceof WebProviderError
+                && (error.code === 'CONTENT_POLICY' || error.code === 'QUOTA_EXHAUSTED')) {
+                throw error;
+            }
+            // Do not hammer Gemini after a transport/rate-limit failure. The
+            // fixed 60s interval is the backoff; the periodic refresh before a
+            // later poll replaces short-lived bl/f.sid/at values.
+            // The task is already paid for. A transient lookup failure must not
+            // turn into a second generation through auto/browser fallback.
+            console.warn(`[Gemini Web HTTP] 视频状态查询失败，继续等待：${error.message}`);
+        }
+    }
+    throw new WebProviderError(
+        `${PROVIDER_NAME} 视频在 ${timeoutMinutes} 分钟内未完成。生成配额可能已经消耗。`
+        + `会话 ID：${conversationId}。请到 Gemini 会话中查看结果，不要直接重新生成。`,
+        {
+            provider: PROVIDER,
+            code: 'POLL_TIMEOUT',
+            submitted: true,
+            details: { conversationId }
+        }
+    );
+}
+
 export async function generateGeminiVideoHttp({
     prompt,
     aspectRatio = '16:9',
+    duration = 10,
     referenceImageInputs = [],
     libraryDir,
     timeoutMinutes = 15,
     signal
 }) {
     const cleanPrompt = requireNonEmptyPrompt(prompt, `${PROVIDER_NAME} 视频`);
-    const session = await getGeminiSession({ signal, forceRefresh: true });
-    const assets = referenceImageInputs.length
-        ? await uploadGeminiImages(referenceImageInputs, libraryDir, { session, signal })
+    if (Number(duration) !== 10) {
+        throw new WebProviderError(`${PROVIDER_NAME} 视频当前固定生成 10 秒`, {
+            provider: PROVIDER, code: 'INVALID_INPUT', submitted: false, retryable: false
+        });
+    }
+    const references = referenceImageInputs.filter(Boolean);
+    if (references.length > 1) {
+        throw new WebProviderError(`${PROVIDER_NAME} 视频当前只支持 1 张首帧参考图`, {
+            provider: PROVIDER, code: 'INVALID_INPUT', submitted: false
+        });
+    }
+    let session = await getGeminiSession({ signal, forceRefresh: true });
+    const assets = references.length
+        ? await uploadGeminiImages(references, libraryDir, { session, signal })
         : [];
 
-    const payloads = await streamGenerate({
+    let payloads = await streamGenerate({
         session,
         prompt: applyAspectRatio(cleanPrompt, aspectRatio, 'video'),
         assets,
@@ -309,12 +408,30 @@ export async function generateGeminiVideoHttp({
         timeoutSeconds: Math.max(300, timeoutMinutes * 60)
     });
 
-    const { videos } = extractGeneratedMedia(payloads);
+    let { videos } = extractGeneratedMedia(payloads);
+    const conversation = extractConversation(payloads);
+    if (videos.length === 0 && isGenerationPending(payloads)) {
+        if (!conversation.conversationId) {
+            throw new WebProviderError(
+                `${PROVIDER_NAME} 已接受视频任务，但没有返回可查询的 conversationId。请到 Gemini 会话中查看结果，不要直接重新生成。`,
+                { provider: PROVIDER, code: 'PROTOCOL_CHANGED', submitted: true }
+            );
+        }
+        const completed = await waitForGeminiVideo({
+            session,
+            conversationId: conversation.conversationId,
+            timeoutMinutes,
+            signal
+        });
+        payloads = completed.payloads;
+        session = completed.session;
+        ({ videos } = extractGeneratedMedia(payloads));
+    }
     if (videos.length === 0) {
         const refusal = detectRefusal(payloads);
         if (refusal) {
             throw new WebProviderError(`${PROVIDER_NAME}：${refusal.message}`, {
-                provider: PROVIDER, code: refusal.code, submitted: false
+                provider: PROVIDER, code: refusal.code, submitted: false, retryable: false
             });
         }
         throw new WebProviderError(
@@ -323,7 +440,33 @@ export async function generateGeminiVideoHttp({
         );
     }
     const downloaded = await downloadGeminiMedia(videos, { session, expectedType: 'video' });
-    return { videos: downloaded, ...downloaded[0], channel: 'http' };
+    return {
+        videos: downloaded,
+        ...downloaded[0],
+        runId: conversation.conversationId || '',
+        channel: 'http'
+    };
+}
+
+function sleep(ms, signal) {
+    return new Promise((resolve, reject) => {
+        const cancelled = () => new WebProviderError(
+            '任务已取消', { provider: PROVIDER, code: 'UNKNOWN', submitted: true }
+        );
+        if (signal?.aborted) {
+            reject(cancelled());
+            return;
+        }
+        const onAbort = () => {
+            clearTimeout(timer);
+            reject(cancelled());
+        };
+        const timer = setTimeout(() => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+        signal?.addEventListener('abort', onAbort, { once: true });
+    });
 }
 
 /**
@@ -337,13 +480,14 @@ export async function discoverGeminiModels() {
             id: 'gemini-web-image',
             displayName: 'Gemini Web 生图',
             aspectRatios: ['1:1', '16:9', '9:16', '4:3', '3:4'],
-            maxReferenceImages: 12,
+            maxReferenceImages: 5,
             maxBatchCount: 1
         }],
         videos: [{
             id: 'gemini-web-video',
             displayName: 'Gemini Web 生视频',
             aspectRatios: ['16:9', '9:16'],
+            durations: [10],
             supportsImageToVideo: true,
             supportsAudio: true,
             maxReferenceImages: 1,

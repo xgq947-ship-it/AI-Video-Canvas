@@ -82,6 +82,10 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
   const videoProvider = videoChoice ? getVideoGenerationProvider(videoChoice.modelId) : null;
   const videoCandidates = videoModelsForAspectRatio(aspectRatio);
   const videoDurations = videoProvider?.supportedDurations || [];
+  const savedVideoDuration = Number(data.productSceneVideoDuration);
+  const selectedVideoDuration = videoDurations.includes(savedVideoDuration)
+    ? savedVideoDuration
+    : videoDurations[0];
   const dimensions = data.productDimensions || { length: 0, width: 0, height: 0, unit: 'cm' as const };
   const dimensionError = validateProductDimensions(dimensions);
   const missingVideoPrompt = data.productSceneAutoGenerateVideo && !promptNode?.prompt?.trim();
@@ -360,7 +364,7 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
                     ? <option value="">没有模型支持 {aspectRatio}</option>
                     : videoCandidates.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
                 </select>
-                {videoDurations.length > 0 && <select value={data.productSceneVideoDuration || videoDurations[0]} onChange={event => onUpdate(data.id, { productSceneVideoDuration: Number(event.target.value) })} className={`rounded-lg border px-2 py-2 text-xs ${isDark ? 'border-neutral-700 bg-[#242424]' : 'border-neutral-300 bg-white'}`}>
+                {videoDurations.length > 0 && <select value={selectedVideoDuration} onChange={event => onUpdate(data.id, { productSceneVideoDuration: Number(event.target.value) })} className={`rounded-lg border px-2 py-2 text-xs ${isDark ? 'border-neutral-700 bg-[#242424]' : 'border-neutral-300 bg-white'}`}>
                   {videoDurations.map(duration => <option key={duration} value={duration}>{duration} 秒</option>)}
                 </select>}
                 {videoProvider?.supportsNativeAudio && <label className="flex items-center gap-1.5 text-[11px]"><input type="checkbox" checked={data.productSceneVideoGenerateAudio !== false} onChange={event => onUpdate(data.id, { productSceneVideoGenerateAudio: event.target.checked })} />原生音频</label>}

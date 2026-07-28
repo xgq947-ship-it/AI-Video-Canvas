@@ -125,8 +125,13 @@ def browser_web_context(
     ctx: typer.Context,
     provider: str = typer.Option(..., "--provider", help="google-flow, jimeng, or gemini-web"),
     output_file: str = typer.Option(..., "--output-file", help="Where to write the auth/bootstrap context."),
+    recaptcha_action: str = typer.Option("", "--recaptcha-action", help="Flow generation action; empty for auth-only probes."),
 ) -> None:
-    params = {"provider": provider, "output_file": output_file}
+    params = {
+        "provider": provider,
+        "output_file": output_file,
+        "recaptcha_action": recaptcha_action,
+    }
     _execute(
         ctx,
         command_name="ops browser web-context",

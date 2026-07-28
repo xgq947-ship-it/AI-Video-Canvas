@@ -5,10 +5,12 @@
  * Allows users to write/generate prompts for each scene and configure video settings.
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { X, Sparkles, Film, Loader2, Play, Check, ChevronDown, Wand2, Trash2 } from 'lucide-react';
 import { NodeData } from '../../types';
 import { useBrowserModels } from '../../hooks/useBrowserModels';
+import { useGenerationModelRegistry } from '../../hooks/useGenerationModelRegistry';
+import { listVideoGenerationProviders } from '@/shared/generationProviders.js';
 
 interface StoryboardVideoModalProps {
     isOpen: boolean;
@@ -29,62 +31,7 @@ interface StoryboardVideoModalProps {
     };
 }
 
-// Video durations in seconds
-const VIDEO_DURATIONS = [5, 6, 8, 10];
-const VIDEO_RESOLUTIONS = ["Auto", "1080p", "768p", "720p", "512p"];
-
-const VIDEO_MODELS = [
-    {
-        id: 'google-flow-omni-flash',
-        name: 'Google Flow · Omni Flash',
-        provider: 'workflow',
-        durations: [4, 6, 8, 10],
-        resolutions: ['自动']
-    },
-    {
-        id: 'google-flow-veo-3-1-lite',
-        name: 'Google Flow · Veo 3.1 - Lite',
-        provider: 'workflow',
-        durations: [4, 6, 8, 10],
-        resolutions: ['自动']
-    },
-    {
-        id: 'jimeng-seedance-2-0-mini',
-        name: '即梦 · Seedance 2.0 mini',
-        provider: 'workflow',
-        durations: [4, 5, 6, 8, 10, 15],
-        resolutions: ['720P', '1080P', '4K']
-    },
-    {
-        id: 'jimeng-seedance-2-0-fast',
-        name: '即梦 · Seedance 2.0 Fast VIP',
-        provider: 'workflow',
-        durations: [4, 5, 6, 8, 10, 15],
-        resolutions: ['720P', '1080P', '4K']
-    },
-    {
-        id: 'jimeng-seedance-2-0',
-        name: '即梦 · Seedance 2.0 VIP',
-        provider: 'workflow',
-        durations: [4, 5, 6, 8, 10, 15],
-        resolutions: ['720P', '1080P', '4K']
-    },
-    {
-        id: 'jimeng-seedance-2-0-fast-standard',
-        name: '即梦 · Seedance 2.0 Fast',
-        provider: 'workflow',
-        durations: [4, 5, 6, 8, 10, 15],
-        resolutions: ['720P', '1080P', '4K']
-    },
-    {
-        id: 'jimeng-seedance-2-0-standard',
-        name: '即梦 · Seedance 2.0',
-        provider: 'workflow',
-        durations: [4, 5, 6, 8, 10, 15],
-        resolutions: ['720P', '1080P', '4K']
-    },
-    { id: 'seedance-2-0', name: 'Seedance 2.0', provider: 'seedance', durations: [4, 5, 6, 8, 10, 15], resolutions: ['720p', '1080p'] },
-];
+const VIDEO_RESOLUTIONS = ['自动'];
 
 export const StoryboardVideoModal: React.FC<StoryboardVideoModalProps> = ({
     isOpen,
@@ -93,8 +40,18 @@ export const StoryboardVideoModal: React.FC<StoryboardVideoModalProps> = ({
     onCreateVideos,
     storyContext
 }) => {
-    // Google Flow / 即梦 依赖本机浏览器自动化运行时，未配置时置灰而不是让用户点了才报错。
+    // 网页 HTTP 模型依赖本机 Python 连接 Chrome 登录态，未配置时提前置灰。
     const { browserModelsHint, isModelUnavailable } = useBrowserModels();
+    const { revision: modelRegistryRevision } = useGenerationModelRegistry();
+    const videoModels = useMemo(() => listVideoGenerationProviders()
+        .filter(model => model.supportsImageToVideo)
+        .map(model => ({
+            id: model.id,
+            name: model.name,
+            provider: model.provider,
+            durations: model.supportedDurations,
+            resolutions: model.resolutions
+        })), [modelRegistryRevision]);
 
     // Track removed scenes (locally within modal session)
     const [removedSceneIds, setRemovedSceneIds] = useState<Set<string>>(new Set());
@@ -122,14 +79,13 @@ export const StoryboardVideoModal: React.FC<StoryboardVideoModalProps> = ({
     const modelDropdownRef = useRef<HTMLDivElement>(null);
 
     // Dynamic resolution options based on model and duration
-    const currentModel = VIDEO_MODELS.find(m => m.id === settings.model) || VIDEO_MODELS[0];
-    const availableResolutions: string[] = (currentModel as any).durationResolutionMap?.[settings.duration]
-        || currentModel.resolutions
+    const currentModel = videoModels.find(m => m.id === settings.model) || videoModels[0];
+    const availableResolutions: string[] = currentModel?.resolutions
         || VIDEO_RESOLUTIONS;
 
     // Ensure settings are valid when model/duration changes
     useEffect(() => {
-        const model = VIDEO_MODELS.find(m => m.id === settings.model);
+        const model = videoModels.find(m => m.id === settings.model);
         if (!model) return;
 
         let newDuration = settings.duration;
@@ -143,7 +99,7 @@ export const StoryboardVideoModal: React.FC<StoryboardVideoModalProps> = ({
         }
 
         // Validation for Resolution
-        const allowedResolutions = (model as any).durationResolutionMap?.[newDuration] || model.resolutions || VIDEO_RESOLUTIONS;
+        const allowedResolutions = model.resolutions || VIDEO_RESOLUTIONS;
         if (!allowedResolutions.includes(newResolution) && !allowedResolutions.includes('Auto')) {
             // If current resolution not allowed, pick first allowed
             // Favor '720p' or '1080p' if available, else first
@@ -156,16 +112,16 @@ export const StoryboardVideoModal: React.FC<StoryboardVideoModalProps> = ({
         if (changed) {
             setSettings(prev => ({ ...prev, duration: newDuration, resolution: newResolution }));
         }
-    }, [settings.model, settings.duration, settings.resolution]);
+    }, [settings.model, settings.duration, settings.resolution, videoModels]);
 
     // Initial settings sync
     useEffect(() => {
         // Ensure duration is valid for initial model
-        const model = VIDEO_MODELS.find(m => m.id === settings.model);
+        const model = videoModels.find(m => m.id === settings.model);
         if (model && !model.durations.includes(settings.duration)) {
             setSettings(prev => ({ ...prev, duration: model.durations[0] }));
         }
-    }, []); // Only run once on mount
+    }, [settings.model, settings.duration, videoModels]);
 
     // Close dropdown when clicking outside
     useEffect(() => {
@@ -281,7 +237,7 @@ export const StoryboardVideoModal: React.FC<StoryboardVideoModalProps> = ({
     };
 
     const handleModelChange = (modelId: string) => {
-        const newModel = VIDEO_MODELS.find(m => m.id === modelId);
+        const newModel = videoModels.find(m => m.id === modelId);
         if (!newModel) return;
 
         // Determine new duration: keep current if valid, else first available
@@ -292,7 +248,7 @@ export const StoryboardVideoModal: React.FC<StoryboardVideoModalProps> = ({
 
         // Determine new resolution
         let newResolution = settings.resolution;
-        const availableRes = (newModel as any).durationResolutionMap?.[newDuration] || newModel.resolutions || VIDEO_RESOLUTIONS;
+        const availableRes = newModel.resolutions || VIDEO_RESOLUTIONS;
         if (!availableRes.includes(newResolution) && availableRes.length > 0) {
             newResolution = availableRes[0];
         }
@@ -446,7 +402,7 @@ export const StoryboardVideoModal: React.FC<StoryboardVideoModalProps> = ({
 
                                             {/* 本地工作流 */}
                                             <div className="px-3 py-2 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1a1a1a]">本地工作流</div>
-                                            {VIDEO_MODELS.filter(m => m.provider === 'workflow').map(model => {
+                                            {videoModels.filter(m => m.provider === 'workflow').map(model => {
                                                 const unavailable = isModelUnavailable(model.id);
                                                 return (
                                                 <button
@@ -469,7 +425,7 @@ export const StoryboardVideoModal: React.FC<StoryboardVideoModalProps> = ({
 
                                             {/* Seedance */}
                                             <div className="px-3 py-2 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1a1a1a] border-t border-neutral-700">Seedance</div>
-                                            {VIDEO_MODELS.filter(m => m.provider === 'seedance').map(model => (
+                                            {videoModels.filter(m => m.provider === 'seedance').map(model => (
                                                 <button
                                                     key={model.id}
                                                     onClick={() => handleModelChange(model.id)}

@@ -18,6 +18,9 @@ import { downloadResultMedia, loadReferenceImageFiles, requireNonEmptyPrompt } f
 import { fetchImageXCredentials, uploadReferenceImage } from './imagex.js';
 import {
     JIMENG_BASELINE_IMAGE_MODEL,
+    buildGenerateUrl,
+    buildJimengSignHeaders,
+    toolPageUrl,
     JIMENG_BASELINE_VIDEO_MODEL,
     JIMENG_IMAGE_RATIOS,
     JIMENG_IMAGE_RESOLUTIONS,
@@ -45,12 +48,20 @@ const PROVIDER_NAME = '即梦';
 const FIRST_POLL_DELAY_MS = 4_000;
 const FALLBACK_POLL_INTERVAL_MS = 15_000;
 
-async function jimengApi(path, body, { signal, submitted = false, what = '接口调用', timeoutSeconds } = {}) {
+async function jimengApi(path, body, { signal, submitted = false, what = '接口调用', timeoutSeconds, url, pageUrl } = {}) {
+    const target = url || apiUrl(path);
     const response = await webFetch(PROVIDER, buildRequestSpec({
-        url: apiUrl(path),
+        url: target,
         method: 'POST',
         json: body ?? {},
-        timeoutSeconds
+        // 站点自己的请求层会加这一组头；裸 XHR 拿不到，必须我们补上，
+        // 否则受保护接口一律 permission denied。
+        headers: buildJimengSignHeaders(target),
+        timeoutSeconds,
+        pageUrl,
+        // 即梦所有业务接口统一走 XHR：受保护路径必须靠 XHR 钩子补 sign 头，
+        // 其余路径走 XHR 也完全正常，没必要按路径分叉。
+        transport: 'xhr'
     }), { signal, timeoutSeconds, submitted });
 
     if (!response.ok) {
@@ -79,6 +90,23 @@ async function jimengApi(path, body, { signal, submitted = false, what = '接口
 // ---------------------------------------------------------------------------
 // Session / workspace
 // ---------------------------------------------------------------------------
+
+/**
+ * Per-browser client context (webId). Cached for the process: it is tied to the
+ * browser profile, not to the login, so it does not rotate mid-session.
+ */
+let cachedClientContext = null;
+
+export function clearJimengClientContext() {
+    cachedClientContext = null;
+}
+
+async function getJimengClientContext({ signal } = {}) {
+    if (cachedClientContext) return cachedClientContext;
+    const context = await webContext(PROVIDER, { signal });
+    cachedClientContext = { webId: context?.webId || '' };
+    return cachedClientContext;
+}
 
 
 /** Workspaces are cheap; one per business task keeps histories separable. */
@@ -132,13 +160,20 @@ export async function uploadJimengReferenceImages(inputs, libraryDir, { signal }
 // Task submission + polling
 // ---------------------------------------------------------------------------
 
-async function submitDraft({ draft, workspaceId, model, signal, what }) {
+async function submitDraft({ draft, workspaceId, model, signal, what, generateCount = 1, toolId, featureKey, kind = 'image' }) {
     // Generated before the request so an ambiguous outcome stays recoverable.
     const submitId = randomUUID();
+    // babi_param（放在 URL 上）携带功能与权益描述符，缺了它服务端直接
+    // permission denied；webId 取自 _tea_web_id Cookie，同样是必填。
+    const { webId } = await getJimengClientContext({ signal });
     const payload = await jimengApi(
         '/aigc_draft/generate',
-        buildGenerateBody({ draft, submitId, workspaceId, model }),
-        { signal, submitted: true, what, timeoutSeconds: 180 }
+        buildGenerateBody({ draft, submitId, workspaceId, model, generateCount }),
+        {
+            signal, submitted: true, what, timeoutSeconds: 180,
+            url: buildGenerateUrl({ model, webId, toolId, featureKey }),
+            pageUrl: toolPageUrl(kind, workspaceId)
+        }
     );
     return {
         submitId,
@@ -261,7 +296,10 @@ export async function generateJimengImageHttp({
         ? buildBlendDraft({ prompt: cleanPrompt, images: references, model, ratio: aspectRatio, resolution, count })
         : buildImageDraft({ prompt: cleanPrompt, model, ratio: aspectRatio, resolution, count });
 
-    const task = await submitDraft({ draft, workspaceId: workspace, model, signal, what: '图片生成' });
+    const task = await submitDraft({
+        draft, workspaceId: workspace, model, signal, what: '图片生成',
+        generateCount: Number(count) || 1, toolId: 'tool_image', featureKey: 'aigc_to_image', kind: 'image'
+    });
     const results = await waitForTask(task, {
         isCompleted: isJimengImageCompleted,
         parseResults: parseJimengImageResults,
@@ -332,7 +370,10 @@ export async function generateJimengVideoHttp({
         batchCount: count
     });
 
-    const task = await submitDraft({ draft, workspaceId: workspace, model, signal, what: '视频生成' });
+    const task = await submitDraft({
+        draft, workspaceId: workspace, model, signal, what: '视频生成',
+        generateCount: Number(count) || 1, toolId: 'tool_video', featureKey: 'aigc_to_video', kind: 'video'
+    });
     const results = await waitForTask(task, {
         isCompleted: isJimengVideoCompleted,
         parseResults: parseJimengVideoResults,
@@ -357,14 +398,11 @@ export async function generateJimengVideoHttp({
 // Dynamic model discovery
 // ---------------------------------------------------------------------------
 
-const MODEL_CONFIG_ENDPOINTS = ['/get_model_list', '/aigc_model/list', '/model_config'];
-
 /**
- * Ask the account which models it can actually use.
+ * 动态模型发现。
  *
- * Several endpoint names are tried because the doc did not pin one down; the
- * verified samples remain as a baseline so a discovery miss never removes the
- * models the user already had.
+ * 数据源是页面 bootstrap 里服务端下发的模型表（见 webhttp.py 的 jimeng 上下文
+ * 脚本），不是猜来的接口名。发现失败时退回内置基线，绝不让模型下拉变空。
  */
 export async function discoverJimengModels({ signal } = {}) {
     const baseline = {
@@ -384,7 +422,7 @@ export async function discoverJimengModels({ signal } = {}) {
             fps: 24,
             durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
             aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
-            resolutions: ['720p'],
+            resolutions: ['720P'],
             maxBatchCount: 4,
             maxReferenceImages: 9,
             inputModes: [...JIMENG_VIDEO_INPUT_MODES],
@@ -392,20 +430,18 @@ export async function discoverJimengModels({ signal } = {}) {
         }]
     };
 
-    for (const path of MODEL_CONFIG_ENDPOINTS) {
-        try {
-            const payload = await jimengApi(path, { aid: 513695 }, { signal, what: '模型列表' });
-            const found = extractJimengModels(payload);
-            if (found.images.length > 0 || found.videos.length > 0) {
-                return {
-                    images: found.images.length ? found.images : baseline.images,
-                    videos: found.videos.length ? found.videos : baseline.videos,
-                    discovered: true
-                };
-            }
-        } catch {
-            // Try the next candidate; discovery must never block generation.
+    try {
+        const context = await webContext(PROVIDER, { signal });
+        const found = extractJimengModels(context?.modelConfig);
+        if (found.images.length > 0 || found.videos.length > 0) {
+            return {
+                images: found.images.length ? found.images : baseline.images,
+                videos: found.videos.length ? found.videos : baseline.videos,
+                discovered: true
+            };
         }
+    } catch (error) {
+        console.warn(`[即梦 HTTP] 模型发现失败，沿用内置基线：${error.message}`);
     }
     return { ...baseline, discovered: false };
 }

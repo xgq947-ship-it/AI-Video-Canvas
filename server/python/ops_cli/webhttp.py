@@ -87,11 +87,78 @@ class WebHttpBridgeError(RuntimeError):
         self.submitted = False
 
 
-# The single in-page fetch. Deliberately uses `window.fetch` (not a captured
-# reference) so the site's own interceptors — 即梦's secsdk signer above all —
-# still wrap the call.
+# The single in-page request.
+#
+# Transport matters, and not for style: 即梦's security SDK adds the `sign` /
+# `device-time` / `x-secsdk-web-signature` headers by hooking
+# `XMLHttpRequest`, **not** `window.fetch`. Measured against the live API, the
+# identical body sent via fetch is rejected with `ret=3018 permission denied`
+# while the XHR path gets past the entitlement check. `window.fetch` still gets
+# the BDMS query signing (msToken / a_bogus), which is why the lighter
+# endpoints work either way — but anything on the protected-path list has to go
+# out over XHR.
+#
+# Both branches deliberately use the live globals rather than captured
+# references, so whatever the page has wrapped stays wrapped.
 _FETCH_SCRIPT = """
 async (spec) => {
+  if (spec.transport === 'xhr') {
+    return await new Promise((resolve) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(spec.method || 'GET', spec.url, true);
+      xhr.withCredentials = (spec.credentials || 'include') !== 'omit';
+      xhr.responseType = 'arraybuffer';
+      xhr.timeout = spec.timeoutMs;
+      for (const [key, value] of Object.entries(spec.headers || {})) {
+        try { xhr.setRequestHeader(key, value); } catch (error) { /* forbidden header */ }
+      }
+      const encodeBuffer = (buffer) => {
+        const bytes = new Uint8Array(buffer || new ArrayBuffer(0));
+        let binary = '';
+        const chunk = 0x8000;
+        for (let index = 0; index < bytes.length; index += chunk) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(index, index + chunk));
+        }
+        return btoa(binary);
+      };
+      const headersOf = () => {
+        const out = {};
+        String(xhr.getAllResponseHeaders() || '').trim().split(/[\\r\\n]+/).forEach((line) => {
+          const at = line.indexOf(':');
+          if (at > 0) out[line.slice(0, at).trim().toLowerCase()] = line.slice(at + 1).trim();
+        });
+        return out;
+      };
+      xhr.onload = () => resolve({
+        ok: xhr.status >= 200 && xhr.status < 300,
+        status: xhr.status,
+        statusText: xhr.statusText || '',
+        url: xhr.responseURL || spec.url,
+        redirected: false,
+        headers: headersOf(),
+        bodyBase64: encodeBuffer(xhr.response)
+      });
+      const fail = (reason) => resolve({
+        ok: false, status: 0, statusText: reason, url: spec.url,
+        networkError: true, headers: {}, bodyBase64: ''
+      });
+      xhr.onerror = () => fail('xhr network error');
+      xhr.ontimeout = () => fail('xhr timeout');
+      xhr.onabort = () => fail('xhr aborted');
+
+      let body = null;
+      if (spec.bodyBase64) {
+        const binary = atob(spec.bodyBase64);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+        body = bytes;
+      } else if (typeof spec.bodyText === 'string') {
+        body = spec.bodyText;
+      }
+      xhr.send(body);
+    });
+  }
+  return await (async (spec) => {
   const decode = (value) => {
     const binary = atob(value);
     const bytes = new Uint8Array(binary.length);
@@ -148,6 +215,7 @@ async (spec) => {
   } finally {
     clearTimeout(timer);
   }
+  })(spec);
 }
 """
 
@@ -283,6 +351,8 @@ _CONTEXT_SCRIPTS = {
     "jimeng": """
     async () => {
       const result = { webId: '', aid: 513695, appVersion: '', signedIn: false };
+      // 整页文档只拉一次：登录判定与模型表解析共用，避免多一次几百 KB 的请求。
+      let html = '';
       // 诊断用：即梦的 secsdk 是否包装了 window.fetch / XHR。
       // 整个 HTTP 通道之所以把请求放进页面里发，就是为了让站点自己的包装去补
       // sign / msToken / a_bogus。若两者都是原生实现，说明当前这批接口只靠 Cookie
@@ -299,16 +369,44 @@ _CONTEXT_SCRIPTS = {
           credentials: 'include',
           headers: { 'cache-control': 'no-cache' }
         });
-        const html = await response.text();
+        html = await response.text();
         const match = html.match(/window\\.__isLogined\\s*=\\s*(true|false)/);
         result.loginFlag = match ? match[1] : '';
         result.hasUserInfo = html.indexOf('__userInfoStringify') >= 0;
         result.signedIn = result.loginFlag === 'true' && result.hasUserInfo;
       } catch (error) { result.userError = String(error && error.message || error); }
+      // webId 是生成请求必带的查询参数，来源是 _tea_web_id Cookie。
+      // 缺它时 aigc_draft/generate 直接 permission denied。
+      try {
+        const match = String(document.cookie || '').match(/(?:^|;\\s*)_tea_web_id=([^;]+)/);
+        result.webId = match ? decodeURIComponent(match[1]) : '';
+      } catch (error) { /* cookie may be blocked */ }
       try {
         const raw = window.localStorage ? window.localStorage.getItem('web_version') : '';
         if (raw) result.appVersion = String(raw).slice(0, 32);
       } catch (error) { /* storage may be blocked */ }
+      // 模型表由服务端随页面下发，是当前账号**真实可用**的那一份。
+      // 之前去猜 /get_model_list 之类的接口名，一个都没猜中。
+      try {
+        const pick = (name) => {
+          const key = 'window.' + name + '=';
+          const at = html.indexOf(key);
+          if (at < 0) return null;
+          let start = html.indexOf('{', at), depth = 0, inStr = false, esc = false;
+          for (let i = start; i < html.length; i += 1) {
+            const c = html[i];
+            if (inStr) { if (esc) esc = false; else if (c === '\\\\') esc = true; else if (c === '"') inStr = false; continue; }
+            if (c === '"') inStr = true;
+            else if (c === '{') depth += 1;
+            else if (c === '}') { depth -= 1; if (depth === 0) { try { return JSON.parse(html.slice(start, i + 1)); } catch (e) { return null; } } }
+          }
+          return null;
+        };
+        result.modelConfig = {
+          image: pick('__image_generate_model_config__'),
+          video: pick('__video_generate_model_config__')
+        };
+      } catch (error) { result.modelConfigError = String(error && error.message || error); }
       return result;
     }
     """
@@ -379,7 +477,24 @@ def _page_window_name(page: Any) -> str:
         return ""
 
 
-def _provider_page(context: Any, provider: str) -> Any:
+def _same_page_target(current: str, desired: str) -> bool:
+    """Is the page already on the requested tool page?
+
+    Compared by host + path + the `type` query parameter only. The app rewrites
+    its own URL (appending `workspace=...`), so a strict string comparison would
+    force a reload before every request.
+    """
+    a, b = urlparse(current), urlparse(desired)
+    if (a.hostname or "").lower() != (b.hostname or "").lower():
+        return False
+    if (a.path or "/").rstrip("/") != (b.path or "/").rstrip("/"):
+        return False
+    from urllib.parse import parse_qs
+
+    return parse_qs(a.query).get("type") == parse_qs(b.query).get("type")
+
+
+def _provider_page(context: Any, provider: str, desired_url: str | None = None) -> Any:
     """Return a long-lived page parked on the provider's origin.
 
     Deliberately does **not** run ``cleanup_playwright_context``: closing other
@@ -407,19 +522,31 @@ def _provider_page(context: Any, provider: str) -> Any:
         except Exception:
             pass
 
-    host = (urlparse(str(getattr(page, "url", "") or "")).hostname or "").lower()
+    current = str(getattr(page, "url", "") or "")
+    host = (urlparse(current).hostname or "").lower()
+
+    # 有些平台的权益判定与请求来源页面绑定：实测即梦同一份生图请求，从
+    # /ai-tool/generate?type=image 发出可以通过鉴权，从 ?type=video 发出则一律
+    # permission denied。所以调用方可以指定必须待在哪个工具页上。
     if host == expected_host:
+        if not desired_url or _same_page_target(current, desired_url):
+            return page
+        page.goto(desired_url, wait_until="domcontentloaded", timeout=PAGE_READY_TIMEOUT_MS)
+        # 应用要把安全 SDK 和工具页初始化完才会给请求补签名；实测 3 秒不够，
+        # 太早发出的请求会被判 permission denied。
+        page.wait_for_timeout(9000)
         return page
 
     # A single redirect is not proof of a logout: these apps intermittently bounce
     # through a consent/interstitial page and land correctly on a second attempt.
     # Reporting AUTH_REQUIRED on the first bounce would push `auto` mode into a
     # browser fallback (and the user into a pointless re-login) for a blip.
+    target = desired_url or PROVIDER_ORIGINS[provider]
     for attempt in range(2):
         if attempt:
             page.wait_for_timeout(2_000)
         page.goto(
-            PROVIDER_ORIGINS[provider],
+            target,
             wait_until="domcontentloaded",
             timeout=PAGE_READY_TIMEOUT_MS,
         )
@@ -473,6 +600,9 @@ def _normalize_spec(spec: Any, timeout_seconds: int) -> dict[str, Any]:
         "bodyText": spec.get("bodyText"),
         "credentials": spec.get("credentials") or "include",
         "redirect": spec.get("redirect") or "follow",
+        # fetch 默认；受保护端点用 xhr 才能拿到站点自己加的 sign 头。
+        "transport": "xhr" if str(spec.get("transport") or "").lower() == "xhr" else "fetch",
+        "pageUrl": spec.get("pageUrl") or None,
         "timeoutMs": max(1, int(spec.get("timeoutSeconds") or timeout_seconds)) * 1000,
     }
 
@@ -494,8 +624,10 @@ def run_web_fetch(
     raw_requests = raw.get("requests") if isinstance(raw, dict) and "requests" in raw else [raw]
     specs = [_normalize_spec(item, timeout_seconds) for item in raw_requests]
 
+    desired_page = next((item.get("pageUrl") for item in specs if item.get("pageUrl")), None)
+
     def _run(context: Any) -> list[dict[str, Any]]:
-        page = _provider_page(context, provider)
+        page = _provider_page(context, provider, desired_page)
         page.set_default_timeout(max(specs, key=lambda s: s["timeoutMs"])["timeoutMs"] + 15_000)
         results: list[dict[str, Any]] = []
         for spec in specs:

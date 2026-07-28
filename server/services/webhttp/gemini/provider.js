@@ -23,6 +23,7 @@ import {
     extractGeminiBootstrap,
     extractStreamPayloads,
     extractText,
+    detectRefusal,
     isGenerationPending,
     nextRequestId,
     parseUploadedResourcePath,
@@ -263,8 +264,14 @@ export async function generateGeminiImageHttp({
 
     const { images } = extractGeneratedMedia(payloads);
     if (images.length === 0) {
-        // The doc says image results arrive in the same stream, but explicitly
-        // warns not to assume Gemini stays synchronous forever.
+        // Gemini 用自然语言拒绝（额度耗尽 / 内容策略），HTTP 依然是 200。
+        // 不识别的话会报成「协议可能已变化」，把用户引去查一个其实正常的协议。
+        const refusal = detectRefusal(payloads);
+        if (refusal) {
+            throw new WebProviderError(`${PROVIDER_NAME}：${refusal.message}`, {
+                provider: PROVIDER, code: refusal.code, submitted: false
+            });
+        }
         const hint = isGenerationPending(payloads)
             ? '生成仍在进行中，请到 Gemini 会话中查看结果，不要直接重新生成。'
             : '请到 Gemini 会话中确认结果，不要直接重新生成。';
@@ -304,6 +311,12 @@ export async function generateGeminiVideoHttp({
 
     const { videos } = extractGeneratedMedia(payloads);
     if (videos.length === 0) {
+        const refusal = detectRefusal(payloads);
+        if (refusal) {
+            throw new WebProviderError(`${PROVIDER_NAME}：${refusal.message}`, {
+                provider: PROVIDER, code: refusal.code, submitted: false
+            });
+        }
         throw new WebProviderError(
             `${PROVIDER_NAME} 视频生成未返回可下载结果。生成配额可能已消耗，请到 Gemini 会话中查看，不要直接重新生成。`,
             { provider: PROVIDER, code: 'GENERATION_FAILED', submitted: true }

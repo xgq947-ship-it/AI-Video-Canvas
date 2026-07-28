@@ -1,11 +1,11 @@
 /**
  * Per-provider execution mode for the Web HTTP channels.
  *
- *   auto    HTTP first; fall back to the existing browser workflow when the
- *           HTTP attempt failed **before** the generation request was submitted.
- *   http    HTTP only. A failure surfaces as an error instead of silently
- *           spending quota a second time through the browser.
- *   browser The pre-existing DOM/CDP automation, untouched.
+ *   auto  HTTP，提交前失败会重试一次（认证类失败先走 Session 恢复）。
+ *   http  HTTP，不额外重试。
+ *
+ * 曾经的 `browser`（DOM 点击生成）已整体删除：浏览器只负责登录与会话上下文。
+ * 旧配置里残留的 "browser" 会被规范化成 auto，不影响已有用户数据。
  *
  * Stored next to the optimizer preference (library/config/), which is already
  * git-ignored user data. Only the mode is persisted — never a token or cookie.
@@ -14,7 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const WEB_EXECUTION_MODES = Object.freeze(['auto', 'http', 'browser']);
+export const WEB_EXECUTION_MODES = Object.freeze(['auto', 'http']);
 export const WEB_HTTP_PROVIDER_IDS = Object.freeze(['gemini-web', 'jimeng', 'google-flow']);
 export const DEFAULT_WEB_EXECUTION_MODE = 'auto';
 
@@ -30,6 +30,8 @@ export function getWebExecutionConfigPath(libraryDir) {
 
 function normalizeMode(value) {
     const mode = String(value || '').trim().toLowerCase();
+    // 兼容旧配置：browser 模式已下线，读到时按默认 auto 处理，而不是报错让设置页打不开。
+    if (mode === 'browser') return DEFAULT_WEB_EXECUTION_MODE;
     return WEB_EXECUTION_MODES.includes(mode) ? mode : null;
 }
 

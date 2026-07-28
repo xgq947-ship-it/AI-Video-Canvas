@@ -100,19 +100,19 @@ export function buildStreamPayload({ prompt, assets = [], conversation = {}, mod
     const attachments = buildAttachments(assets);
     const message = [String(prompt ?? ''), 0, null, attachments, null, null, 0];
 
-    const payload = [message, [language], buildConversationTuple(conversation)];
-
-    if (mode === GEMINI_MODE.video) {
-        // Video requests carry the mode, the capability tool list and the extra
-        // structure recorded in doc §22. Slot positions follow the captured
-        // request; `2`'s meaning stays deliberately unnamed.
-        payload.push(null, null, null, [1], mode, [[GEMINI_MODE.videoCapability]], 1);
-        payload.push(...GEMINI_MODE.videoExtra);
-    } else if (mode === GEMINI_MODE.image) {
-        payload.push(null, null, null, [1], mode, [], 1);
-    }
-
-    return payload;
+    // 实测结论（2026-07-28，真实账号）：图片 / 视频请求与普通文本请求**结构完全相同**。
+    //
+    // 协议文档 §15/§21 记录了 14 / 11 / 17 这些数值，据此推断请求里应当附带「生成模式」
+    // 字段。实测把它们按任何位置追加进 payload，StreamGenerate 一律返回：
+    //   HTTP 400 [["er",null,...,400,...]]
+    // 而不带任何模式字段、只把意图写在 prompt 里时返回 200，模型正常按图片请求响应
+    // （本次因账号额度耗尽答复「一旦您的额度重置，我就可以创建更多图片」，
+    //  说明请求已被正确识别为生图）。
+    //
+    // 结论：Gemini Web 是对话式的 —— 生成什么由 prompt 决定，14/11/17 是**响应侧**的
+    // 标记而非请求字段。文档本身也规定「最终抓包事实 > 文档」，故以实测为准。
+    // GEMINI_MODE 保留下来供响应解析与将来协议变化参考，但不再注入请求。
+    return [message, [language], buildConversationTuple(conversation)];
 }
 
 /** Serialize the payload into the `f.req` + `at` form body. */
@@ -387,6 +387,29 @@ export function extractGeneratedMedia(payloads) {
     }
 
     return { images, videos };
+}
+
+/**
+ * Gemini refuses in prose rather than with a status code.
+ *
+ * A quota-exhausted image request still returns HTTP 200 with a friendly
+ * sentence and no media. Without this the caller reports "生成未返回结果（协议可能
+ * 已变化）", sending the user to debug a protocol that is working fine.
+ *
+ * @returns {{code: string, message: string}|null}
+ */
+export function detectRefusal(payloads) {
+    const text = extractText(payloads);
+    if (!text) return null;
+
+    const quota = /额度|配额|quota|limit.*(reset|reached)|用完|上限/i.test(text)
+        && /图片|视频|image|video|创建|生成|create|generate/i.test(text);
+    if (quota) return { code: 'QUOTA_EXHAUSTED', message: text.slice(0, 200) };
+
+    if (/无法(生成|创建)|不能(生成|创建)|policy|违反|不适当|can't (create|generate)|unable to (create|generate)/i.test(text)) {
+        return { code: 'CONTENT_POLICY', message: text.slice(0, 200) };
+    }
+    return null;
 }
 
 /** True when the stream says generation is still running rather than done. */

@@ -23,6 +23,10 @@ import {
 } from '../services/webhttp/index.js';
 import { getModelRegistry, invalidateModelRegistryCache } from '../services/webhttp/registry.js';
 import {
+    listPendingAuthTasks,
+    resumePendingAuthTasks
+} from '../services/webhttp/authRecovery.js';
+import {
     checkAllWebAuthStatus,
     describeAuthStatus,
     persistAuthStatus,
@@ -174,6 +178,29 @@ router.get('/web-sessions', async (req, res) => {
         res.json({ providers, probed: true });
     } catch (error) {
         res.status(500).json({ error: error.message || '登录状态检测失败' });
+    }
+});
+
+/**
+ * 因登录失效而挂起的任务。
+ *
+ * 用户重新登录后调用 resume：先确认 Session 真的恢复，再重放**未提交**的任务。
+ * 已提交的任务不会进到这里 —— 平台可能已经在生成，重放等于二次扣费。
+ */
+router.get('/pending-auth-tasks', (req, res) => {
+    res.json({ tasks: listPendingAuthTasks(req.query.provider || undefined) });
+});
+
+router.post('/pending-auth-tasks/resume', async (req, res) => {
+    const provider = String(req.body?.provider || '');
+    if (!WEB_HTTP_PROVIDER_IDS.includes(provider)) {
+        return res.status(400).json({ error: '未知的 Web 平台' });
+    }
+    try {
+        const result = await resumePendingAuthTasks(provider, { store: browserSessionState });
+        res.json({ success: true, ...result });
+    } catch (error) {
+        res.status(500).json({ error: error.message || '任务恢复失败' });
     }
 });
 

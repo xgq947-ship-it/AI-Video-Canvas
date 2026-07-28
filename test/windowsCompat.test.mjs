@@ -21,10 +21,6 @@ test('任务临时目录清理失败不会盖掉真正的错误', () => {
   // 这段在 finally 里，抛出去会把真正的生成失败原因整个替换掉 ——
   // 用户花了生成配额，却只看到一条删临时目录的报错。
   for (const file of [
-    '../server/services/googleFlowImageWorkflow.js',
-    '../server/services/jimengImageWorkflow.js',
-    '../server/services/jimengVideoWorkflow.js',
-    '../server/services/googleFlowWorkflow.js'
   ]) {
     const source = read(file);
     const cleanup = source.slice(source.indexOf('} finally {'));

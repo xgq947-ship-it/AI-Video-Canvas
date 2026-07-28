@@ -137,38 +137,26 @@ test('检查登录态在拒绝之前不得写入 checking 状态', () => {
   );
 });
 
-test('识图 / 提示词优化的浏览器通道与生成共用同一条队列', () => {
-  // Gemini 识图曾是唯一没入队的浏览器任务：它和生成同时驱动同一个 Chrome，
-  // 而 ops-cli 工作页是 cleanup_before=True，后来者会关掉正在用的页面。
-  //
-  // HTTP 改造后主链路不再走 DOM，但**浏览器兜底分支仍然必须入队** —— 兜底跑的正是
-  // 原来那段 cleanup_before=True 的自动化，漏掉入队等于把这个 bug 原样放回来。
-  const source = fs.readFileSync(new URL('../server/services/geminiWebWorkflow.js', import.meta.url), 'utf8');
-  const task = source.slice(
-    source.indexOf('runGeminiWebTextTask = options =>'),
-    source.indexOf('async function executeTextTask')
-  );
-  assert.ok(task.length > 0, '没找到 runGeminiWebTextTask');
-  assert.match(task, /browser:\s*\(\)\s*=>\s*enqueueBrowserWorkflow\(/);
-  assert.match(task, /executeTextTask\(options\)/);
+test('生成链路不再占用浏览器串行队列', () => {
+  // 曾经所有生成都要排队抢那一个 Chrome：识图没入队还会关掉正在用的页面。
+  // DOM 生成删除后，队列只服务「打开浏览器 / 登录」这类真正独占的操作，
+  // HTTP 生成由 bridge 内部按 provider 串行，轮询与下载完全并行。
+  const files = [
+    '../server/services/geminiWebWorkflow.js',
+    '../server/services/googleFlowWorkflow.js',
+    '../server/services/googleFlowImageWorkflow.js',
+    '../server/services/jimengImageWorkflow.js',
+    '../server/services/jimengVideoWorkflow.js'
+  ];
+  for (const file of files) {
+    const source = fs.readFileSync(new URL(file, import.meta.url), 'utf8');
+    assert.doesNotMatch(source, /enqueue(Browser|GoogleFlow)Workflow/, `${file} 不应再往浏览器队列排生成任务`);
+    assert.match(source, /runWithExecutionMode/, `${file} 应通过统一分发进入 HTTP 通道`);
+  }
 });
 
-test('三个 Web 平台的生成入口都保留浏览器兜底分支', () => {
-  // auto 模式下 HTTP 提交前失败要能回退；漏掉 browser 分支的话，一次登录过期就
-  // 直接把任务判死，而不是退回原来可用的自动化通道。
-  const cases = [
-    ['../server/services/geminiWebWorkflow.js', ['generateGeminiWebImage', 'generateGeminiWebVideo']],
-    ['../server/services/googleFlowWorkflow.js', ['generateGoogleFlowWorkflowVideo']],
-    ['../server/services/googleFlowImageWorkflow.js', ['generateGoogleFlowWorkflowImage']],
-    ['../server/services/jimengImageWorkflow.js', ['generateJimengWorkflowImage']],
-    ['../server/services/jimengVideoWorkflow.js', ['generateJimengWorkflowVideo']]
-  ];
-  for (const [file, exported] of cases) {
-    const source = fs.readFileSync(new URL(file, import.meta.url), 'utf8');
-    for (const name of exported) {
-      assert.ok(source.includes(name), `${file} 缺少 ${name}`);
-    }
-    assert.match(source, /runWithExecutionMode\(/, `${file} 未接入执行模式分发`);
-    assert.match(source, /browser:\s*\(\)\s*=>/, `${file} 缺少浏览器兜底分支`);
-  }
+test('浏览器队列仍然保护登录 / 打开窗口这类独占操作', () => {
+  const serverMain = fs.readFileSync(new URL('../server/index.js', import.meta.url), 'utf8');
+  assert.match(serverMain, /assertBrowserWorkflowIdle\('打开浏览器窗口'\)/);
+  assert.match(serverMain, /assertBrowserWorkflowIdle\('打开登录窗口'\)/);
 });

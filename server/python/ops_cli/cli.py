@@ -1,9 +1,7 @@
 """Ecommerce operations CLI — auto-discovers platform commands."""
 from __future__ import annotations
 
-import importlib
 import os
-from pathlib import Path
 
 import typer
 
@@ -17,8 +15,6 @@ from ops_cli.browser import (
 )
 from ops_cli.capabilities import CapabilitySpec, register_capabilities
 from ops_cli.cli_helpers import _execute
-from ops_cli.output import CommandResponse
-from ops_cli.platforms._gemini_web_common import run_text_task
 from ops_cli.webhttp import (
     DEFAULT_FETCH_TIMEOUT_SECONDS,
     run_web_context,
@@ -27,24 +23,6 @@ from ops_cli.webhttp import (
 
 
 app = typer.Typer(help="Ecommerce operations CLI.", no_args_is_help=True)
-
-
-def _discover_and_register_platforms(app: typer.Typer) -> None:
-    """Scan platforms/ for platform.py modules and call their register()."""
-    platforms_dir = Path(__file__).resolve().parent / "platforms"
-    capabilities: dict[str, CapabilitySpec] = {}
-
-    for platform_dir in sorted(platforms_dir.iterdir()):
-        if not platform_dir.is_dir() or platform_dir.name.startswith("_"):
-            continue
-        platform_file = platform_dir / "platform.py"
-        if not platform_file.exists():
-            continue
-        mod = importlib.import_module(f"ops_cli.platforms.{platform_dir.name}.platform")
-        mod.register(app, capabilities)
-
-    # Register all collected capabilities with the global registry
-    register_capabilities(list(capabilities.values()))
 
 
 # Browser command (not platform-specific, stays in cli.py)
@@ -172,34 +150,6 @@ register_capabilities(
 )
 
 app.add_typer(browser_app, name="browser")
-
-gemini_web_app = typer.Typer(help="Gemini Apps web text tasks.", no_args_is_help=True)
-
-
-@gemini_web_app.command("ask")
-def gemini_web_ask(
-    ctx: typer.Context,
-    prompt: str = typer.Option(..., "--prompt"),
-    reference_image: list[str] = typer.Option([], "--reference-image"),
-    timeout_minutes: int = typer.Option(5, "--timeout-minutes"),
-) -> None:
-    params = {"prompt": prompt, "reference_images": list(reference_image), "timeout_minutes": timeout_minutes}
-
-    def handler() -> CommandResponse:
-        text = run_text_task(**params)
-        return CommandResponse(success=True, platform="gemini_web", command="ask", data={"text": text})
-
-    _execute(ctx, command_name="ops gemini_web ask", params=params, handler=handler)
-
-
-register_capabilities([
-    CapabilitySpec(id="gemini_web.ask", platform="gemini_web", command="ask", recovery_policy="interactive_if_tty")
-])
-app.add_typer(gemini_web_app, name="gemini-web")
-
-# Discover and register all platforms
-_discover_and_register_platforms(app)
-
 
 @app.callback()
 def main_callback(

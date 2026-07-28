@@ -233,10 +233,12 @@ test('旧的 DOM / 重定向登录探针已从代码库移除', () => {
     assert.equal(/probe_google_account_login/.test(browserPy), false, '仍残留 Google 账号重定向探针');
     assert.equal(/_probe_jimeng_login|_probe_flow_login|_probe_gemini_login/.test(browserPy), false, '仍残留旧探针');
 
-    const geminiCommon = fs.readFileSync(
-        new URL('../server/python/ops_cli/platforms/_gemini_web_common.py', import.meta.url), 'utf8'
+    // Gemini 的页面探针随 platforms/ 一起删除；登录判定现在只在 auth.js 里。
+    assert.equal(
+        fs.existsSync(new URL('../server/python/ops_cli/platforms', import.meta.url).pathname),
+        false,
+        'platforms/ 应已删除'
     );
-    assert.equal(/myaccount\.google\.com/.test(geminiCommon), false, 'Gemini 仍在用重定向判定登录');
 });
 
 test('登录检测不得触发任何生成 / 计费动作', () => {

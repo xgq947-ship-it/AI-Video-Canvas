@@ -1,19 +1,11 @@
 /**
- * 即梦 图片 5.0 生图 workflow 适配器。
+ * 即梦 图片生成入口。
  *
- * 页面自动化位于 Python Ops CLI；本层只负责模型映射、参考图落盘、串行调度和结果读取。
+ * 生成走 HTTP（webhttp/jimeng/provider.js）：draft → aigc_draft/generate →
+ * get_history_by_ids 轮询 → CDN 下载。原先驱动网页 DOM 的实现已删除。
  */
 
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { runOpsCli } from './opsCliRunner.js';
-import { enqueueBrowserWorkflow } from './googleFlowWorkflowQueue.js';
-import {
-    loadBrowserImageResults,
-    resolveBrowserReferenceImages
-} from './googleFlowImageWorkflow.js';
-import { runWithExecutionMode } from './webhttp/index.js';
+import { runWithAuthRecovery, runWithExecutionMode } from './webhttp/index.js';
 import { generateJimengImageHttp } from './webhttp/jimeng/provider.js';
 import { resolveProtocolModelId } from './webhttp/registry.js';
 import { JIMENG_BASELINE_IMAGE_MODEL } from './webhttp/jimeng/protocol.js';
@@ -56,108 +48,19 @@ export function normalizeJimengImageCount(value) {
     return count;
 }
 
-export function buildJimengImageWorkflowArgs({
-    prompt,
-    referenceImages = [],
-    aspectRatio,
-    resolution,
-    outputDir,
-    timeoutMinutes,
-    model,
-    count = 1
-}) {
-    const args = [
-        '--prompt', String(prompt).trim(),
-        '--aspect-ratio', aspectRatio,
-        '--resolution', normalizeJimengImageResolution(resolution),
-        '--count', String(normalizeJimengImageCount(count)),
-        '--model', model,
-        '--output-dir', outputDir,
-        '--timeout-minutes', String(timeoutMinutes)
-    ];
-    for (const referenceImage of referenceImages) {
-        args.push('--reference-image', referenceImage);
-    }
-    args.push('--execute');
-    return args;
-}
-
-async function executeJimengImageWorkflow({
-    prompt,
-    aspectRatio,
-    resolution,
-    referenceImageInputs = [],
-    libraryDir,
-    timeoutMinutes = 10,
-    modelId,
-    count = 1,
-    signal
-}) {
-    if (!String(prompt || '').trim()) throw new Error('即梦图片提示词不能为空');
-    if (!JIMENG_IMAGE_SUPPORTED_ASPECT_RATIOS.includes(aspectRatio)) {
-        throw new Error(`即梦图片比例只支持 ${JIMENG_IMAGE_SUPPORTED_ASPECT_RATIOS.join('、')}`);
-    }
-    if (referenceImageInputs.length > JIMENG_IMAGE_MAX_REFERENCES) {
-        throw new Error(`即梦图片生成最多支持 ${JIMENG_IMAGE_MAX_REFERENCES} 张参考图`);
-    }
-    const normalizedCount = normalizeJimengImageCount(count);
-
-    const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-jimeng-image-'));
-    try {
-        const outputDir = path.join(taskDir, 'output');
-        const referenceImages = await resolveBrowserReferenceImages(
-            referenceImageInputs,
-            libraryDir,
-            taskDir,
-            { providerName: '即梦' }
-        );
-        const { data, runId } = await runOpsCli({
-            label: '即梦图片生成',
-            signal,
-            // +4 而不是 +2：Python 侧在第 timeoutMinutes 分钟判超时后，还要留出
-            // 「只读补收」的时间把已经产出的结果收回来。余量给太紧的话，兜底刚开始
-            // 跑就被这里 kill 掉，用户拿到的还是「执行超时」（本机 07:13 那次实测）。
-            timeoutMs: (timeoutMinutes + 4) * 60 * 1000,
-            args: [
-                'text-to-image', 'jimeng', 'generate',
-                ...buildJimengImageWorkflowArgs({
-                    prompt,
-                    aspectRatio,
-                    resolution,
-                    referenceImages,
-                    outputDir,
-                    timeoutMinutes,
-                    model: resolveJimengImageModelLabel(modelId),
-                    count: normalizedCount
-                })
-            ]
-        });
-        const images = await loadBrowserImageResults(data, { providerName: '即梦图片生成' });
-        return { images, runId };
-    } finally {
-        // Windows 上子进程可能还持着任务目录里的句柄，rmSync 会抛 EBUSY/EPERM。
-        // 这里在 finally 里，抛出去会把真正的失败原因整个盖掉（生成配额已经花了，
-        // 用户却只看到一条删临时目录的错）。清理失败不影响结果，记一条日志即可。
-        try {
-            fs.rmSync(taskDir, { recursive: true, force: true });
-        } catch (cleanupError) {
-            console.warn(`[workflow] 无法清理临时目录 ${taskDir}：${cleanupError.message}`);
-        }
-    }
-}
-
 export function generateJimengWorkflowImage(options) {
-    return runWithExecutionMode({
+    return runWithAuthRecovery({
+        provider: 'jimeng',
+        label: '即梦图片生成',
+        metadata: { prompt: options?.prompt },
+        run: () => runWithExecutionMode({
         mode: options?.executionMode,
         provider: 'jimeng',
         label: '即梦图片生成',
         http: () => generateJimengImageHttp({
             ...options,
             modelId: resolveProtocolModelId(options?.modelId, JIMENG_BASELINE_IMAGE_MODEL)
-        }),
-        browser: () => enqueueBrowserWorkflow(
-            () => executeJimengImageWorkflow(options),
-            { label: '即梦图片生成', signal: options?.signal }
-        )
+        })
+        })
     });
 }

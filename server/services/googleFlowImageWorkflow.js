@@ -1,17 +1,15 @@
 /**
  * Google Flow 文生图 workflow 适配器。
  *
- * 只负责把画布参数转成 ops_cli 的 text-to-image 参数，
- * 页面自动化、登录态恢复和产物下载由 server/python 下的 provider 负责。
+ * 生成走 HTTP（webhttp/flow/provider.js）；原先驱动网页 DOM 的实现已删除。
+ * 这里保留的参考图解析与结果读取工具仍被 HTTP 通道复用。
  */
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runOpsCli } from './opsCliRunner.js';
-import { enqueueGoogleFlowWorkflow } from './googleFlowWorkflowQueue.js';
 import { fetchWorkflowMedia } from '../utils/workflowMedia.js';
-import { runWithExecutionMode } from './webhttp/index.js';
+import { runWithAuthRecovery, runWithExecutionMode } from './webhttp/index.js';
 import { generateFlowImageHttp } from './webhttp/flow/provider.js';
 import { resolveProtocolModelId } from './webhttp/registry.js';
 import { FLOW_BASELINE_IMAGE_MODEL } from './webhttp/flow/protocol.js';
@@ -191,92 +189,12 @@ export function loadGoogleFlowImageResult(outputs) {
     return loadBrowserImageResult(outputs, { providerName: 'Google Flow 文生图' });
 }
 
-export function buildGoogleFlowImageWorkflowArgs({
-    prompt,
-    aspectRatio,
-    referenceImages = [],
-    outputDir,
-    timeoutMinutes,
-    flowModel = 'Nano Banana 2',
-    count = 1
-}) {
-    const args = [
-        '--prompt', String(prompt).trim(),
-        '--aspect-ratio', aspectRatio,
-        '--count', String(normalizeGoogleFlowImageCount(count)),
-        '--model', flowModel,
-        '--output-dir', outputDir,
-        '--timeout-minutes', String(timeoutMinutes)
-    ];
-    for (const referenceImage of referenceImages) {
-        args.push('--reference-image', referenceImage);
-    }
-    args.push('--execute');
-    return args;
-}
-
-async function executeGoogleFlowImageWorkflow({
-    prompt,
-    aspectRatio,
-    referenceImageInputs = [],
-    libraryDir,
-    timeoutMinutes = 10,
-    modelId,
-    count = 1,
-    signal
-}) {
-    if (!String(prompt || '').trim()) throw new Error('Google Flow 图片提示词不能为空');
-    if (!GOOGLE_FLOW_IMAGE_SUPPORTED_ASPECT_RATIOS.includes(aspectRatio)) {
-        throw new Error('Google Flow 文生图画面比例只支持 16:9、4:3、1:1、3:4 或 9:16');
-    }
-    const normalizedCount = normalizeGoogleFlowImageCount(count);
-
-    const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-google-flow-image-'));
-    try {
-        const outputDir = path.join(taskDir, 'output');
-        const referenceImages = await resolveGoogleFlowReferenceImages(referenceImageInputs, libraryDir, taskDir);
-        const { data, runId } = await runOpsCli({
-            label: 'Google Flow 文生图',
-            signal,
-            timeoutMs: (timeoutMinutes + 2) * 60 * 1000,
-            args: [
-                'text-to-image', 'google-flow', 'generate',
-                ...buildGoogleFlowImageWorkflowArgs({
-                    prompt,
-                    aspectRatio,
-                    referenceImages,
-                    outputDir,
-                    timeoutMinutes,
-                    flowModel: resolveGoogleFlowImageModelName(modelId),
-                    count: normalizedCount
-                })
-            ]
-        });
-        const images = await loadBrowserImageResults(data, { providerName: 'Google Flow 文生图' });
-        // Keep the legacy first-image fields for product-scene jobs and other
-        // single-image callers while exposing the complete batch to the
-        // generation route.
-        return {
-            images,
-            buffer: images[0].buffer,
-            extension: images[0].extension,
-            source: images[0].source,
-            runId
-        };
-    } finally {
-        // Windows 上子进程可能还持着任务目录里的句柄，rmSync 会抛 EBUSY/EPERM。
-        // 这里在 finally 里，抛出去会把真正的失败原因整个盖掉（生成配额已经花了，
-        // 用户却只看到一条删临时目录的错）。清理失败不影响结果，记一条日志即可。
-        try {
-            fs.rmSync(taskDir, { recursive: true, force: true });
-        } catch (cleanupError) {
-            console.warn(`[workflow] 无法清理临时目录 ${taskDir}：${cleanupError.message}`);
-        }
-    }
-}
-
 export function generateGoogleFlowWorkflowImage(options) {
-    return runWithExecutionMode({
+    return runWithAuthRecovery({
+        provider: 'google-flow',
+        label: 'Google Flow 图片生成',
+        metadata: { prompt: options?.prompt },
+        run: () => runWithExecutionMode({
         mode: options?.executionMode,
         provider: 'google-flow',
         label: 'Google Flow 图片生成',
@@ -284,10 +202,7 @@ export function generateGoogleFlowWorkflowImage(options) {
             ...options,
             // 画布模型 id → Flow 协议 imageModelName；未知 id 退回已验证样本。
             modelId: resolveProtocolModelId(options?.modelId, FLOW_BASELINE_IMAGE_MODEL)
-        }),
-        browser: () => enqueueGoogleFlowWorkflow(
-            () => executeGoogleFlowImageWorkflow(options),
-            { label: 'Google Flow 图片生成', signal: options?.signal }
-        )
+        })
+        })
     });
 }

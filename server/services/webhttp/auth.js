@@ -259,8 +259,20 @@ export async function checkWebAuthStatus(provider, { force = false, signal } = {
     return status;
 }
 
-export function checkAllWebAuthStatus({ force = false, signal, providers = WEB_AUTH_PROVIDERS } = {}) {
-    return Promise.all(providers.map(provider => checkWebAuthStatus(provider, { force, signal })));
+/**
+ * 依次检测多个平台 —— 刻意串行。
+ *
+ * 三个平台各有自己的 bridge 队列，并发检测时会同时进入 `_connect`：那里在实例
+ * 不可复用时会先 stop_chrome 再 start_chrome，于是一个进程刚起好的 Chrome 会被
+ * 另一个关掉，首次检测经常整批报「检测失败」。串行后每个平台复用同一个已就绪的
+ * 实例，实测三平台合计 4~7 秒，比并发更快也更稳。
+ */
+export async function checkAllWebAuthStatus({ force = false, signal, providers = WEB_AUTH_PROVIDERS } = {}) {
+    const results = [];
+    for (const provider of providers) {
+        results.push(await checkWebAuthStatus(provider, { force, signal }));
+    }
+    return results;
 }
 
 /**

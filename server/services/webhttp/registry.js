@@ -32,14 +32,24 @@ export const WEB_PROVIDER_IDS = Object.freeze(['gemini-web', 'jimeng', 'google-f
  * old canvases loading after the HTTP switch. Unknown ids fall through to the
  * provider baseline rather than throwing.
  */
+/*
+ * 即梦这一组 key 全部取自页面 bootstrap（window.__*_generate_model_config__）
+ * 里服务端下发的真实模型表，不是按命名规律推的。
+ *
+ * 之前是猜的，7 个里 4 个根本不存在（high_aes_general_v50_pro、
+ * dreamina_seedance_40_fast/_standard/_fast_standard），另外两个虽然存在但对错了
+ * 档位 —— `jimeng-seedance-2-0`（UI「2.0 VIP」）被指到了 `dreamina_seedance_40`，
+ * 而那其实是「2.0 Fast」。服务端对不认识 / 对不上档位的 model_req_key 一律回
+ * `ret=3018 permission denied`，看起来就像"没额度"，非常有迷惑性。
+ */
 export const CANVAS_MODEL_PROTOCOL_IDS = Object.freeze({
-    'jimeng-image-5-0-lite': JIMENG_BASELINE_IMAGE_MODEL,
-    'jimeng-image-5-0-pro': 'high_aes_general_v50_pro',
-    'jimeng-seedance-2-0-mini': JIMENG_BASELINE_VIDEO_MODEL,
-    'jimeng-seedance-2-0': 'dreamina_seedance_40',
-    'jimeng-seedance-2-0-fast': 'dreamina_seedance_40_fast',
-    'jimeng-seedance-2-0-standard': 'dreamina_seedance_40_standard',
-    'jimeng-seedance-2-0-fast-standard': 'dreamina_seedance_40_fast_standard',
+    'jimeng-image-5-0-lite': JIMENG_BASELINE_IMAGE_MODEL,          // 图片 5.0 Lite
+    'jimeng-image-5-0-pro': 'high_aes_general_v50p_large',          // 图片 5.0 Pro
+    'jimeng-seedance-2-0-mini': JIMENG_BASELINE_VIDEO_MODEL,        // 即梦 Seedance 2.0 mini
+    'jimeng-seedance-2-0': 'dreamina_seedance_40_pro_vision',       // 即梦 Seedance 2.0 VIP
+    'jimeng-seedance-2-0-fast': 'dreamina_seedance_40_vision',      // 即梦 Seedance 2.0 Fast VIP
+    'jimeng-seedance-2-0-standard': 'dreamina_seedance_40_pro',     // 即梦 Seedance 2.0
+    'jimeng-seedance-2-0-fast-standard': 'dreamina_seedance_40',    // 即梦 Seedance 2.0 Fast
     'google-flow-nano-banana-2': FLOW_BASELINE_IMAGE_MODEL,
     'google-flow-nano-banana-pro': 'GEM_PIX_2_PRO',
     'google-flow-nano-banana-2-lite': 'GEM_PIX_2_LITE',

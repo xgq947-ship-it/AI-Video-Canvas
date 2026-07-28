@@ -70,9 +70,16 @@ export function buildRequestSpec({
     json,
     credentials = 'include',
     redirect = 'follow',
-    timeoutSeconds
+    timeoutSeconds,
+    // 'xhr' 让请求走页面的 XMLHttpRequest —— 即梦的 sign 头由 XHR 钩子添加，
+    // 走 fetch 拿不到（实测同一份请求体 fetch 被判 permission denied）。
+    transport,
+    // 请求必须从哪个页面发出。部分平台的权益判定绑定来源页面（见 webhttp.py）。
+    pageUrl
 }) {
     const spec = { url, method: String(method).toUpperCase(), headers: { ...headers }, credentials, redirect };
+    if (transport) spec.transport = transport;
+    if (pageUrl) spec.pageUrl = pageUrl;
     if (timeoutSeconds) spec.timeoutSeconds = timeoutSeconds;
 
     if (json !== undefined) {
@@ -164,8 +171,12 @@ async function runWebFetch(provider, requests, { timeoutSeconds, signal, label, 
     const responseFile = path.join(taskDir, 'response.json');
     try {
         fs.writeFileSync(requestFile, JSON.stringify({ requests }), 'utf8');
-        // 单次调用的墙钟上限：请求超时 + 冷启动 / 页面导航余量。
-        const wallClockMs = (timeoutSeconds + 120) * 1000;
+        // 单次调用的墙钟上限 = 请求超时 + 冷启动余量。
+        //
+        // 余量必须覆盖**最坏情况**：Chrome 冷启动 + 首个平台页面首次加载 +
+        // 导航重试。实测冷启动后第一个平台可以逼近 3 分钟，原来给 120 秒会让
+        // 首次「检测登录状态」必定超时报错（后两个平台复用实例反而很快）。
+        const wallClockMs = (timeoutSeconds + 300) * 1000;
         await runOpsCli({
             label: label || `${provider} HTTP 请求`,
             signal,

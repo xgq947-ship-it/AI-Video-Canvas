@@ -1,16 +1,22 @@
 /**
  * Execution-mode dispatcher shared by all three Web providers.
  *
- * The rule that matters, inherited from `opsCliRunner.js`: once a generation
- * request has been submitted, the user's quota is spent. Falling back to the
- * browser at that point would generate — and bill — a second time. So the HTTP
- * attempt may only be abandoned when it failed *before* submission, which is
- * exactly what `WebProviderError#canFallbackToBrowser` encodes.
+ * 生成链路只剩 HTTP 一条：DOM 点击生成已整体删除，浏览器只提供登录与会话上下文。
+ *
+ * 这里仍然守着从 `opsCliRunner.js` 继承下来的那条硬规则：请求一旦提交出去，
+ * 用户的配额就已经花掉了，绝不能重试 —— 重试等于二次扣费、两份结果。
  */
 
 import { isWebProviderError, redactSecrets, WebProviderError } from './errors.js';
 
 export { WebProviderError, isWebProviderError, redactSecrets } from './errors.js';
+export { getSessionManager, listSessionManagers, cookieHeaderForUrl } from './sessionManager.js';
+export {
+    WAITING_AUTH,
+    listPendingAuthTasks,
+    resumePendingAuthTasks,
+    runWithAuthRecovery
+} from './authRecovery.js';
 export {
     WEB_EXECUTION_MODES,
     WEB_HTTP_PROVIDER_IDS,
@@ -31,7 +37,6 @@ export {
  * @param {string}   options.provider
  * @param {string}   options.label     user-facing task name, used in messages
  * @param {Function} options.http      HTTP implementation
- * @param {Function} options.browser   existing browser-workflow implementation
  * @param {number}   [options.httpAttempts]  pre-submit retries (default 2)
  */
 export async function runWithExecutionMode({
@@ -39,11 +44,12 @@ export async function runWithExecutionMode({
     provider,
     label,
     http,
-    browser,
     httpAttempts = 2
 }) {
-    if (mode === 'browser' || typeof http !== 'function') {
-        return browser();
+    if (typeof http !== 'function') {
+        throw new WebProviderError(`${label} 没有可用的 HTTP 实现`, {
+            provider, code: 'BRIDGE_UNAVAILABLE', submitted: false
+        });
     }
 
     let lastError;
@@ -56,31 +62,21 @@ export async function runWithExecutionMode({
                 ? error
                 : new WebProviderError(error?.message || String(error), { provider, submitted: true, cause: error });
 
-            // Submitted → the platform is already working on it (or already
-            // charged for it). Surface it; never retry, never fall back.
-            if (!webError.canFallbackToBrowser) throw webError;
+            // 已提交 → 平台可能已经在生成（并且已经扣费）。直接抛出，绝不重试。
+            if (webError.submitted) throw webError;
 
-            const isLastAttempt = attempt >= Math.max(1, httpAttempts);
+            if (attempt >= Math.max(1, httpAttempts)) {
+                // 提交前失败且重试用尽：如实抛出。
+                //
+                // 这里刻意没有「回退浏览器点击生成」这条路 —— 那套 DOM 自动化已按
+                // 需求整体删除。认证类失败应该走 Session 恢复（重新登录后重试原任务），
+                // 而不是换一条同样要花配额、结果更不可控的链路。
+                throw webError;
+            }
             console.warn(
                 `[web-http] ${label} 第 ${attempt} 次 HTTP 尝试失败（${webError.code}）：`
                 + redactSecrets(webError.message)
             );
-            if (!isLastAttempt) continue;
-
-            if (mode === 'http') {
-                throw new WebProviderError(
-                    `${label} HTTP 通道失败：${redactSecrets(webError.message)}`
-                    + '（当前执行模式为「仅 HTTP」，未自动回退浏览器）',
-                    { provider, code: webError.code, submitted: false, cause: webError }
-                );
-            }
-            if (typeof browser !== 'function') throw webError;
-
-            console.warn(`[web-http] ${label} 回退到浏览器自动化通道`);
-            const result = await browser();
-            // 识图/提示词优化的浏览器实现返回的是字符串，不能被展开成对象。
-            if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
-            return { ...result, channel: 'browser', httpFallbackReason: webError.code };
         }
     }
     throw lastError;

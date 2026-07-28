@@ -39,6 +39,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { isSupportedImageFile, useCanvasImageImport } from './hooks/useCanvasImageImport';
 import { useContextMenuHandlers } from './hooks/useContextMenuHandlers';
 import { useToasts } from './hooks/useToasts';
+import { useCanvasEditLock } from './hooks/useCanvasEditLock';
 import { ToastStack } from './components/ToastStack';
 import { useAutoSave } from './hooks/useAutoSave';
 import { useGenerationRecovery } from './hooks/useGenerationRecovery';
@@ -286,6 +287,15 @@ export default function App() {
       closeAssetLibrary();
     }
   });
+
+  // 项目级编辑锁：没有当前项目时画布只读（见 useCanvasEditLock）。
+  // 必须在 workflowId 可用之后、所有编辑入口之前建立。
+  const canvasEditLock = useCanvasEditLock({
+    workflowId,
+    notify: message => showToast(message, { tone: 'error' })
+  });
+  const { canEditCanvas } = canvasEditLock;
+
 
   const trashDeleteInFlight = React.useRef(false);
   const deleteNodesWithTrash = React.useCallback(async (ids: string[]) => {
@@ -713,6 +723,8 @@ export default function App() {
   }, [nodes, selectedNodeIds]);
 
   const openNewNodeMenu = React.useCallback(() => {
+    // 工具栏「新建节点」与快捷键共用这个入口，同样受项目级编辑锁约束。
+    if (!canvasEditLock.guard()) return;
     const sidebarWidth = sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH;
     const canvasCenterX = (window.innerWidth - sidebarWidth) / 2;
     setContextMenu({
@@ -723,7 +735,7 @@ export default function App() {
       canvasY: window.innerHeight / 2,
       type: 'add-nodes'
     });
-  }, [sidebarCollapsed]);
+  }, [sidebarCollapsed, canvasEditLock]);
 
   const arrangeCanvas = React.useCallback(() => {
     const ids = selectedNodeIds.length > 1 ? selectedNodeIds : nodes.map(node => node.id);
@@ -1046,7 +1058,8 @@ export default function App() {
     setContextMenu,
     handleOpenCreateAsset,
     handleSelectTypeFromMenu,
-    onDeleteNodes: deleteNodesWithTrash
+    onDeleteNodes: deleteNodesWithTrash,
+    canEdit: canvasEditLock.guard
   });
 
   // Wrapper functions that pass closeWorkflowPanel to panel handlers
@@ -1320,6 +1333,12 @@ export default function App() {
 
   /** Create an image/video node where a sidebar asset was dropped on the canvas */
   const handleCanvasDrop = async (e: React.DragEvent) => {
+    // 拖入图片同样是在写当前画布，没有项目时直接拦下。
+    if (!canvasEditLock.guard()) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     const externalFiles = Array.from(e.dataTransfer.files);
     if (externalFiles.length > 0) {
       e.preventDefault();
@@ -1883,6 +1902,19 @@ export default function App() {
         />
       )}
 
+      {/* 没有项目时的只读提示。刻意只加一层提示，不改动画布本身的结构与样式。 */}
+      {!canEditCanvas && (
+        <div
+          className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center"
+          style={{ left: sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH }}
+        >
+          <div className="rounded-2xl border border-neutral-700/70 bg-black/70 px-5 py-3 text-center backdrop-blur-sm">
+            <p className="text-sm font-medium text-neutral-100">请先新建项目，再开始编辑画布</p>
+            <p className="mt-1 text-[11px] text-neutral-400">点击顶部「+ 新建」创建项目后即可添加节点</p>
+          </div>
+        </div>
+      )}
+
       {/* Canvas */}
       <div
         ref={canvasRef}
@@ -2071,7 +2103,7 @@ export default function App() {
         onUpload={handleContextUpload}
         onUndo={undo}
         onRedo={redo}
-        onPaste={handlePaste}
+        onPaste={canvasEditLock.withGuard(handlePaste)}
         onCopy={handleCopy}
         onDuplicate={handleDuplicate}
         onCreateAsset={handleContextMenuCreateAsset}

@@ -21,6 +21,11 @@ interface UseContextMenuHandlersOptions {
         closeMenu: () => void
     ) => void;
     onDeleteNodes?: (ids: string[]) => void | Promise<void>;
+    /**
+     * 编辑闸门（见 useCanvasEditLock）。返回 false 时表示当前没有项目，
+     * 所有会改动画布的入口都要在这里就被挡住，而不是等到写数据时才失败。
+     */
+    canEdit?: () => boolean;
 }
 
 export const useContextMenuHandlers = ({
@@ -30,14 +35,18 @@ export const useContextMenuHandlers = ({
     setContextMenu,
     handleOpenCreateAsset,
     handleSelectTypeFromMenu,
-    onDeleteNodes
+    onDeleteNodes,
+    canEdit
 }: UseContextMenuHandlersOptions) => {
+    const allowEdit = useCallback(() => (canEdit ? canEdit() : true), [canEdit]);
     // ============================================================================
     // DOUBLE-CLICK & RIGHT-CLICK
     // ============================================================================
 
     const handleDoubleClick = useCallback((e: React.MouseEvent) => {
         if ((e.target as HTMLElement).id === 'canvas-background') {
+            // 没有项目时不弹「添加节点」，只提示先新建项目。
+            if (!allowEdit()) return;
             const rect = e.currentTarget.getBoundingClientRect();
             setContextMenu({
                 isOpen: true,
@@ -48,11 +57,12 @@ export const useContextMenuHandlers = ({
                 canvasY: e.clientY - rect.top
             });
         }
-    }, [setContextMenu]);
+    }, [setContextMenu, allowEdit]);
 
     const handleGlobalContextMenu = useCallback((e: React.MouseEvent) => {
         e.preventDefault();
         if ((e.target as HTMLElement).id === 'canvas-background') {
+            if (!allowEdit()) return;
             const rect = e.currentTarget.getBoundingClientRect();
             setContextMenu({
                 isOpen: true,
@@ -63,7 +73,7 @@ export const useContextMenuHandlers = ({
                 canvasY: e.clientY - rect.top
             });
         }
-    }, [setContextMenu]);
+    }, [setContextMenu, allowEdit]);
 
     // ============================================================================
     // NODE OPERATIONS

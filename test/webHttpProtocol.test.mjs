@@ -18,6 +18,7 @@ import {
     buildStreamBody,
     buildStreamPayload,
     buildStreamUrl,
+    detectRefusal,
     extractConversation,
     extractGeminiBootstrap,
     extractGeneratedMedia,
@@ -40,7 +41,9 @@ import {
     parseJimengImageResults,
     parseJimengVideoResults,
     pickHistoryRecord,
-    resolveImageSize
+    resolveImageSize,
+    buildGenerateUrl,
+    toolPageUrl
 } from '../server/services/webhttp/jimeng/protocol.js';
 
 import {
@@ -104,18 +107,35 @@ test('多图附件与单图共用同一结构', () => {
     assert.equal(buildAttachments([]), null);
 });
 
-test('生图/生视频模式常量只出现在 payload 里，且视频带 capability 结构', () => {
-    const image = buildStreamPayload({ prompt: 'p', mode: GEMINI_MODE.image });
-    assert.ok(JSON.stringify(image).includes(String(GEMINI_MODE.image)));
-
-    const video = buildStreamPayload({ prompt: 'p', mode: GEMINI_MODE.video });
-    const serialized = JSON.stringify(video);
-    assert.ok(serialized.includes(String(GEMINI_MODE.video)));
-    assert.ok(serialized.includes(String(GEMINI_MODE.videoCapability)));
-
-    // 纯文本请求不得夹带任何生成模式字段。
+test('图片 / 视频 / 文本请求结构一致，不得注入生成模式字段', () => {
+    // 实测（2026-07-28，真实账号）：把 14 / 11 / 17 按任何位置塞进 payload，
+    // StreamGenerate 一律 400；不塞则 200，且模型正确按生图请求响应。
+    // 所以三种请求的 payload 必须完全同构 —— 生成什么由 prompt 决定。
     const text = buildStreamPayload({ prompt: 'p', mode: null });
+    const image = buildStreamPayload({ prompt: 'p', mode: GEMINI_MODE.image });
+    const video = buildStreamPayload({ prompt: 'p', mode: GEMINI_MODE.video });
+
     assert.equal(text.length, 3);
+    assert.deepEqual(image, text);
+    assert.deepEqual(video, text);
+
+    // 回归防线：这些数值绝不能重新出现在请求体里。
+    const serialized = JSON.stringify(image);
+    for (const value of [GEMINI_MODE.image, GEMINI_MODE.video, GEMINI_MODE.videoCapability]) {
+        assert.equal(serialized.includes(String(value)), false, `payload 不应包含模式值 ${value}`);
+    }
+});
+
+test('Gemini 用自然语言拒绝时被识别为额度 / 策略问题', () => {
+    // 额度耗尽时 HTTP 仍是 200，只是文案里说明原因；不识别就会误报「协议已变化」。
+    const quota = [['rc_abc123def456', ['一旦您的额度重置，我就可以创建更多图片。请在“设置”中查看您的使用情况。']]];
+    assert.equal(detectRefusal(quota).code, 'QUOTA_EXHAUSTED');
+
+    const policy = [['rc_abc123def456', ['我无法生成该内容，因为它违反了相关政策。']]];
+    assert.equal(detectRefusal(policy).code, 'CONTENT_POLICY');
+
+    const normal = [['rc_abc123def456', ['这是一段完全正常的回答内容，用于确认不会误判。']]];
+    assert.equal(detectRefusal(normal), null);
 });
 
 test('f.req 与 URL 按协议拼装，且不硬编码 _reqid', () => {
@@ -215,26 +235,56 @@ test('上传续传地址按多种 header 名兼容，资源路径必须是 contr
 
 test('比例枚举与 2K/4K 尺寸表按协议文档取值', () => {
     assert.equal(JIMENG_IMAGE_RATIO['16:9'], 3);
-    assert.deepEqual(resolveImageSize('16:9', '2k'), {
-        image_ratio: 3,
-        large_image_info: { width: 2560, height: 1440, resolution_type: '2k' }
-    });
-    assert.deepEqual(resolveImageSize('21:9', '4k'), {
-        image_ratio: 8,
-        large_image_info: { width: 6197, height: 2656, resolution_type: '4k' }
-    });
+
+    const hd = resolveImageSize('16:9', '2k');
+    assert.equal(hd.image_ratio, 3);
+    assert.equal(hd.large_image_info.width, 2560);
+    assert.equal(hd.large_image_info.height, 1440);
+    assert.equal(hd.large_image_info.resolution_type, '2k');
+    // large_image_info 也是 draft 节点：实测真实请求里它带 type/id，缺了会被拒。
+    assert.equal(hd.large_image_info.type, '');
+    assert.equal(typeof hd.large_image_info.id, 'string');
+
+    const uhd = resolveImageSize('21:9', '4k');
+    assert.equal(uhd.image_ratio, 8);
+    assert.equal(uhd.large_image_info.width, 6197);
+    assert.equal(uhd.large_image_info.height, 2656);
+
     // 未知比例回落到 1:1 而不是抛错，保证旧画布还能打开。
     assert.equal(resolveImageSize('7:5', '2k').image_ratio, 1);
 });
 
-test('图片张数由 gen_count 控制，不用埋点字段', () => {
+test('图片张数由 gen_count 控制，且 gen_option 是 abilities 的兄弟节点', () => {
     const draft = buildImageDraft({ prompt: 'p', count: 3 });
-    const generate = draft.component_list[0].abilities.generate;
-    assert.equal(generate.gen_option.gen_count, 3);
-    assert.equal(JSON.stringify(draft).includes('generateCount'), false);
+    const abilities = draft.component_list[0].abilities;
+
+    // 实测：gen_option 与 generate 同级。放进 generate 内部时服务端不报字段错误，
+    // 而是直接 permission denied —— 属于最难查的一类错位。
+    assert.equal(abilities.gen_option.gen_count, 3);
+    assert.equal(abilities.generate.gen_option, undefined, 'gen_option 不能嵌在 generate 里');
+    assert.ok(abilities.generate.core_param, 'core_param 仍在 generate 内');
+
     // 上限 4，越界收敛而不是发出去被服务端拒绝。
-    assert.equal(buildImageDraft({ prompt: 'p', count: 9 }).component_list[0]
-        .abilities.generate.gen_option.gen_count, 4);
+    assert.equal(buildImageDraft({ prompt: 'p', count: 9 })
+        .component_list[0].abilities.gen_option.gen_count, 4);
+});
+
+test('draft 每个节点都带 type/id，根节点带版本协商字段', () => {
+    // 缺这层信封时服务端返回 ret=1002 common error。
+    const draft = buildImageDraft({ prompt: 'p' });
+    assert.equal(draft.type, 'draft');
+    assert.equal(typeof draft.id, 'string');
+    assert.equal(draft.min_version, '3.0.2');
+    assert.deepEqual(draft.min_features, []);
+    assert.equal(draft.is_from_tsn, true);
+
+    const component = draft.component_list[0];
+    assert.equal(draft.main_component_id, component.id, 'main_component_id 必须指向组件');
+    assert.equal(typeof component.metadata.created_time_in_ms, 'string');
+    for (const n of [component.abilities, component.abilities.generate, component.abilities.generate.core_param]) {
+        assert.equal(n.type, '');
+        assert.equal(typeof n.id, 'string');
+    }
 });
 
 test('参考图 URI 同时写入三处，并自动补 ##image 前缀', () => {
@@ -287,10 +337,14 @@ test('generate 请求体带 submit_id 与序列化后的 draft_content', () => {
         model: 'high_aes_general_v50'
     });
     assert.equal(body.submit_id, 'sub-1');
-    assert.equal(body.extend.workspace_id, '17381487769100');
+    // workspace_id 在线上是**数字**，不是字符串。
+    assert.equal(body.extend.workspace_id, 17381487769100);
     assert.equal(body.http_common_info.aid, 513695);
     assert.equal(typeof body.draft_content, 'string');
     assert.equal(JSON.parse(body.draft_content).type, 'draft');
+    // metrics_extra 属于埋点，但线上请求始终带着它。
+    assert.equal(typeof body.metrics_extra, 'string');
+    assert.equal(JSON.parse(body.metrics_extra).generateId, 'sub-1');
 });
 
 test('图片完成判断不能只看 status（参考图编辑的 45 陷阱）', () => {
@@ -340,6 +394,31 @@ test('图片与视频结果解析走同一条路径取原图 / 原视频', () =>
     assert.equal(videos[0].hasAudio, true);
 });
 
+test('生成请求必须带 babi_param 权益描述符与 webId', () => {
+    // 实测：缺 babi_param 时 aigc_draft/generate 一律 ret=3018 permission denied，
+    // 与模型、分辨率无关。它是 URL 参数（值为 URL 编码的 JSON），不在请求体里。
+    const url = new URL(buildGenerateUrl({ model: 'high_aes_general_v50', webId: '76667375525102566' }));
+    assert.equal(url.pathname, '/mweb/v1/aigc_draft/generate');
+    assert.equal(url.searchParams.get('webId'), '76667375525102566');
+
+    const babi = JSON.parse(decodeURIComponent(url.searchParams.get('babi_param')));
+    assert.equal(babi.feature_key, 'aigc_to_image');
+    assert.equal(babi.scenario, 'image_video_generation');
+    assert.equal(babi.feature_entrance_detail, 'to-generate-high_aes_general_v50');
+    assert.equal(babi.extra_param.model_id, 'high_aes_general_v50');
+
+    // generate_id 每次都要变，不能是固定值。
+    const again = new URL(buildGenerateUrl({ model: 'high_aes_general_v50' }));
+    assert.notEqual(url.searchParams.get('generate_id'), again.searchParams.get('generate_id'));
+});
+
+test('生成请求来源页面必须与任务类型一致', () => {
+    // 实测：同一份生图请求从 ?type=video 页面发出会 permission denied。
+    assert.match(toolPageUrl('image', '123'), /type=image/);
+    assert.match(toolPageUrl('image', '123'), /workspace=123/);
+    assert.match(toolPageUrl('video'), /type=video/);
+});
+
 test('轮询响应按 submit_id 定位记录', () => {
     const payload = { data: { 'hist-1': { submit_id: 'sub-a', status: 45 }, 'hist-2': { submit_id: 'sub-b', status: 20 } } };
     assert.equal(pickHistoryRecord(payload, 'sub-b').status, 20);
@@ -351,23 +430,67 @@ test('ret != 0 被识别为业务失败', () => {
     assert.equal(jimengBusinessError({ ret: '1001', errmsg: '登录失效' }), '登录失效');
 });
 
-test('即梦模型发现读取服务端名称，不按 key 猜 UI 名', () => {
+test('即梦模型发现读取页面 bootstrap，UI 名一律取服务端 model_name', () => {
+    // 数据形状取自线上 window.__*_generate_model_config__（值已精简）。
+    // 注意 key 写着 40_mini，真实 UI 名却是「2.0 mini」—— 所以绝不能按 key 猜名字。
     const { images, videos } = extractJimengModels({
-        list: [
-            { model_req_key: 'dreamina_seedance_40_mini', model_name: '即梦 Seedance 2.0 mini', fps: 24, duration_option: [4, 5, 6] },
-            { model_req_key: 'high_aes_general_v50', model_name: '图片 5.0 Lite' }
-        ]
+        image: {
+            data: {
+                model_list: [{
+                    model_req_key: 'high_aes_general_v50',
+                    model_name: '图片 5.0 Lite',
+                    feats: ['t2i', 'byte_edit'],
+                    generate_count_options: [1, 2, 3, 4],
+                    input_image_limit: [{ ability_name: 'byte_edit', max_image_num: 10 }],
+                    resolution_map: {
+                        '2k': { image_ratio_sizes: [{ ratio_type: 1 }, { ratio_type: 3 }] },
+                        '4k': { image_ratio_sizes: [{ ratio_type: 1 }] }
+                    }
+                }]
+            }
+        },
+        video: {
+            data: {
+                model_list: [{
+                    model_req_key: 'dreamina_seedance_40_mini',
+                    model_name: '即梦 Seedance 2.0 mini',
+                    options: [
+                        { key: 'resolution', enum_val: { string_value: ['720p'] } },
+                        { key: 'fps', enum_val: { int_value: [24] } },
+                        { key: 'frames', enum_val: { int_value: [96, 120, 144] } },
+                        { key: 'video_aspect_ratio', enum_val: { string_value: ['16:9', '9:16'] } },
+                        { key: 'input_media_type', enum_val: { string_value: ['unified_edit', 'prompt', 'first_frame', 'end_frame'] } },
+                        { key: 'unified_edit', unified_edit_config: { supported_materials: [{ material_type: 1, limit: { max_count: 9 } }] } }
+                    ]
+                }]
+            }
+        }
     });
-    const video = videos.find(model => model.id === 'dreamina_seedance_40_mini');
-    // key 里写着 40_mini，但 UI 名必须来自服务端。
+
+    const image = images[0];
+    assert.equal(image.displayName, '图片 5.0 Lite');
+    assert.deepEqual(image.resolutions, ['2K', '4K']);
+    assert.deepEqual(image.aspectRatios.sort(), ['1:1', '16:9'].sort(), 'ratio_type 应还原成比例字符串');
+    assert.equal(image.maxBatchCount, 4);
+    assert.equal(image.supportsReferenceImage, true);
+    assert.equal(image.maxReferenceImages, 10);
+
+    const video = videos[0];
     assert.equal(video.displayName, '即梦 Seedance 2.0 mini');
+    assert.equal(video.fps, 24);
+    // 服务端只给帧数，秒数要用 frames / fps 换算。
     assert.deepEqual(video.durations, [4, 5, 6]);
-    assert.equal(images.find(model => model.id === 'high_aes_general_v50').displayName, '图片 5.0 Lite');
+    assert.deepEqual(video.resolutions, ['720P']);
+    assert.equal(video.supportsFirstFrame, true);
+    assert.equal(video.supportsEndFrame, true);
+    assert.equal(video.maxReferenceImages, 9);
 });
 
 test('模型发现遇到未知结构返回空表而不是抛错', () => {
+    // 发现失败必须退回基线，不能让模型下拉变空。
     assert.deepEqual(extractJimengModels(null), { images: [], videos: [] });
     assert.deepEqual(extractJimengModels({ unrelated: true }), { images: [], videos: [] });
+    assert.deepEqual(extractJimengModels({ image: { data: {} } }), { images: [], videos: [] });
 });
 
 // ---------------------------------------------------------------------------
@@ -510,9 +633,8 @@ test('Flow 模型发现能认出新的 videoModelKey', () => {
 // 执行模式 / 错误契约
 // ---------------------------------------------------------------------------
 
-test('已提交的失败绝不回退浏览器，也绝不重试', async () => {
+test('已提交的失败绝不重试', async () => {
     let httpCalls = 0;
-    let browserCalls = 0;
     await assert.rejects(
         runWithExecutionMode({
             mode: 'auto',
@@ -521,83 +643,70 @@ test('已提交的失败绝不回退浏览器，也绝不重试', async () => {
             http: () => {
                 httpCalls += 1;
                 throw new WebProviderError('生成中途失败', { provider: 'jimeng', code: 'GENERATION_FAILED' });
-            },
-            browser: () => { browserCalls += 1; return { ok: true }; }
+            }
         }),
         error => error.code === 'GENERATION_FAILED'
     );
-    // 二次提交 = 用户被扣两次费，所以这两个计数必须是 1 和 0。
+    // 二次提交 = 用户被扣两次费。
     assert.equal(httpCalls, 1);
-    assert.equal(browserCalls, 0);
 });
 
-test('提交前失败会重试，仍失败才回退浏览器', async () => {
+test('提交前失败会重试，重试用尽后如实抛出（不再回退浏览器）', async () => {
+    // DOM 点击生成已删除，认证类失败应交给 Session 恢复，而不是换一条也要花配额的链路。
     let httpCalls = 0;
-    const result = await runWithExecutionMode({
-        mode: 'auto',
-        provider: 'google-flow',
-        label: '测试',
-        http: () => {
-            httpCalls += 1;
-            throw new WebProviderError('登录过期', { provider: 'google-flow', code: 'AUTH_EXPIRED' });
-        },
-        browser: () => ({ buffer: 'x' })
-    });
+    await assert.rejects(
+        runWithExecutionMode({
+            mode: 'auto',
+            provider: 'google-flow',
+            label: '测试',
+            http: () => {
+                httpCalls += 1;
+                throw new WebProviderError('登录过期', { provider: 'google-flow', code: 'AUTH_EXPIRED' });
+            }
+        }),
+        error => error.code === 'AUTH_EXPIRED'
+    );
     assert.equal(httpCalls, 2, 'HTTP 重试上限 2 次');
-    assert.equal(result.channel, 'browser');
-    assert.equal(result.httpFallbackReason, 'AUTH_EXPIRED');
 });
 
-test('http 模式不回退浏览器', async () => {
-    let browserCalls = 0;
+test('http 模式同样只走 HTTP', async () => {
+    let httpCalls = 0;
     await assert.rejects(
         runWithExecutionMode({
             mode: 'http',
             provider: 'gemini-web',
             label: '测试',
-            http: () => { throw new WebProviderError('签名失败', { provider: 'gemini-web', code: 'SIGN_FAILED' }); },
-            browser: () => { browserCalls += 1; return {}; }
+            httpAttempts: 1,
+            http: () => {
+                httpCalls += 1;
+                throw new WebProviderError('签名失败', { provider: 'gemini-web', code: 'SIGN_FAILED' });
+            }
         }),
-        error => /仅 HTTP/.test(error.message)
+        error => error.code === 'SIGN_FAILED'
     );
-    assert.equal(browserCalls, 0);
+    assert.equal(httpCalls, 1);
 });
 
-test('browser 模式完全不碰 HTTP 通道', async () => {
-    let httpCalls = 0;
-    const result = await runWithExecutionMode({
-        mode: 'browser', provider: 'jimeng', label: '测试',
-        http: () => { httpCalls += 1; return {}; },
-        browser: () => ({ source: 'workflow-file' })
-    });
-    assert.equal(httpCalls, 0);
-    assert.equal(result.source, 'workflow-file');
-});
-
-test('识图这类返回字符串的浏览器兜底不会被展开成对象', async () => {
-    const result = await runWithExecutionMode({
-        mode: 'auto', provider: 'gemini-web', label: '识图',
-        httpAttempts: 1,
-        http: () => { throw new WebProviderError('过期', { provider: 'gemini-web', code: 'AUTH_EXPIRED' }); },
-        browser: () => '这是识图结果'
-    });
-    assert.equal(result, '这是识图结果');
+test('没有 HTTP 实现时明确报错，而不是静默什么都不做', () => {
+    assert.rejects(
+        runWithExecutionMode({ mode: 'auto', provider: 'jimeng', label: '测试' }),
+        error => error.code === 'BRIDGE_UNAVAILABLE'
+    );
 });
 
 test('未知异常按已提交处理（宁可让用户手动重试，也不能重复扣费）', async () => {
-    let browserCalls = 0;
+    let httpCalls = 0;
     await assert.rejects(
         runWithExecutionMode({
             mode: 'auto', provider: 'jimeng', label: '测试',
-            http: () => { throw new Error('意料之外的崩溃'); },
-            browser: () => { browserCalls += 1; return {}; }
+            http: () => { httpCalls += 1; throw new Error('意料之外的崩溃'); }
         }),
         error => error instanceof WebProviderError && error.submitted === true
     );
-    assert.equal(browserCalls, 0);
+    assert.equal(httpCalls, 1, '未知异常不得重试');
 });
 
-test('Flow 真实 403 reCAPTCHA 响应被判为提交前失败，可回退浏览器', () => {
+test('Flow 真实 403 reCAPTCHA 响应被判为提交前失败', () => {
     // 实测响应体（无头 Chrome 会被 reCAPTCHA Enterprise 判为 UNUSUAL_ACTIVITY）。
     // 这条路径必须 submitted:false —— 请求根本没进生成队列，回退浏览器不会重复扣费。
     const body = JSON.stringify({
@@ -615,7 +724,7 @@ test('Flow 真实 403 reCAPTCHA 响应被判为提交前失败，可回退浏览
     assert.equal(error.canFallbackToBrowser, true);
 });
 
-test('Gemini 页面被重定向映射为登录失效，同样允许回退', () => {
+test('Gemini 页面被重定向映射为登录失效，属提交前失败', () => {
     // ops-cli 抛 AUTH_REQUIRED，bridge 归一成 AUTH_EXPIRED；两者都必须是提交前失败。
     const error = new WebProviderError('页面被重定向', { provider: 'gemini-web', code: 'AUTH_EXPIRED' });
     assert.equal(error.submitted, false);

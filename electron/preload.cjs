@@ -13,6 +13,11 @@ contextBridge.exposeInMainWorld('evanDesktop', {
         return result.data;
     },
     getAppInfo: () => ipcRenderer.invoke('app:info'),
+    uninstall: {
+        /** 只算路径不动手，用于在界面上如实列出会被扔掉的东西。 */
+        plan: (keepUserData) => ipcRenderer.invoke('app:uninstall-plan', keepUserData),
+        run: (keepUserData) => ipcRenderer.invoke('app:uninstall', keepUserData)
+    },
     chrome: {
         getStatus: () => ipcRenderer.invoke('chrome:get-status'),
         openDownload: () => ipcRenderer.invoke('chrome:open-download'),

@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
     buildCodexAutomationCommand,
     createCodexImageAutomation,
+    resolveExtraWritableRoots,
     pruneCodexAutomationLogs
 } from '../server/services/codexImageAutomation.js';
 import { createCodexImageJob } from '../server/services/codexImageJobs.js';
@@ -20,19 +21,53 @@ function fixture() {
     return { root, libraryDir, jobsDir };
 }
 
+// 按“参数是否存在 + 相邻取值”断言，不钉死整段前缀顺序：以前每加一个参数都要
+// 顺手改一次 slice(0, N)。
+function argValue(args, flag) {
+    const index = args.indexOf(flag);
+    return index === -1 ? undefined : args[index + 1];
+}
+
 test('Codex 自动生图固定使用 Plus 会话和工作区沙箱', () => {
     const spec = buildCodexAutomationCommand('/tmp/twitcanva', '/tmp/codex', '/tmp/evan-codex-queue');
     assert.equal(spec.command, '/tmp/codex');
-    assert.deepEqual(spec.args.slice(0, 8), [
-        'exec', '--ephemeral', '--skip-git-repo-check',
-        '-C', '/tmp/twitcanva', '-s', 'workspace-write', '--color'
-    ]);
+    assert.equal(spec.args[0], 'exec');
+    assert.ok(spec.args.includes('--ephemeral'));
+    assert.equal(argValue(spec.args, '-C'), '/tmp/twitcanva');
+    assert.equal(argValue(spec.args, '-s'), 'workspace-write');
+    assert.equal(argValue(spec.args, '--color'), 'never');
     // 工作目录（userData/data）不是 git 仓库，少了这个参数 codex exec 直接退出码 1：
     // “Not inside a trusted directory and --skip-git-repo-check was not specified.”
     assert.ok(spec.args.includes('--skip-git-repo-check'));
     assert.match(spec.args.at(-1), /ChatGPT 登录包含的内置 image_gen/);
     assert.match(spec.args.at(-1), /不调用 OpenAI API/);
     assert.match(spec.args.at(-1), /evan-codex-queue/);
+});
+
+test('项目素材目录链接到沙箱外时，按真实路径放开写权限', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'twitcanva-codex-roots-'));
+    const workspaceDir = path.join(root, 'data');
+    const libraryDir = path.join(workspaceDir, 'library');
+    const projectsDir = path.join(libraryDir, 'projects');
+    const outside = path.join(root, 'outside-project');
+    fs.mkdirSync(projectsDir, { recursive: true });
+    fs.mkdirSync(path.join(projectsDir, 'inside-project'));
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(projectsDir, 'linked-project'));
+    // 目录里混着 .DS_Store 这类文件，不能当成可写根。
+    fs.writeFileSync(path.join(projectsDir, '.DS_Store'), 'junk');
+
+    const roots = resolveExtraWritableRoots({ libraryDir, workspaceDir });
+    assert.deepEqual(roots, [fs.realpathSync(outside)]);
+
+    const spec = buildCodexAutomationCommand(workspaceDir, '/tmp/codex', '', { libraryDir });
+    const addDirIndex = spec.args.indexOf('--add-dir');
+    assert.notEqual(addDirIndex, -1);
+    assert.equal(spec.args[addDirIndex + 1], fs.realpathSync(outside));
+    // 沙箱本来就可写的目录不重复声明。
+    assert.equal(spec.args.filter(arg => arg === '--add-dir').length, 1);
+
+    fs.rmSync(root, { recursive: true, force: true });
 });
 
 test('连续通知只启动一个 Codex worker', async t => {

@@ -22,6 +22,13 @@ export interface UpdateState {
   checkedAt: string | null;
 }
 
+export interface UninstallPlan {
+  /** 只有 macOS 打包版能自己卸载自己；其余平台给系统卸载入口的指引。 */
+  supported: boolean;
+  hint?: string;
+  targets: { path: string; label: string }[];
+}
+
 export interface AppInfo {
   version: string;
   platform: string;
@@ -54,6 +61,13 @@ declare global {
         viewport: { x: number; y: number; zoom: number };
       }>;
       getAppInfo: () => Promise<AppInfo>;
+      uninstall: {
+        plan: (keepUserData: boolean) => Promise<UninstallPlan>;
+        run: (keepUserData: boolean) => Promise<
+          | { ok: true }
+          | { ok: false; canceled?: boolean; error?: string }
+        >;
+      };
       chrome: {
         getStatus: () => Promise<ChromeRuntimeStatus>;
         openDownload: () => Promise<{ ok: boolean }>;

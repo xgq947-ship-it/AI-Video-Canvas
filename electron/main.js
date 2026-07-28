@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createUpdateController } from './updater.js';
+import { resolveUninstallTargets } from './uninstall.js';
 import {
     CHROME_DOWNLOAD_URL,
     getChromeCompatibility
@@ -333,6 +334,65 @@ ipcMain.handle('app:info', () => ({
     arch: process.arch,
     isPackaged: app.isPackaged
 }));
+
+const uninstallPlan = keepUserData => resolveUninstallTargets({
+    userDataDir: app.getPath('userData'),
+    exePath: process.execPath,
+    platform: process.platform,
+    isPackaged: app.isPackaged,
+    keepUserData
+});
+
+// 预览：界面在按钮旁边如实列出会被扔进废纸篓的路径，用户点之前就能看到。
+ipcMain.handle('app:uninstall-plan', (_event, keepUserData) => uninstallPlan(Boolean(keepUserData)));
+
+ipcMain.handle('app:uninstall', async (_event, keepUserData) => {
+    const plan = uninstallPlan(Boolean(keepUserData));
+    if (!plan.supported) return { ok: false, error: plan.hint };
+
+    // 最终确认放在主进程：不可逆动作不交给渲染进程的 confirm 把关。
+    const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'warning',
+        buttons: ['取消', '移到废纸篓'],
+        defaultId: 0,
+        cancelId: 0,
+        title: '卸载 Evan',
+        message: keepUserData ? '确定卸载 Evan？（保留你的数据）' : '确定卸载 Evan 并删除全部数据？',
+        detail: [
+            '以下内容会被移到废纸篓：',
+            ...plan.targets.map(target => `· ${target.label}\n  ${target.path}`),
+            '',
+            keepUserData
+                ? '你的素材和登录态会保留在原处，重新安装后可以直接继续用。'
+                : '素材、生成结果、登录态都会一起进废纸篓 —— 清空废纸篓前还能拖回来。'
+        ].join('\n')
+    });
+    if (response !== 1) return { ok: false, canceled: true };
+
+    // 专属 Chrome 是 detached 的：不先关掉，profile 进了废纸篓它还在跑。
+    if (backendProcess) {
+        backendProcess.postMessage({ type: 'shutdown' });
+        await new Promise(resolve => {
+            const timer = setTimeout(resolve, 9_000);
+            backendProcess.once('exit', () => { clearTimeout(timer); resolve(); });
+        });
+    } else {
+        await closeDedicatedChromeFallback();
+    }
+    backendProcess = null;
+
+    for (const target of plan.targets) {
+        try {
+            await shell.trashItem(target.path);
+        } catch (error) {
+            return { ok: false, error: `无法把「${target.label}」移到废纸篓：${error.message}` };
+        }
+    }
+
+    shuttingDown = true;
+    app.quit();
+    return { ok: true };
+});
 
 ipcMain.handle('chrome:get-status', () => currentChromeStatus({ force: true }));
 ipcMain.handle('chrome:open-download', async () => {

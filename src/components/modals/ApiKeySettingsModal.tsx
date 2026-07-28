@@ -1,17 +1,59 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Eye, EyeOff, FolderOpen, Info, KeyRound, Loader2, LogIn, RefreshCw, ShieldCheck, Sparkles, TerminalSquare, Trash2, Wand2, X } from 'lucide-react';
+import { CheckCircle2, Eye, EyeOff, FolderOpen, Heart, Info, KeyRound, Loader2, LogIn, RefreshCw, ShieldCheck, Sparkles, TerminalSquare, Trash2, Wand2, X } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { notifyCodexStatusChanged } from '../../hooks/useCodexService';
 import { useAppUpdates } from '../../hooks/useAppUpdates';
 import { AboutPanel } from './settings/AboutPanel';
+import { SupportPanel } from './settings/SupportPanel';
+import { UninstallPanel } from './settings/UninstallPanel';
 import { WhatsNewPanel } from './settings/WhatsNewPanel';
 
-type SettingsPage = 'connections' | 'whatsNew' | 'about';
+type SettingsPage =
+    | 'keys'
+    | 'web'
+    | 'codex'
+    | 'optimizer'
+    | 'whatsNew'
+    | 'about'
+    | 'support'
+    | 'uninstall';
 
-const SETTINGS_PAGES = [
-    { id: 'connections' as const, label: 'AI 服务与密钥', icon: KeyRound },
-    { id: 'whatsNew' as const, label: '新功能', icon: Sparkles },
-    { id: 'about' as const, label: '关于', icon: Info }
+/**
+ * 一页一件事：原来「AI 服务与密钥」把 Codex、三家 Web 平台、提示词后端和所有
+ * 密钥堆在同一条长滚动里，找任何一项都得先滚。这里按用途拆开，侧栏分组只是
+ * 视觉分隔，不承载状态。
+ */
+const SETTINGS_NAV: { group: string; items: { id: SettingsPage; label: string; icon: LucideIcon }[] }[] = [
+    {
+        group: '服务',
+        items: [
+            { id: 'keys', label: 'API 密钥', icon: KeyRound },
+            { id: 'web', label: 'Web 平台登录', icon: ShieldCheck },
+            { id: 'codex', label: 'Codex 服务', icon: TerminalSquare },
+            { id: 'optimizer', label: '提示词优化', icon: Wand2 }
+        ]
+    },
+    {
+        group: 'App',
+        items: [
+            { id: 'whatsNew', label: '新功能', icon: Sparkles },
+            { id: 'about', label: '关于', icon: Info },
+            { id: 'support', label: '支持', icon: Heart },
+            { id: 'uninstall', label: '卸载', icon: Trash2 }
+        ]
+    }
 ];
+
+const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; subtitle: string }> = {
+    keys: { title: '设置', subtitle: '云端模型的 API 密钥；密钥只存本机，不会写入项目文件。' },
+    web: { title: '设置', subtitle: 'Gemini Web / 即梦 / Flow 的登录状态与执行模式。' },
+    codex: { title: '设置', subtitle: '本机 Codex CLI 的连接状态，用 ChatGPT 登录态生图。' },
+    optimizer: { title: '设置', subtitle: '提示词优化走哪个后端，以及对应的模型与推理强度。' },
+    whatsNew: { title: '设置', subtitle: '每次更新带来的新增、改进与修复。' },
+    about: { title: '设置', subtitle: '版本信息与软件更新。' },
+    support: { title: '设置', subtitle: '这个项目完全免费。如果它帮到了你，欢迎来打个招呼。' },
+    uninstall: { title: '设置', subtitle: '从这里直接卸载 Evan，可选择是否保留你的素材数据。' }
+};
 
 interface ApiKeyField {
     name: string;
@@ -53,8 +95,14 @@ interface CodexStatus {
 
 interface BrowserSession { state: string; message?: string | null; }
 
-/** Gemini Web / 即梦 / Flow 的执行通道：auto = HTTP 优先，提交前失败才回退浏览器。 */
-type WebExecutionMode = 'auto' | 'http' | 'browser';
+/**
+ * Gemini Web / 即梦 / Flow 的执行通道。
+ *
+ * 只剩 HTTP 一条链路：`browser`（DOM 点击生成）已整体删除，浏览器只负责登录和
+ * 签名上下文（见 server/services/webhttp/executionMode.js）。两个模式的差别只在
+ * 失败后要不要自动重试一次。
+ */
+type WebExecutionMode = 'auto' | 'http';
 
 interface WebExecutionProvider {
     id: string;
@@ -80,9 +128,8 @@ interface WebSessionProvider {
 }
 
 const WEB_EXECUTION_MODE_LABELS: Record<WebExecutionMode, string> = {
-    auto: '自动（HTTP 优先，失败回退浏览器）',
-    http: '仅 HTTP',
-    browser: '仅浏览器自动化'
+    auto: '自动（失败自动重试一次）',
+    http: '仅 HTTP（不重试）'
 };
 
 const WEB_SESSION_LABELS: Record<string, { text: string; tone: string }> = {
@@ -115,7 +162,7 @@ interface ApiKeySettingsModalProps {
 }
 
 export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen, onClose, canvasTheme }) => {
-    const [activePage, setActivePage] = useState<SettingsPage>('connections');
+    const [activePage, setActivePage] = useState<SettingsPage>('keys');
     const {
         appVersion,
         update,
@@ -470,13 +517,9 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                             </div>
                             <h2 className="text-2xl font-semibold tracking-tight">设置</h2>
                             <p className={`mt-1.5 text-xs leading-5 ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
-                                {activePage === 'connections'
-                                    ? '统一管理 Codex、提示词后端和云端 API；密钥不会写入项目文件。'
-                                    : activePage === 'whatsNew'
-                                        ? '每次更新带来的新增、改进与修复。'
-                                        : '版本信息与软件更新。'}
+                                {SETTINGS_PAGE_META[activePage].subtitle}
                             </p>
-                            {activePage === 'connections' && (
+                            {activePage === 'keys' && (
                                 <div className="mt-3 flex flex-wrap gap-2">
                                     <span className={`rounded-full border px-2.5 py-1 text-[10px] ${codexStatus?.authenticated ? 'border-emerald-400/25 bg-emerald-400/10 text-emerald-400' : 'border-white/10 text-neutral-500'}`}>
                                         Codex {codexStatus?.authenticated ? '已连接' : '未连接'}
@@ -501,42 +544,52 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                 <div className="relative flex min-h-0 flex-1">
                     {/* 左侧分栏导航 */}
                     <nav className={`hidden w-52 shrink-0 overflow-y-auto border-r px-3 py-5 sm:block ${isDark ? 'border-white/[0.08]' : 'border-neutral-200'}`}>
-                        {SETTINGS_PAGES.map(page => {
-                            const Icon = page.icon;
-                            const isActive = activePage === page.id;
-                            return (
-                                <button
-                                    key={page.id}
-                                    type="button"
-                                    onClick={() => setActivePage(page.id)}
-                                    aria-current={isActive ? 'page' : undefined}
-                                    className={`mb-1 flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${isActive
-                                        ? 'bg-blue-600 font-medium text-white'
-                                        : isDark
-                                            ? 'text-neutral-300 hover:bg-white/[0.06]'
-                                            : 'text-neutral-700 hover:bg-neutral-100'
-                                        }`}
-                                >
-                                    <Icon size={16} className="shrink-0" />
-                                    <span className="flex-1 truncate">{page.label}</span>
-                                    {page.id === 'about' && hasPendingUpdate && (
-                                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${isActive ? 'bg-white' : 'bg-amber-400'}`} />
-                                    )}
-                                </button>
-                            );
-                        })}
+                        {SETTINGS_NAV.map(section => (
+                            <div key={section.group} className="mb-4 last:mb-0">
+                                <div className={`mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] ${isDark ? 'text-neutral-600' : 'text-neutral-400'}`}>
+                                    {section.group}
+                                </div>
+                                {section.items.map(page => {
+                                    const Icon = page.icon;
+                                    const isActive = activePage === page.id;
+                                    const isDanger = page.id === 'uninstall';
+                                    return (
+                                        <button
+                                            key={page.id}
+                                            type="button"
+                                            onClick={() => setActivePage(page.id)}
+                                            aria-current={isActive ? 'page' : undefined}
+                                            className={`mb-1 flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm transition-colors ${isActive
+                                                ? isDanger ? 'bg-red-600 font-medium text-white' : 'bg-blue-600 font-medium text-white'
+                                                : isDanger
+                                                    ? 'text-red-400 hover:bg-red-500/10'
+                                                    : isDark
+                                                        ? 'text-neutral-300 hover:bg-white/[0.06]'
+                                                        : 'text-neutral-700 hover:bg-neutral-100'
+                                                }`}
+                                        >
+                                            <Icon size={16} className="shrink-0" />
+                                            <span className="flex-1 truncate">{page.label}</span>
+                                            {page.id === 'about' && hasPendingUpdate && (
+                                                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${isActive ? 'bg-white' : 'bg-amber-400'}`} />
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        ))}
                     </nav>
 
                     {/* 小屏退化成横向标签，避免侧栏挤掉内容 */}
                     <div className="flex min-w-0 flex-1 flex-col">
                         <div className={`flex shrink-0 gap-1 overflow-x-auto border-b px-4 py-2 sm:hidden ${isDark ? 'border-white/[0.08]' : 'border-neutral-200'}`}>
-                            {SETTINGS_PAGES.map(page => (
+                            {SETTINGS_NAV.flatMap(section => section.items).map(page => (
                                 <button
                                     key={page.id}
                                     type="button"
                                     onClick={() => setActivePage(page.id)}
                                     className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs transition-colors ${activePage === page.id
-                                        ? 'bg-blue-600 font-medium text-white'
+                                        ? page.id === 'uninstall' ? 'bg-red-600 font-medium text-white' : 'bg-blue-600 font-medium text-white'
                                         : isDark ? 'text-neutral-400' : 'text-neutral-600'
                                         }`}
                                 >
@@ -559,10 +612,15 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                         onInstall={installUpdate}
                         onOpenDownloadPage={openDownloadPage}
                     />
+                ) : activePage === 'support' ? (
+                    <SupportPanel isDark={isDark} />
+                ) : activePage === 'uninstall' ? (
+                    <UninstallPanel isDark={isDark} />
                 ) : isLoading ? (
                         <div className="flex h-48 items-center justify-center gap-2 text-sm text-neutral-500"><Loader2 size={18} className="animate-spin" />正在读取配置</div>
                     ) : (
                         <div className="space-y-4">
+                            {activePage === 'codex' && (
                             <section className={`rounded-2xl border p-5 transition-colors ${sectionSurface}`}>
                                 <div className="mb-1 flex items-center justify-between gap-3">
                                     <div className="flex items-center gap-2">
@@ -634,7 +692,9 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                     )}
                                 </div>
                             </section>
+                            )}
 
+                            {activePage === 'web' && (
                             <section className={`rounded-2xl border p-5 transition-colors ${sectionSurface}`}>
                                 <div className="mb-1 flex items-center justify-between gap-3">
                                     <div className="flex items-center gap-2"><Sparkles size={14} className="text-cyan-400" /><h3 className="text-sm font-medium">Gemini Web Browser Automation</h3></div>
@@ -649,8 +709,10 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                     <button type="button" disabled={browserBusy} onClick={() => void handleGeminiBrowser('check')} className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs disabled:opacity-50 ${isDark ? 'border-neutral-700' : 'border-neutral-300'}`}>{browserBusy ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}检查登录状态</button>
                                 </div>
                             </section>
+                            )}
 
                             {/* Web 平台执行模式 + 登录状态：Gemini Web / 即梦 / Flow 统一在这里 */}
+                            {activePage === 'web' && (
                             <section className={`rounded-2xl border p-5 transition-colors ${sectionSurface}`}>
                                 <div className="mb-1 flex items-center justify-between gap-3">
                                     <div className="flex items-center gap-2">
@@ -668,8 +730,8 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                     </button>
                                 </div>
                                 <p className={`mb-3 text-[11px] leading-5 ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
-                                    生成主链路走平台 HTTP 接口，浏览器只负责登录、签名上下文和失败回退。
-                                    「仅 HTTP」不会自动回退；已经提交出去的任务在任何模式下都不会重复提交。
+                                    生成全程走平台 HTTP 接口，浏览器只负责登录和签名上下文，不再有 DOM 点击生成。
+                                    两个模式的差别只是失败后要不要自动重试一次；已经提交出去的任务在任何模式下都不会重复提交。
                                 </p>
                                 <div className="space-y-2">
                                     {webExecution.map(provider => {
@@ -739,8 +801,10 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                     })}
                                 </div>
                             </section>
+                            )}
 
                             {/* 提示词优化后端选择 */}
+                            {activePage === 'optimizer' && (
                             <section className={`rounded-2xl border p-5 transition-colors ${sectionSurface}`}>
                                 <div className="mb-1 flex items-center gap-2">
                                     <Wand2 size={14} className={isDark ? 'text-purple-400' : 'text-purple-600'} />
@@ -798,8 +862,9 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                     <p className="mt-2 text-[11px] text-amber-400">{selectedOptimizer.unavailableHint || '该 CLI 后端尚未连接。'}</p>
                                 )}
                             </section>
+                            )}
 
-                            {groups.map(([provider, providerFields]) => (
+                            {activePage === 'keys' && groups.map(([provider, providerFields]) => (
                                 <section key={provider} className={`rounded-2xl border p-5 transition-colors ${sectionSurface}`}>
                                     <div className="mb-3 flex items-center justify-between">
                                         <h3 className="text-sm font-medium">{provider}</h3>
@@ -872,8 +937,9 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                     </div>
                     <div className="flex gap-2">
                         <button onClick={onClose} className={`rounded-xl border px-4 py-2.5 text-sm transition-colors ${isDark ? 'border-white/10 bg-white/[0.04] text-neutral-300 hover:bg-white/10' : 'border-neutral-200 bg-white text-neutral-600 hover:bg-neutral-100'}`}>关闭</button>
-                        {/* 只有密钥页有可保存的内容；「新功能」「关于」是只读页面。 */}
-                        {activePage === 'connections' && (
+                        {/* 只有密钥页和提示词优化页有「攒着再保存」的内容（handleSave 同时提交这两处）；
+                            Web 平台执行模式是切换即生效，其余页面只读。 */}
+                        {(activePage === 'keys' || activePage === 'optimizer') && (
                             <button onClick={handleSave} disabled={!hasChanges || isSaving} className="flex min-w-28 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-blue-950/20 transition-all hover:from-blue-500 hover:to-indigo-400 disabled:cursor-not-allowed disabled:opacity-35">
                                 {isSaving && <Loader2 size={14} className="animate-spin" />}
                                 {isSaving ? '保存中' : '保存修改'}

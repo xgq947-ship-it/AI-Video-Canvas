@@ -23,9 +23,13 @@ function fixture() {
 test('Codex 自动生图固定使用 Plus 会话和工作区沙箱', () => {
     const spec = buildCodexAutomationCommand('/tmp/twitcanva', '/tmp/codex', '/tmp/evan-codex-queue');
     assert.equal(spec.command, '/tmp/codex');
-    assert.deepEqual(spec.args.slice(0, 7), [
-        'exec', '--ephemeral', '-C', '/tmp/twitcanva', '-s', 'workspace-write', '--color'
+    assert.deepEqual(spec.args.slice(0, 8), [
+        'exec', '--ephemeral', '--skip-git-repo-check',
+        '-C', '/tmp/twitcanva', '-s', 'workspace-write', '--color'
     ]);
+    // 工作目录（userData/data）不是 git 仓库，少了这个参数 codex exec 直接退出码 1：
+    // “Not inside a trusted directory and --skip-git-repo-check was not specified.”
+    assert.ok(spec.args.includes('--skip-git-repo-check'));
     assert.match(spec.args.at(-1), /ChatGPT 登录包含的内置 image_gen/);
     assert.match(spec.args.at(-1), /不调用 OpenAI API/);
     assert.match(spec.args.at(-1), /evan-codex-queue/);

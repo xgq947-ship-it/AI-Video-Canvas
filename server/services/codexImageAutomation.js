@@ -36,6 +36,28 @@ export function pruneCodexAutomationLogs(
     return removed;
 }
 
+/**
+ * worker 日志的最后一条有效输出，用来补全"退出码 N"这种无从下手的报错。
+ *
+ * codex 失败时真正的原因只写在日志里（例：Not inside a trusted directory…），
+ * 前端只拿到退出码，排查得先去 userData 里翻文件。
+ */
+export function readCodexFailureReason(logFile, { maxChars = 200 } = {}) {
+    if (!logFile) return '';
+    let text = '';
+    try {
+        text = fs.readFileSync(logFile, 'utf8');
+    } catch {
+        return '';
+    }
+    const lines = text.split(/\r?\n/)
+        .map(line => line.trim())
+        // 这行是 codex 读 stdin 的例行提示，不是失败原因。
+        .filter(line => line && line !== 'Reading additional input from stdin...');
+    const reason = lines.at(-1) || '';
+    return reason.length > maxChars ? `${reason.slice(0, maxChars)}…` : reason;
+}
+
 export function buildCodexAutomationCommand(projectRoot, codexPath, queueCommand = '') {
     const command = resolveCodexBin({ projectRoot, configuredPath: codexPath });
     const prompt = [
@@ -51,6 +73,12 @@ export function buildCodexAutomationCommand(projectRoot, codexPath, queueCommand
         args: [
             'exec',
             '--ephemeral',
+            // 工作目录是 userData/data（放 library、codex-home 的地方），永远不是 git 仓库。
+            // 少了这个参数，codex exec 直接拒绝启动：
+            //   Not inside a trusted directory and --skip-git-repo-check was not specified.
+            // 退出码 1、什么也没做，前端只看到"Codex 进程退出码 1"。
+            // 提示词优化那条路径（promptOptimizerProviders.runCodexCli）一直带着它。
+            '--skip-git-repo-check',
             '-C', projectRoot,
             '-s', 'workspace-write',
             '--color', 'never',
@@ -220,7 +248,13 @@ export function createCodexImageAutomation({
             };
 
             child.once('error', error => settle(null, `无法启动 Codex：${error.message}`));
-            child.once('close', code => settle(code, code === 0 ? null : `Codex 进程退出码 ${code}`));
+            child.once('close', code => {
+                if (code === 0) return settle(code, null);
+                const reason = readCodexFailureReason(logFile);
+                settle(code, reason
+                    ? `Codex 进程退出码 ${code}：${reason}`
+                    : `Codex 进程退出码 ${code}`);
+            });
         } catch (error) {
             if (!settled) {
                 settled = true;

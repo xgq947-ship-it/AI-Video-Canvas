@@ -101,10 +101,10 @@ log('\n▶ 自检 ops_cli');
 const check = spawnSync(VENV_PYTHON, ['-m', 'ops_cli', '--help'], {
     cwd: PYTHON_ROOT, encoding: 'utf8'
 });
-if (check.status !== 0 || !/image-to-video/.test(check.stdout || '')) {
+if (check.status !== 0 || !/browser/.test(check.stdout || '')) {
     fail(`ops_cli 自检未通过：\n${check.stderr || check.stdout}`);
 }
-log('✅ ops_cli 正常，image-to-video / text-to-image 均已就绪');
+log('✅ ops_cli 正常，browser 命令已就绪');
 
 log(`
 ========================================================

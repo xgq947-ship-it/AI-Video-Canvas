@@ -298,6 +298,14 @@ export default function App() {
   const { canEditCanvas } = canvasEditLock;
 
 
+  /**
+   * 已经移进回收站、但节点可能被撤销拿回来的记录。
+   *
+   * 删除项目图片节点时，图片文件会被移进 .trash；而撤销（Ctrl+Z）只还原画布状态，
+   * 不碰磁盘 —— 节点方框回来了，图片却 404。这里记下「哪几个节点的图片进了哪个
+   * 回收站条目」，节点一旦重新出现在画布上就把文件还原回去。
+   */
+  const pendingTrashRef = React.useRef<{ entryId: string; nodeIds: string[] }[]>([]);
   const trashDeleteInFlight = React.useRef(false);
   const deleteNodesWithTrash = React.useCallback(async (ids: string[]) => {
     const uniqueIds = [...new Set(ids)];
@@ -332,7 +340,16 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nodeIds: uniqueIds, nodes })
       });
-      await readApiResponse(response, '移入回收站失败');
+      const result = await readApiResponse<{ entry?: { id?: string } }>(response, '移入回收站失败');
+      // 记下这次删除对应的回收站条目：撤销只会把节点还原到画布上，图片文件还在
+      // .trash 里，节点回来了却是一个「Failed to load」的空框。见 pendingTrashRef。
+      const entryId = result?.entry?.id;
+      if (entryId) {
+        pendingTrashRef.current = [
+          ...pendingTrashRef.current.filter(record => record.entryId !== entryId),
+          { entryId, nodeIds: uniqueIds }
+        ].slice(-20);
+      }
       deleteNodes(uniqueIds);
     } catch (error) {
       console.error('Failed to move canvas image to trash:', error);
@@ -1479,6 +1496,43 @@ export default function App() {
       setNodes(historyState.nodes);
     }
   }, [historyState]);
+
+  // 撤销把删掉的节点拿回来时，把它的图片文件也从回收站还原回去。
+  //
+  // 挂在 nodes 上而不是 undo 上：撤销是异步生效的，而且「节点又出现了」这个条件
+  // 对撤销、重做、以及其它任何让它回来的路径都成立，不用逐个入口去接。
+  const restoreTrashInFlight = React.useRef(false);
+  useEffect(() => {
+    if (!workflowId || restoreTrashInFlight.current) return;
+    if (pendingTrashRef.current.length === 0) return;
+
+    const presentIds = new Set(nodes.map(node => node.id));
+    const record = pendingTrashRef.current.find(item => item.nodeIds.some(id => presentIds.has(id)));
+    if (!record) return;
+
+    restoreTrashInFlight.current = true;
+    pendingTrashRef.current = pendingTrashRef.current.filter(item => item.entryId !== record.entryId);
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/projects/${encodeURIComponent(workflowId)}/trash/${encodeURIComponent(record.entryId)}/restore`,
+          { method: 'POST' }
+        );
+        await readApiResponse(response, '恢复图片失败');
+        // 文件回来了，但 <img> 已经记住了那次 404，必须换个 URL 才会重新请求。
+        setNodes(current => current.map(node => (
+          record.nodeIds.includes(node.id) && typeof node.resultUrl === 'string' && node.resultUrl
+            ? { ...node, resultUrl: `${node.resultUrl.split('?')[0]}?t=${Date.now()}` }
+            : node
+        )));
+      } catch (error) {
+        console.error('Failed to restore trashed image after undo:', error);
+        showToast('撤销已还原节点，但图片没能从回收站取回，请在回收站中手动恢复。', { tone: 'error' });
+      } finally {
+        restoreTrashInFlight.current = false;
+      }
+    })();
+  }, [nodes, workflowId, setNodes, showToast]);
 
   // Simple wrapper for updateNode (sync code removed - TEXT node prompts are combined at generation time)
   const updateNodeWithSync = React.useCallback((id: string, updates: Partial<NodeData>) => {

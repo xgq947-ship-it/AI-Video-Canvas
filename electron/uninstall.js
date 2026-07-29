@@ -46,7 +46,9 @@ export function resolveUninstallTargets({
     }
 
     // /Applications/Evan.app/Contents/MacOS/Evan → /Applications/Evan.app
-    const bundlePath = path.resolve(exePath, '..', '..', '..');
+    // 用 posix 语义：这条分支只可能是 macOS 的路径，而测试要在 Windows runner 上
+    // 跑出同样的结果，不能让宿主的路径风格插一脚。
+    const bundlePath = path.posix.resolve(exePath, '..', '..', '..');
     if (!bundlePath.endsWith('.app')) {
         return {
             supported: false,

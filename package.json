@@ -2,11 +2,11 @@
   "name": "twitcanva",
   "productName": "Evan AI Video Canvas",
   "private": true,
-  "version": "0.2.8",
+  "version": "0.2.12",
   "main": "electron/main.js",
   "type": "module",
   "engines": {
-    "//": "\u9700\u8981 Node 22+\uff1anpm test \u4f9d\u8d56 node --test \u81ea\u8eab\u7684\u901a\u914d\u7b26\u5c55\u5f00\uff08Node 21 \u8d77\u652f\u6301\uff09\u3002Windows \u7684 cmd \u4e0d\u5c55\u5f00 test/*.test.mjs\uff0c\u4f4e\u7248\u672c Node \u4f1a\u76f4\u63a5\u8dd1\u4e0d\u4e86\u6d4b\u8bd5\u3002",
+    "//": "需要 Node 22+：npm test 依赖 node --test 自身的通配符展开（Node 21 起支持）。Windows 的 cmd 不展开 test/*.test.mjs，低版本 Node 会直接跑不了测试。",
     "node": ">=22"
   },
   "scripts": {

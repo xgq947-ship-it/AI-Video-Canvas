@@ -109,7 +109,6 @@ run(VENV_PYTHON, [
     '--collect-submodules', 'ops_cli',
     '--collect-submodules', 'scene',
     '--collect-all', 'playwright',
-    '--add-data', `${path.join(PYTHON_ROOT, 'ops_cli', 'platforms')}${path.delimiter}ops_cli/platforms`,
     path.join(PYTHON_ROOT, 'ops_cli_launcher.py')
 ], '构建独立 Ops CLI 运行时');
 

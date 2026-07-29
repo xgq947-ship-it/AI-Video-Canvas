@@ -14,6 +14,7 @@ const OPS_EXECUTABLE = path.join(
 );
 const MEDIA_ROOT = path.join(RUNTIME_ROOT, 'media-tools');
 const MEDIA_SUFFIX = IS_WINDOWS ? '.exe' : '';
+const BROWSER_HUB_ROOT = path.join(RUNTIME_ROOT, 'browser-hub');
 
 function fail(message) {
     console.error(`\n❌ 桌面运行时验收失败：${message}\n`);
@@ -40,6 +41,10 @@ function requireCommand(command, args, label) {
 requireFile(OPS_EXECUTABLE);
 requireFile(path.join(MEDIA_ROOT, `ffmpeg${MEDIA_SUFFIX}`));
 requireFile(path.join(MEDIA_ROOT, `ffprobe${MEDIA_SUFFIX}`));
+requireFile(path.join(BROWSER_HUB_ROOT, 'manifest.json'));
+requireFile(path.join(BROWSER_HUB_ROOT, 'server', 'daemon.mjs'));
+requireFile(path.join(BROWSER_HUB_ROOT, 'runtime', IS_WINDOWS ? 'node.exe' : 'node'));
+requireFile(path.join(BROWSER_HUB_ROOT, 'runtime', 'NODE-LICENSE'));
 requireFile(path.join(ROOT, 'build', 'icon.ico'));
 if (process.platform === 'darwin') requireFile(path.join(ROOT, 'build', 'icon.icns'));
 
@@ -52,3 +57,4 @@ console.log(`   平台：${process.platform}/${process.arch}`);
 console.log(`   Ops CLI：${OPS_EXECUTABLE}`);
 console.log('   浏览器：运行时检测用户电脑上的 Google Chrome');
 console.log(`   媒体工具：${MEDIA_ROOT}`);
+console.log(`   共享浏览器：${BROWSER_HUB_ROOT}`);

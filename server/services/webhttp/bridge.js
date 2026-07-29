@@ -23,6 +23,7 @@ import {
     noteBillableRequestStart
 } from '../generationRuntime/scheduler.js';
 import { asWebProviderError, classifyHttpFailure, WebProviderError } from './errors.js';
+import { isSharedBrowserReady } from '../browserHubClient.js';
 
 export const WEB_HTTP_PROVIDERS = Object.freeze(['gemini-web', 'jimeng', 'google-flow']);
 
@@ -30,7 +31,6 @@ export const WEB_HTTP_PROVIDERS = Object.freeze(['gemini-web', 'jimeng', 'google
 export const MAX_BRIDGE_BODY_BYTES = 24 * 1024 * 1024;
 
 const DEFAULT_TIMEOUT_SECONDS = 120;
-const CDP_PORT = Number(process.env.SESSIONHUB_CDP_PORT) || 19222;
 
 export function isHeadlessBridgeVersion(version) {
     const userAgent = version?.['User-Agent'] || version?.userAgent || '';
@@ -38,15 +38,7 @@ export function isHeadlessBridgeVersion(version) {
 }
 
 async function isBridgeBrowserReady() {
-    try {
-        const response = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`, {
-            signal: AbortSignal.timeout(500)
-        });
-        if (!response.ok) return false;
-        return isHeadlessBridgeVersion(await response.json());
-    } catch {
-        return false;
-    }
+    return isSharedBrowserReady();
 }
 
 /**

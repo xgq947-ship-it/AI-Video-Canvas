@@ -107,7 +107,7 @@ def _interactive_default() -> bool:
 def _unattended_recovery_enabled() -> bool:
     """无人值守登录恢复开关。
 
-    定时/后台（非 tty）运行时，允许平台从 Evan 专属 Chrome 恢复登录态，
+    定时/后台（非 tty）运行时，允许平台从系统共享 Chrome 恢复登录态，
     无需真人在终端。仅在未显式指定 --interactive-login/--no-interactive-login 时生效；
     dry-run 与 recovery_policy="never" 的能力始终不恢复。
     业务层桥接 (运营自动化工具/clients/ops_cli_client.py) 默认给子进程置 1。

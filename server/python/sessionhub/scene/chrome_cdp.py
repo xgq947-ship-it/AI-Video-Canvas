@@ -13,12 +13,14 @@ import sys
 import traceback
 from pathlib import Path
 
+from . import browser_hub
+
 
 CDP_HOST = "127.0.0.1"
-CDP_PORT = int(os.environ.get("SESSIONHUB_CDP_PORT", "19222"))
+CDP_PORT = int(os.environ.get("AI_BROWSER_HUB_LEGACY_CDP_PORT", "0"))
 CDP_URL = f"http://{CDP_HOST}:{CDP_PORT}"
-# Evan reuses the machine's Google Chrome binary with its own persistent profile.
-# The installer never reads or controls the user's daily Chrome profile.
+# Hub reuses the machine's Google Chrome binary with one shared persistent profile.
+# It never reads or controls the user's daily Chrome profile.
 IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
 
@@ -54,28 +56,17 @@ def _default_chrome_bin() -> Path:
 
 
 CHROME_BIN = _default_chrome_bin()
-_DEFAULT_PROFILE_NAME = "evan-browser"
-
-
 def _default_profile_dir() -> Path:
-    """没有显式配置时的 Evan 专属 Profile 位置。
-
-    必须和 Electron 的 userData 落在同一处。此前回退到 ~/.sessionhub/evan-browser，
-    于是任何没带 SESSIONHUB_CHROME_PROFILE 的调用都会**另起一个全新的空 Chrome**，
-    还会占住 19222 —— 应用那边按自己的路径匹配不到进程，直接判「端口被占用」硬失败，
-    登录检查永远停在「无法确认」，而用户明明已经在专属浏览器里登录过了。
-    专属实例只能有一个，所以这里对齐 Electron 的 app.getPath('userData')。
-    """
-    app_name = "Evan AI Video Canvas"
+    """没有显式配置时返回跨 App 共用的 Hub Profile；不落入 Electron userData。"""
     if sys.platform == "darwin":
-        base = Path.home() / "Library" / "Application Support" / app_name
+        base = Path.home() / "Library" / "Application Support" / "SankaiAI" / "AI Browser Hub"
     elif os.name == "nt":
-        appdata = os.environ.get("APPDATA")
-        base = Path(appdata) / app_name if appdata else Path.home() / "AppData" / "Roaming" / app_name
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        base = Path(local_appdata) / "SankaiAI" / "AI Browser Hub" if local_appdata else Path.home() / "AppData" / "Local" / "SankaiAI" / "AI Browser Hub"
     else:
-        config_home = os.environ.get("XDG_CONFIG_HOME")
-        base = (Path(config_home) if config_home else Path.home() / ".config") / app_name
-    return base / "data" / "browser-profile"
+        data_home = os.environ.get("XDG_DATA_HOME")
+        base = (Path(data_home) if data_home else Path.home() / ".local" / "share") / "sankaiai" / "ai-browser-hub"
+    return base / "data" / "profile-v1"
 
 
 PROFILE_DIR = Path(
@@ -83,6 +74,21 @@ PROFILE_DIR = Path(
     or os.environ.get("EVAN_BROWSER_PROFILE_DIR")
     or str(_default_profile_dir())
 )
+
+
+def _hub_enabled() -> bool:
+    return os.environ.get("AI_BROWSER_HUB_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _set_hub_endpoint(endpoint: str) -> None:
+    global CDP_PORT, CDP_URL, PROFILE_DIR
+    CDP_URL = endpoint.rstrip("/")
+    CDP_PORT = int(CDP_URL.rsplit(":", 1)[1])
+    PROFILE_DIR = browser_hub.profile_dir()
+
+
+if _hub_enabled():
+    PROFILE_DIR = browser_hub.profile_dir()
 
 
 def _detached_popen_kwargs() -> dict:
@@ -98,15 +104,21 @@ def _detached_popen_kwargs() -> dict:
     return {"start_new_session": True}
 
 
-def is_port_open(host: str = CDP_HOST, port: int = CDP_PORT, timeout: float = 0.5) -> bool:
+def is_port_open(host: str = CDP_HOST, port: int | None = None, timeout: float = 0.5) -> bool:
+    resolved_port = CDP_PORT if port is None else port
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(timeout)
-        return sock.connect_ex((host, port)) == 0
+        return sock.connect_ex((host, resolved_port)) == 0
 
 
 def check_cdp() -> tuple[bool, str]:
+    if _hub_enabled():
+        endpoint = browser_hub.current_endpoint()
+        if not endpoint:
+            return False, "当前进程尚未获取共享浏览器租约。"
+        _set_hub_endpoint(endpoint)
     if not is_port_open():
-        return False, f"{CDP_PORT} 端口未开启，Evan 专属 Chrome CDP 未启动。"
+        return False, f"{CDP_PORT} 端口未开启，系统共享 Chrome CDP 未启动。"
     try:
         with urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=2) as resp:
             info = json.loads(resp.read().decode("utf-8"))
@@ -128,7 +140,7 @@ def chrome_start_command() -> str:
 
 
 def _foreground_allowed() -> bool:
-    """是否允许把 Evan 专属 Chrome 切到前台（弹窗）。
+    """是否允许把系统共享 Chrome 切到前台（弹窗）。
 
     仅当有人正坐在终端前（stdin 是 tty）才允许弹窗：终端直跑 ops / learn 登录时正常弹。
     launchd 定时、Hermes、workflow 子进程都经 osascript 空环境启动，无 tty → 静默不弹，
@@ -171,11 +183,10 @@ def _debug_log(event: str, **details: object) -> None:
 
 
 def _instance_pid() -> int | None:
-    """使用 Evan profile 的专属 Chrome 顶层进程 PID。
-
-    按 ``--user-data-dir=<PROFILE_DIR>`` 精确匹配，只锁定 Evan 实例，
-    绝不误伤用户日常浏览器。
-    """
+    """按共享 Profile 精确匹配 Hub Chrome 顶层进程，绝不触碰日常浏览器。"""
+    if _hub_enabled():
+        browser = browser_hub.status().get("browser") or {}
+        return int(browser["pid"]) if browser.get("pid") else None
     if IS_WINDOWS:
         return _instance_pid_windows()
     try:
@@ -230,7 +241,7 @@ def _powershell(script: str) -> str:
 
 
 def _instance_details_windows() -> tuple[int, str] | None:
-    """一次查询专用实例的 PID 与命令行。
+    """一次查询共享实例的 PID 与命令行。
 
     ``Get-CimInstance`` 在部分 Windows 电脑上启动很慢，所以调用方必须复用这次
     查询结果，不能在轮询里反复启动 PowerShell。
@@ -257,7 +268,7 @@ def _instance_details_windows() -> tuple[int, str] | None:
 
 
 def _instance_pid_windows() -> int | None:
-    """按 --user-data-dir 精确匹配专用实例，绝不误伤用户日常 Chrome。"""
+    """按 --user-data-dir 精确匹配共享实例，绝不误伤用户日常 Chrome。"""
     details = _instance_details_windows()
     return details[0] if details else None
 
@@ -337,6 +348,9 @@ def _instance_command(pid: int) -> str:
 
 
 def _instance_is_headless(pid: int, command: str | None = None) -> bool:
+    if _hub_enabled():
+        browser = browser_hub.status().get("browser") or {}
+        return browser.get("mode") == "background"
     if IS_WINDOWS:
         # Chromium 的 `Browser` 字段在新无头模式下也可能仍是
         # "Chrome/1xx"，不能据此判断。先看已按 PID 精确取得的命令行，
@@ -355,6 +369,9 @@ def _instance_is_headless(pid: int, command: str | None = None) -> bool:
 
 def _instance_supports_playwright(pid: int, command: str | None = None) -> bool:
     """生成实例必须带 Evan 指定的 CDP 跨源参数，登录实例不会命中。"""
+    if _hub_enabled():
+        browser = browser_hub.status().get("browser") or {}
+        return browser.get("mode") == "background" and bool(browser.get("cdpEndpoint"))
     resolved_command = command if command is not None else _instance_command(pid)
     normalized = resolved_command.lower()
     return "--remote-allow-origins" in normalized and "--enable-automation" in normalized
@@ -375,9 +392,15 @@ def _windows_login_instance_reusable(command: str) -> bool:
 def start_login_chrome(url: str) -> tuple[bool, str]:
     """用普通 Chrome 模式打开登录页，不暴露 CDP/自动化参数。
 
-    登录完成后的站点状态写入 Evan 专属 profile。后续生成会关闭这个可见实例，
+    登录完成后的站点状态写入共享 Profile。后续生成会关闭这个可见实例，
     再以无头 CDP 模式启动同一个 profile，因此不会触碰日常 Chrome 数据。
     """
+    if _hub_enabled():
+        try:
+            browser_hub.open_login(url)
+            return True, "共享 Chrome 登录窗口已打开"
+        except browser_hub.BrowserHubError as exc:
+            return False, str(exc)
     if not CHROME_BIN.exists():
         return False, f"找不到 Google Chrome：{CHROME_BIN}"
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
@@ -404,7 +427,7 @@ def start_login_chrome(url: str) -> tuple[bool, str]:
                     stderr=subprocess.DEVNULL,
                     **_detached_popen_kwargs(),
                 )
-                return True, "已在现有 Evan 专属 Chrome 中打开登录页"
+                return True, "已在现有系统共享 Chrome 中打开登录页"
             stop_chrome(pid)
     else:
         stop_chrome()
@@ -421,14 +444,14 @@ def start_login_chrome(url: str) -> tuple[bool, str]:
         for _ in range(30):
             running = _windows_pid_is_running(process.pid)
             if running is True:
-                return True, "Evan 专属 Chrome 登录窗口已打开"
+                return True, "系统共享 Chrome 登录窗口已打开"
             if running is False:
                 break
             time.sleep(0.1)
         # Chrome 极少数情况下会把启动转交给另一个新进程；只做一次精确兜底查询。
         if _instance_pid_windows() is not None:
-            return True, "Evan 专属 Chrome 登录窗口已打开"
-        return False, "已启动 Google Chrome，但未检测到 Evan 专属实例"
+            return True, "系统共享 Chrome 登录窗口已打开"
+        return False, "已启动 Google Chrome，但未检测到共享浏览器实例"
 
     for _ in range(30):
         pid = _instance_pid()
@@ -438,9 +461,9 @@ def start_login_chrome(url: str) -> tuple[bool, str]:
                 _system_events(
                     f'tell application "System Events" to set frontmost of first process whose unix id is {pid} to true'
                 )
-            return True, "Evan 专属 Chrome 登录窗口已打开"
+            return True, "系统共享 Chrome 登录窗口已打开"
         time.sleep(0.25)
-    return False, "已启动 Google Chrome，但未检测到 Evan 专属实例"
+    return False, "已启动 Google Chrome，但未检测到共享浏览器实例"
 
 
 def _system_events(*statements: str) -> bool:
@@ -524,7 +547,7 @@ def bring_chrome_to_front() -> tuple[bool, str]:
         # 不影响生成本身，故静默降级。**绝不能抛异常**：调用方会把异常归类成
         # AUTH_REQUIRED，用户会看到莫名其妙的「请重新登录」。
         _debug_log("bring_chrome_to_front.skip", reason="not_macos")
-        return False, "当前平台不支持自动切前台，请手动切到 Evan 专属 Chrome 窗口"
+        return False, "当前平台不支持自动切前台，请手动切到系统共享 Chrome 窗口"
     if not _foreground_allowed():
         # 非交互式（后台/定时/Hermes）运行：静默跳过切前台，调用方仍会抛出登录错误。
         _debug_log("bring_chrome_to_front.skip", reason="foreground_not_allowed")
@@ -532,16 +555,16 @@ def bring_chrome_to_front() -> tuple[bool, str]:
     pid = _instance_pid()
     if pid is None:
         _debug_log("bring_chrome_to_front.skip", reason="no_pid")
-        return False, "未找到 Evan 专属 Chrome 实例，跳过切前台"
+        return False, "未找到系统共享 Chrome 实例，跳过切前台"
     ok = _system_events(
         f"tell application \"System Events\" to set visible of (first process whose unix id is {pid}) to true",
         f"tell application \"System Events\" to set frontmost of (first process whose unix id is {pid}) to true",
     )
     if ok:
         _debug_log("bring_chrome_to_front.ok", pid=pid)
-        return True, "已将 Evan 专属 Chrome 切到前台"
+        return True, "已将系统共享 Chrome 切到前台"
     _debug_log("bring_chrome_to_front.failed", pid=pid)
-    return False, "切换 Evan 专属 Chrome 到前台失败"
+    return False, "切换系统共享 Chrome 到前台失败"
 
 
 def hide_chrome(*, max_wait_seconds: float = 2.0, poll_interval: float = 0.1) -> tuple[bool, str]:
@@ -551,26 +574,26 @@ def hide_chrome(*, max_wait_seconds: float = 2.0, poll_interval: float = 0.1) ->
         return False, "当前平台不支持自动隐藏窗口"
     pid = _instance_pid()
     if pid is None:
-        # 找不到专用实例时什么都不做，避免误伤用户日常 Chrome。
+        # 找不到共享实例时什么都不做，避免误伤用户日常 Chrome。
         _debug_log("hide_chrome.skip", reason="no_pid")
-        return False, "未找到 Evan 专属 Chrome 实例，跳过隐藏"
+        return False, "未找到系统共享 Chrome 实例，跳过隐藏"
     ok = _system_events(
         f"tell application \"System Events\" to set visible of (first process whose unix id is {pid}) to false",
     )
     if ok and _wait_until_hidden(pid, max_wait_seconds=max_wait_seconds, poll_interval=poll_interval):
         _debug_log("hide_chrome.ok", pid=pid)
-        return True, "已将 Evan 专属 Chrome 隐藏到后台"
+        return True, "已将系统共享 Chrome 隐藏到后台"
     if ok:
         _debug_log("hide_chrome.unconfirmed", pid=pid)
-        return False, "隐藏 Evan 专属 Chrome 命令已发送，但未确认隐藏"
+        return False, "隐藏系统共享 Chrome 命令已发送，但未确认隐藏"
     _debug_log("hide_chrome.failed", pid=pid)
-    return False, "隐藏 Evan 专属 Chrome 失败"
+    return False, "隐藏系统共享 Chrome 失败"
 
 
 def surface_for_login(reason: str) -> None:
-    """统一的「需要登录」出口：把 Evan 专属 Chrome 切到前台让用户手动登录，并抛错中断。
+    """统一的「需要登录」出口：把系统共享 Chrome 切到前台让用户手动登录，并抛错中断。
 
-    这是专属 Chrome 唯一允许主动弹窗的场景。其余自动化行为一律静默（后台运行）。
+    这是共享 Chrome 唯一允许主动弹窗的场景。其余自动化行为一律静默（后台运行）。
     """
     _debug_log("surface_for_login", reason=reason)
     bring_chrome_to_front()
@@ -578,11 +601,14 @@ def surface_for_login(reason: str) -> None:
 
 
 def stop_chrome(known_pid: int | None = None) -> tuple[bool, str]:
+    if _hub_enabled():
+        released = browser_hub.release_browser()
+        return True, "已释放共享浏览器租约" if released else "当前进程没有浏览器租约"
     if IS_WINDOWS:
         # known_pid 只能来自本模块刚按 --user-data-dir 精确核验的查询结果。
         pid = known_pid if known_pid is not None else _instance_pid_windows()
         if pid is None:
-            return True, "未找到专用 Chrome，无需关闭"
+            return True, "未找到共享 Chrome，无需关闭"
         # 先不带 /F 请求正常退出，让 Chrome 有机会完整落盘 Cookie/Profile；超时才强杀。
         subprocess.run(
             ["taskkill", "/PID", str(pid), "/T"],
@@ -591,7 +617,7 @@ def stop_chrome(known_pid: int | None = None) -> tuple[bool, str]:
         )
         for _ in range(20):
             if _windows_pid_is_running(pid) is False and not is_port_open():
-                return True, "已关闭专用 Chrome"
+                return True, "已关闭共享 Chrome"
             time.sleep(0.25)
         subprocess.run(
             ["taskkill", "/PID", str(pid), "/T", "/F"],
@@ -606,27 +632,27 @@ def stop_chrome(known_pid: int | None = None) -> tuple[bool, str]:
         # 那类机器上 OpenProcess 本来就拿不到句柄，报失败会把它们全部挡在启动之外。
         if _windows_pid_is_running(pid) is True:
             return False, (
-                f"无法结束 Evan 专属 Chrome 进程（PID {pid}）。"
+                f"无法结束系统共享 Chrome 进程（PID {pid}）。"
                 "请在任务管理器中手动结束该 chrome.exe 后重试。"
             )
-        return True, "已强制关闭专用 Chrome"
+        return True, "已强制关闭共享 Chrome"
 
     main_pid = _instance_pid()
     if main_pid is None:
-        return True, "未找到专用 Chrome，无需关闭"
+        return True, "未找到共享 Chrome，无需关闭"
     # 只给主进程 SIGTERM。Chrome 会自行通知 Helper 退出并刷新 Cookie 数据库；旧实现
     # 同时 SIGTERM 全部 Helper，登录刚完成就切换无头时可能来不及持久化登录态。
     try:
         os.kill(main_pid, signal.SIGTERM)
     except ProcessLookupError:
-        return True, "已关闭专用 Chrome"
+        return True, "已关闭共享 Chrome"
 
     for _ in range(30):
         if _instance_pid() is None and not is_port_open():
-            return True, "已关闭专用 Chrome"
+            return True, "已关闭共享 Chrome"
         time.sleep(0.2)
 
-    # 正常退出超时后，只强杀仍属于 Evan Profile 的进程，绝不触碰日常 Chrome。
+    # 正常退出超时后，只强杀仍属于共享 Profile 的进程，绝不触碰日常 Chrome。
     try:
         result = subprocess.run(
             ["pgrep", "-f", str(PROFILE_DIR)],
@@ -636,7 +662,7 @@ def stop_chrome(known_pid: int | None = None) -> tuple[bool, str]:
         )
         pids = [int(line) for line in result.stdout.splitlines() if line.strip().isdigit()]
     except Exception as exc:
-        return False, f"查找专用 Chrome 失败：{exc}"
+        return False, f"查找共享 Chrome 失败：{exc}"
     for pid in pids:
         try:
             os.kill(pid, signal.SIGKILL)
@@ -655,7 +681,7 @@ def stop_chrome(known_pid: int | None = None) -> tuple[bool, str]:
         if not remaining:
             break
         time.sleep(0.1)
-    return True, "已强制关闭专用 Chrome"
+    return True, "已强制关闭共享 Chrome"
 
 
 def start_chrome(
@@ -669,6 +695,13 @@ def start_chrome(
     launch_url = str(initial_url or "about:blank").strip()
     if launch_url != "about:blank" and not launch_url.startswith(("https://", "http://")):
         launch_url = "about:blank"
+    if _hub_enabled():
+        try:
+            endpoint, _ = browser_hub.acquire_browser(launch_url)
+            _set_hub_endpoint(endpoint)
+            return True, f"已连接共享 Chrome：{endpoint}"
+        except browser_hub.BrowserHubError as exc:
+            return False, str(exc)
     ok, msg = check_cdp()
     stopped_existing = False
     if IS_WINDOWS:
@@ -698,7 +731,7 @@ def start_chrome(
     if ok and not force:
         if pid is None:
             return False, (
-                f"{CDP_PORT} 端口被另一个浏览器实例占用，且它用的不是 Evan 专属 Profile"
+                f"{CDP_PORT} 端口被另一个浏览器实例占用，且它用的不是共享 Profile"
                 f"（{PROFILE_DIR}）。没有复用它，以免把任务发到错误的浏览器资料上。"
                 f"请退出 Evan、结束占用该端口的浏览器进程后重新打开 Evan。"
             )
@@ -722,7 +755,7 @@ def start_chrome(
             stop_chrome(pid if IS_WINDOWS else None)
             ok = False
     if ok and not force:
-        # 默认静默：已在运行时也把专用窗口压回后台，避免上一次登录/操作残留的前台窗口
+        # 默认静默：已在运行时也把共享窗口压回后台，避免上一次登录/操作残留的前台窗口
         # 在后续自动化里持续打扰。仅当显式 foreground（登录场景）才切前台。
         if foreground:
             bring_chrome_to_front()
@@ -814,6 +847,6 @@ def start_chrome(
         time.sleep(0.5)
     logging.error("Chrome CDP 启动超时")
     return False, (
-        f"已尝试启动 Evan 专属 Chrome，但本机端口 {CDP_PORT} 的自动化连接仍不可用。"
+        f"已尝试启动系统共享 Chrome，但本机端口 {CDP_PORT} 的自动化连接仍不可用。"
         "请完全退出 Evan 后重试；如果持续出现，请检查安全软件是否拦截 Chrome 的本机连接。"
     )

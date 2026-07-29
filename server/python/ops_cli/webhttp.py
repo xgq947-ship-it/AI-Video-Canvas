@@ -493,23 +493,8 @@ def _connect(
     """Attach for one request, then disconnect without closing Chrome or its page."""
     chrome_cdp = _load_sessionhub()
 
-    # 只在**必要时**重启浏览器。
-    #
-    # start_chrome 自带复用分支，所以无条件 stop_chrome() 等于每次都主动摧毁复用、
-    # 付一次完整冷启动。但也不能一律跳过：用户点「重新登录」打开的是可见实例，
-    # 它没有 CDP（刻意的，避免 Google 判定成自动化登录），而且刚输入的 Cookie
-    # 要等它优雅退出才落盘 —— 直接连过去会读到还没写盘的状态，
-    # 表现就是「刚登录成功却显示未登录」。
-    # 因此按实例种类判断：已经是无头且可被 Playwright 接管的才直接复用。
-    pid = chrome_cdp._instance_pid()
-    reusable = (
-        pid is not None
-        and chrome_cdp._instance_is_headless(pid)
-        and chrome_cdp._instance_supports_playwright(pid)
-    )
-    if not reusable:
-        chrome_cdp.stop_chrome()
-
+    # Hub 原子地处理「复用无头实例」与「从可见登录实例切回后台」；业务进程
+    # 不再自行检查、关闭或启动 Chrome，只申请一次带心跳的短期租约。
     ok, message = chrome_cdp.start_chrome(
         headless=True,
         # On a cold start Chrome creates its first tab at the final marked URL.
@@ -517,9 +502,8 @@ def _connect(
         initial_url=_tagged_provider_url(provider, initial_url or PROVIDER_ORIGINS[provider]),
     )
     if not ok:
-        raise WebHttpBridgeError(message or "无法启动 Evan 专属 Chrome", error_code="BROWSER_CLOSED")
-    if not reusable:
-        _remember_launched_project_target(chrome_cdp.CDP_PORT, provider)
+        raise WebHttpBridgeError(message or "无法启动系统共享 Chrome", error_code="BROWSER_CLOSED")
+    _remember_launched_project_target(chrome_cdp.CDP_PORT, provider)
 
     try:
         from playwright.sync_api import sync_playwright  # type: ignore
@@ -529,10 +513,15 @@ def _connect(
             error_code="BROWSER_MODELS_NOT_READY",
         ) from exc
 
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{chrome_cdp.CDP_PORT}")
-        context = browser.contexts[0] if browser.contexts else browser.new_context()
-        return handler(context)
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{chrome_cdp.CDP_PORT}")
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            return handler(context)
+    finally:
+        # Hub 负责 Chrome 生命周期；每个 Ops CLI 进程只持有本次调用的租约。
+        # 释放租约不会关闭其他 App 正在使用的共享实例。
+        chrome_cdp.stop_chrome()
 
 
 def _page_window_name(page: Any) -> str:

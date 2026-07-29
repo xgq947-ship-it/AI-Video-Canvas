@@ -1,5 +1,5 @@
 /**
- * 锁定 Evan 专属 Chrome 的生命周期规则：「不做无谓重启」，但该重启时必须重启。
+ * 锁定共享 Hub 的生命周期规则：业务层只申请/释放租约，不直接启动或关闭 Chrome。
  *
  * 登录态判定本身已经全部改成 HTTP（见 test/webAuthStatus.test.mjs 与
  * server/services/webhttp/auth.js），原来基于 DOM / 重定向的探针连同它们的用例
@@ -37,24 +37,17 @@ function runPython(script) {
     return JSON.parse(out.trim().split('\n').pop());
 }
 
-test('已经是无头 CDP 实例时不重启浏览器', () => {
-    // 这条规则随登录检测一起从 browser.py 迁到了 HTTP 桥接层：
-    // 现在所有平台请求（含登录检测）都经由 webhttp._connect 拿到浏览器上下文。
+test('HTTP 桥接只向 Hub 申请租约，并在 finally 释放', () => {
     const source = fs.readFileSync(path.join(PYTHON_ROOT, 'ops_cli', 'webhttp.py'), 'utf8');
     const block = source.slice(
         source.indexOf('def _connect('),
         source.indexOf('def _page_window_name(')
     );
 
-    // 复用判定必须同时满足「无头」与「可被 Playwright 接管」。
-    assert.match(block, /_instance_is_headless\(pid\)/);
-    assert.match(block, /_instance_supports_playwright\(pid\)/);
-    assert.match(block, /if not reusable:\s*\n\s*chrome_cdp\.stop_chrome\(\)/);
-
-    // 但绝不能把 stop_chrome 整个删掉：可见登录实例没有 CDP，
-    // 且用户刚登录完的 Cookie 要等它优雅退出才落盘，
-    // 跳过会读到没写盘的状态，报出「刚登录成功却显示未登录」。
+    assert.match(block, /chrome_cdp\.start_chrome/);
     assert.match(block, /stop_chrome\(\)/);
+    assert.match(block, /finally:/);
+    assert.doesNotMatch(block, /subprocess\.Popen|_instance_is_headless|_instance_supports_playwright/);
 });
 
 test('HTTP 页面只复用明确项目标签，不会占用同域未标记页面', { skip: !ready }, () => {
@@ -133,77 +126,37 @@ test('Flow reCAPTCHA action 由计费请求显式传入，认证探针不会预�
     assert.match(pythonSource, /result\.modelConfig\s*=\s*await response\.json\(\)/);
 });
 
-test('可见登录实例占用 Profile 时，生成先关闭它再启动无头 CDP', { skip: !ready }, () => {
+test('生成通过 Hub 获取动态 CDP，不直接启动本机 Chrome', { skip: !ready }, () => {
     const script = `
-import json, sys, tempfile
-from pathlib import Path
+import json, os, sys
+os.environ['AI_BROWSER_HUB_ENABLED'] = '1'
 sys.path.insert(0, 'sessionhub')
 from scene import chrome_cdp as c
 
 events = []
-checks = iter([(False, 'no-cdp'), (True, 'cdp-ready')])
-
-class FakeProcess:
-    pid = 9001
-
-def fake_popen(args, **kwargs):
-    events.append({'event': 'launch', 'args': args})
-    return FakeProcess()
-
-c.IS_WINDOWS = True
-c.CHROME_BIN = Path(sys.executable)
-c.PROFILE_DIR = Path(tempfile.mkdtemp()) / 'browser-profile'
-c.check_cdp = lambda: next(checks)
-c._instance_details_windows = lambda: (
-    4242,
-    f'"chrome.exe" --user-data-dir="{c.PROFILE_DIR}" --new-window about:blank'
-)
-c.stop_chrome = lambda known_pid=None: (
-    events.append({'event': 'stop', 'pid': known_pid}) or (True, 'closed')
-)
-c.subprocess.Popen = fake_popen
+c.browser_hub.acquire_browser = lambda url: (events.append({'event': 'acquire', 'url': url}) or ('http://127.0.0.1:45678', 4242))
 
 target = 'https://labs.google/fx/tools/flow#evan-ai-video-canvas=google-flow'
 ok, message = c.start_chrome(headless=True, initial_url=target)
-print(json.dumps({'ok': ok, 'message': message, 'events': events}))
+print(json.dumps({'ok': ok, 'message': message, 'events': events, 'port': c.CDP_PORT}))
 `;
     const result = runPython(script);
 
     assert.equal(result.ok, true);
-    assert.deepEqual(result.events.map(event => event.event), ['stop', 'launch']);
-    assert.equal(result.events[0].pid, 4242);
-    assert.ok(result.events[1].args.includes('--headless=new'));
-    assert.ok(result.events[1].args.includes('https://labs.google/fx/tools/flow#evan-ai-video-canvas=google-flow'));
-    assert.equal(result.events[1].args.includes('about:blank'), false);
+    assert.deepEqual(result.events.map(event => event.event), ['acquire']);
+    assert.equal(result.events[0].url, 'https://labs.google/fx/tools/flow#evan-ai-video-canvas=google-flow');
+    assert.equal(result.port, 45678);
 });
 
-test('Windows 重复打开普通登录窗口直接复用，不关闭 Chrome', { skip: !ready }, () => {
+test('打开登录页委托 Hub，业务层不带 CDP 或自动化参数', { skip: !ready }, () => {
     const script = `
-import json, sys, tempfile
-from pathlib import Path
+import json, os, sys
+os.environ['AI_BROWSER_HUB_ENABLED'] = '1'
 sys.path.insert(0, 'sessionhub')
 from scene import chrome_cdp as c
 
 events = []
-
-class FakeProcess:
-    pid = 9002
-
-def fake_popen(args, **kwargs):
-    events.append({'event': 'launch', 'args': args})
-    return FakeProcess()
-
-c.IS_WINDOWS = True
-c.CHROME_BIN = Path(sys.executable)
-c.PROFILE_DIR = Path(tempfile.mkdtemp()) / 'browser-profile'
-c._instance_details_windows = lambda: (
-    4242,
-    f'"chrome.exe" --user-data-dir="{c.PROFILE_DIR}" --new-window about:blank'
-)
-c.stop_chrome = lambda known_pid=None: (
-    events.append({'event': 'stop', 'pid': known_pid}) or (True, 'closed')
-)
-c.subprocess.Popen = fake_popen
+c.browser_hub.open_login = lambda url: events.append({'event': 'login', 'url': url}) or {}
 
 ok, message = c.start_login_chrome('https://labs.google/fx/tools/flow')
 print(json.dumps({'ok': ok, 'message': message, 'events': events}))
@@ -211,11 +164,12 @@ print(json.dumps({'ok': ok, 'message': message, 'events': events}))
     const result = runPython(script);
 
     assert.equal(result.ok, true);
-    assert.deepEqual(result.events.map(event => event.event), ['launch']);
-    assert.match(result.message, /现有/);
+    assert.deepEqual(result.events.map(event => event.event), ['login']);
+    assert.equal(result.events[0].url, 'https://labs.google/fx/tools/flow');
+    assert.match(result.message, /共享/);
 });
 
-test('没有环境变量时也落在同一个 Evan 专属 Profile 上', { skip: !ready }, () => {
+test('没有环境变量时落在系统共享 Profile', { skip: !ready }, () => {
     // 回归：此前回退到 ~/.sessionhub/evan-browser，于是任何没带
     // SESSIONHUB_CHROME_PROFILE 的调用都会另起一个全新的空 Chrome，还占住 19222。
     // 应用按自己的路径匹配不到进程 → 直接判「端口被占用」硬失败 →
@@ -232,11 +186,12 @@ print(json.dumps({'dir': str(PROFILE_DIR)}))
 
     // 必须与 Electron 的 app.getPath('userData') 同源，绝不能再落到 ~/.sessionhub。
     assert.doesNotMatch(dir, /\.sessionhub/);
-    assert.match(dir, /Evan AI Video Canvas/);
-    assert.match(dir, /browser-profile$/);
+    assert.match(dir, /SankaiAI/);
+    assert.match(dir, /AI Browser Hub/);
+    assert.match(dir, /profile-v1$/);
 });
 
-test('环境变量优先级：显式配置压过默认位置', { skip: !ready }, () => {
+test('旧 App Profile 环境变量不能覆盖共享 Profile', { skip: !ready }, () => {
     const script = `
 import json, os, sys
 os.environ['SESSIONHUB_CHROME_PROFILE'] = '/tmp/evan-explicit-profile'
@@ -248,5 +203,6 @@ print(json.dumps({'dir': str(PROFILE_DIR)}))
     // Windows 上 pathlib 会把同一条路径渲染成 \tmp\evan-explicit-profile；
     // 这条断言要验的是「显式配置被采纳」，不是路径分隔符长什么样。
     // 直接比字面量会让 Windows 打包流水线卡在回归测试上（v0.2.0 首次发版实测）。
-    assert.equal(path.normalize(runPython(script).dir), path.normalize('/tmp/evan-explicit-profile'));
+    assert.notEqual(path.normalize(runPython(script).dir), path.normalize('/tmp/evan-explicit-profile'));
+    assert.match(runPython(script).dir, /AI Browser Hub/);
 });

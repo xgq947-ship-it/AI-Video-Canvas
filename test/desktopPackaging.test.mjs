@@ -22,6 +22,14 @@ const installerWorkflow = fs.readFileSync(
 const electronMain = fs.readFileSync(new URL('../electron/main.js', import.meta.url), 'utf8');
 const electronPreload = fs.readFileSync(new URL('../electron/preload.cjs', import.meta.url), 'utf8');
 const serverMain = fs.readFileSync(new URL('../server/index.js', import.meta.url), 'utf8');
+const browserHubClient = fs.readFileSync(
+  new URL('../server/services/browserHubClient.js', import.meta.url),
+  'utf8'
+);
+const opsCliRunner = fs.readFileSync(
+  new URL('../server/services/opsCliRunner.js', import.meta.url),
+  'utf8'
+);
 const installerInclude = fs.readFileSync(new URL('../build/installer.nsh', import.meta.url), 'utf8');
 
 test('桌面安装包按目标平台原生构建并在打包前验收运行时', () => {
@@ -35,6 +43,7 @@ test('桌面安装包按目标平台原生构建并在打包前验收运行时',
   assert.doesNotMatch(runtimeVerifier, /chrome-win64|chrome-mac-arm64|Chrome for Testing/);
   assert.match(runtimeVerifier, /用户电脑上的 Google Chrome/);
   assert.equal(pkg.build.extraResources.some(entry => entry.to === 'playwright-browsers'), false);
+  assert.equal(pkg.build.extraResources.some(entry => entry.to === 'browser-hub'), true);
   assert.match(automationRuntimeSetup, /fs\.rmSync\(LEGACY_BROWSER_ROOT/);
   assert.doesNotMatch(automationRuntimeSetup, /playwright.+install/);
   assert.ok(pkg.build.files.includes('scripts/codex-image-queue.mjs'));
@@ -65,13 +74,14 @@ test('macOS 首次启动缺少 Chrome 时显示阻断页并开放重试', () => 
   assert.match(electronMain, /createWindow\(chrome\.ready \? null : chromeRequiredPage\(chrome\)\)/);
 });
 
-test('关闭最后一个 Evan 窗口会退出应用并触发专属 Chrome 回收', () => {
+test('关闭最后一个 Evan 窗口只退出本 App，不关闭共享 Chrome', () => {
   const block = electronMain.slice(electronMain.indexOf("app.on('window-all-closed'"));
   assert.match(block, /app\.quit\(\)/);
   assert.doesNotMatch(block, /process\.platform !== 'darwin'/);
   assert.match(electronMain, /backendProcess\.postMessage\(\{ type: 'shutdown' \}\)/);
-  assert.match(electronMain, /closeDedicatedChromeFallback/);
-  assert.match(electronMain, /后端已崩溃时也不能遗留 detached/);
+  assert.match(electronMain, /ensureSharedBrowserHub/);
+  assert.match(electronMain, /共享 Chrome 由 Hub 按租约空闲回收/);
+  assert.doesNotMatch(electronMain, /closeDedicatedChromeFallback|browser', 'close/);
 });
 
 test('运行后端依赖属于 production，安装包不再显式收录整个 node_modules', () => {
@@ -82,8 +92,22 @@ test('运行后端依赖属于 production，安装包不再显式收录整个 no
   assert.equal(pkg.build.files.includes('node_modules/**/*'), false);
 });
 
+test('共享 Hub 载荷包含 Node 许可证并校验远程归档', () => {
+  assert.equal(pkg.build.extraResources.some(item => item.to === 'browser-hub'), true);
+  const prepareHub = fs.readFileSync(new URL('../scripts/prepare-browser-hub.mjs', import.meta.url), 'utf8');
+  assert.match(prepareHub, /NODE-LICENSE/);
+  assert.match(prepareHub, /createHash\('sha256'\)/);
+  assert.match(runtimeVerifier, /NODE-LICENSE/);
+});
+
+test('Electron 与普通 npm run dev 都会自动启动内置共享 Hub', () => {
+  assert.match(pkg.scripts.dev, /^node scripts\/prepare-browser-hub\.mjs &&/);
+  assert.match(browserHubClient, /sdk\.ensureHub\(payloadDir, \{ env: environment \}\)/);
+  assert.match(opsCliRunner, /await ensureSharedBrowserHub\(\)/);
+});
+
 test('安装器 CI 同时使用原生 macOS 和 Windows runner', () => {
-  assert.match(installerWorkflow, /os: macos-latest/);
+  assert.match(installerWorkflow, /os: macos-15/);
   assert.match(installerWorkflow, /os: windows-latest/);
   assert.match(installerWorkflow, /npm run desktop:dist:mac/);
   assert.match(installerWorkflow, /npm run desktop:dist:win/);

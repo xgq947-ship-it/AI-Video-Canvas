@@ -1,7 +1,8 @@
 # Web HTTP 真实验证记录
 
-验证日期：2026-07-28。执行环境为 Evan 专属 Chrome 登录态，生成请求全部由 HTTP
-provider 发出；浏览器只提供会话、Cookie、Bearer 与 reCAPTCHA，不执行 DOM 点击生成。
+验证日期：2026-07-28。执行环境为当时的 Evan 专属 Chrome 登录态（现已迁移到系统共享
+AI Browser Hub Profile），生成请求全部由 HTTP provider 发出；浏览器只提供会话、Cookie、
+Bearer 与 reCAPTCHA，不执行 DOM 点击生成。
 
 ## 即梦
 

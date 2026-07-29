@@ -36,7 +36,6 @@ Evan AI Video Canvas-<版本>-mac-arm64.dmg
 其中：
 
 - `library/`：项目、图片、视频、音频和渲染成片。
-- `browser-profile/`：Google Flow、Gemini Web 与即梦登录状态。
 - `runtime/`：自动化运行状态。
 - `logs/`：本地日志。
 
@@ -45,15 +44,16 @@ Evan AI Video Canvas-<版本>-mac-arm64.dmg
 ## 3. 登录 Google Flow、Gemini Web 和即梦
 
 1. 打开画布右上角“设置”。
-2. 选择“打开 Evan 专属 Chrome”。
+2. 选择“打开共享 AI 浏览器”。
 3. 在该浏览器中访问并登录：
    - Google Flow：`https://labs.google/fx/tools/flow`
    - Gemini Web：`https://gemini.google.com/app`
    - 即梦：`https://jimeng.jianying.com`
 4. 登录完成后回到 Evan，点击“检查登录状态”。探针通过后才会显示“已验证”。
 
-登录资料只保存在 Evan 独立 Profile，不读取日常 Chrome 登录资料。日常生图、生视频使用
-同一 Profile 的后台无头实例；如果登录过期，再从设置中打开 Evan 专属 Chrome。
+登录资料保存在系统共享 Profile，不读取日常 Chrome 登录资料。同一电脑上的三开 AI App
+登录一次即可复用；Hub 已包含在安装包中，无需额外安装。日常生图、生视频使用同一 Profile
+的后台无头实例；如果登录过期，再从设置中打开共享 AI 浏览器。
 
 ## 4. 开始使用
 
@@ -91,21 +91,22 @@ Evan 为安装版创建独立的 `CODEX_HOME`，登录资料和画布 Skill 保�
 ## 6. 卸载和更新
 
 - 更新：安装新版并覆盖“应用程序”中的旧版，用户数据和登录资料保留。
-- 关闭 Evan 主窗口会退出应用并关闭 Evan 专属 Chrome，不会关闭日常 Chrome。
+- 关闭 Evan 主窗口只退出 Evan；共享 Chrome 在所有 App 都空闲 120 秒后自动关闭。
 - 卸载程序：删除“应用程序”中的 Evan。
 - 完全删除数据：卸载后再手动删除
   `~/Library/Application Support/Evan AI Video Canvas/`。
 
-删除数据目录会永久移除项目、素材和登录状态，请先备份。
+删除 Evan 数据目录会永久移除项目和素材，但不会删除共享浏览器登录态。共享 Profile 位于
+`~/Library/Application Support/SankaiAI/AI Browser Hub/`，只有用户明确清理时才删除。
 
 ## 7. 常见问题
 
 | 现象 | 处理 |
 |---|---|
 | macOS 提示无法验证开发者 | 当前测试包未签名，按“安装”章节从隐私与安全性允许。 |
-| Flow/Gemini Web/即梦提示需要登录 | 设置 → 打开 Evan 专属 Chrome，登录对应网站后重试。 |
+| Flow/Gemini Web/即梦提示需要登录 | 设置 → 打开共享 AI 浏览器，登录对应网站后重试。 |
 | 生成时没有浏览器窗口 | 正常，自动生成默认后台无头运行。 |
-| 想查看浏览器执行情况 | 主动打开 Evan 专属 Chrome 用于登录/调试；不要在任务提交过程中切换浏览器模式。 |
+| 想查看浏览器执行情况 | 主动打开共享 AI 浏览器用于登录；存在运行中的任务时 Hub 会拒绝切换模式。 |
 | Codex 模型是灰色 | 安装/更新 Codex CLI，然后在“设置 → Codex 服务”选择路径并登录。 |
 | Codex 提示登录过期 | “设置 → Codex 服务 → 登录 ChatGPT”，完成后刷新状态。 |
 | 自定义项目文件夹无法创建 | 确认所选磁盘已连接、文件夹有写入权限，且其中不存在同名项目文件夹。 |

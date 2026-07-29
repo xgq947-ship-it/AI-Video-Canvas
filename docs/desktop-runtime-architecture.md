@@ -1,13 +1,13 @@
 # Evan 桌面运行时架构
 
-状态：安装版第一阶段已落地
+状态：共享 AI Browser Hub 已落地
 基线：每次从发布 Tag 对应的 commit 构建，不在文档中固定“最新 main”哈希。
 
 ## 1. 产品目标
 
 最终用户安装 Evan 后，不需要自行安装 Node.js、Python、ffmpeg 或 Chrome Beta，但电脑
 必须安装可自动更新的正式版 Google Chrome。首次打开即可使用画布、素材管理和本地渲染；
-即梦与 Google Flow 只要求用户在 Evan 管理的专属 Chrome Profile 中各登录一次。
+即梦、Gemini Web 与 Google Flow 只要求用户在系统共享 AI Browser Hub Profile 中各登录一次。
 
 桌面版必须同时满足：
 
@@ -24,19 +24,20 @@ Electron 主进程
   ├─ Renderer：现有 React/Vite 画布
   ├─ Node 后端：Electron utilityProcess，绑定随机 loopback 端口
   └─ Python Automation Engine
-       └─ 当前：独立 Ops CLI + 应用专用 CDP 端口（迁移兼容层）
-       └─ 目标：常驻 Worker + Playwright persistent context
-            └─ 系统 Google Chrome + Evan 专属 Profile
+       └─ 独立 Ops CLI + AI Browser Hub 租约客户端
+
+AI Browser Hub（当前用户级共享运行时）
+  └─ 系统 Google Chrome + 共享 Profile + 动态 CDP
 ```
 
-第一阶段允许 Node 后端继续以现有入口启动，但正式安装版不得依赖系统 `node` 命令。
-第一阶段已经把 Ops CLI 冻结为平台独立可执行目录，安装机不依赖系统 Python。当前仍以
-一次性进程连接应用专用 CDP 端口；下一阶段迁移为常驻 Worker 后移除 CDP 兼容层。
+正式安装版不依赖系统 `node` 或 Python。Ops CLI 仍冻结为平台独立可执行目录；Hub 自带
+独立 Node 运行时，并由每个 App 的安装包内置载荷静默安装/升级。Python 与 Node 客户端
+通过用户权限状态文件找到 Hub 的随机本机控制端口，再按任务申请租约。
 
 ### 2.1 关闭应用与生成中断
 
-- macOS 与 Windows 关闭最后一个 Evan 窗口都会退出 Electron，并请求本地后端优雅关闭
-  Evan 专属 Chrome；日常 Chrome 不受影响。
+- macOS 与 Windows 关闭最后一个 Evan 窗口都会退出 Electron，并释放本 App 租约；不会
+  关闭其他 App 正在使用的共享 Chrome。最后一个租约释放 120 秒后由 Hub 回收 Chrome。
 - 后台异常退出但 Electron 仍存活时，主进程会在一分钟窗口内最多自动重启三次，并让
   页面连接新的随机 loopback 地址；连续崩溃超过上限后才要求用户完整重启应用。
 - 本地后端退出不会暂停远程平台任务。Flow/Gemini Web/即梦已经提交的任务可能继续在平台生成，
@@ -69,11 +70,13 @@ Electron 主进程
 
 - `library/`：项目、素材、工作流和持久化任务
 - `logs/`：后端、自动化和渲染日志
-- `browser-profile/`：Flow、Gemini Web 与即梦的持久化登录态
 - `runtime/`：临时状态与进程通信文件
 - `codex-home/`：安装版可选 Codex 连接器的独立登录资料、配置和 Evan Skill
 
-大体积素材目录后续允许用户迁移，但浏览器 profile 和配置不跟随素材目录迁移。
+共享浏览器数据不在 `EVAN_DATA_DIR`：macOS 位于
+`~/Library/Application Support/SankaiAI/AI Browser Hub/`，Windows 位于
+`%LOCALAPPDATA%\SankaiAI\AI Browser Hub\`。其中 `data/profile-v1` 保存三平台登录态，
+`install/versions` 保存可替换运行时。卸载单个 App 不删除该目录。
 
 ## 4. 浏览器与登录态
 
@@ -116,13 +119,13 @@ unknown
 
 ### 4.3 更新兼容
 
-- 浏览器可执行文件由 Google Chrome 自身更新，`browser-profile/` 永不打入安装包、永不被更新覆盖。
+- 浏览器可执行文件由 Google Chrome 自身更新，共享 `profile-v1` 永不打入安装包、永不被更新覆盖。
 - Evan 启动时读取 Chrome 版本；低于最低兼容版本时阻断运行并引导更新。
 - macOS 缺少 Chrome 时显示阻断页并打开官方下载地址；Windows 安装器在安装前检查并阻止继续。
 - provider 选择器规则单独带 schema/version，可随应用补丁更新。
 
-当前兼容阶段使用应用专用端口 `19222` 并校验占用进程的 profile；不会再连接旧的
-Chrome Beta 9222。常驻 Worker 完成后将不再暴露固定 CDP 端口。
+Hub 控制面和 Chrome CDP 都使用随机 loopback 端口。状态文件含随机访问令牌并限制为当前
+用户读取；App 不得硬编码 9222/19222，也不得直接拥有 Chrome 生命周期。
 
 ## 5. 持久化任务
 
@@ -172,20 +175,21 @@ Chrome Beta 9222。常驻 Worker 完成后将不再暴露固定 CDP 端口。
 - 在生成提交瞬间强制关闭浏览器，不会自动重复扣额度。
 - 升级不会删除或移动用户项目、素材、配置和登录 profile。
 - 后端仅绑定 loopback 随机端口，不依赖固定 3001。
-- Automation Engine 只连接带 Evan `browser-profile` 的系统 Chrome 实例，不连接日常 Chrome Profile 或 Chrome Beta。
+- Automation Engine 只连接 Hub 租约返回的动态 CDP，不连接日常 Chrome Profile 或 Chrome Beta。
 
-## 9. 当前实施状态（0.1.2 架构基线）
+## 9. 当前实施状态
 
 已完成：
 
 - Electron 主进程管理后端 utility process，并使用随机 loopback 端口。
-- 程序资源和用户数据分离，浏览器 profile 与项目数据不会被升级覆盖。
+- 程序资源、App 用户数据和系统共享浏览器数据三者分离。
 - 系统 Chrome 兼容性探针、macOS 启动阻断页和 Windows 安装前检查已配置。
 - Ops CLI 通过 PyInstaller 冻结，安装机不要求 Node、Python 或 Chrome Beta；正式版 Google Chrome 是唯一浏览器前置条件。
 - FFmpeg `6.1.1` 与 FFprobe `6.1.1` 按平台打入安装资源，视频处理不依赖系统 PATH。
 - Remotion 使用系统 Chrome 可执行文件，首次本地渲染不再下载额外浏览器。
-- Flow/Gemini Web/即梦自动任务强制使用同一 Evan Profile 的无头 Chrome，生成时不弹窗或抢焦点。
-- provider 登录状态持久化；认证过期只返回恢复提示，用户主动打开无自动化参数的 Evan 专属 Chrome 后登录。
+- Flow/Gemini Web/即梦自动任务通过跨 App 租约复用同一无头 Chrome；真实跨语言联调已验证
+  AI 画布 Python 与 Reverse Prompt Node 同时复用一个浏览器 PID。
+- provider 登录状态持久化；认证过期只返回恢复提示，用户主动打开无自动化参数的共享 Chrome 后登录。
 - Flow 新账号可从首页进入已有项目或自动创建项目。
 - 三平台生图按统一模型能力表限制结果数量；Flow 最多 4 张、Gemini Web 1 张、即梦图片
   5.0 Pro 最多 4 张、5.0 Lite 最多 8 张。纯文生图水平排列，带参考素材时纵向排列并保留
@@ -203,7 +207,7 @@ Chrome Beta 9222。常驻 Worker 完成后将不再暴露固定 CDP 端口。
 
 正式对外发布前仍需：
 
-- 把一次性 Ops CLI/CDP 兼容层迁移为常驻 Python Worker。
+- 将受信任客户端目前使用的租约内 CDP 逐步收敛为 Hub 侧 provider/page RPC。
 - 完成 `submission_unknown` 的平台历史记录核验与任务级安全续跑 UI。
 - 完成 macOS Developer ID 签名/公证与 Windows Authenticode 代码签名。
 - 配置生产更新源，并将现有安装器矩阵接入正式发布/签名凭证。

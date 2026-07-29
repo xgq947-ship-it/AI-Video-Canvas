@@ -81,13 +81,13 @@ export async function getFlowAuth({ signal, forceRefresh = false, recaptchaActio
     const context = await webContext(PROVIDER, { signal, recaptchaAction });
     if (!context?.accessToken) {
         throw new WebProviderError(
-            `${PROVIDER_NAME} 未能获取访问令牌，请在 Evan 专属 Chrome 中重新登录 Google 账号`,
+            `${PROVIDER_NAME} 未能获取访问令牌，请在系统共享 Chrome 中重新登录 Google 账号`,
             { provider: PROVIDER, code: 'AUTH_EXPIRED', submitted: false }
         );
     }
     if (!context?.projectId) {
         throw new WebProviderError(
-            `${PROVIDER_NAME} 未能确定当前项目（projectId）。请在 Evan 专属 Chrome 中打开一个 Flow 项目后重试。`,
+            `${PROVIDER_NAME} 未能确定当前项目（projectId）。请在系统共享 Chrome 中打开一个 Flow 项目后重试。`,
             { provider: PROVIDER, code: 'AUTH_EXPIRED', submitted: false }
         );
     }

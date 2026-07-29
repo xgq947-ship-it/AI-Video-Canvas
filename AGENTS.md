@@ -19,11 +19,12 @@
   Windows 安装器直接 `Abort`。改动这条前先确认登录链路仍可用。
 - Codex 是可选连接器：不得把固定版本 Codex CLI 打入安装包或锁进项目依赖。运行时使用
   用户单独安装/更新的 CLI；Evan 仅管理应用专用 `CODEX_HOME`、Skill、队列桥接和状态 UI。
-- Flow/即梦自动生成默认使用「Evan 专属 Chrome」无头运行：同一个系统 Chrome 二进制，
-  但强制 `--user-data-dir=<browser-profile>`，绝不读取或影响用户日常 Chrome 的
-  Profile。只有用户主动登录或调试时才显示窗口，且登录实例不带自动化参数。
-- 用户项目、素材、密钥和 `browser-profile` 属于持久化用户数据，升级和普通卸载不得
-  覆盖或清理。
+- Flow/Gemini Web/即梦默认通过 AI Browser Hub 共用一个无头 Chrome 和共享 Profile；
+  开发版、安装版、Reverse Prompt 及后续兼容 App 复用同一登录态。它绝不读取或影响
+  用户日常 Chrome 的 Profile。只有用户主动登录时才显示窗口，登录实例不带 CDP、
+  headless 或 automation 参数。
+- 用户项目、素材、密钥和 AI Browser Hub 的共享 Profile 都是持久化用户数据。业务 App
+  升级和普通卸载不得覆盖、迁移或清理共享 Profile，也不得直接关闭共享 Chrome。
 - macOS 与 Windows 运行时必须在对应原生 runner 构建，不得跨平台复用二进制。
 - 正式发布由 `vX.Y.Z` Tag 触发；工作流创建 GitHub Release 后自动删除 Actions 临时
   产物，不得长期保留重复安装文件。

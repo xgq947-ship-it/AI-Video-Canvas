@@ -29,10 +29,10 @@ test('启动器构建前端、记录 Electron PID 并防止重复启动', () => 
   assert.match(launcher, /Electron 启动后立即退出/);
 });
 
-test('关闭器先优雅退出，再精确回收 Evan Electron 与专属 Chrome', () => {
+test('关闭器只回收 Evan Electron，不触碰其他 App 共用的 Chrome', () => {
   assert.match(launcher, /signalAll\(electronPids, 'SIGTERM'\)/);
   assert.match(launcher, /signalAll\(electronPids, 'SIGKILL'\)/);
-  assert.match(launcher, /--user-data-dir=/);
-  assert.match(launcher, /entry\.command\.startsWith\(root\)/);
-  assert.match(launcher, /signalAll\(remainingChromePids, 'SIGTERM'\)/);
+  assert.match(launcher, /prepareBrowserHub/);
+  assert.match(launcher, /shared-hub-managed/);
+  assert.doesNotMatch(launcher, /dedicatedChromePids|remainingChromePids|--user-data-dir=/);
 });

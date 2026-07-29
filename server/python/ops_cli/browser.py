@@ -36,54 +36,43 @@ LOGIN_URLS = {
 
 
 def browser_status() -> CommandResponse:
+    sessionhub_root = Path(get_config().sessionhub_root).expanduser().resolve()
+    if str(sessionhub_root) not in sys.path:
+        sys.path.insert(0, str(sessionhub_root))
+    from scene import browser_hub  # type: ignore
+
+    status = browser_hub.status()
     return CommandResponse(
         success=True,
         platform="browser",
         command="status",
-        data={"message": "browser integration is intentionally disabled in this phase"},
+        data={"message": "AI Browser Hub", **status},
     )
 
 
-def _flush_tabs_before_close(port: int) -> int:
-    """Close every real tab through the raw CDP HTTP endpoint before killing Chrome.
+def _resolve_cdp_port(port: int) -> int:
+    if port > 0:
+        return port
+    sessionhub_root = Path(get_config().sessionhub_root).expanduser().resolve()
+    if str(sessionhub_root) not in sys.path:
+        sys.path.insert(0, str(sessionhub_root))
+    from scene import browser_hub  # type: ignore
 
-    实测：Chrome 被 SIGTERM/SIGKILL 掉之后，同一个 profile 下次启动会把上次的标签页
-    全部恢复回来（哪怕是无头实例）。也就是说残留的标签页会跨重启复活，一直吃内存。
-    退出前先把它们关掉，恢复列表自然就是空的。
-
-    走 /json 而不是 Playwright：退出路径上不能依赖 Playwright 装好，也不能被它的
-    连接握手拖住；任何失败都只是少清一次，直接交给后面的 stop_chrome。
-    """
-    try:
-        with urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2) as response:
-            targets: Any = json.loads(response.read().decode("utf-8"))
-    except (OSError, URLError, json.JSONDecodeError):
-        return 0
-    if not isinstance(targets, list):
-        return 0
-
-    closed = 0
-    for target in targets:
-        if not isinstance(target, dict) or target.get("type") != "page":
-            continue
-        target_id = target.get("id")
-        if not target_id or _is_blank_url(str(target.get("url") or "")):
-            continue
-        try:
-            with urlopen(f"http://127.0.0.1:{port}/json/close/{target_id}", timeout=2):
-                closed += 1
-        except (OSError, URLError):
-            continue
-    return closed
+    browser = browser_hub.status().get("browser") or {}
+    endpoint = str(browser.get("cdpEndpoint") or "")
+    if not endpoint:
+        raise RuntimeError("共享浏览器当前没有活动的后台实例")
+    return int(endpoint.rsplit(":", 1)[1])
 
 
 def close_browser() -> CommandResponse:
     sessionhub_root = Path(get_config().sessionhub_root).expanduser().resolve()
     if str(sessionhub_root) not in sys.path:
         sys.path.insert(0, str(sessionhub_root))
-    from scene.chrome_cdp import CDP_PORT, stop_chrome  # type: ignore
+    from scene.chrome_cdp import stop_chrome  # type: ignore
 
-    flushed = _flush_tabs_before_close(CDP_PORT)
+    # 单个 App 退出时不得关闭共享 Chrome，也不得清理其他 App 的标签页。
+    flushed = 0
     ok, message = stop_chrome()
     return CommandResponse(
         success=ok,
@@ -94,6 +83,15 @@ def close_browser() -> CommandResponse:
 
 
 def check_browser_port(port: int) -> CommandResponse:
+    try:
+        port = _resolve_cdp_port(port)
+    except (RuntimeError, ValueError) as exc:
+        return CommandResponse(
+            success=False,
+            platform="browser",
+            command="check",
+            data={"port": None, "available": False, "error": str(exc)},
+        )
     url = f"http://127.0.0.1:{port}/json/version"
     try:
         with urlopen(url, timeout=2) as response:
@@ -131,7 +129,7 @@ def open_browser_login(provider: str) -> CommandResponse:
     sessionhub_root = Path(get_config().sessionhub_root).expanduser().resolve()
     if str(sessionhub_root) not in sys.path:
         sys.path.insert(0, str(sessionhub_root))
-    from scene.chrome_cdp import CDP_PORT, start_login_chrome  # type: ignore
+    from scene.chrome_cdp import start_login_chrome  # type: ignore
 
     ok, message = start_login_chrome(login_url)
     if not ok:
@@ -145,17 +143,17 @@ def open_browser_login(provider: str) -> CommandResponse:
     data = {
         "provider": provider,
         "url": login_url,
-        "port": CDP_PORT,
+        "port": None,
         # 登录模式刻意不开放 CDP，避免 Google 把凭据输入识别成自动化登录。
         # 登录态在用户重试真实任务时由 provider 页面重新验证。
         "authenticated": False,
-        "message": "Evan 专属 Chrome 已打开。完成登录后回到 Evan 重试任务。",
+        "message": "共享 Chrome 已打开。完成登录后回到 Evan 重试任务。",
     }
     return CommandResponse(success=True, platform="browser", command="login", data=data)
 
 
 def open_browser() -> CommandResponse:
-    """Open or foreground Evan's dedicated browser without choosing a provider."""
+    """Open the shared login browser without choosing a provider."""
     sessionhub_root = Path(get_config().sessionhub_root).expanduser().resolve()
     if str(sessionhub_root) not in sys.path:
         sys.path.insert(0, str(sessionhub_root))
@@ -175,7 +173,7 @@ def open_browser() -> CommandResponse:
         platform="browser",
         command="open",
         data={
-            "message": "Evan 专属 Chrome 已打开。",
+            "message": "共享 Chrome 已打开。",
         },
     )
 
@@ -282,7 +280,7 @@ def build_tab_cleanup_plan(
     now: float | None = None,
     managed_residue_min_age_seconds: int = MANAGED_RESIDUE_MIN_AGE_SECONDS,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Build a conservative cleanup plan for the dedicated 19222 browser.
+    """Build a conservative cleanup plan for Hub-owned application tabs.
 
     Rules are intentionally narrow:
     - never close an unmarked page, even when URL/host is duplicated;
@@ -432,6 +430,7 @@ def _with_cdp_context(port: int, handler: Any) -> Any:
     except ModuleNotFoundError as exc:
         raise RuntimeError("缺少 Playwright，请先运行：npm run setup:automation-runtime") from exc
 
+    port = _resolve_cdp_port(port)
     cdp_url = f"http://127.0.0.1:{port}"
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(cdp_url)
@@ -441,10 +440,11 @@ def _with_cdp_context(port: int, handler: Any) -> Any:
 
 def list_browser_tabs(port: int) -> CommandResponse:
     try:
+        resolved_port = _resolve_cdp_port(port)
         result = _with_cdp_context(
-            port,
+            resolved_port,
             lambda context: {
-                "port": port,
+                "port": resolved_port,
                 "tabs": _snapshot_playwright_context(context)[1],
             },
         )
@@ -453,7 +453,7 @@ def list_browser_tabs(port: int) -> CommandResponse:
             success=False,
             platform="browser",
             command="tabs",
-            data={"port": port, "available": False, "error": str(exc)},
+            data={"port": port or None, "available": False, "error": str(exc)},
         )
     result["page_count"] = len(result["tabs"])
     return CommandResponse(success=True, platform="browser", command="tabs", data=result)
@@ -467,6 +467,7 @@ def cleanup_browser_tabs(
     now: float | None = None,
 ) -> CommandResponse:
     try:
+        resolved_port = _resolve_cdp_port(port)
         def _cleanup(context: Any) -> dict[str, Any]:
             if not dry_run:
                 ensure_keepalive_page(context)
@@ -478,15 +479,15 @@ def cleanup_browser_tabs(
             )
             if not dry_run:
                 ensure_keepalive_page(context)
-            result["port"] = port
+            result["port"] = resolved_port
             return result
 
-        result = _with_cdp_context(port, _cleanup)
+        result = _with_cdp_context(resolved_port, _cleanup)
     except Exception as exc:
         return CommandResponse(
             success=False,
             platform="browser",
             command="cleanup",
-            data={"port": port, "available": False, "dry_run": dry_run, "error": str(exc)},
+            data={"port": port or None, "available": False, "dry_run": dry_run, "error": str(exc)},
         )
     return CommandResponse(success=True, platform="browser", command="cleanup", data=result)

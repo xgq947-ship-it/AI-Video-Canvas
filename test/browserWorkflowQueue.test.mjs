@@ -1,7 +1,7 @@
 /**
  * 锁定「生成期间的浏览器串行队列」行为。
  *
- * 现场问题（用户实测）：产品短视频跑到「正在生成替换图」时，右上角「打开 Evan 专属 Chrome」
+ * 现场问题（用户实测）：产品短视频跑到「正在生成替换图」时，右上角「打开系统共享 Chrome」
  * 点了一直转圈。原因是这三个界面操作和生成走同一条串行队列，而队列**没有等待超时** ——
  * runOpsCli 的 timeoutMs 只从任务真正开始执行才计时，所以按钮会一直转到整个生成结束。
  * 这类操作又必须重启 Chrome（open 切有头、check-login 走 stop_chrome），排到了反而会
@@ -53,7 +53,7 @@ test('任务失败也要释放队列，不能把后续操作永久锁死', async
   assert.equal(browserWorkflowBusyLabel(), '');
 });
 
-test('HTTP 生成运行时占用期间同样拒绝打开或重启专属 Chrome', async () => {
+test('HTTP 生成运行时占用期间同样拒绝打开或重启共享 Chrome', async () => {
   let release;
   let started;
   const startedPromise = new Promise(resolve => { started = resolve; });
@@ -107,7 +107,7 @@ test('取消信号立即从浏览器队列移除任务，排队任务不会再�
 test('取消正在执行的任务后，队列在它真正收尾前仍然算忙', async () => {
   // 取消只表示「调用方不再等结果」：ops_cli 子进程还在收尾，Chrome 仍被它占着。
   // 早期实现在 abort 时就把条目移出 inFlight，于是 assertBrowserWorkflowIdle 立刻放行
-  // 「打开专属 Chrome / 检查登录」——而这两个动作都会 stop_chrome，正好把还没退干净的
+  // 「打开共享 Chrome / 检查登录」——而这两个动作都会 stop_chrome，正好把还没退干净的
   // 那个任务打断。这正是这几个 Windows 修复要根除的生命周期问题。
   assert.equal(browserWorkflowBusyLabel(), '');
   let release;

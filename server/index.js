@@ -1300,7 +1300,7 @@ app.delete('/api/workflows/:id', async (req, res) => {
 app.get('/api/capabilities', (req, res) => {
     const chrome = browserRuntimeStatus();
     res.json({
-        // 网页 HTTP 模型仍依赖 server/python 连接 Evan 专属 Chrome 取得登录态与签名；
+        // 网页 HTTP 模型仍依赖 server/python 通过 Hub 连接系统共享 Chrome；
         // 未安装时这些模型不可用，但其余官方 API 模型照常工作。
         browserModels: {
             ready: chrome.ready,
@@ -1421,8 +1421,8 @@ app.post('/api/browser/open', async (_req, res) => {
         const { data } = await enqueueBrowserWorkflow(() => runOpsCli({
             args: ['browser', 'open'],
             timeoutMs: 30_000,
-            label: '打开 Evan 专属 Chrome'
-        }), { label: '打开 Evan 专属 Chrome' });
+            label: '打开系统共享 Chrome'
+        }), { label: '打开系统共享 Chrome' });
         res.json({ success: true, ...data });
     } catch (error) {
         res.status(error.status || 500).json({
@@ -2221,9 +2221,8 @@ if (invokedPath === __filename) {
 
     // 直接 `node server/index.js`（npm run dev / npm run server）时，桌面端的
     // 退出链路（electron/main.js 的 before-quit → desktop-entry.js 的 shutdown）
-    // 完全不参与。Evan 专属 Chrome 是 detached 启动的，不加这段的话 Ctrl-C 之后
-    // 它会一直在后台占着几百 MB 内存。concurrently --kill-others-on-fail 发的
-    // SIGTERM 同样走这里。
+    // 完全不参与。这里仍执行统一退出钩子以释放当前 App 的本地状态；系统共享 Chrome
+    // 由 Hub 根据所有 App 的租约统一回收。concurrently 的 SIGTERM 同样走这里。
     let shuttingDown = false;
     const shutdown = () => {
         if (shuttingDown) return;

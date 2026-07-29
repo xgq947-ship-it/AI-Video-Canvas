@@ -33,7 +33,7 @@ React 画布
        ├─ provider.js（上传、提交、轮询、下载）
        └─ bridge.js（页面登录上下文中的 HTTP/XHR）
   -> Ops CLI 一次性进程
-  -> 系统正式版 Chrome + Evan 专属 Profile
+  -> AI Browser Hub + 系统正式版 Chrome + 共享 Profile
   -> 平台官方 HTTP 服务
 ```
 
@@ -75,7 +75,7 @@ queued -> waiting -> preparing -> submitting -> submitted
 不占用 bridge 提交队列。Flow 2K 使用官方 `flow/upsampleImage` 页面鉴权请求，每张图需要
 一个新的单次 reCAPTCHA token，因此同一批次按“取 token → 2K 请求”逐张串行。Chrome
 冷启动或从可见登录实例切换到无头实例时，三平台先经过一个全局
-启动闸门，只允许一个 CLI 执行 stop/start/connect；CDP 就绪后立即恢复跨平台并行。
+启动闸门，只允许 Hub 完成 Chrome 模式切换；CDP 就绪后立即恢复跨平台并行。
 
 每个平台的常驻页使用四重正向身份：URL Hash
 `#evan-ai-video-canvas=<provider>`、`window.name`、`sessionStorage` 和持久化 CDP

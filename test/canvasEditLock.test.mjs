@@ -65,7 +65,7 @@ test('新建项目后立即恢复编辑，不需要重启', () => {
 });
 
 test('启动配置页打开时不自动探测登录状态', () => {
-    // 三平台 HTTP 检测要唤醒专属 Chrome，好几秒起步。刚进画布就卡这么久，
+    // 三平台 HTTP 检测要唤醒共享 Chrome，好几秒起步。刚进画布就卡这么久，
     // 而登录态几乎总是和上次一样 —— 打开面板只读缓存。
     assert.match(GUIDE, /void loadStatus\(false\)/, '打开面板只读缓存');
     assert.equal(/hasAutoDetectedThisSession/.test(GUIDE), false,

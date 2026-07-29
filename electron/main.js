@@ -1,11 +1,15 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess } from 'electron';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createUpdateController } from './updater.js';
 import { resolveUninstallTargets } from './uninstall.js';
 import { revealProjectById } from './projectReveal.js';
+import {
+    browserHubPayloadPath,
+    ensureBrowserHubRuntime,
+    sharedBrowserHubHome
+} from './browserHub.js';
 import {
     CHROME_DOWNLOAD_URL,
     getChromeCompatibility
@@ -81,7 +85,7 @@ function chromeRequiredPage(status) {
 </style>
 <main>
     <h1>需要安装 Google Chrome</h1>
-    <p>Evan 使用电脑上的 Google Chrome 创建独立的专属浏览器实例，用于 Flow、即梦和本地成片渲染。不会读取或影响你的日常 Chrome 登录资料。</p>
+    <p>Evan 使用电脑上的 Google Chrome 接入系统共享的 AI 浏览器，用于 Flow、即梦和本地成片渲染。不会读取或影响你的日常 Chrome 登录资料。</p>
     <p class="reason">${message.replace(/[<>&]/g, '')}</p>
     <div class="actions">
         <button id="download">下载 Google Chrome</button>
@@ -115,44 +119,11 @@ function currentChromeStatus({ force = false } = {}) {
     return getChromeCompatibility(process.env, { force });
 }
 
-function closeDedicatedChromeFallback() {
-    const environment = runtimeEnvironment();
-    const command = app.isPackaged
-        ? environment.EVAN_OPS_EXECUTABLE
-        : path.join(
-            PROJECT_ROOT,
-            'server',
-            'python',
-            '.venv',
-            process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'
-        );
-    const args = app.isPackaged
-        ? ['--json', 'browser', 'close']
-        : ['-m', 'ops_cli', '--json', 'browser', 'close'];
-    return new Promise(resolve => {
-        let settled = false;
-        const finish = () => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            resolve();
-        };
-        let child;
-        const timer = setTimeout(() => {
-            try { child?.kill('SIGKILL'); } catch { /* ignore */ }
-            finish();
-        }, 8_000);
-        try {
-            child = spawn(command, args, {
-                cwd: app.isPackaged ? path.dirname(command) : path.join(PROJECT_ROOT, 'server', 'python'),
-                env: environment,
-                stdio: 'ignore'
-            });
-            child.once('error', finish);
-            child.once('close', finish);
-        } catch {
-            finish();
-        }
+function ensureSharedBrowserHub() {
+    return ensureBrowserHubRuntime({
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        projectRoot: PROJECT_ROOT
     });
 }
 
@@ -163,6 +134,12 @@ function runtimeEnvironment() {
         ? path.join(process.resourcesPath, 'media-tools')
         : path.join(PROJECT_ROOT, 'node_modules', 'ffmpeg-ffprobe-static');
     const chrome = currentChromeStatus();
+    const browserHubHome = sharedBrowserHubHome(process.env);
+    const browserHubPayload = browserHubPayloadPath({
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        projectRoot: PROJECT_ROOT
+    });
     return {
         ...process.env,
         NODE_ENV: app.isPackaged ? 'production' : (process.env.NODE_ENV || 'development'),
@@ -172,7 +149,7 @@ function runtimeEnvironment() {
         EVAN_DATA_DIR: dataDir,
         EVAN_LOGS_DIR: path.join(dataDir, 'logs'),
         EVAN_RUNTIME_DIR: path.join(dataDir, 'runtime'),
-        EVAN_BROWSER_PROFILE_DIR: path.join(dataDir, 'browser-profile'),
+        EVAN_BROWSER_PROFILE_DIR: path.join(browserHubHome, 'data', 'profile-v1'),
         EVAN_CHROME_EXECUTABLE: chrome.executable || '',
         EVAN_BROWSER_EXECUTABLE: chrome.executable || '',
         EVAN_FFMPEG_PATH: path.join(
@@ -186,7 +163,9 @@ function runtimeEnvironment() {
         EVAN_DESKTOP: '1',
         EVAN_ELECTRON_EXECUTABLE: process.execPath,
         EVAN_ELECTRON_RUN_AS_NODE: '1',
-        SESSIONHUB_CDP_PORT: '19222',
+        AI_BROWSER_HUB_ENABLED: '1',
+        AI_BROWSER_HUB_HOME: browserHubHome,
+        AI_BROWSER_HUB_PAYLOAD: browserHubPayload,
         EVAN_OPS_EXECUTABLE: app.isPackaged
             ? path.join(
                 process.resourcesPath,
@@ -385,15 +364,13 @@ ipcMain.handle('app:uninstall', async (_event, keepUserData) => {
     });
     if (response !== 1) return { ok: false, canceled: true };
 
-    // 专属 Chrome 是 detached 的：不先关掉，profile 进了废纸篓它还在跑。
+    // 先停本 App 后端并释放它持有的租约；共享 Profile/Hub 不属于 Evan，不能删除。
     if (backendProcess) {
         backendProcess.postMessage({ type: 'shutdown' });
         await new Promise(resolve => {
             const timer = setTimeout(resolve, 9_000);
             backendProcess.once('exit', () => { clearTimeout(timer); resolve(); });
         });
-    } else {
-        await closeDedicatedChromeFallback();
     }
     backendProcess = null;
 
@@ -415,12 +392,17 @@ ipcMain.handle('chrome:open-download', async () => {
     await shell.openExternal(CHROME_DOWNLOAD_URL);
     return { ok: true };
 });
-ipcMain.handle('chrome:retry', () => {
+ipcMain.handle('chrome:retry', async () => {
     // 用户刚装好 Chrome 才会点这里，必须绕开缓存重新探测。
     const status = currentChromeStatus({ force: true });
     if (!status.ready) return status;
     if (!mainWindow) createWindow(LOADING_PAGE);
     else void mainWindow.loadURL(LOADING_PAGE);
+    try {
+        await ensureSharedBrowserHub();
+    } catch (error) {
+        return { ...status, ready: false, message: `共享浏览器启动失败：${error.message}` };
+    }
     if (!backendProcess) launchBackend();
     return status;
 });
@@ -535,18 +517,28 @@ if (!hasSingleInstanceLock) {
         app.focus({ steal: true });
     });
 
-    app.whenReady().then(() => {
+    app.whenReady().then(async () => {
         const chrome = currentChromeStatus();
         createWindow(chrome.ready ? null : chromeRequiredPage(chrome));
         app.focus({ steal: true });
-        if (chrome.ready) launchBackend();
-        else void shell.openExternal(CHROME_DOWNLOAD_URL);
+        if (chrome.ready) {
+            try {
+                await ensureSharedBrowserHub();
+                launchBackend();
+            } catch (error) {
+                dialog.showErrorBox('共享浏览器启动失败', error.message || String(error));
+            }
+        } else void shell.openExternal(CHROME_DOWNLOAD_URL);
 
         app.on('activate', () => {
             if (BrowserWindow.getAllWindows().length === 0 && mainWindow === null) {
                 const current = currentChromeStatus();
                 createWindow(current.ready ? null : chromeRequiredPage(current));
-                if (current.ready && !backendProcess) launchBackend();
+                if (current.ready && !backendProcess) {
+                    void ensureSharedBrowserHub()
+                        .then(() => { if (!backendProcess) launchBackend(); })
+                        .catch(error => dialog.showErrorBox('共享浏览器启动失败', error.message || String(error)));
+                }
             }
         });
     });
@@ -563,14 +555,11 @@ if (!hasSingleInstanceLock) {
         if (backendProcess) {
             backendProcess.postMessage({ type: 'shutdown' });
             backendProcess.once('exit', () => app.quit());
-        } else {
-            // 后端已崩溃时也不能遗留 detached 的 Evan 专属 Chrome。
-            void closeDedicatedChromeFallback().finally(() => app.quit());
-        }
+        } else app.quit();
     });
 
     app.on('window-all-closed', () => {
-        // 用户关闭 Evan 主窗口就视为退出应用，并同步回收 Evan 专属 Chrome。
+        // 用户关闭 Evan 主窗口只退出本 App；共享 Chrome 由 Hub 按租约空闲回收。
         app.quit();
     });
 }

@@ -394,7 +394,7 @@ router.post('/generate-video', async (req, res) => {
                 error: `${videoProvider.name} 最多支持 ${videoProvider.maxReferenceImages} 张参考图`
             });
         }
-        // 三个平台都走 Evan 专属 Chrome workflow：输入是真实文件路径而非 base64。
+        // 三个平台都走系统共享 Chrome workflow：输入是真实文件路径而非 base64。
         const isBrowserWorkflowModel = isGoogleFlowWorkflowModel || isJimengWorkflowModel || isGeminiWebWorkflowModel;
 
         // 页面 workflow 需要真实首帧路径；其他供应商继续使用 base64 输入。

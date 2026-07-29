@@ -19,14 +19,7 @@ const ELECTRON_BINARY = path.join(
     'Electron'
 );
 const VITE_ENTRY = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
-const EVAN_PROFILE = path.join(
-    process.env.HOME || '',
-    'Library',
-    'Application Support',
-    'Evan AI Video Canvas',
-    'data',
-    'browser-profile'
-);
+const BROWSER_HUB_PREPARE = path.join(ROOT, 'scripts', 'prepare-browser-hub.mjs');
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -59,21 +52,6 @@ function managedElectronPids() {
         .map((entry) => entry.pid);
 }
 
-function dedicatedChromePids() {
-    if (!EVAN_PROFILE) return [];
-    const profileArgument = `--user-data-dir=${EVAN_PROFILE}`;
-    const systemChromeRoots = [
-        '/Applications/Google Chrome.app/',
-        path.join(process.env.HOME || '', 'Applications', 'Google Chrome.app') + path.sep
-    ];
-    return processList()
-        .filter((entry) => (
-            systemChromeRoots.some((root) => entry.command.startsWith(root))
-            && entry.command.includes(profileArgument)
-        ))
-        .map((entry) => entry.pid);
-}
-
 function readPid() {
     try {
         const pid = Number(fs.readFileSync(PID_FILE, 'utf8').trim());
@@ -90,7 +68,8 @@ function emit(payload) {
 function requireRuntimeFiles() {
     for (const [target, label] of [
         [ELECTRON_BINARY, 'Electron'],
-        [VITE_ENTRY, 'Vite']
+        [VITE_ENTRY, 'Vite'],
+        [BROWSER_HUB_PREPARE, 'AI Browser Hub 准备脚本']
     ]) {
         if (!fs.existsSync(target)) {
             throw new Error(`${label} 不存在，请先在项目目录运行 npm install`);
@@ -110,6 +89,18 @@ function buildFrontend() {
     }
 }
 
+function prepareBrowserHub() {
+    const result = spawnSync(process.execPath, [BROWSER_HUB_PREPARE], {
+        cwd: ROOT,
+        encoding: 'utf8',
+        env: process.env
+    });
+    if (result.status !== 0) {
+        const detail = `${result.stderr || result.stdout || ''}`.trim().slice(-1200);
+        throw new Error(`共享浏览器准备失败${detail ? `：\n${detail}` : ''}`);
+    }
+}
+
 async function start() {
     const recordedPid = readPid();
     const activePids = [...new Set([
@@ -123,6 +114,7 @@ async function start() {
 
     requireRuntimeFiles();
     buildFrontend();
+    prepareBrowserHub();
     fs.mkdirSync(RUNTIME_DIR, { recursive: true });
     const logFd = fs.openSync(LOG_FILE, 'a');
     const child = spawn(ELECTRON_BINARY, ['.'], {
@@ -175,8 +167,7 @@ async function stop() {
         ...(isAlive(recordedPid) ? [recordedPid] : []),
         ...managedElectronPids()
     ])];
-    const chromePidsBeforeStop = dedicatedChromePids();
-    if (electronPids.length === 0 && chromePidsBeforeStop.length === 0) {
+    if (electronPids.length === 0) {
         fs.rmSync(PID_FILE, { force: true });
         emit({ status: 'not_running' });
         return;
@@ -188,16 +179,11 @@ async function stop() {
         await waitForExit(electronPids, 2_000);
     }
 
-    const remainingChromePids = dedicatedChromePids();
-    signalAll(remainingChromePids, 'SIGTERM');
-    if (!(await waitForExit(remainingChromePids, 5_000))) {
-        signalAll(remainingChromePids, 'SIGKILL');
-    }
     fs.rmSync(PID_FILE, { force: true });
     emit({
         status: 'stopped',
         electronProcesses: electronPids.length,
-        chromeProcesses: new Set([...chromePidsBeforeStop, ...remainingChromePids]).size
+        browserRuntime: 'shared-hub-managed'
     });
 }
 

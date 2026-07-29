@@ -6,6 +6,7 @@ const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.ur
 const electronMain = fs.readFileSync(new URL('../electron/main.js', import.meta.url), 'utf8');
 
 test('开发服务端口冲突时整组退出，不产生隐藏的重复画布进程', () => {
+    assert.match(pkg.scripts.dev, /^node scripts\/prepare-browser-hub\.mjs &&/);
     assert.match(pkg.scripts.dev, /--kill-others-on-fail/);
     assert.match(pkg.scripts.dev, /vite --strictPort/);
 });
@@ -44,10 +45,10 @@ test('后端就绪时不抢焦点，只在窗口尚未显示时才显示', () =>
     assert.match(loadBackendOrigin, /!mainWindow\.isVisible\(\)/);
 });
 
-test('退出时会主动关掉常驻的无头浏览器', () => {
-    // 无头 Chromium 是 detached 启动的，不主动关就会在用户退出 Evan 之后继续占内存。
+test('退出时只结束本 App，Chrome 交给共享 Hub 空闲回收', () => {
     const desktopEntry = fs.readFileSync(new URL('../server/desktop-entry.js', import.meta.url), 'utf8');
     assert.match(desktopEntry, /closeBrowserForShutdown/);
+    assert.match(desktopEntry, /共享 Chrome 由 Hub/);
     // 关闭浏览器不能拖死退出流程：Electron 主进程只给 5.5 秒。
     assert.match(desktopEntry, /setTimeout\(\(\) => process\.exit\(1\), 9_500\)/);
 });

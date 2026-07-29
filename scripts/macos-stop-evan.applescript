@@ -9,7 +9,7 @@ try
 	if resultText contains "\"not_running\"" then
 		display notification "项目当前没有运行。" with title "Evan"
 	else
-		display notification "项目、后端和 Evan 专属 Chrome 已关闭。" with title "Evan"
+		display notification "Evan 已关闭；共享 Chrome 将由 Hub 在空闲后回收。" with title "Evan"
 	end if
 on error errorText
 	display dialog "Evan 关闭失败：" & return & errorText buttons {"好"} default button "好" with icon stop

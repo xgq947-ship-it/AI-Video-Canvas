@@ -1,5 +1,5 @@
 /**
- * Evan 专属 Chrome 自动化 CLI（server/python 下的 ops_cli）的统一调用层。
+ * 系统共享 Chrome 自动化 CLI（server/python 下的 ops_cli）的统一调用层。
  *
  * 历史上 Google Flow / 即梦 要跨项目调用桌面上的「运营自动化工具」，再由它
  * 转调 Ops-Cli。现在 provider 代码已内置到 server/python，这里直接
@@ -24,6 +24,7 @@ import {
     decodeProcessOutput,
     withUtf8PythonEnvironment
 } from '../utils/processOutput.js';
+import { ensureSharedBrowserHub } from './browserHubClient.js';
 
 /** server/python —— 内置 Python 运行时根目录。 */
 export const PYTHON_ROOT = RUNTIME_PATHS.pythonRoot;
@@ -67,22 +68,6 @@ export function isBrowserModelsReady() {
 export const BROWSER_MODELS_SETUP_HINT =
     '未找到兼容的 Google Chrome。请先安装或更新 Chrome，然后重新打开 Evan。';
 
-// 空闲多久关掉常驻浏览器。
-//
-// 这里是「内存占用」和「冷启动」的取舍点。原来是 120 秒 —— 用户生成一张图、看三
-// 分钟、再生成一张，浏览器已经被关了，第二次要完整重吃一遍冷启动（Chromium 启动
-// + 即梦/Flow 前端拉 chunk + 编辑器挂载），也就是 EDITOR_NOT_READY 最常见的来源。
-// 这不是首次运行才有的问题，是每次隔几分钟再操作都会复现。
-//
-// 放宽到 30 分钟：连续创作期间不再反复冷启动，代价是这段时间里 Chrome 常驻。
-// 上限是可控的 —— 退出 Evan 时会主动关掉（见 closeBrowserForShutdown）。
-const BROWSER_IDLE_CLOSE_MS = Number(process.env.EVAN_BROWSER_IDLE_CLOSE_MS) || 30 * 60_000;
-const BROWSER_LOGIN_IDLE_CLOSE_MS =
-    Number(process.env.EVAN_BROWSER_LOGIN_IDLE_CLOSE_MS) || 30 * 60_000;
-
-let activeBrowserOperations = 0;
-let browserIdleTimer = null;
-
 export function opsEnvironment() {
     const chrome = getChromeCompatibility(process.env);
     return {
@@ -94,8 +79,7 @@ export function opsEnvironment() {
         EVAN_BROWSER_PROFILE_DIR: RUNTIME_PATHS.browserProfileDir,
         EVAN_CHROME_EXECUTABLE: chrome.executable || '',
         EVAN_BROWSER_EXECUTABLE: chrome.executable || '',
-        SESSIONHUB_CHROME_PROFILE: RUNTIME_PATHS.browserProfileDir,
-        SESSIONHUB_CDP_PORT: process.env.SESSIONHUB_CDP_PORT || '19222',
+        AI_BROWSER_HUB_ENABLED: '1',
         // Automated desktop generation must stay silent. Foreground browser
         // commands (`browser open` / `browser login`) already request a visible
         // window explicitly, so the backend must not globally force auth
@@ -105,124 +89,9 @@ export function opsEnvironment() {
     };
 }
 
-function clearBrowserIdleTimer() {
-    if (!browserIdleTimer) return;
-    clearTimeout(browserIdleTimer);
-    browserIdleTimer = null;
-}
-
-function browserCloseCommand() {
-    const executable = resolveOpsExecutable();
-    return {
-        command: executable || resolveOpsPython(),
-        commandArgs: executable
-            ? ['--json', 'browser', 'close']
-            : ['-m', 'ops_cli', '--json', 'browser', 'close']
-    };
-}
-
-function closeIdleBrowser() {
-    if (activeBrowserOperations > 0) return;
-    // 运行时没装就没有浏览器需要关。这个检查同时是崩溃防线：spawn 一个不存在的
-    // 可执行文件会让子进程发出 'error' 事件，而 ChildProcess 的 'error' 没有监听器时
-    // 会直接把整个后端进程带走 —— 模块加载时 armed 的兜底定时器意味着，
-    // 任何缺少自动化运行时的机器上，后端都会在启动 120 秒后猝死。
-    if (!isBrowserModelsReady()) return;
-
-    const { command, commandArgs } = browserCloseCommand();
-    try {
-        const child = spawn(command, commandArgs, {
-            cwd: PYTHON_ROOT,
-            env: opsEnvironment(),
-            detached: true,
-            stdio: 'ignore'
-        });
-        // detached + unref 的子进程同样需要 error 监听器，否则同上。
-        child.on('error', error => {
-            console.warn('[ops-cli] 关闭空闲浏览器失败：', error?.message || error);
-        });
-        child.unref();
-    } catch (error) {
-        console.warn('[ops-cli] 无法启动关闭浏览器的进程：', error?.message || error);
-    }
-}
-
-/**
- * 退出前回收使用 Evan 专属 Profile 的 Chrome。
- *
- * Chromium 是刻意 detached 启动的（chrome_cdp.py 的 start_new_session /
- * DETACHED_PROCESS），所以后端进程退出时它不会跟着走。退出路径上不主动关掉的话，
- * 用户关掉 Evan 之后它会一直占着几百 MB —— 唯一的回收点是本模块加载时 armed 的
- * 兜底 idle 定时器，也就是要等到"下次启动 Evan 再过一个 idle 周期"。
- *
- * 关闭失败、超时、运行时没装：都只是解析成 closed:false，绝不抛错也绝不挂住，
- * 退出流程不能被这一步拖死。
- *
- * @returns {Promise<{ closed: boolean, reason?: string }>}
- */
-export function closeBrowserForShutdown({
-    spawnProcess = spawn,
-    timeoutMs = 8_000
-} = {}) {
-    clearBrowserIdleTimer();
-
-    if (spawnProcess === spawn && !isBrowserModelsReady()) {
-        // 运行时都没装，自然也没有浏览器需要关。
-        return Promise.resolve({ closed: false, reason: 'not-ready' });
-    }
-
-    const { command, commandArgs } = browserCloseCommand();
-
-    return new Promise(resolve => {
-        let settled = false;
-        const settle = (result) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            resolve(result);
-        };
-
-        let child;
-        // 这个定时器刻意不 unref：调用方正在 await 这个 Promise，如果事件循环
-        // 因为没有别的句柄而直接排空，超时就永远不会触发，Promise 也就永不落定。
-        // 退出流程的最终兜底是 desktop-entry.js 里那个 9.5 秒的硬退出。
-        const timer = setTimeout(() => {
-            try { child?.kill('SIGKILL'); } catch { /* ignore */ }
-            settle({ closed: false, reason: 'timeout' });
-        }, timeoutMs);
-
-        try {
-            child = spawnProcess(command, commandArgs, {
-                cwd: PYTHON_ROOT,
-                env: opsEnvironment(),
-                stdio: 'ignore'
-            });
-        } catch (error) {
-            settle({ closed: false, reason: error?.message || 'spawn-failed' });
-            return;
-        }
-
-        child.on('error', error => settle({ closed: false, reason: error?.message || 'spawn-failed' }));
-        child.on('close', code => settle(
-            code === 0 ? { closed: true } : { closed: false, reason: `exit-${code}` }
-        ));
-    });
-}
-
-function beginBrowserOperation() {
-    clearBrowserIdleTimer();
-    activeBrowserOperations += 1;
-}
-
-function finishBrowserOperation(idleDelayMs) {
-    activeBrowserOperations = Math.max(0, activeBrowserOperations - 1);
-    if (activeBrowserOperations > 0) return;
-    clearBrowserIdleTimer();
-    browserIdleTimer = setTimeout(() => {
-        browserIdleTimer = null;
-        closeIdleBrowser();
-    }, idleDelayMs);
-    browserIdleTimer.unref();
+/** App 退出不操作共享 Chrome；Hub 在所有租约释放后统一回收。 */
+export function closeBrowserForShutdown() {
+    return Promise.resolve({ closed: false, reason: 'shared-hub-managed' });
 }
 
 function ensureReady() {
@@ -350,7 +219,6 @@ export function runOpsCli({
     maxAttempts = MAX_OPS_ATTEMPTS
 }) {
     const provider = inferBrowserProvider(args);
-    const tracksBrowser = Boolean(provider) || args[0] === 'browser';
     const previousProviderState = provider && trackSessionState && typeof sessionStateStore.get === 'function'
         ? sessionStateStore.get(provider)
         : null;
@@ -375,12 +243,7 @@ export function runOpsCli({
     const commandArgs = executable
         ? ['--json', ...args]
         : ['-m', 'ops_cli', '--json', ...args];
-    const idleDelayMs = args.includes('login') || args.includes('open')
-        ? BROWSER_LOGIN_IDLE_CLOSE_MS
-        : BROWSER_IDLE_CLOSE_MS;
-
-    // 一次尝试。刻意不在这里做 begin/finishBrowserOperation，也不写 session 状态：
-    // 那些只能由 runOpsCli 在整轮重试的首尾各做一次。
+    // 一次尝试不单独写 session 状态；整轮重试只在首尾落一次最终状态。
     const runAttempt = (attempt) => new Promise((resolve, reject) => {
         if (signal?.aborted) {
             reject(operationCancelledError(label));
@@ -457,7 +320,7 @@ export function runOpsCli({
             const data = payload?.data || {};
             if (code !== 0 || payload?.success !== true) {
                 // Python 侧已把登录失效等归类成结构化 error_code + recovery_hint，
-                // 这里原样透出，让用户打开 Evan 专属 Chrome 登录，而不是看到一串堆栈。
+                // 这里原样透出，让用户打开系统共享 Chrome 登录，而不是看到一串堆栈。
                 const parts = [data.error || stderr.trim() || `进程退出码 ${code}`];
                 if (data.recovery_hint) parts.push(data.recovery_hint);
                 const error = new Error(`${label}失败：${parts.join('　')}`);
@@ -473,18 +336,24 @@ export function runOpsCli({
         });
     });
 
-    // 整轮重试共用一次 begin/finish。若把重试放在 runOpsCli 之外，第一次尝试的
-    // finish 会 arm 空闲关闭定时器，退避期间浏览器可能被关掉，第二次尝试就要再吃
-    // 一次冷启动——正好是这里要修的问题。
-    if (tracksBrowser) beginBrowserOperation();
     if (provider && trackSessionState) sessionStateStore.transition(provider, initialSessionState);
 
     const finalize = (state, detail) => {
         if (provider && trackSessionState) sessionStateStore.transition(provider, state, detail);
-        if (tracksBrowser) finishBrowserOperation(idleDelayMs);
     };
 
     return (async () => {
+        if (usesRealProcess) {
+            try {
+                await ensureSharedBrowserHub();
+            } catch (error) {
+                finalize(error?.sessionState || 'browser_unavailable', {
+                    errorCode: error?.code || 'BROWSER_HUB_UNAVAILABLE',
+                    message: error?.message
+                });
+                throw error;
+            }
+        }
         let lastError;
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
             try {
@@ -512,7 +381,7 @@ export function runOpsCli({
         }
 
         // 用户主动取消只代表“不再等待这次任务”，不代表登录失效或浏览器损坏。
-        // 保留 provider 原来的 authenticated 状态，只释放活跃计数与空闲计时器。
+        // 保留 provider 原来的 authenticated 状态；子进程 finally 会释放 Hub 租约。
         if (isOperationCancelled(lastError)) {
             if (provider && trackSessionState) {
                 const restoreState = previousProviderState?.state === 'checking'
@@ -522,7 +391,6 @@ export function runOpsCli({
                     message: '当前任务已取消，登录状态未变'
                 });
             }
-            if (tracksBrowser) finishBrowserOperation(idleDelayMs);
             throw lastError;
         }
         finalize(lastError?.sessionState || 'unknown', {
@@ -532,11 +400,3 @@ export function runOpsCli({
         throw lastError;
     })();
 }
-
-// If the previous app session was interrupted while the dedicated browser was
-// still open, reclaim it after the normal idle window unless a new task starts.
-browserIdleTimer = setTimeout(() => {
-    browserIdleTimer = null;
-    closeIdleBrowser();
-}, BROWSER_IDLE_CLOSE_MS);
-browserIdleTimer.unref();

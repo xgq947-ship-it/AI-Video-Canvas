@@ -1212,7 +1212,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                         {availableImageModels.filter(m => m.provider === 'workflow').length > 0 && (
                                             <>
                                                 <div className="px-3 py-1.5 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f] border-t border-neutral-700">
-                                                    Evan 专属 Chrome（Flow / 即梦 / Gemini）
+                                                    共享 AI 浏览器（Flow / 即梦 / Gemini）
                                                 </div>
                                                 {availableImageModels.filter(m => m.provider === 'workflow').map(model => {
                                                     const isUnavailable = isModelUnavailable(model.id);

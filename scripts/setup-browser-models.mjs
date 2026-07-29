@@ -112,12 +112,12 @@ log(`
 ========================================================
 
 Evan 不再下载或打包 Chromium；运行时使用电脑现有的 Google Chrome，
-并自动创建独立 browser-profile。首次使用或登录过期时请分别登录：
+并通过系统共享 AI Browser Hub 保存登录态。首次使用或登录过期时请分别登录：
    · 即梦        https://jimeng.jianying.com   —— 需要即梦 VIP 会员额度
    · Google Flow https://labs.google/fx/tools/flow —— 需要有 Flow 权限的 Google 账号
 
 ⚠️ 登录态只保存在你本机，不会也不能随项目分发。
-   应用更新不会覆盖 Evan 专属 Chrome 的用户资料。
+   Evan、Reverse Prompt 和后续兼容 App 共用这份登录态；应用更新不会覆盖。
 
 不配置这一套也没关系：Gemini / OpenAI / Seedance(ARK)
 等官方 API 模型不依赖它，填好 .env 即可直接使用。

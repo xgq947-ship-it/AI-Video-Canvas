@@ -7,7 +7,7 @@
  * - 即梦是「文字为主、参考素材可选」：节点不接图也能生成（纯文生视频）。
  * - 连进来的图可以作为统一编辑素材（当前 2.0 模型最多 9 个）。
  * - 分辨率按具体模型能力约束，只有 VIP 档开放 1080P/4K。
- * 三个平台共用 Evan 专属 Chrome，并由统一调度器控制提交并发。
+ * 三个平台共用系统共享 Chrome，并由统一调度器控制提交并发。
  */
 
 import { runWithAuthRecovery, runWithExecutionMode } from './webhttp/index.js';

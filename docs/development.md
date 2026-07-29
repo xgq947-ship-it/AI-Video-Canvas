@@ -37,8 +37,8 @@ npm run build
 端口，不使用这两个固定端口。
 
 > **不要同时运行 `npm run dev` 和已安装的桌面应用。**
-> 两者共用同一份 `browser-profile`（登录一次两边都能用，见「浏览器自动化」），
-> 因此也共用同一个 Evan 专属 Chrome 实例。生成调度器和浏览器独占队列都只在单个
+> 两者通过 AI Browser Hub 共用同一份登录 Profile 和 Chrome 实例。Hub 能保护浏览器
+> 生命周期，但生成调度器和业务页面队列仍只在单个
 > 后端进程内生效，跨进程不排队：
 > 两个后端会互相切换页面、抢焦点，正在等结果的一方会拿到
 > `SUBMISSION_UNKNOWN`——积分已扣但结果收不回来。调试时请先退出桌面应用。
@@ -91,18 +91,15 @@ Flow、Gemini Web、即梦的 HTTP Provider 分层、并发策略、健康接口
 
 ## 浏览器自动化
 
-安装包不再携带 Chromium。Evan 检测系统正式版 Google Chrome，并通过独立
-`browser-profile/` 保存 Flow/Gemini Web/即梦登录态；应用更新不会覆盖。兼容性探针会阻止缺失或
-版本过低的 Chrome 启动自动化。Remotion 使用同一个系统 Chrome 可执行文件，不会首次
-渲染时联网下载浏览器。
+安装包不再携带 Chromium，而是内置版本固定的 AI Browser Hub 载荷。应用首次启动把 Hub
+静默安装到当前用户目录，后续 App 复用并只升级、不降级。Hub 检测系统正式版 Google Chrome，
+用共享 Profile 保存 Flow/Gemini Web/即梦登录态；应用更新与卸载不会覆盖。Remotion 仍直接
+使用系统 Chrome 可执行文件，不会首次渲染时联网下载浏览器。
 
-`browser-profile/` 的位置**不随后端从哪个目录启动而变**，源码模式与桌面应用落在
-同一处（`app.getPath('userData')/data/browser-profile`），所以在桌面应用里登录过
-Flow/Gemini Web/即梦后，`npm run dev` 直接可用，无需重新登录。三处默认值必须保持一致：
-`package.json` 的 `productName`、`server/runtime/paths.js` 的
-`defaultBrowserProfileDir()`、`server/python/sessionhub/scene/chrome_cdp.py` 的
-`_default_profile_dir()`——任一处改名都会让另外两处指向旧目录，症状是
-「明明登录过却报尚未创建登录资料」。`test/runtimePaths.test.mjs` 有守卫。
+共享 Profile 位于 macOS 的 `~/Library/Application Support/SankaiAI/AI Browser Hub/data/profile-v1`
+或 Windows 的 `%LOCALAPPDATA%\SankaiAI\AI Browser Hub\data\profile-v1`，不属于 Evan 的
+`userData`。开发版、安装版、Reverse Prompt 及后续 App 都从 Hub 取得短期租约和动态 CDP，
+禁止硬编码调试端口。`test/runtimePaths.test.mjs` 与独立 Hub 仓库测试负责守卫该边界。
 
 ## 媒体工具
 
@@ -110,13 +107,11 @@ FFmpeg `6.1.1` 与 FFprobe `6.1.1` 由锁定的 `ffmpeg-ffprobe-static` 平台�
 直接使用 `node_modules` 中的二进制；`npm run desktop:runtime` 会复制二进制与许可证信息，
 桌面安装包从 `resources/media-tools/` 执行，不依赖系统 `PATH`。
 
-当前迁移兼容层使用应用专用 CDP 端口 `19222`，且会校验 profile 所属进程，不会连接系统
-用户日常 Chrome Profile。Windows 在普通登录实例切换到无头生成实例前会先按专属
-Profile 精确关闭旧进程，等待退出时使用原生 PID 句柄，不在轮询中重复启动 PowerShell。
-生成实例空闲 30 分钟后关闭；退出 Evan 时仍会立即回收。常驻 Worker 完成后将移除该固定
-端口。
+Hub 只监听 `127.0.0.1` 随机控制端口，Chrome 也使用动态 CDP。每个任务持有带心跳的租约；
+最后一个租约释放 120 秒后回收 Chrome。关闭 Evan 只释放本 App 的租约，不会中断其他 App。
+用户主动登录时由 Hub 切换为无自动化参数的可见 Chrome，普通任务固定无头执行。
 
-Windows 即梦生图优先复用 Evan 专属 Chrome 中已经存在的即梦标签页，避免已有标签较多时
+Windows 即梦生图优先复用系统共享 Chrome 中已经存在的即梦标签页，避免已有标签较多时
 创建新 CDP target 长时间阻塞；读取生成结果时只选择实际可见的记录区，忽略响应式布局
 同时渲染的隐藏副本。产品短视频的“取消队列”会通过 `AbortSignal` 立即终止本地 Ops CLI
 等待并释放浏览器队列。平台已经接单的生成可能仍会在远端完成，取消后不得自动重复提交。
@@ -129,12 +124,9 @@ Windows 即梦生图优先复用 Evan 专属 Chrome 中已经存在的即梦标�
 必须按当前指针位置重新解析目标，不能只依赖上一次异步 hover 状态；连接点附近保留少量
 屏幕像素容错，以兼容 Windows 鼠标和触控板快速拖放。
 
-自动生成显式启动无头 Chrome。用户主动执行“打开 Evan 专属 Chrome/登录”才会切换成无自动化参数的可见实例；
-后端不设置全局强制弹窗变量。
-
-登录检查会先让可见实例正常退出并刷新 `browser-profile`，再以同一 Profile 无头执行
-只读页面探针。退出时先终止 Chrome 主进程，让 Cookie 数据库正常落盘；超时才按
-Profile 精确强杀残留进程，禁止同时结束全部 Helper 造成登录态丢失。
+自动生成通过 Hub 获取无头 Chrome。用户主动执行“打开共享 Chrome/登录”时才切换成无自动化
+参数的可见实例；存在其他活动租约时 Hub 会拒绝切换，避免中断任务。登录完成后的检查由 Hub
+优雅切回同一共享 Profile 的无头实例，业务 App 不直接结束 Chrome 进程。
 
 ## 可选 AI CLI / MCP
 

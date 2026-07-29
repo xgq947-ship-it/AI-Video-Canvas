@@ -3,7 +3,7 @@
  *
  * 探测「网页 HTTP 模型」（Google Flow / 即梦 / Gemini）是否可用。
  *
- * 生成请求走 HTTP；正式 Chrome 的 Evan 专属 Profile 只提供登录态、签名和验证令牌。
+ * 生成请求走 HTTP；AI Browser Hub 的共享 Profile 只提供登录态、签名和验证令牌。
  * 源码开发需要先跑 `npm run setup:automation-runtime`，安装包已自带 Python 运行时。
  * 未安装时不应让用户点了才报错，而是直接在模型列表里置灰。
  *

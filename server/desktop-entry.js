@@ -30,10 +30,7 @@ const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
 
-    // 常驻的无头 Chrome 是 detached 启动的（chrome_cdp.py 的 start_new_session /
-    // DETACHED_PROCESS），不会随后端进程一起退出。不在这里主动关掉，用户退出 Evan 后
-    // 它会一直占着内存，直到下次启动 Evan 再过一个 idle 周期才被回收。
-    // closeBrowserForShutdown 不抛错也不会挂住，最坏情况按 timeout 兜底。
+    // 这里只释放本 App 的运行状态。共享 Chrome 由 Hub 根据所有 App 的租约统一回收。
     const finish = () => server.close(() => process.exit(0));
     closeBrowserForShutdown({ timeoutMs: 8_000 }).then(finish, finish);
 

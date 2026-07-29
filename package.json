@@ -14,7 +14,7 @@
     "setup": "node scripts/setup-project.mjs",
     "setup:ai-cli": "node scripts/setup-project.mjs --with-ai-cli",
     "setup:check": "node scripts/setup-project.mjs --check --skip-dependencies",
-    "dev": "concurrently --kill-others-on-fail \"npm run server\" \"vite --strictPort\"",
+    "dev": "node scripts/prepare-browser-hub.mjs && concurrently --kill-others-on-fail \"npm run server\" \"vite --strictPort\"",
     "server": "node server/index.js",
     "mcp:claude": "node mcp/twitcanva-mcp.js",
     "test": "node --test test/*.test.mjs",
@@ -24,9 +24,9 @@
     "render:e2e-test": "node scripts/proof-manifest-render.mjs",
     "build": "vite build",
     "preview": "vite preview",
-    "desktop:dev": "npm run build && electron .",
+    "desktop:dev": "npm run build && node scripts/prepare-browser-hub.mjs && electron .",
     "desktop:icons": "node scripts/generate-desktop-icons.mjs",
-    "desktop:runtime": "node scripts/prepare-desktop-runtime.mjs",
+    "desktop:runtime": "node scripts/prepare-desktop-runtime.mjs && node scripts/prepare-browser-hub.mjs",
     "desktop:verify": "node scripts/verify-desktop-runtime.mjs",
     "desktop:prepare": "npm run desktop:icons && npm run desktop:runtime && npm run desktop:verify",
     "desktop:pack": "npm run build && npm run desktop:prepare && electron-builder --dir",
@@ -106,6 +106,10 @@
       {
         "from": "desktop-runtime/current/media-tools",
         "to": "media-tools"
+      },
+      {
+        "from": "desktop-runtime/current/browser-hub",
+        "to": "browser-hub"
       }
     ],
     "artifactName": "Evan-AI-Video-Canvas-${version}-${os}-${arch}.${ext}",

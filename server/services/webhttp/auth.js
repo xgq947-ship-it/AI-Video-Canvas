@@ -313,7 +313,7 @@ export function toBrowserSessionState(status) {
 
 const STATUS_MESSAGES = Object.freeze({
     'logged-in': '已通过平台接口确认登录',
-    'logged-out': '当前未登录，请在 Evan 专属 Chrome 中登录',
+    'logged-out': '当前未登录，请在系统共享 Chrome 中登录',
     expired: '登录已过期，请重新登录',
     unknown: '未能确认登录状态',
     error: '登录检测失败'

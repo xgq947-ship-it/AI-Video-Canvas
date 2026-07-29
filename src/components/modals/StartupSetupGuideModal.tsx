@@ -105,7 +105,7 @@ function sessionLabel(session?: BrowserSession) {
 function friendlyBrowserError(error: unknown) {
     const message = error instanceof Error ? error.message : String(error || '');
     if (message.includes('Browser.setDownloadBehavior') || message.includes('connect_over_cdp')) {
-        return 'Evan 专属 Chrome 连接没有准备好，正在重新初始化。请关闭该窗口后再点一次。';
+        return '共享 AI 浏览器连接没有准备好，正在重新初始化。请关闭该窗口后再点一次。';
     }
     return message || '登录页面打开失败';
 }
@@ -185,7 +185,7 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
         if (!isOpen) return;
         // 一律只读缓存，永远不自动探测。
         //
-        // 三平台 HTTP 登录检测要唤醒专属 Chrome 并逐个发请求，好几秒起步；放在
+        // 三平台 HTTP 登录检测要唤醒共享 AI 浏览器并逐个发请求，好几秒起步；放在
         // 「刚进画布」这个时刻，用户什么都还没做就先被卡住，而登录态绝大多数时候
         // 和上次一样。需要最新状态时由用户点「重新检查」或单平台的「检查登录状态」，
         // 那时等待是他自己要的。
@@ -316,7 +316,7 @@ export const StartupSetupGuideModal: React.FC<StartupSetupGuideModalProps> = ({
                     <div className="min-w-0 flex-1">
                         <h2 className="text-[15px] font-semibold leading-tight">连接你的 AI 创作服务</h2>
                         <p className={`mt-1 truncate text-[11px] leading-tight ${muted}`}>
-                            前三项用 Evan 专属 Chrome 登录；后两项是提示词优化后端，二选一即可。
+                            前三项用共享 AI 浏览器登录；后两项是提示词优化后端，二选一即可。
                         </p>
                     </div>
                     <div className="hidden shrink-0 items-center gap-2 sm:flex">

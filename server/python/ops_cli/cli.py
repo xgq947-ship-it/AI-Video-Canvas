@@ -27,13 +27,13 @@ app = typer.Typer(help="Ecommerce operations CLI.", no_args_is_help=True)
 
 # Browser command (not platform-specific, stays in cli.py)
 browser_app = typer.Typer(help="Browser utility commands.", no_args_is_help=True)
-DEFAULT_BROWSER_PORT = int(os.environ.get("SESSIONHUB_CDP_PORT", "19222"))
+DEFAULT_BROWSER_PORT = int(os.environ.get("AI_BROWSER_HUB_CDP_PORT", "0"))
 
 
 @browser_app.command("check")
 def browser_check(
     ctx: typer.Context,
-    port: int = typer.Option(DEFAULT_BROWSER_PORT, "--port", help="Chrome remote debugging port."),
+    port: int = typer.Option(DEFAULT_BROWSER_PORT, "--port", help="Optional Hub CDP port override."),
 ) -> None:
     _execute(ctx, command_name="ops browser check", params={"port": port}, handler=lambda: check_browser_port(port))
 
@@ -41,7 +41,7 @@ def browser_check(
 @browser_app.command("tabs")
 def browser_tabs(
     ctx: typer.Context,
-    port: int = typer.Option(DEFAULT_BROWSER_PORT, "--port", help="Chrome remote debugging port."),
+    port: int = typer.Option(DEFAULT_BROWSER_PORT, "--port", help="Optional Hub CDP port override."),
 ) -> None:
     _execute(ctx, command_name="ops browser tabs", params={"port": port}, handler=lambda: list_browser_tabs(port))
 
@@ -49,7 +49,7 @@ def browser_tabs(
 @browser_app.command("cleanup")
 def browser_cleanup(
     ctx: typer.Context,
-    port: int = typer.Option(DEFAULT_BROWSER_PORT, "--port", help="Chrome remote debugging port."),
+    port: int = typer.Option(DEFAULT_BROWSER_PORT, "--port", help="Optional Hub CDP port override."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview tabs to close without closing them."),
 ) -> None:
     _execute(
@@ -163,7 +163,7 @@ def main_callback(
     interactive_login: bool | None = typer.Option(
         None,
         "--interactive-login/--no-interactive-login",
-        help="Override terminal detection for SessionHub login recovery.",
+        help="Override terminal detection for shared Hub login recovery.",
     ),
 ) -> None:
     ctx.obj = {"json_output": json_output, "interactive_login": interactive_login}

@@ -62,7 +62,7 @@ export async function getGeminiSession({ signal, forceRefresh = false } = {}) {
     const context = await webContext(PROVIDER, { signal });
     if (context?.signedIn === false) {
         throw new WebProviderError(
-            `${PROVIDER_NAME} 登录已失效，请在 Evan 专属 Chrome 中重新登录 Google 账号`,
+            `${PROVIDER_NAME} 登录已失效，请在系统共享 Chrome 中重新登录 Google 账号`,
             { provider: PROVIDER, code: 'AUTH_EXPIRED', submitted: false }
         );
     }

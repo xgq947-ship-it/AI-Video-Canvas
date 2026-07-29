@@ -702,7 +702,7 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                         {browserSessions['gemini-web']?.state === 'authenticated' ? '已验证' : browserSessions['gemini-web']?.state === 'checking' ? '检查中' : browserSessions['gemini-web']?.state === 'expired' ? '登录失效' : '未登录'}
                                     </span>
                                 </div>
-                                <p className={`mb-3 text-[11px] leading-5 ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>图片、视频、识图和提示词优化共用 Evan 专属 Chrome Profile，不读取日常 Chrome。</p>
+                                <p className={`mb-3 text-[11px] leading-5 ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>图片、视频、识图和提示词优化共用系统共享 AI 浏览器，不读取日常 Chrome Profile。</p>
                                 {browserSessions['gemini-web']?.message && <p className="mb-3 text-[11px] text-amber-400">{browserSessions['gemini-web'].message}</p>}
                                 <div className="flex gap-2">
                                     <button type="button" disabled={browserBusy} onClick={() => void handleGeminiBrowser('open')} className="flex items-center gap-1.5 rounded-lg bg-cyan-500 px-3 py-2 text-xs font-semibold text-black disabled:opacity-50"><LogIn size={13} />打开登录窗口</button>

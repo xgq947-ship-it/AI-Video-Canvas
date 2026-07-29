@@ -565,6 +565,42 @@ def _runtime_lock_path(name: str) -> Path:
 def _pid_is_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        # ``os.kill(pid, 0)`` is a harmless existence probe on POSIX, but
+        # Python implements non-console signals on Windows with
+        # TerminateProcess. Passing 0 there therefore kills the process we are
+        # trying to inspect. Query the process handle without mutating it.
+        import ctypes
+        from ctypes import wintypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        error_access_denied = 5
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        open_process.restype = wintypes.HANDLE
+        get_exit_code_process = kernel32.GetExitCodeProcess
+        get_exit_code_process.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        get_exit_code_process.restype = wintypes.BOOL
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+
+        handle = open_process(process_query_limited_information, False, pid)
+        if not handle:
+            # Access denied means the process exists but cannot be inspected.
+            return ctypes.get_last_error() == error_access_denied
+        try:
+            exit_code = wintypes.DWORD()
+            if not get_exit_code_process(handle, ctypes.byref(exit_code)):
+                # A valid process handle is stronger evidence than a transient
+                # query failure; keep its lock until normal stale detection.
+                return True
+            return exit_code.value == still_active
+        finally:
+            close_handle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

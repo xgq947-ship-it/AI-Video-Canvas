@@ -40,9 +40,12 @@ from ops_cli.webhttp import (
     WEBHTTP_HASH_KEY,
     WEBHTTP_SESSION_KEY,
     WEBHTTP_WINDOW_PREFIX,
+    _pid_is_alive,
     _provider_page,
     _tagged_provider_url,
 )
+
+pid_probe_survived = _pid_is_alive(os.getpid())
 
 next_id = 0
 next_id_lock = threading.Lock()
@@ -175,6 +178,7 @@ before_crash.responsive = False
 after_crash = _provider_page(crash, crash_provider)
 
 print(json.dumps({
+    'pid_probe_survived': pid_probe_survived,
     'sequential': {
         'ids': [first.target_id, second.target_id, third.target_id],
         'project_count': len(project_pages(sequential, provider)),
@@ -200,6 +204,7 @@ print(json.dumps({
 }))
 `);
 
+  assert.equal(result.pid_probe_survived, true);
   assert.equal(new Set(result.sequential.ids).size, 1);
   assert.equal(result.sequential.project_count, 1);
   assert.equal(result.sequential.created, 1);

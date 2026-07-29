@@ -27,6 +27,7 @@ import { buildReverseImagePromptInstruction, type ReverseImagePromptMode } from 
 import {
     listImageGenerationProviders,
     listVideoGenerationProviders,
+    normalizeImageResolution,
     supportedImageOutputCounts,
     type VideoGenerationProvider,
 } from '../../../shared/generationProviders.js';
@@ -565,6 +566,9 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
 
     // Image model selection logic
     const currentImageModel = IMAGE_MODELS.find(m => m.id === data.imageModel) || IMAGE_MODELS[0];
+    const currentImageResolution = normalizeImageResolution(currentImageModel.id, data.resolution)
+        || data.resolution
+        || 'Auto';
     const imageOutputCounts = supportedImageOutputCounts(currentImageModel.id);
     const isBrowserBatchImageModel = !isVideoNode && imageOutputCounts.length > 1;
     const imageGenerationCount = Math.min(
@@ -609,9 +613,12 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
             updates.aspectRatio = newModel.aspectRatios[0] || 'Auto';
         }
 
-        // Reset resolution if current resolution is not supported by new model
-        if (newModel?.resolutions && data.resolution && !newModel.resolutions.includes(data.resolution)) {
-            updates.resolution = newModel.resolutions[0] || 'Auto';
+        // Resolve through the model capability. This preserves an explicit
+        // Flow 1K choice while legacy Auto/missing Flow nodes become 2K.
+        if (newModel?.resolutions) {
+            updates.resolution = normalizeImageResolution(modelId, data.resolution)
+                || newModel.resolutions[0]
+                || 'Auto';
         }
 
         onUpdate(data.id, updates);
@@ -1297,7 +1304,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                     className="flex items-center gap-1.5 whitespace-nowrap text-xs font-medium bg-[#252525] hover:bg-[#333] border border-neutral-700 text-white px-2.5 py-1.5 rounded-lg transition-colors"
                                 >
                                     <Monitor size={12} className="text-green-400" />
-                                    {(data.resolution || 'Auto') === 'Auto' ? '自动' : data.resolution}
+                                    {currentImageResolution === 'Auto' ? '自动' : currentImageResolution}
                                 </button>
 
                                 {/* Dropdown Menu */}
@@ -1313,10 +1320,10 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                             <button
                                                 key={res}
                                                 onClick={() => handleResolutionSelect(res)}
-                                                className={`flex items-center justify-between w-full px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${(data.resolution || 'Auto') === res ? 'text-blue-400' : 'text-neutral-300'}`}
+                                                className={`flex items-center justify-between w-full px-3 py-2 text-xs text-left hover:bg-[#333] transition-colors ${currentImageResolution === res ? 'text-blue-400' : 'text-neutral-300'}`}
                                             >
                                                 <span>{res}</span>
-                                                {(data.resolution || 'Auto') === res && <Check size={12} />}
+                                                {currentImageResolution === res && <Check size={12} />}
                                             </button>
                                         ))}
                                     </div>

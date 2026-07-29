@@ -71,9 +71,19 @@ queued -> waiting -> preparing -> submitting -> submitted
 | 下载 | 2 | 4 | 限制 CDN、内存与磁盘瞬时压力 |
 
 三家的页面上下文请求还会经过各自的 bridge 队列，因此同一 Provider 的真实浏览器 HTTP
-调用仍按顺序进入同一常驻标签页；Flow 的项目状态轮询和三家的最终媒体下载不占用
-bridge 提交队列。Chrome 冷启动或从可见登录实例切换到无头实例时，三平台先经过一个全局
+调用仍按顺序进入同一常驻标签页；Flow 的项目状态轮询、1K 原图下载和三家普通 CDN 下载
+不占用 bridge 提交队列。Flow 2K 使用官方 `flow/upsampleImage` 页面鉴权请求，每张图需要
+一个新的单次 reCAPTCHA token，因此同一批次按“取 token → 2K 请求”逐张串行。Chrome
+冷启动或从可见登录实例切换到无头实例时，三平台先经过一个全局
 启动闸门，只允许一个 CLI 执行 stop/start/connect；CDP 就绪后立即恢复跨平台并行。
+
+每个平台的常驻页使用四重正向身份：URL Hash
+`#evan-ai-video-canvas=<provider>`、`window.name`、`sessionStorage` 和持久化 CDP
+`targetId`。每次调用只复用可响应且至少命中一项明确身份的页面；同域、同路径或
+`about:blank` 都不能作为归属依据。发现重复时仅关闭带同一 Provider 明确身份的重复页，
+所有未标记页和其他 Provider 页必须原样保留。页面选择/创建由 runtime 目录中的跨进程锁
+保护，标签崩溃时只替换该明确标记页。冷启动直接把带 Hash 的平台地址交给 Chrome，不先
+创建空白锚点；请求结束只断开 Playwright/CDP 连接，Chrome 与常驻页继续复用。
 
 这些上限可以通过 `EVAN_WEB_GLOBAL_SUBMIT_CONCURRENCY`、
 `EVAN_WEB_GLOBAL_POLL_CONCURRENCY`、`EVAN_WEB_GLOBAL_DOWNLOAD_CONCURRENCY` 调整。
@@ -110,6 +120,24 @@ bridge 提交队列。Chrome 冷启动或从可见登录实例切换到无头实
 
 ## 协议与回归验证
 
+### Flow 图片 1K / 2K
+
+2026-07-29 用当前 Flow 页面真实生成并分别点击下载确认：
+
+- 1K `Original size` 请求
+  `GET /fx/api/trpc/media.getMediaUrlRedirect?name=<原始 mediaId>`，经 307 跳到
+  `flow-content.google/image/<mediaId>` 的签名地址；最终响应是原始 JPEG。
+- 2K `Upscaled` 请求 `POST https://aisandbox-pa.googleapis.com/v1/flow/upsampleImage`，
+  请求体包含原始 `mediaId`、`targetResolution: UPSAMPLE_IMAGE_RESOLUTION_2K` 和带
+  `IMAGE_GENERATION` reCAPTCHA 的 `clientContext`。响应为 JSON，`encodedImage` 是最终
+  JPEG，`media.name` 是新建的 2K mediaId，并通过 `sourceMediaId/finalMediaId` 同时保留
+  原始生成关系。
+
+Provider 不做 Canvas、Sharp 或 FFmpeg 插值。Sharp 只读取最终字节的 metadata：1K 必须
+等于生成响应里的原始宽高，2K 必须是同一比例下宽高各 2 倍；缺少源尺寸时，2K 至少要求
+长边达到 2048px。校验失败按已提交协议错误处理，不保存、不标记成功。普通图片路由和产品
+短视频任务的本地 JSON 都记录 `requestedResolution/actualWidth/actualHeight`。
+
 日常验证不消耗额度：
 
 ```bash
@@ -137,7 +165,9 @@ npm run test:web-http:live -- --list
 
 执行参考图或多参考图用例时重复传入 `--reference <本地图片路径>`。脚本会先做零额度健康
 探针，再调用 Evan 的真实 `/api/generate-image` 或 `/api/generate-video`，最后用 HEAD 验证
-项目素材文件；任一失败立即停止。只有 `--all` 或明确筛选范围才允许执行，避免误跑整套。
+项目素材文件；Flow 图片还会核对服务端返回的请求分辨率与实际像素 metadata。可用
+`--resolution 1K|2K` 覆盖单项用例的默认值；任一失败立即停止。只有 `--all` 或明确筛选
+范围才允许执行，避免误跑整套。
 
 ## 扩展规则
 

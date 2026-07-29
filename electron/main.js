@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createUpdateController } from './updater.js';
 import { resolveUninstallTargets } from './uninstall.js';
+import { revealProjectById } from './projectReveal.js';
 import {
     CHROME_DOWNLOAD_URL,
     getChromeCompatibility
@@ -305,6 +306,21 @@ ipcMain.handle('project:create', async (_event, { title, locationId } = {}) => {
         return { ok: true, data };
     } catch (error) {
         return { ok: false, error: error.message || '项目创建失败' };
+    }
+});
+
+ipcMain.handle('project:reveal', async (_event, workflowId) => {
+    try {
+        const id = String(workflowId || '').trim();
+        if (!id) return { ok: false, error: '请先打开项目' };
+
+        const dataDir = path.join(app.getPath('userData'), 'data');
+        return revealProjectById(id, {
+            dataDir,
+            openPath: directory => shell.openPath(directory)
+        });
+    } catch (error) {
+        return { ok: false, error: error.message || '无法打开项目目录' };
     }
 });
 

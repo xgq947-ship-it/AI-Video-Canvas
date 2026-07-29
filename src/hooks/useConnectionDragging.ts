@@ -10,6 +10,7 @@ import { NodeData, NodeType } from '../types';
 // @ts-ignore — 纯 JS 共享模块，类型由 shared/connectionRules.d.ts 提供
 import { isValidNodeConnection } from '@/shared/connectionRules.js';
 import { resolveConnectionDropTarget, ConnectionDropCandidate } from '../utils/connectionDropTarget.js';
+import { removeCanvasConnection } from '../utils/canvasEdges.js';
 
 interface ConnectionStart {
     nodeId: string;
@@ -197,7 +198,7 @@ export const useConnectionDragging = () => {
         ) => void,
         onUpdateNodes: (updater: (prev: NodeData[]) => NodeData[]) => void,
         nodes: NodeData[],
-        onConnectionMade?: (parentId: string, childId: string) => void,
+        onConnectionMade?: (parentId: string, childId: string, currentNodes: NodeData[]) => Partial<NodeData> | void,
         pointerPosition?: { x: number; y: number }
     ): boolean => {
         const activeStart = connectionStartRef.current;
@@ -238,18 +239,23 @@ export const useConnectionDragging = () => {
                 }
 
                 // Add source as a parent to target node
-                onUpdateNodes(prev => prev.map(n => {
-                    if (n.id === targetNodeId) {
-                        const existingParents = n.parentIds || [];
-                        // Prevent duplicate connections
-                        if (!existingParents.includes(activeStart.nodeId)) {
-                            return { ...n, parentIds: [...existingParents, activeStart.nodeId] };
+                onUpdateNodes(prev => {
+                    const connectionUpdates = onConnectionMade?.(activeStart.nodeId, targetNodeId, prev) || {};
+                    return prev.map(n => {
+                        if (n.id === targetNodeId) {
+                            const existingParents = n.parentIds || [];
+                            // Prevent duplicate connections
+                            if (!existingParents.includes(activeStart.nodeId)) {
+                                return {
+                                    ...n,
+                                    parentIds: [...existingParents, activeStart.nodeId],
+                                    ...connectionUpdates
+                                };
+                            }
                         }
-                    }
-                    return n;
-                }));
-                // Notify about new connection: source is parent, hoveredNode is child
-                onConnectionMade?.(activeStart.nodeId, targetNodeId);
+                        return n;
+                    });
+                });
             } else {
                 // Connecting to RIGHT connector = target provides output (target is parent)
                 // hoveredNode is parent, source is child
@@ -260,18 +266,23 @@ export const useConnectionDragging = () => {
                 }
 
                 // Add target as a parent to source node
-                onUpdateNodes(prev => prev.map(n => {
-                    if (n.id === activeStart.nodeId) {
-                        const existingParents = n.parentIds || [];
-                        // Prevent duplicate connections
-                        if (!existingParents.includes(targetNodeId)) {
-                            return { ...n, parentIds: [...existingParents, targetNodeId] };
+                onUpdateNodes(prev => {
+                    const connectionUpdates = onConnectionMade?.(targetNodeId, activeStart.nodeId, prev) || {};
+                    return prev.map(n => {
+                        if (n.id === activeStart.nodeId) {
+                            const existingParents = n.parentIds || [];
+                            // Prevent duplicate connections
+                            if (!existingParents.includes(targetNodeId)) {
+                                return {
+                                    ...n,
+                                    parentIds: [...existingParents, targetNodeId],
+                                    ...connectionUpdates
+                                };
+                            }
                         }
-                    }
-                    return n;
-                }));
-                // Notify about new connection: hoveredNode is parent, source is child
-                onConnectionMade?.(targetNodeId, activeStart.nodeId);
+                        return n;
+                    });
+                });
             }
         }
 
@@ -294,13 +305,7 @@ export const useConnectionDragging = () => {
     const deleteSelectedConnection = (onUpdateNodes: (updater: (prev: NodeData[]) => NodeData[]) => void) => {
         if (!selectedConnection) return false;
 
-        onUpdateNodes(prev => prev.map(n => {
-            if (n.id === selectedConnection.childId) {
-                const existingParents = n.parentIds || [];
-                return { ...n, parentIds: existingParents.filter(pid => pid !== selectedConnection.parentId) };
-            }
-            return n;
-        }));
+        onUpdateNodes(prev => removeCanvasConnection(prev, selectedConnection));
         setSelectedConnection(null);
         return true;
     };

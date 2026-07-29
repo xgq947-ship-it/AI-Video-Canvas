@@ -62,7 +62,7 @@ print(json.dumps({
   assert.equal(result.name, 'ops-cli:keepalive');
 });
 
-test('托管任务页无论成功失败都会关闭，浏览器只保留一个锚点页', {
+test('托管任务页无论成功失败都会关闭，原有未标记标签保持不变', {
   skip: ready ? false : '未配置 server/python/.venv'
 }, () => {
   const result = runPython(`
@@ -104,7 +104,36 @@ print(json.dumps({
     "names": [page.name for page in alive],
 }))
 `);
-  assert.equal(result.alive, 1);
-  assert.deepEqual(result.urls, ['about:blank']);
-  assert.deepEqual(result.names, ['ops-cli:keepalive']);
+  assert.equal(result.alive, 2);
+  assert.deepEqual(result.urls, ['about:blank', 'about:blank']);
+  assert.deepEqual(result.names, ['ops-cli:keepalive', '']);
+});
+
+test('清理器只关闭明确标记的重复项目标签，不按空白页或同 URL 误删', {
+  skip: ready ? false : '未配置 server/python/.venv'
+}, () => {
+  const result = runPython(`
+import json
+from ops_cli.browser import build_tab_cleanup_plan
+
+snapshots = [
+    {"index": 0, "url": "about:blank", "window_name": ""},
+    {"index": 1, "url": "about:blank", "window_name": ""},
+    {"index": 2, "url": "https://labs.google/fx/tools/flow", "window_name": ""},
+    {"index": 3, "url": "https://labs.google/fx/tools/flow", "window_name": ""},
+    {"index": 4, "url": "https://labs.google/fx/tools/flow", "window_name": "ops-cli:webhttp:google-flow"},
+    {"index": 5, "url": "https://labs.google/fx/tools/flow", "window_name": "ops-cli:webhttp:google-flow"},
+    {"index": 6, "url": "https://gemini.google.com/app", "window_name": "ops-cli:webhttp:gemini-web"},
+]
+plan = build_tab_cleanup_plan(snapshots)
+print(json.dumps({
+    "kept": [item["index"] for item in plan["keep"]],
+    "closed": [item["index"] for item in plan["close"]],
+    "reasons": [item["reason"] for item in plan["close"]],
+}))
+`);
+
+  assert.deepEqual(result.kept, [0, 1, 2, 3, 4, 6]);
+  assert.deepEqual(result.closed, [5]);
+  assert.deepEqual(result.reasons, ['duplicate_managed_marker']);
 });

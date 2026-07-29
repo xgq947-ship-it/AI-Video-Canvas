@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { MessageCircle } from 'lucide-react';
+import { Check, Copy, MessageCircle } from 'lucide-react';
 
 /**
  * 二维码放在 public/ 下，vite build 会原样拷进 dist/，打包后由 express.static(dist)
@@ -13,6 +13,25 @@ interface SupportPanelProps {
 
 export const SupportPanel: React.FC<SupportPanelProps> = ({ isDark }) => {
     const [qrFailed, setQrFailed] = useState(false);
+    const [wechatCopied, setWechatCopied] = useState(false);
+
+    const copyWechat = async () => {
+        try {
+            await navigator.clipboard.writeText('Moment_oo7');
+        } catch {
+            // Loopback pages normally have Clipboard API access. Keep a small
+            // fallback for older Electron/web development contexts.
+            const input = document.createElement('textarea');
+            input.value = 'Moment_oo7';
+            input.style.position = 'fixed';
+            input.style.opacity = '0';
+            document.body.appendChild(input);
+            input.select();
+            document.execCommand('copy');
+            input.remove();
+        }
+        setWechatCopied(true);
+    };
 
     return (
         <div className="flex flex-col items-center py-6 text-center">
@@ -22,11 +41,24 @@ export const SupportPanel: React.FC<SupportPanelProps> = ({ isDark }) => {
 
             <h3 className="mt-5 text-lg font-semibold">支持 Evan</h3>
             <p className={`mt-2 max-w-md text-xs leading-6 ${isDark ? 'text-neutral-400' : 'text-neutral-500'}`}>
-                这个项目现在是、将来也会完全免费：没有订阅，没有广告。
-                如果 Evan 帮到了你，欢迎扫码加我微信，聊聊你在用它做什么、哪里还不好用。
+                需要更高级的自动化方案、业务工作流或定制化设计？
+                <br />
+                欢迎联系我，微信：
+                <button
+                    type="button"
+                    onClick={() => void copyWechat()}
+                    className={`ml-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-semibold transition-colors ${isDark ? 'text-white hover:bg-white/10' : 'text-neutral-900 hover:bg-neutral-200'}`}
+                    title="复制微信号 Moment_oo7"
+                >
+                    Moment_oo7
+                    {wechatCopied ? <Check size={12} /> : <Copy size={12} />}
+                </button>
             </p>
+            <span className="mt-1 min-h-5 text-[11px] text-emerald-400" aria-live="polite">
+                {wechatCopied ? '微信号已复制' : ''}
+            </span>
 
-            <div className={`mt-6 rounded-3xl border p-4 ${isDark ? 'border-white/10 bg-white/[0.03]' : 'border-neutral-200 bg-neutral-50'}`}>
+            <div className={`mt-4 rounded-3xl border p-4 ${isDark ? 'border-white/10 bg-white/[0.03]' : 'border-neutral-200 bg-neutral-50'}`}>
                 {qrFailed ? (
                     <div className={`flex h-56 w-56 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed px-5 text-[11px] leading-5 ${isDark ? 'border-white/15 text-neutral-500' : 'border-neutral-300 text-neutral-500'}`}>
                         <span>还没有放二维码图片</span>

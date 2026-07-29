@@ -23,6 +23,7 @@ import {
 } from '../utils/nodeReferences.js';
 import { validateProductDimensions } from '../../shared/productSceneReplacement.js';
 import { getImageGenerationProvider, getVideoGenerationProvider, normalizeImageAspectRatio } from '../../shared/generationProviders.js';
+import { resolveProductSceneInputMapping } from '../utils/productSceneInputMapping.js';
 
 interface UseGenerationProps {
     nodes: NodeData[];
@@ -149,8 +150,11 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                 const dimensionError = validateProductDimensions(dimensions);
                 if (dimensionError) throw new Error(dimensionError);
 
-                const sceneNode = nodes.find(parent => parent.id === node.sceneReferenceId);
-                const productNode = nodes.find(parent => parent.id === node.productReferenceId);
+                // Resolve the same persisted semantic mapping shown by the UI.
+                // parentIds order is deliberately irrelevant here.
+                const inputMapping = resolveProductSceneInputMapping(node, nodes);
+                const sceneNode = nodes.find(parent => parent.id === inputMapping.sceneReferenceNodeId);
+                const productNode = nodes.find(parent => parent.id === inputMapping.productImageNodeId);
                 const sceneUrl = sceneNode?.resultUrl || sceneNode?.editorBackgroundUrl;
                 const productUrl = productNode?.resultUrl || productNode?.editorBackgroundUrl;
                 if (!sceneUrl || !productUrl) throw new Error('请连接并指定“场景参考”和“我方产品”两张图片');
@@ -161,7 +165,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                     node.imageModel || 'google-flow-nano-banana-pro',
                     node.aspectRatio || '9:16'
                 ) || '9:16';
-                const videoPromptNode = nodes.find(parent => parent.id === node.productSceneVideoPromptSourceId && parent.type === NodeType.TEXT);
+                const videoPromptNode = nodes.find(parent => parent.id === inputMapping.promptSourceNodeId && parent.type === NodeType.TEXT);
                 const job = await createProductSceneJob({
                     jobId: requestedProductSceneJobId,
                     workflowId,
@@ -193,6 +197,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                 updateNode(id, {
                     status: NodeStatus.LOADING,
                     aspectRatio: productAspectRatio,
+                    resolution: job.imageResolution || node.resolution,
                     productSceneJobId: job.id,
                     productSceneJobStatus: job.status,
                     productSceneStage: job.stage === 'generating_images' ? 'generating_images' : 'analyzing',

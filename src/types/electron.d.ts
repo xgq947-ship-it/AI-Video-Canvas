@@ -60,6 +60,7 @@ declare global {
         groups: unknown[];
         viewport: { x: number; y: number; zoom: number };
       }>;
+      revealProject: (workflowId: string) => Promise<{ ok: true; path: string }>;
       getAppInfo: () => Promise<AppInfo>;
       uninstall: {
         plan: (keepUserData: boolean) => Promise<UninstallPlan>;

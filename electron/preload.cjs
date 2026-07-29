@@ -12,6 +12,11 @@ contextBridge.exposeInMainWorld('evanDesktop', {
         if (!result?.ok) throw new Error(result?.error || '项目创建失败');
         return result.data;
     },
+    revealProject: async (workflowId) => {
+        const result = await ipcRenderer.invoke('project:reveal', workflowId);
+        if (!result?.ok) throw new Error(result?.error || '无法打开项目目录');
+        return result;
+    },
     getAppInfo: () => ipcRenderer.invoke('app:info'),
     uninstall: {
         /** 只算路径不动手，用于在界面上如实列出会被扔掉的东西。 */

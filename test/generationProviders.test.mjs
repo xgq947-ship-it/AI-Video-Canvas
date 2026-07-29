@@ -11,6 +11,7 @@ import {
   listImageGenerationProviders,
   listVideoGenerationProviders,
   normalizeImageAspectRatio,
+  normalizeImageResolution,
   normalizeVideoParameters,
   resolveVideoModelForAspectRatio,
   resetDiscoveredModelRegistry,
@@ -38,6 +39,13 @@ test('图片与视频模型注册表使用唯一 ID，并包含 Gemini Web capab
 });
 
 test('Flow 能力表覆盖文本、首帧、多参考图，且只展示可路由模型', () => {
+  const flowImage = getImageGenerationProvider('google-flow-nano-banana-pro');
+  assert.deepEqual(flowImage.resolutions, ['1K', '2K']);
+  assert.equal(flowImage.defaultResolution, '2K');
+  assert.equal(normalizeImageResolution(flowImage.id, undefined), '2K');
+  assert.equal(normalizeImageResolution(flowImage.id, 'Auto'), '2K');
+  assert.equal(normalizeImageResolution(flowImage.id, '1K'), '1K');
+
   const omni = getVideoGenerationProvider('google-flow-omni-flash');
   assert.equal(omni.supportsTextToVideo, true);
   assert.equal(omni.supportsImageToVideo, true);

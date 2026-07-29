@@ -11,6 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import sharp from 'sharp';
 
 import {
     attachCurrentGenerationDetails,
@@ -28,18 +29,34 @@ import {
     buildGenerateVideoRequest,
     buildFlowMediaUrl,
     buildProjectMediaRequest,
+    buildUpsampleImageRequest,
     buildUploadImageRequest,
     extractFlowModels,
     isFlowVideoCompleted,
     isFlowVideoFailed,
+    normalizeFlowImageResolution,
     parseFlowVideoMedia,
     parseGenerateImagesResponse,
     parseGenerateVideoResponse,
-    parseUploadImageResponse
+    parseUpsampleImageResponse,
+    parseUploadImageResponse,
+    validateFlowImageDimensions
 } from './protocol.js';
 
 const PROVIDER = 'google-flow';
 const PROVIDER_NAME = 'Google Flow';
+const UPSAMPLE_RECAPTCHA_RETRY_DELAY_MS = Math.max(
+    1_000,
+    Number(process.env.EVAN_FLOW_UPSAMPLE_RECAPTCHA_RETRY_MS) || 30_000
+);
+const UPSAMPLE_BATCH_GAP_MS = Math.max(
+    0,
+    Number(process.env.EVAN_FLOW_UPSAMPLE_BATCH_GAP_MS) || 2_000
+);
+
+export function shouldRetryFlowUpsampleError(error, attempt) {
+    return attempt === 1 && error?.code === 'RECAPTCHA_REQUIRED';
+}
 
 /**
  * Auth context cache.
@@ -100,9 +117,21 @@ export async function getFlowAuth({ signal, forceRefresh = false, recaptchaActio
 export async function discoverFlowModels({ signal } = {}) {
     const baseline = {
         images: [
-            { id: 'GEM_PIX_2', displayName: 'Nano Banana Pro', maxReferenceImages: 10, maxBatchCount: 4 },
-            { id: FLOW_BASELINE_IMAGE_MODEL, displayName: 'Nano Banana 2', maxReferenceImages: 10, maxBatchCount: 4 },
-            { id: 'HARBOR_SEAL', displayName: 'Nano Banana 2 Lite', maxReferenceImages: 10, maxBatchCount: 4 }
+            {
+                id: 'GEM_PIX_2', displayName: 'Nano Banana Pro',
+                resolutions: ['1K', '2K'], defaultResolution: '2K',
+                maxReferenceImages: 10, maxBatchCount: 4
+            },
+            {
+                id: FLOW_BASELINE_IMAGE_MODEL, displayName: 'Nano Banana 2',
+                resolutions: ['1K', '2K'], defaultResolution: '2K',
+                maxReferenceImages: 10, maxBatchCount: 4
+            },
+            {
+                id: 'HARBOR_SEAL', displayName: 'Nano Banana 2 Lite',
+                resolutions: ['1K', '2K'], defaultResolution: '2K',
+                maxReferenceImages: 10, maxBatchCount: 4
+            }
         ],
         videos: Object.entries(FLOW_VIDEO_FAMILY_CAPABILITIES).map(([id, capabilities]) => ({
             id,
@@ -148,6 +177,175 @@ async function uploadReferenceImages(auth, files, { signal }) {
     return mediaIds;
 }
 
+function imageFormatDetails(format) {
+    if (format === 'jpeg') return { extension: 'jpg', contentType: 'image/jpeg' };
+    if (format === 'webp') return { extension: 'webp', contentType: 'image/webp' };
+    return { extension: 'png', contentType: 'image/png' };
+}
+
+async function verifyFlowImageBytes(buffer, item, requestedResolution) {
+    let imageMetadata;
+    try {
+        imageMetadata = await sharp(buffer).metadata();
+    } catch (error) {
+        throw new WebProviderError(`${PROVIDER_NAME} ${requestedResolution} 下载结果不是可读取的图片`, {
+            provider: PROVIDER,
+            code: 'PROTOCOL_CHANGED',
+            submitted: true,
+            cause: error,
+            details: { mediaIds: [item.mediaId].filter(Boolean), requestedResolution }
+        });
+    }
+
+    const verification = validateFlowImageDimensions({
+        requestedResolution,
+        actualWidth: imageMetadata.width,
+        actualHeight: imageMetadata.height,
+        sourceWidth: item.width,
+        sourceHeight: item.height
+    });
+    const logDetails = {
+        requestedResolution: verification.requestedResolution,
+        actualWidth: verification.actualWidth,
+        actualHeight: verification.actualHeight,
+        sourceWidth: verification.sourceWidth,
+        sourceHeight: verification.sourceHeight,
+        mediaId: item.mediaId
+    };
+    if (!verification.valid) {
+        console.error('[Flow HTTP] 图片实际像素校验失败', logDetails, verification.reason);
+        throw new WebProviderError(
+            `${PROVIDER_NAME} 请求 ${verification.requestedResolution}，但最终文件像素不符合官方输出：${verification.reason}`,
+            {
+                provider: PROVIDER,
+                code: 'PROTOCOL_CHANGED',
+                submitted: true,
+                details: { ...logDetails, reason: verification.reason }
+            }
+        );
+    }
+    console.info('[Flow HTTP] 图片实际像素校验通过', logDetails);
+    return {
+        ...verification,
+        format: imageMetadata.format || 'png',
+        ...imageFormatDetails(imageMetadata.format)
+    };
+}
+
+async function downloadFlowImage(item, {
+    requestedResolution,
+    generationAuth,
+    signal
+}) {
+    if (!item.mediaId) {
+        throw new WebProviderError(`${PROVIDER_NAME} 图片结果缺少 mediaId，无法按官方 ${requestedResolution} 协议下载`, {
+            provider: PROVIDER,
+            code: 'PROTOCOL_CHANGED',
+            submitted: true
+        });
+    }
+
+    if (requestedResolution === '1K') {
+        const downloaded = await downloadResultMedia(buildFlowMediaUrl(item.mediaId), {
+            providerName: `${PROVIDER_NAME} 文生图 1K`,
+            expectedType: 'image',
+            cookieHeader: generationAuth.labsCookie,
+            recoveryHint: '请先到 Flow 项目历史中下载本次 1K 原图，不要直接重新生成。'
+        });
+        const verified = await verifyFlowImageBytes(downloaded.buffer, item, requestedResolution);
+        return {
+            ...downloaded,
+            extension: verified.extension,
+            contentType: verified.contentType,
+            metadata: {
+                ...item,
+                sourceMediaId: item.mediaId,
+                finalMediaId: item.mediaId,
+                requestedResolution,
+                actualWidth: verified.actualWidth,
+                actualHeight: verified.actualHeight,
+                downloadProtocol: 'media.getMediaUrlRedirect'
+            }
+        };
+    }
+
+    // The generation reCAPTCHA token was consumed by batchGenerateImages.
+    // Flow's official 2K button mints another IMAGE_GENERATION token for every
+    // upsample call; batch outputs therefore each receive their own fresh token.
+    let response;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+            const upsampleAuth = await getFlowAuth({
+                signal,
+                forceRefresh: true,
+                recaptchaAction: 'IMAGE_GENERATION'
+            });
+            const spec = buildUpsampleImageRequest({
+                auth: upsampleAuth,
+                mediaId: item.mediaId,
+                resolution: requestedResolution
+            });
+            response = await webFetchOk(PROVIDER, buildRequestSpec(spec), {
+                signal,
+                submitted: true,
+                what: `${requestedResolution} 高清下载`,
+                timeoutSeconds: 300
+            });
+            break;
+        } catch (error) {
+            // This is a definite server-side rejection: the upsample did not
+            // start, while the paid image generation already completed. Retry
+            // only this download step with a fresh token after a cooldown.
+            // Transport/unknown failures are never retried because they may
+            // already have created the 2K media.
+            if (shouldRetryFlowUpsampleError(error, attempt)) {
+                console.warn(
+                    `[Flow HTTP] ${requestedResolution} 高清 token 被拒绝，`
+                    + `${UPSAMPLE_RECAPTCHA_RETRY_DELAY_MS / 1000} 秒后仅重试高清步骤；不会重新生图`
+                );
+                await sleep(UPSAMPLE_RECAPTCHA_RETRY_DELAY_MS, signal);
+                continue;
+            }
+            throw error;
+        }
+    }
+    const upsampled = parseUpsampleImageResponse(response.json());
+    if (!upsampled) {
+        throw new WebProviderError(
+            `${PROVIDER_NAME} ${requestedResolution} 接口没有返回 encodedImage 或新的 mediaId`,
+            {
+                provider: PROVIDER,
+                code: 'PROTOCOL_CHANGED',
+                submitted: true,
+                details: { mediaIds: [item.mediaId] }
+            }
+        );
+    }
+
+    const buffer = Buffer.from(upsampled.encodedImage, 'base64');
+    const verified = await verifyFlowImageBytes(buffer, item, requestedResolution);
+    return {
+        buffer,
+        extension: verified.extension,
+        contentType: verified.contentType,
+        source: 'http',
+        metadata: {
+            ...item,
+            // Preserve the original generation relationship for compatibility,
+            // while recording the new media entity returned by the 2K endpoint.
+            sourceMediaId: item.mediaId,
+            finalMediaId: upsampled.mediaId,
+            upsampledMediaId: upsampled.mediaId,
+            upsampleWorkflowId: upsampled.workflowId,
+            requestedResolution,
+            actualWidth: verified.actualWidth,
+            actualHeight: verified.actualHeight,
+            upsampleResolution: upsampled.resolution,
+            downloadProtocol: 'flow.upsampleImage'
+        }
+    };
+}
+
 /**
  * Text-to-image and reference-image generation. Flow returns finished images
  * synchronously — no polling stage exists.
@@ -158,9 +356,11 @@ export async function generateFlowImageHttp({
     referenceImageInputs = [],
     count = 1,
     modelId,
+    resolution,
     libraryDir,
     signal
 }) {
+    const requestedResolution = normalizeFlowImageResolution(resolution);
     const cleanPrompt = requireNonEmptyPrompt(prompt, `${PROVIDER_NAME} 图片`);
     const files = await loadReferenceImageFiles(referenceImageInputs, libraryDir, { providerName: PROVIDER_NAME });
     const uploadAuth = files.length ? await getFlowAuth({ signal, forceRefresh: true }) : null;
@@ -199,15 +399,31 @@ export async function generateFlowImageHttp({
         mediaIds: results.map(item => item.mediaId).filter(Boolean)
     });
 
-    const images = await Promise.all(results.map(item => runProviderDownload(PROVIDER, async () => {
-        const downloaded = await downloadResultMedia(item.imageUrl, {
-            providerName: `${PROVIDER_NAME} 文生图`,
-            expectedType: 'image',
-            cookieHeader: auth.labsCookie,
-            recoveryHint: '请先到 Flow 项目历史中下载本次结果，不要直接重新生成。'
-        });
-        return { ...downloaded, metadata: item };
-    }, { signal, label: `${PROVIDER_NAME} 图片下载` })));
+    const downloadOne = item => runProviderDownload(
+        PROVIDER,
+        () => downloadFlowImage(item, { requestedResolution, generationAuth: auth, signal }),
+        { signal, label: `${PROVIDER_NAME} 图片 ${requestedResolution} 下载` }
+    );
+    // Each 2K upsample needs a fresh, single-use reCAPTCHA token immediately
+    // followed by its own POST. Keep that pair sequential so a later batch item
+    // cannot mint another token between the two operations.
+    const images = [];
+    if (requestedResolution === '2K') {
+        for (const [index, item] of results.entries()) {
+            if (index > 0 && UPSAMPLE_BATCH_GAP_MS > 0) {
+                await sleep(UPSAMPLE_BATCH_GAP_MS, signal);
+            }
+            images.push(await downloadOne(item));
+        }
+    } else {
+        images.push(...await Promise.all(results.map(downloadOne)));
+    }
+    attachCurrentGenerationDetails(PROVIDER, {
+        mediaIds: images.flatMap(image => [
+            image.metadata?.sourceMediaId,
+            image.metadata?.finalMediaId
+        ]).filter(Boolean)
+    });
     // 首图字段保持与浏览器实现一致，产品场景等单图调用方无需改动。
     return { images, ...images[0], channel: 'http' };
 }

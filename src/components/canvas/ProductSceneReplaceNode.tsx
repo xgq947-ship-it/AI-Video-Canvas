@@ -9,11 +9,18 @@ import {
   getImageGenerationProvider,
   getVideoGenerationProvider,
   normalizeImageAspectRatio,
+  normalizeImageResolution,
   resolveVideoModelForAspectRatio,
   supportedImageOutputCounts,
   videoModelsForAspectRatio,
 } from '../../../shared/generationProviders.js';
 import { cancelProductSceneJob } from '../../services/generationService';
+import { resolveImageNodeDisplayName } from '../../utils/nodeDisplayName.js';
+import {
+  productSceneInputMappingNeedsSync,
+  productSceneInputMappingPatch,
+  resolveProductSceneInputMapping,
+} from '../../utils/productSceneInputMapping.js';
 
 // 与服务端同一个默认值：产品短视频以竖版投放为主。
 const DEFAULT_ASPECT_RATIO = '9:16';
@@ -46,34 +53,30 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
   onConnectorDown,
 }) => {
   const isDark = canvasTheme === 'dark';
-  const connectedImages = (data.parentIds || [])
+  const connectedImageNodes = (data.parentIds || [])
     .map(id => allNodes.find(node => node.id === id))
     .filter((node): node is NodeData => Boolean(
-      node &&
-      (node.type === NodeType.IMAGE || node.type === NodeType.IMAGE_EDITOR) &&
-      previewUrl(node)
+      node && (node.type === NodeType.IMAGE || node.type === NodeType.IMAGE_EDITOR)
     ));
+  const connectedImages = connectedImageNodes.filter(node => Boolean(previewUrl(node)));
   const connectedTextNodes = (data.parentIds || [])
     .map(id => allNodes.find(node => node.id === id))
     .filter((node): node is NodeData => Boolean(node?.type === NodeType.TEXT));
 
-  const availableIds = new Set(connectedImages.map(node => node.id));
-  const sceneId = data.sceneReferenceId && availableIds.has(data.sceneReferenceId)
-    ? data.sceneReferenceId
-    : connectedImages[0]?.id || '';
-  const productId = data.productReferenceId && availableIds.has(data.productReferenceId) && data.productReferenceId !== sceneId
-    ? data.productReferenceId
-    : connectedImages.find(node => node.id !== sceneId)?.id || '';
+  const inputMapping = resolveProductSceneInputMapping(data, allNodes);
+  const sceneId = inputMapping.sceneReferenceNodeId || '';
+  const productId = inputMapping.productImageNodeId || '';
   const sceneNode = allNodes.find(node => node.id === sceneId);
   const productNode = allNodes.find(node => node.id === productId);
-  const promptSourceId = data.productSceneVideoPromptSourceId && connectedTextNodes.some(node => node.id === data.productSceneVideoPromptSourceId)
-    ? data.productSceneVideoPromptSourceId
-    : connectedTextNodes[0]?.id || '';
+  const promptSourceId = inputMapping.promptSourceNodeId || '';
   const promptNode = allNodes.find(node => node.id === promptSourceId);
   const imageProvider = getImageGenerationProvider(data.imageModel)
     || getImageGenerationProvider('google-flow-nano-banana-pro')!;
   const imageCounts = supportedImageOutputCounts(imageProvider.id);
   const imageCount = Math.min(imageCounts[imageCounts.length - 1], Math.max(1, data.productSceneImageCount || 1));
+  const imageResolution = normalizeImageResolution(imageProvider.id, data.resolution)
+    || data.resolution
+    || imageProvider.resolutions[0];
   // 用户指定的这一个比例同时决定替换图和短视频；不在图片模型能力表里时收口到它支持的值。
   const aspectRatio = normalizeImageAspectRatio(imageProvider.id, data.aspectRatio || DEFAULT_ASPECT_RATIO)
     || DEFAULT_ASPECT_RATIO;
@@ -98,9 +101,9 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
 
   React.useEffect(() => {
     const updates: Partial<NodeData> = {};
-    if (sceneId !== (data.sceneReferenceId || '')) updates.sceneReferenceId = sceneId || undefined;
-    if (productId !== (data.productReferenceId || '')) updates.productReferenceId = productId || undefined;
-    if (promptSourceId !== (data.productSceneVideoPromptSourceId || '')) updates.productSceneVideoPromptSourceId = promptSourceId || undefined;
+    if (productSceneInputMappingNeedsSync(data, inputMapping)) {
+      Object.assign(updates, productSceneInputMappingPatch(inputMapping));
+    }
     // 比例只由用户决定，不再跟着场景参考图变 —— 之前换一张竖图就会把用户选好的
     // 比例悄悄改掉，而视频那边的比例又是另一个独立字段，两边对不上就被平台裁切。
     if (aspectRatio !== data.aspectRatio) updates.aspectRatio = aspectRatio;
@@ -111,7 +114,19 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
     if (Object.keys(updates).length > 0) {
       onUpdate(data.id, updates);
     }
-  }, [aspectRatio, data.aspectRatio, data.id, data.productReferenceId, data.productSceneVideoModel, data.productSceneVideoPromptSourceId, data.sceneReferenceId, onUpdate, productId, promptSourceId, sceneId, videoChoice]);
+  }, [
+    aspectRatio,
+    data,
+    inputMapping.productImageNodeId,
+    inputMapping.promptSourceNodeId,
+    inputMapping.sceneReferenceNodeId,
+    onUpdate,
+    videoChoice,
+  ]);
+
+  const updateInputMapping = (updates: Partial<typeof inputMapping>) => {
+    onUpdate(data.id, productSceneInputMappingPatch({ ...inputMapping, ...updates }));
+  };
 
   const handleCancel = async () => {
     if (!workflowId || !data.productSceneJobId) return;
@@ -158,16 +173,16 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
         </div>
         <select
           value={value}
-          onChange={event => onUpdate(data.id, role === 'scene'
-            ? { sceneReferenceId: event.target.value || undefined }
-            : { productReferenceId: event.target.value || undefined })}
+          onChange={event => updateInputMapping(role === 'scene'
+            ? { sceneReferenceNodeId: event.target.value || undefined }
+            : { productImageNodeId: event.target.value || undefined })}
           onPointerDown={event => event.stopPropagation()}
           className={`w-full rounded-lg border px-2 py-1.5 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#242424] text-neutral-200' : 'border-neutral-300 bg-white text-neutral-800'}`}
         >
           <option value="">请选择已连接图片</option>
           {connectedImages.map((item, index) => (
             <option key={item.id} value={item.id} disabled={role === 'scene' ? item.id === productId : item.id === sceneId}>
-              {item.title || `参考图 ${index + 1}`}
+              {resolveImageNodeDisplayName(item, index + 1)}
             </option>
           ))}
         </select>
@@ -200,7 +215,7 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
             <span className="mb-2 flex items-center gap-1.5 text-xs font-semibold"><FileText size={14} className="text-cyan-400" />短视频提示词来源</span>
             <select
               value={promptSourceId}
-              onChange={event => onUpdate(data.id, { productSceneVideoPromptSourceId: event.target.value || undefined })}
+              onChange={event => updateInputMapping({ promptSourceNodeId: event.target.value || undefined })}
               className={`w-full rounded-lg border px-2.5 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#242424]' : 'border-neutral-300 bg-white'}`}
             >
               <option value="">未连接文本节点（仍可只生成图片）</option>
@@ -277,7 +292,7 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
 
           <div className={`rounded-lg px-3 py-2 text-[11px] ${isDark ? 'bg-neutral-900 text-neutral-400' : 'bg-neutral-100 text-neutral-600'}`}>
             <div>识图：{data.productSceneRecognitionModel || (data.productSceneRecognitionProvider === 'gemini-web' ? 'Gemini Web' : 'Codex CLI · gpt-5.6-sol')}</div>
-            <div className="mt-0.5">生图：{imageProvider.name} · {imageCount} 张 · {aspectRatio}</div>
+            <div className="mt-0.5">生图：{imageProvider.name} · {imageCount} 张 · {aspectRatio} · {imageResolution}</div>
             {data.productSceneAutoGenerateVideo && (
               <div className="mt-0.5">
                 视频：{videoProvider ? `${videoProvider.name} · ${aspectRatio}` : `没有模型支持 ${aspectRatio}`}
@@ -307,6 +322,9 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
                   imageModel: next.id,
                   productSceneImageCount: Math.min(data.productSceneImageCount || 1, next.maxOutputCount),
                   aspectRatio: next.supportedAspectRatios.includes(data.aspectRatio) ? data.aspectRatio : next.supportedAspectRatios[0],
+                  resolution: normalizeImageResolution(next.id, data.resolution)
+                    || next.resolutions[0]
+                    || 'Auto',
                 });
               }}
               className={`min-w-0 rounded-xl border px-3 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}
@@ -323,6 +341,18 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
               {imageProvider.supportedAspectRatios.filter(ratio => ratio !== 'Auto').map(ratio => (
                 <option key={ratio} value={ratio}>
                   {ratio}{videoModelsForAspectRatio(ratio).length === 0 ? '（无视频模型）' : ''}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="图片分辨率"
+              value={imageResolution}
+              onChange={event => onUpdate(data.id, { resolution: event.target.value })}
+              className={`rounded-xl border px-2 py-2 text-xs outline-none ${isDark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}
+            >
+              {imageProvider.resolutions.map(resolution => (
+                <option key={resolution} value={resolution}>
+                  {['Auto', '自动'].includes(resolution) ? '自动' : resolution}
                 </option>
               ))}
             </select>

@@ -6,6 +6,7 @@
 
 import React, { useCallback, useRef, useEffect } from 'react';
 import { NodeData, ContextMenuState, Viewport } from '../types';
+import { canvasHistoryShortcut, isTextEditingTarget } from '../utils/keyboardShortcuts.js';
 
 interface UseKeyboardShortcutsOptions {
     nodes: NodeData[];
@@ -15,7 +16,7 @@ interface UseKeyboardShortcutsOptions {
     setSelectedNodeIds: React.Dispatch<React.SetStateAction<string[]>>;
     setContextMenu: React.Dispatch<React.SetStateAction<ContextMenuState>>;
     deleteNodes: (ids: string[]) => void;
-    deleteSelectedConnection: (setNodes: React.Dispatch<React.SetStateAction<NodeData[]>>) => void;
+    deleteSelectedConnection: (setNodes: React.Dispatch<React.SetStateAction<NodeData[]>>) => boolean;
     clearSelection: () => void;
     clearSelectionBox: () => void;
     undo: () => void;
@@ -155,10 +156,10 @@ export const useKeyboardShortcuts = ({
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            const activeTag = document.activeElement?.tagName.toLowerCase();
-            if (activeTag === 'input' || activeTag === 'textarea') return;
+            if (isTextEditingTarget(document.activeElement)) return;
             const mod = e.ctrlKey || e.metaKey;
             const key = e.key.toLowerCase();
+            const historyAction = canvasHistoryShortcut(e);
 
             if (e.code === 'Space' && !mod && !e.altKey) {
                 e.preventDefault();
@@ -166,13 +167,13 @@ export const useKeyboardShortcuts = ({
                 return;
             }
 
-            if (mod && key === 'z' && !e.shiftKey) {
+            if (historyAction === 'undo') {
                 e.preventDefault();
                 undo();
                 return;
             }
 
-            if ((mod && key === 'y') || (mod && e.shiftKey && key === 'z')) {
+            if (historyAction === 'redo') {
                 e.preventDefault();
                 redo();
                 return;
@@ -246,12 +247,16 @@ export const useKeyboardShortcuts = ({
 
             // Delete selected nodes or connection
             if (e.key === 'Delete' || e.key === 'Backspace') {
-                if (selectedNodeIds.length > 0) {
+                e.preventDefault();
+                // A visible selected edge always wins over stale node selection.
+                // Edge deletion must never enter the node/trash path.
+                if (selectedConnection) {
+                    deleteSelectedConnection(setNodes);
+                } else if (selectedNodeIds.length > 0) {
                     deleteNodes(selectedNodeIds);
                     setContextMenu(prev => ({ ...prev, isOpen: false }));
-                } else if (selectedConnection) {
-                    deleteSelectedConnection(setNodes);
                 }
+                return;
             } else if (e.key === 'Escape') {
                 clearSelection();
                 clearSelectionBox();

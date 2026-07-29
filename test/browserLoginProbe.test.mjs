@@ -57,39 +57,65 @@ test('已经是无头 CDP 实例时不重启浏览器', () => {
     assert.match(block, /stop_chrome\(\)/);
 });
 
-test('HTTP 页面复用优先选择健康 origin，不会被风控页上的旧 marker 劫持', { skip: !ready }, () => {
+test('HTTP 页面只复用明确项目标签，不会占用同域未标记页面', { skip: !ready }, () => {
     const script = `
-import json
-from ops_cli.webhttp import WEBHTTP_WINDOW_PREFIX, _provider_page
+import json, os, tempfile
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+os.environ['EVAN_RUNTIME_DIR'] = tempfile.mkdtemp(prefix='evan-marker-test-')
+from ops_cli.webhttp import WEBHTTP_HASH_KEY, WEBHTTP_WINDOW_PREFIX, _provider_page
 
 class FakePage:
-    def __init__(self, url, name=''):
+    def __init__(self, url, name='', session='', target_id=''):
         self.url = url
         self.name = name
+        self.session = session
+        self.target_id = target_id
         self.navigations = []
+        self.closed = False
     def is_closed(self): return False
+    def close(self): self.closed = True
+    def set_default_timeout(self, value): pass
     def evaluate(self, script, arg=None):
+        if 'window.sessionStorage.setItem' in script:
+            self.name = arg['windowName']
+            self.session = arg['provider']
+            parsed = urlparse(self.url)
+            pairs = [(k, v) for k, v in parse_qsl(parsed.fragment) if k != arg['hashKey']]
+            pairs.append((arg['hashKey'], arg['provider']))
+            self.url = urlunparse(parsed._replace(fragment=urlencode(pairs)))
+            return {'windowName': self.name, 'href': self.url}
+        if 'sessionMarker' in script:
+            return {
+                'windowName': self.name,
+                'sessionMarker': self.session,
+                'hashMarker': dict(parse_qsl(urlparse(self.url).fragment)).get(WEBHTTP_HASH_KEY, ''),
+                'href': self.url,
+            }
         if 'window.name ||' in script: return self.name
-        if arg is not None: self.name = arg
         return None
     def goto(self, url, **kwargs):
         self.navigations.append(url)
         self.url = url
     def wait_for_timeout(self, value): pass
+    def wait_for_load_state(self, state, **kwargs): pass
 
 marker = WEBHTTP_WINDOW_PREFIX + 'gemini-web'
-bad = FakePage('https://www.google.com/sorry/index', marker)
-good = FakePage('https://gemini.google.com/app')
-context = type('Context', (), {'pages': [bad, good], 'new_page': lambda self: FakePage('about:blank')})()
+managed = FakePage('https://www.google.com/sorry/index', marker, 'gemini-web', 'managed-target')
+manual = FakePage('https://gemini.google.com/app', target_id='manual-target')
+context = type('Context', (), {'pages': [managed, manual], 'new_page': lambda self: FakePage('about:blank', target_id='new-target')})()
 chosen = _provider_page(context, 'gemini-web')
 print(json.dumps({
-    'picked_good': chosen is good,
-    'good_marked': good.name == marker,
-    'bad_navigations': len(bad.navigations),
+    'picked_managed': chosen is managed,
+    'managed_returned': managed.url.startswith('https://gemini.google.com/app'),
+    'manual_untouched': manual.url == 'https://gemini.google.com/app' and not manual.closed and manual.name == '',
 }))
 `;
     const result = runPython(script);
-    assert.deepEqual(result, { picked_good: true, good_marked: true, bad_navigations: 0 });
+    assert.deepEqual(result, {
+        picked_managed: true,
+        managed_returned: true,
+        manual_untouched: true
+    });
 });
 
 test('Flow reCAPTCHA action 由计费请求显式传入，认证探针不会预生成 token', () => {
@@ -137,7 +163,8 @@ c.stop_chrome = lambda known_pid=None: (
 )
 c.subprocess.Popen = fake_popen
 
-ok, message = c.start_chrome(headless=True)
+target = 'https://labs.google/fx/tools/flow#evan-ai-video-canvas=google-flow'
+ok, message = c.start_chrome(headless=True, initial_url=target)
 print(json.dumps({'ok': ok, 'message': message, 'events': events}))
 `;
     const result = runPython(script);
@@ -146,6 +173,8 @@ print(json.dumps({'ok': ok, 'message': message, 'events': events}))
     assert.deepEqual(result.events.map(event => event.event), ['stop', 'launch']);
     assert.equal(result.events[0].pid, 4242);
     assert.ok(result.events[1].args.includes('--headless=new'));
+    assert.ok(result.events[1].args.includes('https://labs.google/fx/tools/flow#evan-ai-video-canvas=google-flow'));
+    assert.equal(result.events[1].args.includes('about:blank'), false);
 });
 
 test('Windows 重复打开普通登录窗口直接复用，不关闭 Chrome', { skip: !ready }, () => {

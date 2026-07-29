@@ -32,11 +32,15 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sys
 import time
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
-from urllib.parse import urlparse
+from typing import Any, Iterator
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.request import urlopen
 
 from ops_cli.config import get_config
 from ops_cli.output import CommandResponse
@@ -67,16 +71,15 @@ PROVIDER_COOKIE_URLS = {
 }
 
 WEBHTTP_WINDOW_PREFIX = "ops-cli:webhttp:"
-# 普通任务页的 marker 前缀（browser.managed_work_page）。回收常驻桥接页周边的
-# 残留标签时必须绕开它，否则会打断并行运行的浏览器工作流任务。
-MANAGED_WINDOW_PREFIX = "ops-cli:"
+WEBHTTP_HASH_KEY = "evan-ai-video-canvas"
+WEBHTTP_SESSION_KEY = "__evan_ai_video_canvas_webhttp__"
 
-# 平台在限流/风控时会把桥接页顶到这些中转页上。它们对业务毫无用处，但会顶着
-# 一个已经失去 window.name 的标签页不放，所以回收时按 host + 路径前缀识别。
-INTERSTITIAL_HOST_PATHS = {
-    "www.google.com": ("/sorry",),
-    "google.com": ("/sorry",),
-}
+# 两个独立 ops_cli 进程可能同时发现「没有桥接页」并各开一个标签。Node 侧已有
+# provider 级队列，但 CLI 也可能被直接调用，所以页面选择/创建仍需跨进程互斥。
+PAGE_LOCK_TIMEOUT_SECONDS = 4 * 60
+PAGE_LOCK_STALE_SECONDS = 10 * 60
+PAGE_LOCK_POLL_SECONDS = 0.05
+INVALID_LOCK_OWNER_GRACE_SECONDS = 1
 
 # 快照类调用（读 window.name）遇到卡死的页面不能一直等：桥接页每次请求都要遍历
 # 全部标签页，默认 30 秒超时乘以标签数会把整个请求拖垮。
@@ -481,8 +484,13 @@ def _load_sessionhub() -> Any:
     return chrome_cdp
 
 
-def _connect(handler: Any) -> Any:
-    """Attach to the dedicated headless Chrome and run ``handler(context)``."""
+def _connect(
+    handler: Any,
+    *,
+    provider: str,
+    initial_url: str | None = None,
+) -> Any:
+    """Attach for one request, then disconnect without closing Chrome or its page."""
     chrome_cdp = _load_sessionhub()
 
     # 只在**必要时**重启浏览器。
@@ -502,9 +510,16 @@ def _connect(handler: Any) -> Any:
     if not reusable:
         chrome_cdp.stop_chrome()
 
-    ok, message = chrome_cdp.start_chrome(headless=True)
+    ok, message = chrome_cdp.start_chrome(
+        headless=True,
+        # On a cold start Chrome creates its first tab at the final marked URL.
+        # It must not create an about:blank anchor and then a second provider tab.
+        initial_url=_tagged_provider_url(provider, initial_url or PROVIDER_ORIGINS[provider]),
+    )
     if not ok:
         raise WebHttpBridgeError(message or "无法启动 Evan 专属 Chrome", error_code="BROWSER_CLOSED")
+    if not reusable:
+        _remember_launched_project_target(chrome_cdp.CDP_PORT, provider)
 
     try:
         from playwright.sync_api import sync_playwright  # type: ignore
@@ -543,6 +558,115 @@ def _bridge_state_path() -> Path:
     return Path(get_config().runtime_dir) / "webhttp_bridge_pages.json"
 
 
+def _runtime_lock_path(name: str) -> Path:
+    return Path(get_config().runtime_dir) / f"{name}.lock"
+
+
+def _pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _read_lock_owner(path: Path) -> tuple[str, int, float]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        try:
+            return "", 0, path.stat().st_mtime
+        except OSError:
+            return "", 0, 0.0
+    if not isinstance(payload, dict):
+        return "", 0, 0.0
+    try:
+        pid = int(payload.get("pid") or 0)
+        created_at = float(payload.get("createdAt") or 0)
+    except (TypeError, ValueError):
+        pid, created_at = 0, 0.0
+    return str(payload.get("token") or ""), pid, created_at
+
+
+@contextmanager
+def _exclusive_runtime_lock(
+    name: str,
+    *,
+    timeout_seconds: float = PAGE_LOCK_TIMEOUT_SECONDS,
+    stale_seconds: float = PAGE_LOCK_STALE_SECONDS,
+) -> Iterator[None]:
+    """Small stdlib-only inter-process lock scoped to Evan's runtime directory.
+
+    ``bridge.js`` serialises the normal Node call path, but direct CLI calls and
+    two Electron utility processes can still overlap. ``O_EXCL`` gives us one
+    creator on macOS and Windows without adding a runtime dependency.
+    """
+    path = _runtime_lock_path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    token = f"{os.getpid()}-{uuid.uuid4().hex}"
+    deadline = time.monotonic() + max(0.1, timeout_seconds)
+
+    while True:
+        try:
+            fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            _, owner_pid, created_at = _read_lock_owner(path)
+            age = max(0.0, time.time() - created_at) if created_at else stale_seconds + 1
+            owner_is_dead = owner_pid > 0 and not _pid_is_alive(owner_pid)
+            invalid_owner_is_stale = (
+                owner_pid <= 0 and age > INVALID_LOCK_OWNER_GRACE_SECONDS
+            )
+            valid_owner_is_stale = owner_pid > 0 and age > stale_seconds
+            if owner_is_dead or invalid_owner_is_stale or valid_owner_is_stale:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
+                continue
+            if time.monotonic() >= deadline:
+                raise WebHttpBridgeError(
+                    "等待 Evan 项目标签复用锁超时，请稍后重试",
+                    error_code="WEB_HTTP_PAGE_LOCK_TIMEOUT",
+                )
+            time.sleep(PAGE_LOCK_POLL_SECONDS)
+            continue
+
+        try:
+            payload = json.dumps(
+                {"token": token, "pid": os.getpid(), "createdAt": time.time()},
+                ensure_ascii=False,
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+        except Exception:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            raise
+        break
+
+    try:
+        yield
+    finally:
+        owner_token, _, _ = _read_lock_owner(path)
+        if owner_token == token:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+
+
 def _page_target_id(context: Any, page: Any) -> str | None:
     """CDP targetId：跨进程、跨导航都不变的标签页身份。
 
@@ -550,6 +674,9 @@ def _page_target_id(context: Any, page: Any) -> str | None:
     就是一次跨站导航），一旦清空，旧实现既认不出这个页面、也不肯复用别的 host 上的
     页面，于是每次请求都 ``new_page()``，标签页无上限增长。targetId 不受此影响。
     """
+    hinted = getattr(page, "target_id", None)
+    if hinted:
+        return str(hinted)
     try:
         session = context.new_cdp_session(page)
     except Exception:
@@ -567,82 +694,330 @@ def _page_target_id(context: Any, page: Any) -> str | None:
             pass
 
 
-def _read_bridge_target_id(provider: str) -> str | None:
+def _read_bridge_state_unlocked() -> dict[str, str]:
     try:
         payload = json.loads(_bridge_state_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return None
+        return {}
     if not isinstance(payload, dict):
-        return None
-    value = payload.get(provider)
-    return str(value) if value else None
+        return {}
+    return {str(key): str(value) for key, value in payload.items() if value}
+
+
+def _read_bridge_target_id(provider: str) -> str | None:
+    with _exclusive_runtime_lock("webhttp-bridge-state"):
+        return _read_bridge_state_unlocked().get(provider)
 
 
 def _write_bridge_target_id(provider: str, target_id: str | None) -> None:
     if not target_id:
         return
     path = _bridge_state_path()
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            payload = {}
-    except (OSError, ValueError):
-        payload = {}
-    if payload.get(provider) == target_id:
-        return
-    payload[provider] = target_id
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError:
-        pass
+    with _exclusive_runtime_lock("webhttp-bridge-state"):
+        payload = _read_bridge_state_unlocked()
+        if payload.get(provider) == target_id:
+            return
+        payload[provider] = target_id
+        temp_path = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            os.replace(temp_path, path)
+        except OSError:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
 
 
-def _is_reclaimable(url: str, expected_host: str) -> bool:
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
-    if not host:
+def _project_marker(provider: str) -> str:
+    return f"{WEBHTTP_WINDOW_PREFIX}{provider}"
+
+
+def _tagged_provider_url(provider: str, url: str | None = None) -> str:
+    """Attach Evan's exact project marker without changing host/path/query."""
+    target = str(url or PROVIDER_ORIGINS[provider])
+    parsed = urlparse(target)
+    pairs = [
+        (key, value)
+        for key, value in parse_qsl(parsed.fragment, keep_blank_values=True)
+        if key != WEBHTTP_HASH_KEY
+    ]
+    pairs.append((WEBHTTP_HASH_KEY, provider))
+    return urlunparse(parsed._replace(fragment=urlencode(pairs)))
+
+
+def _url_has_project_marker(url: str, provider: str) -> bool:
+    try:
+        fragment = urlparse(url).fragment
+        return any(
+            key == WEBHTTP_HASH_KEY and value == provider
+            for key, value in parse_qsl(fragment, keep_blank_values=True)
+        )
+    except (TypeError, ValueError):
         return False
-    if host == expected_host:
-        return True
-    prefixes = INTERSTITIAL_HOST_PATHS.get(host)
-    return bool(prefixes and (parsed.path or "/").startswith(prefixes))
 
 
-def _reclaim_stray_pages(context: Any, provider: str, keep_page: Any) -> None:
-    """把本平台多余的标签页关掉，让标签数由结构保证有上限。
-
-    上面的复用逻辑只是「尽量」复用；一旦某个没预料到的分支再次漏出新标签页，
-    没有这一步就又是无上限增长。回收范围刻意收窄到「本平台域名」和限流中转页，
-    并跳过 ``ops-cli:<owner>:<ts>:<uuid>`` 任务页 —— 关掉后者正是
-    ``geminiWebWorkflow.js`` 记录过的那个 bug（会打断并行任务）。
-    """
-    expected_host = PROVIDER_HOSTS[provider]
-    marker = f"{WEBHTTP_WINDOW_PREFIX}{provider}"
-    for candidate in list(getattr(context, "pages", []) or []):
-        if candidate is keep_page:
-            continue
+def _remember_launched_project_target(port: int, provider: str) -> str | None:
+    """Capture the direct cold-start target before a fast SPA can drop its hash."""
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
         try:
-            if candidate.is_closed():
-                continue
+            with urlopen(f"http://127.0.0.1:{port}/json/list", timeout=0.5) as response:
+                targets = json.loads(response.read().decode("utf-8"))
+        except (OSError, ValueError):
+            targets = []
+        if isinstance(targets, list):
+            for target in targets:
+                if not isinstance(target, dict) or target.get("type") != "page":
+                    continue
+                if not _url_has_project_marker(str(target.get("url") or ""), provider):
+                    continue
+                target_id = str(target.get("id") or "")
+                if target_id:
+                    _write_bridge_target_id(provider, target_id)
+                    return target_id
+        time.sleep(0.05)
+    return None
+
+
+_PROJECT_IDENTITY_SCRIPT = """
+(spec) => {
+  let sessionMarker = '';
+  let hashMarker = '';
+  try {
+    sessionMarker = String(window.sessionStorage.getItem(spec.sessionKey) || '');
+  } catch (error) { /* storage may be unavailable on an interstitial */ }
+  try {
+    const params = new URLSearchParams(String(window.location.hash || '').replace(/^#/, ''));
+    hashMarker = String(params.get(spec.hashKey) || '');
+  } catch (error) { /* malformed/opaque URL */ }
+  return {
+    windowName: String(window.name || ''),
+    sessionMarker,
+    hashMarker,
+    href: String(window.location.href || '')
+  };
+}
+"""
+
+_MARK_PROJECT_PAGE_SCRIPT = """
+(spec) => {
+  window.name = spec.windowName;
+  try {
+    window.sessionStorage.setItem(spec.sessionKey, spec.provider);
+  } catch (error) { /* storage may be unavailable on an interstitial */ }
+  try {
+    const currentHash = String(window.location.hash || '').replace(/^#/, '');
+    const params = new URLSearchParams(currentHash);
+    // Provider pages in this project are path-routed. Preserve any unexpected
+    // third-party hash route instead of rewriting it; window.name/targetId still
+    // retain identity in that edge case.
+    if (!currentHash || params.has(spec.hashKey)) {
+      params.set(spec.hashKey, spec.provider);
+      const suffix = params.toString();
+      window.history.replaceState(
+        window.history.state,
+        '',
+        window.location.pathname + window.location.search + (suffix ? '#' + suffix : '')
+      );
+    }
+  } catch (error) { /* history may be blocked on an interstitial */ }
+  return {
+    windowName: String(window.name || ''),
+    href: String(window.location.href || '')
+  };
+}
+"""
+
+
+def _with_page_snapshot_timeout(page: Any, callback: Any) -> Any:
+    has_timeout = hasattr(page, "set_default_timeout")
+    if has_timeout:
+        try:
+            page.set_default_timeout(PAGE_SNAPSHOT_TIMEOUT_MS)
         except Exception:
-            continue
-        url = str(getattr(candidate, "url", "") or "")
-        if not _is_reclaimable(url, expected_host):
-            continue
-        window_name = _page_window_name(candidate)
-        if window_name.startswith(MANAGED_WINDOW_PREFIX) and not window_name.startswith(
-            WEBHTTP_WINDOW_PREFIX
-        ):
-            continue
-        # 别的平台的常驻桥接页也可能正卡在 /sorry 上。每次 ops_cli 调用都是独立进程，
-        # 三个平台真的会并发，关掉它等于把别人的请求打断。
-        if window_name.startswith(WEBHTTP_WINDOW_PREFIX) and window_name != marker:
-            continue
+            has_timeout = False
+    try:
+        return callback()
+    finally:
+        if has_timeout:
+            try:
+                page.set_default_timeout(PAGE_DEFAULT_TIMEOUT_MS)
+            except Exception:
+                pass
+
+
+def _project_page_identity(page: Any, provider: str) -> dict[str, str] | None:
+    spec = {
+        "windowName": _project_marker(provider),
+        "sessionKey": WEBHTTP_SESSION_KEY,
+        "hashKey": WEBHTTP_HASH_KEY,
+        "provider": provider,
+    }
+    try:
+        raw = _with_page_snapshot_timeout(
+            page,
+            lambda: page.evaluate(_PROJECT_IDENTITY_SCRIPT, spec),
+        )
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    return {
+        "window_name": str(raw.get("windowName") or ""),
+        "session_marker": str(raw.get("sessionMarker") or ""),
+        "hash_marker": str(raw.get("hashMarker") or ""),
+        "href": str(raw.get("href") or ""),
+    }
+
+
+def _mark_project_page(page: Any, provider: str) -> bool:
+    spec = {
+        "windowName": _project_marker(provider),
+        "sessionKey": WEBHTTP_SESSION_KEY,
+        "hashKey": WEBHTTP_HASH_KEY,
+        "provider": provider,
+    }
+    try:
+        raw = _with_page_snapshot_timeout(
+            page,
+            lambda: page.evaluate(_MARK_PROJECT_PAGE_SCRIPT, spec),
+        )
+        return bool(
+            isinstance(raw, dict)
+            and str(raw.get("windowName") or "") == _project_marker(provider)
+        )
+    except Exception:
+        return False
+
+
+def _inspect_project_page(
+    context: Any,
+    page: Any,
+    provider: str,
+    known_target_id: str | None,
+) -> dict[str, Any] | None:
+    try:
+        if page.is_closed():
+            return None
+    except Exception:
+        return None
+    try:
+        url = str(getattr(page, "url", "") or "")
+    except Exception:
+        url = ""
+    target_id = _page_target_id(context, page)
+    identity = _project_page_identity(page, provider)
+    marker = _project_marker(provider)
+    explicit_reasons: list[str] = []
+    if known_target_id and target_id == known_target_id:
+        explicit_reasons.append("target_id")
+    if _url_has_project_marker(url, provider):
+        explicit_reasons.append("url_hash")
+    if identity:
+        if identity["window_name"] == marker:
+            explicit_reasons.append("window_name")
+        if identity["session_marker"] == provider:
+            explicit_reasons.append("session_storage")
+        if identity["hash_marker"] == provider:
+            explicit_reasons.append("page_hash")
+    current_url = identity["href"] if identity and identity["href"] else url
+    return {
+        "page": page,
+        "url": current_url,
+        "host": (urlparse(current_url).hostname or "").lower(),
+        "target_id": target_id,
+        "responsive": identity is not None,
+        "explicit": bool(explicit_reasons),
+        "explicit_reasons": explicit_reasons,
+        "identity": identity,
+    }
+
+
+def _snapshot_project_pages(
+    context: Any,
+    provider: str,
+    known_target_id: str | None,
+) -> list[dict[str, Any]]:
+    snapshots: list[dict[str, Any]] = []
+    for page in list(getattr(context, "pages", []) or []):
+        item = _inspect_project_page(context, page, provider, known_target_id)
+        if item is not None:
+            snapshots.append(item)
+    return snapshots
+
+
+def _create_page_at_url(context: Any, target_url: str) -> Any:
+    """Create a target at its final URL; never leave a helper about:blank tab."""
+    browser = getattr(context, "browser", None)
+    if browser is not None and hasattr(browser, "new_browser_cdp_session"):
+        session = None
+        target_id = None
         try:
-            candidate.close()
+            session = browser.new_browser_cdp_session()
+            created = session.send("Target.createTarget", {"url": target_url}) or {}
+            target_id = str(created.get("targetId") or "") or None
+            if target_id:
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline:
+                    for candidate in list(getattr(context, "pages", []) or []):
+                        if _page_target_id(context, candidate) == target_id:
+                            return candidate
+                    time.sleep(0.05)
+                try:
+                    session.send("Target.closeTarget", {"targetId": target_id})
+                except Exception:
+                    pass
         except Exception:
             pass
+        finally:
+            if session is not None:
+                try:
+                    session.detach()
+                except Exception:
+                    pass
+
+    page = context.new_page()
+    try:
+        page.goto(target_url, wait_until="domcontentloaded", timeout=PAGE_READY_TIMEOUT_MS)
+    except Exception:
+        # Return the one target we created so the caller can mark it and apply
+        # the normal crash/navigation retry without creating another page.
+        pass
+    return page
+
+
+def _close_explicit_project_duplicates(
+    context: Any,
+    provider: str,
+    keep_page: Any,
+    initial_snapshots: list[dict[str, Any]],
+) -> int:
+    """Close only pages carrying this provider's exact Evan identity."""
+    keep_target_id = _page_target_id(context, keep_page)
+    snapshots = list(initial_snapshots)
+    snapshots.extend(_snapshot_project_pages(context, provider, keep_target_id))
+    seen_pages: set[int] = set()
+    closed = 0
+    for item in snapshots:
+        page = item["page"]
+        page_key = id(page)
+        if page_key in seen_pages:
+            continue
+        seen_pages.add(page_key)
+        if page is keep_page or not item.get("explicit"):
+            continue
+        try:
+            if not page.is_closed():
+                page.close()
+                closed += 1
+        except Exception:
+            pass
+    return closed
 
 
 def _same_page_target(current: str, desired: str) -> bool:
@@ -662,91 +1037,35 @@ def _same_page_target(current: str, desired: str) -> bool:
     return parse_qs(a.query).get("type") == parse_qs(b.query).get("type")
 
 
-def _provider_page(context: Any, provider: str, desired_url: str | None = None) -> Any:
-    """Return a long-lived page parked on the provider's origin.
-
-    Deliberately does **not** run ``cleanup_playwright_context``: closing other
-    pages is exactly the bug documented in ``geminiWebWorkflow.js`` — a bridge
-    call would kill a browser-workflow task running in parallel.
-    """
-    marker = f"{WEBHTTP_WINDOW_PREFIX}{provider}"
+def _park_provider_page(
+    page: Any,
+    provider: str,
+    desired_url: str | None,
+    *,
+    settle_existing_hash_only: bool = False,
+) -> Any:
+    """Navigate one already-selected Evan page to the required provider tool."""
     expected_host = PROVIDER_HOSTS[provider]
-    known_target_id = _read_bridge_target_id(provider)
-
-    pages = []
-    stale_marker = None
-    for candidate in list(getattr(context, "pages", []) or []):
-        try:
-            if candidate.is_closed():
-                continue
-        except Exception:
-            continue
-        current = str(getattr(candidate, "url", "") or "")
-        host = (urlparse(current).hostname or "").lower()
-        candidate_marker = _page_window_name(candidate) == marker
-        # 不按 host 过滤：labs.google 被顶到 accounts/consent.google.com 同样是跨站
-        # 导航（window.name 一样会被清空），而那些 host 不在中转页名单里。targetId
-        # 是精确身份，不会误判，多花的只是几次 CDP 往返。
-        if not candidate_marker and known_target_id:
-            # window.name 已被跨站导航清掉时，用持久化的 targetId 认回同一个标签页。
-            candidate_marker = _page_target_id(context, candidate) == known_target_id
-        if candidate_marker and host != expected_host:
-            stale_marker = candidate
-        pages.append((candidate, current, host, candidate_marker))
-
-    # Sites are allowed to overwrite window.name and redirects can strand an
-    # old marker on google.com/sorry. Prefer a healthy origin page over marker
-    # identity, and only reuse a redirected marker if no healthy page exists.
-    page = None
-    for require_marker, require_target in ((True, True), (False, True), (True, False), (False, False)):
-        for candidate, current, host, candidate_marker in reversed(pages):
-            if host != expected_host:
-                continue
-            if require_marker and not candidate_marker:
-                continue
-            if require_target and desired_url and not _same_page_target(current, desired_url):
-                continue
-            page = candidate
-            break
-        if page is not None:
-            break
-
-    if page is None:
-        page = stale_marker or context.new_page()
-
-    # 先记住身份再导航：下面的 goto 可能被顶到 /sorry 并抛错，那时也必须还能认回
-    # 这个标签页，否则每次失败重试都会新开一个。
-    _write_bridge_target_id(provider, _page_target_id(context, page))
-    _reclaim_stray_pages(context, provider, page)
-
-    def mark_page() -> None:
-        try:
-            page.evaluate("(name) => { window.name = name; }", marker)
-        except Exception:
-            pass
-
+    target = _tagged_provider_url(provider, desired_url or PROVIDER_ORIGINS[provider])
     current = str(getattr(page, "url", "") or "")
     host = (urlparse(current).hostname or "").lower()
 
-    # 有些平台的权益判定与请求来源页面绑定：实测即梦同一份生图请求，从
-    # /ai-tool/generate?type=image 发出可以通过鉴权，从 ?type=video 发出则一律
-    # permission denied。所以调用方可以指定必须待在哪个工具页上。
-    if host == expected_host:
-        if not desired_url or _same_page_target(current, desired_url):
-            mark_page()
-            return page
-        page.goto(desired_url, wait_until="domcontentloaded", timeout=PAGE_READY_TIMEOUT_MS)
-        # 应用要把安全 SDK 和工具页初始化完才会给请求补签名；实测 3 秒不够，
-        # 太早发出的请求会被判 permission denied。
-        page.wait_for_timeout(9000)
-        mark_page()
+    if host == expected_host and (not desired_url or _same_page_target(current, desired_url)):
+        if hasattr(page, "wait_for_load_state"):
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=PAGE_READY_TIMEOUT_MS)
+            except Exception:
+                # A timeout can happen while the SPA keeps background requests
+                # alive. Responsiveness is checked again by the caller.
+                pass
+        if settle_existing_hash_only:
+            page.wait_for_timeout(9000)
+        if not _mark_project_page(page, provider):
+            raise RuntimeError("Evan 项目标签在标记时失去响应")
         return page
 
     # A single redirect is not proof of a logout: these apps intermittently bounce
     # through a consent/interstitial page and land correctly on a second attempt.
-    # Reporting AUTH_REQUIRED on the first bounce would push `auto` mode into a
-    # browser fallback (and the user into a pointless re-login) for a blip.
-    target = desired_url or PROVIDER_ORIGINS[provider]
     for attempt in range(2):
         if attempt:
             page.wait_for_timeout(2_000)
@@ -757,12 +1076,118 @@ def _provider_page(context: Any, provider: str, desired_url: str | None = None) 
         )
         host = (urlparse(str(getattr(page, "url", "") or "")).hostname or "").lower()
         if host == expected_host:
-            mark_page()
+            # 即梦的安全 SDK / Flow 的页面上下文要在 DOM ready 后继续初始化。
+            page.wait_for_timeout(9000)
+            if not _mark_project_page(page, provider):
+                raise RuntimeError("Evan 项目标签在导航后失去响应")
             return page
 
     raise WebHttpBridgeError(
         f"{provider} 页面被重定向到 {host or '未知地址'}，通常表示登录已失效或平台暂时不可用",
         error_code="AUTH_REQUIRED",
+    )
+
+
+def _provider_page(context: Any, provider: str, desired_url: str | None = None) -> Any:
+    """Return a long-lived page parked on the provider's origin.
+
+    Identity is positive-only: exact URL hash, ``window.name``,
+    ``sessionStorage`` or the persisted CDP targetId. Same-host pages without
+    one of those markers are user pages and are never selected or closed.
+    """
+    expected_host = PROVIDER_HOSTS[provider]
+    lock_name = f"webhttp-page-{provider}"
+    with _exclusive_runtime_lock(lock_name):
+        known_target_id = _read_bridge_target_id(provider)
+        snapshots = _snapshot_project_pages(context, provider, known_target_id)
+        responsive = [item for item in snapshots if item["explicit"] and item["responsive"]]
+
+        def score(item: dict[str, Any]) -> tuple[int, int, int, int]:
+            identity = item.get("identity") or {}
+            return (
+                int(bool(known_target_id and item.get("target_id") == known_target_id)),
+                int(item.get("host") == expected_host),
+                int(bool(desired_url and _same_page_target(item.get("url") or "", desired_url))),
+                int(
+                    identity.get("window_name") == _project_marker(provider)
+                    or identity.get("session_marker") == provider
+                ),
+            )
+
+        page = max(responsive, key=score)["page"] if responsive else None
+        selected_snapshot = next((item for item in responsive if item["page"] is page), None)
+        created = page is None
+        if created:
+            page = _create_page_at_url(
+                context,
+                _tagged_provider_url(provider, desired_url or PROVIDER_ORIGINS[provider]),
+            )
+
+        # Persist before navigation: if Chrome crashes or a platform redirects
+        # cross-site and clears JS markers, the next request can still identify
+        # this exact target instead of opening another one.
+        _write_bridge_target_id(provider, _page_target_id(context, page))
+        if not _mark_project_page(page, provider):
+            # A direct cold-start URL can still be loading; _park_provider_page
+            # waits for DOM readiness and marks it again.
+            pass
+
+        for recovery_attempt in range(2):
+            selected_identity = (
+                (selected_snapshot or {}).get("identity")
+                if selected_snapshot
+                else {}
+            ) or {}
+            marker_only = bool(
+                selected_snapshot
+                and selected_identity.get("window_name") != _project_marker(provider)
+                and selected_identity.get("session_marker") != provider
+            )
+            try:
+                _park_provider_page(
+                    page,
+                    provider,
+                    desired_url,
+                    settle_existing_hash_only=created or marker_only,
+                )
+                if _project_page_identity(page, provider) is None:
+                    raise RuntimeError("Evan 项目标签没有响应")
+                target_id = _page_target_id(context, page)
+                _write_bridge_target_id(provider, target_id)
+                _close_explicit_project_duplicates(context, provider, page, snapshots)
+                return page
+            except WebHttpBridgeError:
+                # AUTH_REQUIRED still leaves one healthy fixed project page.
+                if _project_page_identity(page, provider) is not None:
+                    _mark_project_page(page, provider)
+                    _write_bridge_target_id(provider, _page_target_id(context, page))
+                    _close_explicit_project_duplicates(context, provider, page, snapshots)
+                raise
+            except Exception as exc:
+                # Only a non-responsive/crashed target is replaced. A healthy
+                # timeout/error is surfaced instead of silently multiplying tabs.
+                if _project_page_identity(page, provider) is not None:
+                    raise
+                try:
+                    page.close()
+                except Exception:
+                    pass
+                if recovery_attempt:
+                    raise WebHttpBridgeError(
+                        f"{provider} 项目标签崩溃且自动恢复失败：{exc}",
+                        error_code="BROWSER_PAGE_CRASHED",
+                    ) from exc
+                page = _create_page_at_url(
+                    context,
+                    _tagged_provider_url(provider, desired_url or PROVIDER_ORIGINS[provider]),
+                )
+                created = True
+                selected_snapshot = None
+                _write_bridge_target_id(provider, _page_target_id(context, page))
+
+    raise WebHttpBridgeError(
+        f"{provider} 项目标签不可用",
+        error_code="BROWSER_PAGE_CRASHED",
     )
 
 
@@ -846,7 +1271,7 @@ def run_web_fetch(
                 break
         return results
 
-    results = _connect(_run)
+    results = _connect(_run, provider=provider, initial_url=desired_page)
     _write_json(response_file, {"responses": results})
 
     summary = [
@@ -888,7 +1313,7 @@ def run_web_context(*, provider: str, output_file: str, recaptcha_action: str = 
         ]
         return payload
 
-    payload = _connect(_run)
+    payload = _connect(_run, provider=provider)
     _write_json(output_file, payload)
 
     # Report presence, never values.

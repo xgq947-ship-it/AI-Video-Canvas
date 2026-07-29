@@ -1,7 +1,8 @@
 export interface ImageGenerationProvider {
   id: string; name: string; provider: string; browserProvider: string | null;
   supportsImageToImage: boolean; supportsMultipleReferenceImages: boolean; maxReferenceImages: number;
-  supportsMultipleOutputs: boolean; maxOutputCount: number; resolutions: string[]; supportedAspectRatios: string[];
+  supportsMultipleOutputs: boolean; maxOutputCount: number; resolutions: string[]; defaultResolution?: string;
+  supportedAspectRatios: string[];
 }
 export interface VideoGenerationProvider {
   id: string; name: string; provider: string; browserProvider: string | null;
@@ -15,6 +16,7 @@ export const VIDEO_GENERATION_PROVIDERS: readonly VideoGenerationProvider[];
 export interface DiscoveredModelDefinition {
   provider: string; id: string; displayName: string; type: 'image' | 'video';
   inputModes?: string[]; aspectRatios?: string[]; resolutions?: string[]; durations?: number[];
+  defaultResolution?: string;
   maxReferenceImages?: number; maxBatchCount?: number; supportsAudio?: boolean;
   supportsPromptEnhancement?: boolean; supportsSeed?: boolean; discovered?: boolean;
   metadata?: Record<string, unknown>;
@@ -35,4 +37,5 @@ export function supportedImageOutputCounts(modelId: string): number[];
 export function resolveVideoModelForAspectRatio(aspectRatio: string, preferredModelId?: string): { modelId: string; switched: boolean; from: string } | null;
 export function videoModelsForAspectRatio(aspectRatio: string): VideoGenerationProvider[];
 export function normalizeImageAspectRatio(modelId: string, value?: string): string | undefined;
+export function normalizeImageResolution(modelId: string, value?: string): string | undefined;
 export function normalizeVideoParameters(modelId: string, values?: { aspectRatio?: string; duration?: number }): { aspectRatio?: string; duration?: number };

@@ -30,7 +30,7 @@ export function buildLiveSmokeMatrix() {
             kind: 'image',
             modelId: model.id,
             aspectRatio: concrete(model.supportedAspectRatios, '1:1'),
-            resolution: concrete(model.resolutions, undefined),
+            resolution: model.defaultResolution || concrete(model.resolutions, undefined),
             quotaClass: model.id === 'jimeng-image-5-0-lite' ? 'free' : 'metered-or-account-dependent'
         };
         cases.push({ ...common, id: `image/${model.id}/text`, mode: 'text', referenceCount: 0, outputCount: 1 });
@@ -153,6 +153,7 @@ function parseArgs(argv) {
     const valueFlags = new Map([
         ['--base-url', 'baseUrl'], ['--case', 'cases'], ['--provider', 'provider'],
         ['--model', 'model'], ['--kind', 'kind'], ['--mode', 'mode'],
+        ['--resolution', 'resolution'],
         ['--reference', 'references'], ['--workflow-id', 'workflowId'],
         ['--timeout-minutes', 'timeoutMinutes'], ['--report', 'report']
     ]);
@@ -276,7 +277,29 @@ async function runLiveCases(cases, options) {
             }
             const media = [];
             for (const url of urls) media.push(await verifyMedia(baseUrl, url, testCase.kind, timeoutMs));
-            report.cases.push({ id: testCase.id, status: 'passed', durationMs: Date.now() - startedAt, media });
+            const resultMetadata = Array.isArray(payload.resultMetadata) ? payload.resultMetadata : [];
+            if (testCase.kind === 'image' && testCase.provider === 'google-flow') {
+                if (resultMetadata.length !== urls.length) {
+                    throw new Error(`Flow 像素元数据数量错误：期望 ${urls.length}，实际 ${resultMetadata.length}`);
+                }
+                for (const metadata of resultMetadata) {
+                    if (metadata.requestedResolution !== testCase.resolution) {
+                        throw new Error(
+                            `Flow 分辨率记录错误：期望 ${testCase.resolution}，实际 ${metadata.requestedResolution}`
+                        );
+                    }
+                    if (!Number.isInteger(metadata.actualWidth) || !Number.isInteger(metadata.actualHeight)) {
+                        throw new Error('Flow 结果缺少实际 width / height');
+                    }
+                }
+            }
+            report.cases.push({
+                id: testCase.id,
+                status: 'passed',
+                durationMs: Date.now() - startedAt,
+                media,
+                ...(resultMetadata.length ? { resultMetadata } : {})
+            });
         } catch (error) {
             report.cases.push({
                 id: testCase.id,
@@ -302,7 +325,7 @@ function usage() {
   EVAN_LIVE_SMOKE=1 npm run test:web-http:live -- --execute --case <case-id> --workflow-id <已有项目ID> [--reference <图片>]
   EVAN_LIVE_SMOKE=1 npm run test:web-http:live -- --execute --all --workflow-id <已有项目ID> --reference <图片1> --reference <图片2>
 
-筛选：--provider / --model / --kind image|video / --mode text|reference|multi-reference|multi-output
+筛选：--provider / --model / --kind image|video / --mode text|reference|multi-reference|multi-output / --resolution 1K|2K
 说明：真实执行严格串行、绝不自动重试；默认只打印矩阵。`;
 }
 
@@ -313,10 +336,19 @@ export async function main(argv = process.argv.slice(2), environment = process.e
         return null;
     }
     const matrix = buildLiveSmokeMatrix();
-    const selected = selectCases(matrix, options);
+    let selected = selectCases(matrix, options);
+    if (options.resolution) {
+        selected = selected.map(testCase => {
+            const model = IMAGE_GENERATION_PROVIDERS.find(item => item.id === testCase.modelId);
+            if (testCase.kind !== 'image' || !model?.resolutions.includes(options.resolution)) {
+                throw new Error(`${testCase.id} 不支持分辨率 ${options.resolution}`);
+            }
+            return { ...testCase, resolution: options.resolution };
+        });
+    }
     if (selected.length === 0) throw new Error('没有匹配的冒烟用例');
     const selectionExplicit = Boolean(options.all || options.cases.length || options.provider
-        || options.model || options.kind || options.mode);
+        || options.model || options.kind || options.mode || options.resolution);
     assertLiveExecutionGate({ execute: options.execute, environment, selectionExplicit });
     if (!options.execute || options.list) {
         printMatrix(selected);

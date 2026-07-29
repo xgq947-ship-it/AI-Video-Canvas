@@ -57,7 +57,9 @@ export const useNodeManagement = () => {
 
         if (type === NodeType.PRODUCT_SCENE_REPLACE) {
             newNode.title = '产品短视频生成';
+            newNode.productSceneInputMapping = { version: 1 };
             newNode.imageModel = 'google-flow-nano-banana-pro';
+            newNode.resolution = '2K';
             // 产品短视频以竖版投放为主；这一个比例同时决定替换图和短视频。
             newNode.aspectRatio = '9:16';
             newNode.productDimensions = { length: 0, width: 0, height: 0, unit: 'cm' };
@@ -178,7 +180,9 @@ export const useNodeManagement = () => {
 
                 if (type === NodeType.PRODUCT_SCENE_REPLACE) {
                     newNode.title = '产品短视频生成';
+                    newNode.productSceneInputMapping = { version: 1 };
                     newNode.imageModel = 'google-flow-nano-banana-pro';
+                    newNode.resolution = '2K';
                     newNode.aspectRatio = '9:16';
                     newNode.productDimensions = { length: 0, width: 0, height: 0, unit: 'cm' };
                     newNode.preserveProductMarkings = true;

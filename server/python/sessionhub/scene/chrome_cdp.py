@@ -658,8 +658,17 @@ def stop_chrome(known_pid: int | None = None) -> tuple[bool, str]:
     return True, "已强制关闭专用 Chrome"
 
 
-def start_chrome(force: bool = False, *, foreground: bool = False, headless: bool = False) -> tuple[bool, str]:
+def start_chrome(
+    force: bool = False,
+    *,
+    foreground: bool = False,
+    headless: bool = False,
+    initial_url: str = "about:blank",
+) -> tuple[bool, str]:
     _debug_log("start_chrome.enter", force=force, foreground=foreground, headless=headless)
+    launch_url = str(initial_url or "about:blank").strip()
+    if launch_url != "about:blank" and not launch_url.startswith(("https://", "http://")):
+        launch_url = "about:blank"
     ok, msg = check_cdp()
     stopped_existing = False
     if IS_WINDOWS:
@@ -760,7 +769,7 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
             "--disable-features=OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints",
             # 固定离屏视口，保证 fund 资金表等凭证截图尺寸稳定、内容不被裁切。
             "--window-size=1440,900",
-            "about:blank",
+            launch_url,
         ]
     else:
         # Direct execution with a dedicated user-data-dir creates a separate
@@ -775,7 +784,7 @@ def start_chrome(force: bool = False, *, foreground: bool = False, headless: boo
             "--no-default-browser-check",
             "--new-window",
             "--disable-features=OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationTargetPrediction,OptimizationHints",
-            "about:blank",
+            launch_url,
         ]
     detached = _detached_popen_kwargs()
     if foreground and not headless:

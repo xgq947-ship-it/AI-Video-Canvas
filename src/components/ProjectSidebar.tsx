@@ -27,6 +27,7 @@ import {
   Volume2,
 } from 'lucide-react';
 import { NodeData, NodeGroup, NodeType } from '../types';
+import { resolveImageNodeDisplayName } from '../utils/nodeDisplayName.js';
 
 type SidebarTab = 'canvas' | 'assets';
 type AssetScope = 'personal' | 'agent';
@@ -37,6 +38,8 @@ export const COLLAPSED_SIDEBAR_WIDTH = 64;
 interface SidebarAsset {
   id: string;
   name: string;
+  displayName?: string;
+  filename?: string;
   url: string;
   type: 'image' | 'video' | 'audio';
   category?: string;
@@ -72,10 +75,12 @@ interface ProjectSidebarProps {
   onOpenWorkflows: (e: React.MouseEvent) => void;
   onOpenHistory: (e: React.MouseEvent) => void;
   onOpenAssets: (e: React.MouseEvent) => void;
-  onPreviewAsset: (asset: SidebarAssetPreview, e: React.MouseEvent<HTMLElement>) => void;
+  onPreviewAsset: (asset: SidebarAssetPreview, anchor: HTMLElement) => void;
   onOpenStoryboard: () => void;
   onCreateProject: () => void;
   onDeleteProject: () => void;
+  onRevealProject: () => void | Promise<void>;
+  onRenameNode: (id: string, displayName: string, syncAsset?: boolean) => void;
   onCollapsedChange?: (collapsed: boolean) => void;
   canvasTheme?: 'dark' | 'light';
 }
@@ -117,6 +122,8 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   onOpenStoryboard,
   onCreateProject,
   onDeleteProject,
+  onRevealProject,
+  onRenameNode,
   onCollapsedChange,
   canvasTheme = 'dark',
 }) => {
@@ -130,6 +137,8 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupLabel, setEditingGroupLabel] = useState('');
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [desktopPlatform, setDesktopPlatform] = useState('');
+  const [revealingProject, setRevealingProject] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [assets, setAssets] = useState<SidebarAsset[]>([]);
   const [assetsLoading, setAssetsLoading] = useState(false);
@@ -138,10 +147,32 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   const [deleteConfirmAssetId, setDeleteConfirmAssetId] = useState<string | null>(null);
   const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
   const [assetDeleteError, setAssetDeleteError] = useState<string | null>(null);
+  const [editingAsset, setEditingAsset] = useState<{ key: string; asset: SidebarAsset; value: string } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const assetNameInputRef = useRef<HTMLInputElement>(null);
+  const cancelAssetRenameRef = useRef(false);
+  const assetPreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isDark = canvasTheme === 'dark';
 
   useEffect(() => onCollapsedChange?.(collapsed), [collapsed, onCollapsedChange]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.evanDesktop?.getAppInfo()
+      .then(info => { if (!cancelled) setDesktopPlatform(info.platform); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!editingAsset) return;
+    assetNameInputRef.current?.focus();
+    assetNameInputRef.current?.select();
+  }, [editingAsset?.key]);
+
+  useEffect(() => () => {
+    if (assetPreviewTimerRef.current) clearTimeout(assetPreviewTimerRef.current);
+  }, []);
 
   useEffect(() => {
     const close = (event: MouseEvent) => {
@@ -168,7 +199,21 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
         } else {
           const response = workflowId ? await fetch(`/api/projects/${encodeURIComponent(workflowId)}/assets`) : null;
           const data = response?.ok ? await response.json() : [];
-          if (!cancelled) setAssets(Array.isArray(data) ? data : []);
+          const listedAssets: SidebarAsset[] = Array.isArray(data) ? data : [];
+          const nodeDisplayNames = new Map(
+            nodes.flatMap(node => {
+              const url = node.resultUrl || node.editorBackgroundUrl || node.lastFrame || node.mediaUrl;
+              return url && node.displayName
+                ? [[url.split('?')[0], node.displayName] as const]
+                : [];
+            })
+          );
+          if (!cancelled) {
+            setAssets(listedAssets.map(asset => {
+              const nodeName = nodeDisplayNames.get(asset.url.split('?')[0]);
+              return nodeName ? { ...asset, displayName: nodeName, name: nodeName } : asset;
+            }));
+          }
         }
       } catch (error) {
         console.error('Failed to load sidebar assets:', error);
@@ -204,6 +249,67 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
     }
   };
 
+  const startAssetRename = (asset: SidebarAsset, event: React.MouseEvent) => {
+    if (assetScope !== 'personal' || asset.type !== 'image' || !asset.filename) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (assetPreviewTimerRef.current) clearTimeout(assetPreviewTimerRef.current);
+    cancelAssetRenameRef.current = false;
+    setEditingAsset({
+      key: `${asset.type}:${asset.id}`,
+      asset,
+      value: asset.displayName || asset.name,
+    });
+  };
+
+  const commitAssetRename = async () => {
+    const editing = editingAsset;
+    if (!editing) return;
+    if (cancelAssetRenameRef.current) {
+      cancelAssetRenameRef.current = false;
+      setEditingAsset(null);
+      return;
+    }
+    const nextName = editing.value.trim();
+    if (!nextName || !workflowId || !editing.asset.filename) {
+      setEditingAsset(null);
+      return;
+    }
+    if (nextName === editing.asset.name) {
+      setEditingAsset(null);
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `/api/projects/${encodeURIComponent(workflowId)}/assets/images/${encodeURIComponent(editing.asset.filename)}/display-name`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ displayName: nextName }),
+        }
+      );
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || '图片重命名失败');
+      setAssets(current => current.map(asset => (
+        asset.type === editing.asset.type && asset.id === editing.asset.id
+          ? { ...asset, displayName: result.displayName || nextName, name: result.displayName || nextName }
+          : asset
+      )));
+      for (const node of nodes) {
+        const mediaUrl = node.resultUrl || node.editorBackgroundUrl || node.lastFrame;
+        if (mediaUrl?.split('?')[0] === editing.asset.url.split('?')[0]) {
+          onRenameNode(node.id, result.displayName || nextName, false);
+        }
+      }
+      setAssetDeleteError(null);
+    } catch (error) {
+      setAssetDeleteError(error instanceof Error ? error.message : '图片重命名失败');
+    } finally {
+      setEditingAsset(null);
+    }
+  };
+
   const visibleNodes = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     const filtered = nodes.filter(node => {
@@ -236,6 +342,35 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
       .filter(section => section.items.length > 0);
     return { grouped, ungrouped };
   }, [visibleNodes, groups]);
+
+  const imageOrdinalById = useMemo(() => {
+    const result = new Map<string, number>();
+    let ordinal = 0;
+    for (const node of nodes) {
+      if ([NodeType.IMAGE, NodeType.IMAGE_EDITOR, NodeType.CAMERA_ANGLE].includes(node.type)) {
+        ordinal += 1;
+        result.set(node.id, ordinal);
+      }
+    }
+    return result;
+  }, [nodes]);
+
+  const revealProjectLabel = desktopPlatform === 'darwin'
+    ? '在 Finder 中显示'
+    : desktopPlatform === 'win32'
+      ? '在文件资源管理器中显示'
+      : '打开文件位置';
+
+  const handleRevealProject = async () => {
+    if (!workflowId || revealingProject) return;
+    setProjectMenuOpen(false);
+    setRevealingProject(true);
+    try {
+      await onRevealProject();
+    } finally {
+      setRevealingProject(false);
+    }
+  };
 
   const toggleGroupCollapsed = (groupId: string) => {
     setCollapsedGroupIds(prev => {
@@ -300,6 +435,12 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
             <div className="absolute right-0 top-11 z-50 w-[228px] overflow-hidden rounded-2xl border border-[#404040] bg-[#262626] p-1.5 shadow-2xl">
               <ProjectMenuButton onClick={() => setProjectMenuOpen(false)}>回到画布</ProjectMenuButton>
               <ProjectMenuButton onClick={(e) => { setProjectMenuOpen(false); onOpenWorkflows(e); }}>全部项目</ProjectMenuButton>
+              <ProjectMenuButton disabled={!workflowId || revealingProject} onClick={() => void handleRevealProject()}>
+                <span className="flex items-center gap-2">
+                  {revealingProject ? <Loader2 size={15} className="animate-spin" /> : <FolderOpen size={15} />}
+                  {revealProjectLabel}
+                </span>
+              </ProjectMenuButton>
               <div className="my-1.5 border-t border-[#3c3c3c]" />
               <ProjectMenuButton onClick={() => { setProjectMenuOpen(false); onCreateProject(); }}>创建新项目</ProjectMenuButton>
               <ProjectMenuButton danger disabled={!workflowId} onClick={() => { setProjectMenuOpen(false); onDeleteProject(); }}>删除项目</ProjectMenuButton>
@@ -408,6 +549,8 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                               muted={muted}
                               onSelect={onSelectNode}
                               onLocate={onLocateNode}
+                              onRename={onRenameNode}
+                              imageOrdinal={imageOrdinalById.get(node.id)}
                             />
                           ))}
                         </div>
@@ -430,6 +573,8 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                         muted={muted}
                         onSelect={onSelectNode}
                         onLocate={onLocateNode}
+                        onRename={onRenameNode}
+                        imageOrdinal={imageOrdinalById.get(node.id)}
                       />
                     ))}
                   </>
@@ -467,13 +612,26 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                   role="button"
                   tabIndex={0}
                   className={`group relative mb-1 flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-left ${hover} ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
-                  onClick={event => asset.type !== 'audio' && onPreviewAsset({ name: asset.name, url: asset.url, type: asset.type }, event)}
+                  onClick={event => {
+                    if (editingAsset?.key === `${asset.type}:${asset.id}` || asset.type === 'audio') return;
+                    if (assetPreviewTimerRef.current) clearTimeout(assetPreviewTimerRef.current);
+                    const target = event.currentTarget;
+                    const previewAsset: SidebarAssetPreview = {
+                      name: asset.name,
+                      url: asset.url,
+                      type: asset.type,
+                    };
+                    assetPreviewTimerRef.current = setTimeout(
+                      () => onPreviewAsset(previewAsset, target),
+                      180
+                    );
+                  }}
                   onKeyDown={event => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault();
                       if (asset.type !== 'audio') onPreviewAsset(
                           { name: asset.name, url: asset.url, type: asset.type },
-                          event as unknown as React.MouseEvent<HTMLElement>
+                          event.currentTarget
                         );
                     }
                   }}
@@ -502,7 +660,37 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                       ? <img src={asset.url} alt="" className="h-full w-full object-cover" draggable={false} />
                       : asset.type === 'audio' ? <Volume2 size={20} className={muted} /> : <Film size={20} className={muted} />}
                   </div>
-                  <span className="min-w-0 flex-1 truncate text-sm">{asset.name}</span>
+                  {editingAsset?.key === `${asset.type}:${asset.id}` ? (
+                    <input
+                      ref={assetNameInputRef}
+                      value={editingAsset.value}
+                      onChange={event => setEditingAsset(current => current ? { ...current, value: event.target.value } : current)}
+                      onClick={event => event.stopPropagation()}
+                      onDoubleClick={event => event.stopPropagation()}
+                      onBlur={() => void commitAssetRename()}
+                      onKeyDown={event => {
+                        event.stopPropagation();
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          event.currentTarget.blur();
+                        } else if (event.key === 'Escape') {
+                          event.preventDefault();
+                          cancelAssetRenameRef.current = true;
+                          setEditingAsset(null);
+                        }
+                      }}
+                      aria-label="图片显示名称"
+                      className="min-w-0 flex-1 rounded-md border border-neutral-500 bg-black/10 px-1.5 py-1 text-sm text-inherit outline-none focus:border-neutral-300"
+                    />
+                  ) : (
+                    <span
+                      className={`min-w-0 flex-1 truncate text-sm ${assetScope === 'personal' && asset.type === 'image' && asset.filename ? 'cursor-text' : ''}`}
+                      onDoubleClick={event => startAssetRename(asset, event)}
+                      title={assetScope === 'personal' && asset.type === 'image' && asset.filename ? `${asset.name}（双击重命名）` : asset.name}
+                    >
+                      {asset.name}
+                    </span>
+                  )}
                   {canDeleteLocalImage ? (
                     <div className="relative shrink-0" data-asset-menu>
                       <button
@@ -592,7 +780,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
 
 /** 侧边栏里的单个节点行（分组内与未分组共用，行为与原扁平列表一致） */
 const NodeRow = ({
-  node, selected, hover, muted, onSelect, onLocate,
+  node, selected, hover, muted, onSelect, onLocate, onRename, imageOrdinal,
 }: {
   node: NodeData;
   selected: boolean;
@@ -600,11 +788,61 @@ const NodeRow = ({
   muted: string;
   onSelect: (id: string) => void;
   onLocate: (id: string) => void;
+  onRename: (id: string, displayName: string, syncAsset?: boolean) => void;
+  imageOrdinal?: number;
 }) => {
   const thumb = nodeThumbnail(node);
+  const isImage = [NodeType.IMAGE, NodeType.IMAGE_EDITOR, NodeType.CAMERA_ANGLE].includes(node.type);
+  const resolvedName = isImage
+    ? resolveImageNodeDisplayName(node, imageOrdinal)
+    : node.title || node.prompt || typeLabel[node.type] || node.type;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const selectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!editing) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [editing]);
+
+  useEffect(() => () => {
+    if (selectTimerRef.current) clearTimeout(selectTimerRef.current);
+  }, []);
+
+  const startRename = (event: React.MouseEvent) => {
+    if (!isImage) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (selectTimerRef.current) clearTimeout(selectTimerRef.current);
+    setDraft(resolvedName);
+    setEditing(true);
+  };
+
+  const commitRename = () => {
+    const nextName = draft.trim();
+    if (nextName && nextName !== resolvedName) onRename(node.id, nextName);
+    setEditing(false);
+  };
+
   return (
-    <button
-      onClick={() => onSelect(node.id)}
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => {
+        if (editing) return;
+        if (selectTimerRef.current) clearTimeout(selectTimerRef.current);
+        // Wait briefly so an image-name double-click can enter rename mode
+        // without also recentering/opening the canvas node.
+        selectTimerRef.current = setTimeout(() => onSelect(node.id), 180);
+      }}
+      onKeyDown={event => {
+        if (!editing && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          onSelect(node.id);
+        }
+      }}
       className={`group mb-1 flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-left transition-colors ${selected ? 'bg-[#292929]' : hover}`}
     >
       <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-neutral-700 bg-neutral-800">
@@ -614,7 +852,36 @@ const NodeRow = ({
             : node.type === NodeType.IMAGE ? <ImageIcon size={20} className={muted} />
               : <Sparkles size={20} className={muted} />}
       </div>
-      <span className="min-w-0 flex-1 truncate text-[13px]">{node.title || node.prompt || typeLabel[node.type] || node.type}</span>
+      {editing ? (
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={event => setDraft(event.target.value)}
+          onClick={event => event.stopPropagation()}
+          onDoubleClick={event => event.stopPropagation()}
+          onBlur={commitRename}
+          onKeyDown={event => {
+            event.stopPropagation();
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              commitRename();
+            } else if (event.key === 'Escape') {
+              event.preventDefault();
+              setEditing(false);
+            }
+          }}
+          className="min-w-0 flex-1 rounded-md border border-neutral-500 bg-black/10 px-1.5 py-1 text-[13px] text-inherit outline-none focus:border-neutral-300"
+          aria-label="图片显示名称"
+        />
+      ) : (
+        <span
+          className={`min-w-0 flex-1 truncate text-[13px] ${isImage ? 'cursor-text' : ''}`}
+          onDoubleClick={startRename}
+          title={isImage ? `${resolvedName}（双击重命名）` : resolvedName}
+        >
+          {resolvedName}
+        </span>
+      )}
       <MoreHorizontal size={18} className={`${muted} opacity-0 transition-opacity group-hover:opacity-100`} />
       <span
         role="button"
@@ -623,7 +890,7 @@ const NodeRow = ({
         className={`rounded-lg p-1.5 ${muted} opacity-0 transition-opacity group-hover:opacity-100 ${hover}`}
         title="定位节点"
       ><LocateFixed size={18} /></span>
-    </button>
+    </div>
   );
 };
 

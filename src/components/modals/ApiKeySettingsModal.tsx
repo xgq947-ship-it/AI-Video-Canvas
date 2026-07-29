@@ -51,7 +51,7 @@ const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; subtitle: string
     optimizer: { title: '设置', subtitle: '提示词优化走哪个后端，以及对应的模型与推理强度。' },
     whatsNew: { title: '设置', subtitle: '每次更新带来的新增、改进与修复。' },
     about: { title: '设置', subtitle: '版本信息与软件更新。' },
-    support: { title: '设置', subtitle: '这个项目完全免费。如果它帮到了你，欢迎来打个招呼。' },
+    support: { title: '设置', subtitle: '需要自动化方案、业务工作流或定制化设计，欢迎联系 Evan。' },
     uninstall: { title: '设置', subtitle: '从这里直接卸载 Evan，可选择是否保留你的素材数据。' }
 };
 

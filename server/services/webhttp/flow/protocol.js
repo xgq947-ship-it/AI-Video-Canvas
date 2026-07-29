@@ -10,6 +10,8 @@
 export const FLOW_TOOL = 'PINHOLE';
 export const FLOW_API_ORIGIN = 'https://aisandbox-pa.googleapis.com';
 export const FLOW_LABS_ORIGIN = 'https://labs.google';
+export const FLOW_IMAGE_RESOLUTIONS = Object.freeze(['1K', '2K']);
+export const FLOW_DEFAULT_IMAGE_RESOLUTION = '2K';
 
 /** Current visible model defaults, used only when model discovery is unavailable. */
 export const FLOW_BASELINE_IMAGE_MODEL = 'NARWHAL';
@@ -151,7 +153,127 @@ export function parseGenerateImagesResponse(payload) {
             height: dimensions.height,
             seed: generated.seed
         };
-    }).filter(item => item.imageUrl);
+    }).filter(item => item.mediaId);
+}
+
+/**
+ * Flow 页面 2026-07-29 的真实图片下载协议：
+ *
+ * - 1K "Original size"：media.getMediaUrlRedirect → 307 → 签名 CDN；
+ * - 2K "Upscaled"：POST /v1/flow/upsampleImage，响应 JSON 的 encodedImage
+ *   就是最终 JPEG，同时返回一个新的 2K media.name。
+ *
+ * 旧项目只有 Auto/自动或没有字段时按产品默认 2K；明确保存的 1K 保持不变。
+ */
+export function normalizeFlowImageResolution(value) {
+    const stored = String(value || '').trim();
+    if (!stored || ['AUTO', '自动'].includes(stored.toUpperCase())) {
+        return FLOW_DEFAULT_IMAGE_RESOLUTION;
+    }
+    const normalized = stored.toUpperCase();
+    if (FLOW_IMAGE_RESOLUTIONS.includes(normalized)) return normalized;
+    throw new Error(`Google Flow 图片分辨率只支持 ${FLOW_IMAGE_RESOLUTIONS.join('/')}`);
+}
+
+export function buildUpsampleImageRequest({ auth, mediaId, resolution = FLOW_DEFAULT_IMAGE_RESOLUTION }) {
+    const normalized = normalizeFlowImageResolution(resolution);
+    if (normalized !== '2K') {
+        throw new Error(`Flow 高清接口不支持目标分辨率：${resolution}`);
+    }
+    if (!mediaId) throw new Error('Flow 2K 高清下载缺少原始 mediaId');
+    return {
+        url: `${FLOW_API_ORIGIN}/v1/flow/upsampleImage`,
+        method: 'POST',
+        headers: {
+            authorization: `Bearer ${auth.accessToken}`,
+            'content-type': 'text/plain;charset=UTF-8'
+        },
+        body: JSON.stringify({
+            mediaId,
+            targetResolution: 'UPSAMPLE_IMAGE_RESOLUTION_2K',
+            clientContext: clientContext(auth)
+        })
+    };
+}
+
+export function parseUpsampleImageResponse(payload) {
+    const media = payload?.media ?? {};
+    const generated = media?.image?.generatedImage ?? {};
+    const encodedImage = String(payload?.encodedImage || '').replace(/^data:image\/[^;]+;base64,/i, '');
+    if (!media?.name || !encodedImage) return null;
+    return {
+        mediaId: media.name,
+        workflowId: media.workflowId || generated.workflowId || '',
+        encodedImage,
+        resolution: generated?.upsampleMetadata?.imageUpsampleResolution || '',
+        size: Number(media?.mediaMetadata?.mediaBlobSize || 0)
+    };
+}
+
+/**
+ * Validate the bytes that will actually be saved, not the UI selection.
+ *
+ * Flow's original media dimensions are returned by batchGenerateImages and are
+ * aspect-ratio aware (the captured 16:9 sample is 1376×768). The official 2K
+ * endpoint doubles both axes (captured: 2752×1536), so comparison against the
+ * source dimensions is stronger than assuming every ratio is 2048×2048.
+ */
+export function validateFlowImageDimensions({
+    requestedResolution,
+    actualWidth,
+    actualHeight,
+    sourceWidth,
+    sourceHeight
+}) {
+    const resolution = normalizeFlowImageResolution(requestedResolution);
+    const width = Number(actualWidth);
+    const height = Number(actualHeight);
+    if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
+        return {
+            valid: false,
+            reason: '下载结果没有可读取的正整数像素尺寸',
+            requestedResolution: resolution,
+            actualWidth: width || 0,
+            actualHeight: height || 0
+        };
+    }
+
+    const originalWidth = Number(sourceWidth);
+    const originalHeight = Number(sourceHeight);
+    if (Number.isInteger(originalWidth) && originalWidth > 0
+        && Number.isInteger(originalHeight) && originalHeight > 0) {
+        const scale = resolution === '2K' ? 2 : 1;
+        const expectedWidth = originalWidth * scale;
+        const expectedHeight = originalHeight * scale;
+        return {
+            valid: width === expectedWidth && height === expectedHeight,
+            reason: width === expectedWidth && height === expectedHeight
+                ? ''
+                : `期望 ${expectedWidth}×${expectedHeight}，实际 ${width}×${height}`,
+            requestedResolution: resolution,
+            sourceWidth: originalWidth,
+            sourceHeight: originalHeight,
+            expectedWidth,
+            expectedHeight,
+            actualWidth: width,
+            actualHeight: height
+        };
+    }
+
+    // Compatibility fallback for a future response shape that omits source
+    // dimensions. It still rejects the known 1K class when 2K was requested.
+    const minimumLongEdge = resolution === '2K' ? 2048 : 1024;
+    const actualLongEdge = Math.max(width, height);
+    return {
+        valid: actualLongEdge >= minimumLongEdge,
+        reason: actualLongEdge >= minimumLongEdge
+            ? ''
+            : `${resolution} 长边至少应为 ${minimumLongEdge}px，实际 ${actualLongEdge}px`,
+        requestedResolution: resolution,
+        actualWidth: width,
+        actualHeight: height,
+        minimumLongEdge
+    };
 }
 
 const FLOW_VIDEO_ENDPOINTS = Object.freeze({
@@ -434,6 +556,8 @@ export function extractFlowModels(raw) {
                     id: key,
                     displayName: display || key,
                     aspectRatios: normalizeList(node.aspectRatios || node.supportedAspectRatios),
+                    resolutions: [...FLOW_IMAGE_RESOLUTIONS],
+                    defaultResolution: FLOW_DEFAULT_IMAGE_RESOLUTION,
                     maxReferenceImages: Number(node.maxReferenceImages || node.maxImageInputs || 0) || undefined,
                     maxBatchCount: Number(node.maxBatchCount || node.batchSize || 0) || undefined
                 });

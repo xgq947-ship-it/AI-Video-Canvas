@@ -24,7 +24,11 @@ import {
     isGeminiWebImageModel,
     isGeminiWebVideoModel
 } from '../services/geminiWebWorkflow.js';
-import { getImageGenerationProvider, getVideoGenerationProvider } from '../../shared/generationProviders.js';
+import {
+    getImageGenerationProvider,
+    getVideoGenerationProvider,
+    normalizeImageResolution
+} from '../../shared/generationProviders.js';
 import { resolveWebExecutionMode } from '../services/webhttp/index.js';
 
 const router = express.Router();
@@ -184,12 +188,25 @@ router.post('/generate-image', async (req, res) => {
         const imageProvider = isBrowserImageWorkflowModel
             ? getImageGenerationProvider(imageModel)
             : null;
+        const requestedImageResolution = isGoogleFlowWorkflowModel
+            ? normalizeImageResolution(imageModel, resolution)
+            : resolution || '2K';
         const requestedCount = rawCount === undefined ? 1 : Number(rawCount);
         if (!Number.isInteger(requestedCount) || requestedCount < 1) {
             return res.status(400).json({ error: '图片生成数量必须是正整数' });
         }
         if (isBrowserImageWorkflowModel && !imageProvider) {
             return res.status(400).json({ error: '当前图片模型没有可用的能力配置' });
+        }
+        const storedResolution = String(resolution || '').trim();
+        const automaticResolution = !storedResolution
+            || ['auto', '自动'].includes(storedResolution.toLowerCase());
+        if (imageProvider && !automaticResolution
+            && !imageProvider.resolutions.some(option =>
+                option.toLowerCase() === storedResolution.toLowerCase())) {
+            return res.status(400).json({
+                error: `${imageProvider.name} 不支持 ${storedResolution}；支持 ${imageProvider.resolutions.join('/')}`
+            });
         }
         if (imageProvider && requestedCount > imageProvider.maxOutputCount) {
             return res.status(400).json({
@@ -224,7 +241,7 @@ router.post('/generate-image', async (req, res) => {
             const result = await workflow({
                 prompt,
                 aspectRatio: aspectRatio || '1:1',
-                resolution: resolution || '2K',
+                resolution: requestedImageResolution,
                 referenceImageInputs: referenceImages,
                 libraryDir: LIBRARY_DIR,
                 timeoutMinutes: 10,
@@ -282,6 +299,7 @@ router.post('/generate-image', async (req, res) => {
         }
 
         const generatedImages = workflowImages || [{ buffer: imageBuffer, extension: imageFormat }];
+        const resultMetadata = [];
         const resultUrls = generatedImages.map((image, index) => {
             const saved = saveBufferToFile(image.buffer, targetDir, 'img', image.extension || 'png');
             const resultUrl = `${urlPrefix}/${saved.filename}`;
@@ -290,11 +308,33 @@ router.post('/generate-image', async (req, res) => {
                 : nodeId
                     ? `${nodeId}-${index + 1}-${saved.id}`
                     : saved.id;
+            const providerMetadata = image.metadata || {};
+            const requestedResolution = providerMetadata.requestedResolution || requestedImageResolution;
             const metadata = {
                 id: metadataId,
                 filename: saved.filename,
                 prompt,
                 model: imageModel || 'gemini-pro',
+                aspectRatio: aspectRatio || '1:1',
+                ...(requestedResolution ? {
+                    resolution: requestedResolution,
+                    requestedResolution
+                } : {}),
+                ...(Number.isInteger(providerMetadata.actualWidth) ? {
+                    actualWidth: providerMetadata.actualWidth
+                } : {}),
+                ...(Number.isInteger(providerMetadata.actualHeight) ? {
+                    actualHeight: providerMetadata.actualHeight
+                } : {}),
+                ...(providerMetadata.sourceMediaId ? {
+                    flowSourceMediaId: providerMetadata.sourceMediaId
+                } : {}),
+                ...(providerMetadata.finalMediaId ? {
+                    flowMediaId: providerMetadata.finalMediaId
+                } : {}),
+                ...(providerMetadata.downloadProtocol ? {
+                    flowDownloadProtocol: providerMetadata.downloadProtocol
+                } : {}),
                 batchIndex: index,
                 batchCount: generatedImages.length,
                 createdAt: new Date().toISOString(),
@@ -304,13 +344,14 @@ router.post('/generate-image', async (req, res) => {
                 path.join(targetDir, `${metadataId}.json`),
                 JSON.stringify(metadata, null, 2)
             );
+            resultMetadata.push(metadata);
             return resultUrl;
         });
 
         console.log(
             `${resultUrls.length} image(s) saved (model: ${imageModel || 'gemini-pro'})`
         );
-        return res.json({ resultUrl: resultUrls[0], resultUrls });
+        return res.json({ resultUrl: resultUrls[0], resultUrls, resultMetadata });
 
     } catch (error) {
         console.error("Server Image Gen Error:", error);

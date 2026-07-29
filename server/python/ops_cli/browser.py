@@ -8,7 +8,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 from urllib.error import URLError
-from urllib.parse import urlparse
 from urllib.request import urlopen
 
 from ops_cli.output import CommandResponse
@@ -29,7 +28,6 @@ MANAGED_RESIDUE_MIN_AGE_SECONDS = 2 * 60 * 60
 PAGE_SNAPSHOT_TIMEOUT_MS = 2000
 PAGE_DEFAULT_TIMEOUT_MS = 30000
 
-_DEDUP_HOSTS: set[str] = {"labs.google", "jimeng.jianying.com", "gemini.google.com"}
 LOGIN_URLS = {
     "google-flow": "https://labs.google/fx/tools/flow",
     "jimeng": "https://jimeng.jianying.com/ai-tool/generate?type=video",
@@ -186,16 +184,6 @@ def _is_blank_url(url: str) -> bool:
     return not url or url == "about:blank"
 
 
-def _dedup_key(url: str) -> tuple[str, str] | None:
-    if _is_blank_url(url):
-        return None
-    parsed = urlparse(url)
-    host = parsed.netloc.lower()
-    if host not in _DEDUP_HOSTS:
-        return None
-    return host, parsed.path or "/"
-
-
 def _with_page_snapshot_timeout(page: Any, callback: Any) -> Any:
     has_timeout = hasattr(page, "set_default_timeout")
     if has_timeout:
@@ -297,53 +285,38 @@ def build_tab_cleanup_plan(
     """Build a conservative cleanup plan for the dedicated 19222 browser.
 
     Rules are intentionally narrow:
-    - keep one about:blank page as a Chrome window anchor;
-    - close stale pages created by Ops-Cli markers;
-    - close exact duplicate tabs for known business hosts.
+    - never close an unmarked page, even when URL/host is duplicated;
+    - keep one page for each exact Evan keepalive/webhttp marker;
+    - close only explicitly marked duplicates or stale managed residues.
     """
     keep: list[dict[str, Any]] = []
     close: list[dict[str, Any]] = []
     effective_now = time.time() if now is None else now
-    seen_dedup_keys: set[tuple[str, str]] = set()
     normalized: list[dict[str, Any]] = []
-    marked_keepalive_index: int | None = None
-    first_blank_index: int | None = None
+    seen_persistent_markers: set[str] = set()
 
     for fallback_index, raw in enumerate(snapshots):
         item = dict(raw)
         item["index"] = int(item.get("index", fallback_index))
         normalized.append(item)
-        url = str(item.get("url") or "")
-        window_name = str(item.get("window_name") or "")
-        if window_name == KEEPALIVE_WINDOW_NAME and _is_blank_url(url) and marked_keepalive_index is None:
-            marked_keepalive_index = int(item["index"])
-        if first_blank_index is None and _is_blank_url(url):
-            first_blank_index = int(item["index"])
-
-    blank_keeper_index = marked_keepalive_index if marked_keepalive_index is not None else first_blank_index
 
     for item in normalized:
-        url = str(item.get("url") or "")
         window_name = str(item.get("window_name") or "")
-        dedup_key = _dedup_key(url)
 
         if window_name == KEEPALIVE_WINDOW_NAME:
-            if not _is_blank_url(url):
-                keep.append(item)
-                if dedup_key is not None:
-                    seen_dedup_keys.add(dedup_key)
-            elif int(item["index"]) == blank_keeper_index:
+            if window_name not in seen_persistent_markers:
+                seen_persistent_markers.add(window_name)
                 keep.append(item)
             else:
-                close.append({**item, "reason": "extra_blank"})
+                close.append({**item, "reason": "duplicate_managed_marker"})
             continue
 
         if window_name.startswith(WEBHTTP_WINDOW_PREFIX):
-            # 常驻桥接页：始终保留，并占住它所在业务域名的去重位，
-            # 这样重复的普通标签页仍会被清掉，被关的不会是它。
-            keep.append(item)
-            if dedup_key is not None:
-                seen_dedup_keys.add(dedup_key)
+            if window_name not in seen_persistent_markers:
+                seen_persistent_markers.add(window_name)
+                keep.append(item)
+            else:
+                close.append({**item, "reason": "duplicate_managed_marker"})
             continue
 
         if window_name.startswith(MANAGED_WINDOW_PREFIX):
@@ -357,21 +330,8 @@ def build_tab_cleanup_plan(
                 keep.append(item)
             continue
 
-        if _is_blank_url(url):
-            if int(item["index"]) == blank_keeper_index:
-                keep.append(item)
-            else:
-                close.append({**item, "reason": "extra_blank"})
-            continue
-
-        if dedup_key is not None:
-            if dedup_key in seen_dedup_keys:
-                close.append({**item, "reason": "duplicate_url"})
-            else:
-                keep.append(item)
-                seen_dedup_keys.add(dedup_key)
-            continue
-
+        # Positive identification only: same host/path/blank is never enough to
+        # prove that a tab belongs to Evan. Preserve all user/manual pages.
         keep.append(item)
 
     return {"keep": keep, "close": close}

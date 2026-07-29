@@ -27,6 +27,7 @@ import {
   getImageGenerationProvider,
   getVideoGenerationProvider,
   normalizeImageAspectRatio,
+  normalizeImageResolution,
   normalizeVideoParameters,
   resolveVideoModelForAspectRatio,
 } from '../../shared/generationProviders.js';
@@ -142,7 +143,7 @@ async function generateProductImages(job, context, signal) {
   const request = {
     prompt: job.prompt,
     aspectRatio: job.aspectRatio,
-    resolution: job.imageResolution || 'Auto',
+    resolution: job.imageResolution,
     referenceImageInputs: [job.productImage],
     libraryDir: context.libraryDir,
     timeoutMinutes: 10,
@@ -165,7 +166,7 @@ async function generateProductImages(job, context, signal) {
         nodeId: `${job.nodeId}-image-${index + 1}`,
         prompt: job.prompt,
         aspectRatio: job.aspectRatio,
-        resolution: job.imageResolution || 'Auto',
+        resolution: job.imageResolution,
         referenceImages: [job.productImage],
         workflowId: job.workflowId,
         projectDirName: target.projectDirName,
@@ -299,6 +300,7 @@ async function executeJob(job, context) {
         : context.generateImage
         ? [await context.generateImage({
             prompt: job.prompt, aspectRatio: job.aspectRatio,
+            resolution: job.imageResolution,
             referenceImageInputs: [job.productImage], libraryDir,
             timeoutMinutes: 10, modelId: job.imageModel, count: 1, signal,
           })]
@@ -314,16 +316,49 @@ async function executeJob(job, context) {
       const nodeId = job.resultNodeIds[index] || crypto.randomUUID();
       job.resultNodeIds[index] = nodeId;
       let resultUrl = result.resultUrl;
+      const providerMetadata = result.metadata || {};
       if (!resultUrl) {
         const saved = saveBufferToFile(result.buffer, imageTarget.targetDir, 'img', result.extension || 'png');
         resultUrl = `${imageTarget.urlPrefix}/${saved.filename}`;
         atomicWriteJson(path.join(imageTarget.targetDir, `${nodeId}.json`), {
           id: nodeId, filename: saved.filename, prompt: job.prompt, model: job.imageModel,
-          aspectRatio: job.aspectRatio, createdAt: new Date().toISOString(), type: 'images',
-          sourceJobId: job.id, batchIndex: index, batchCount: generatedImages.length,
+          aspectRatio: job.aspectRatio,
+          resolution: providerMetadata.requestedResolution || job.imageResolution,
+          requestedResolution: providerMetadata.requestedResolution || job.imageResolution,
+          ...(Number.isInteger(providerMetadata.actualWidth)
+            ? { actualWidth: providerMetadata.actualWidth }
+            : {}),
+          ...(Number.isInteger(providerMetadata.actualHeight)
+            ? { actualHeight: providerMetadata.actualHeight }
+            : {}),
+          ...(providerMetadata.sourceMediaId
+            ? { flowSourceMediaId: providerMetadata.sourceMediaId }
+            : {}),
+          ...(providerMetadata.finalMediaId
+            ? { flowMediaId: providerMetadata.finalMediaId }
+            : {}),
+          ...(providerMetadata.downloadProtocol
+            ? { flowDownloadProtocol: providerMetadata.downloadProtocol }
+            : {}),
+          createdAt: new Date().toISOString(), type: 'images',
+          sourceJobId: job.id,
+          batchIndex: index,
+          batchCount: Math.min(generatedImages.length, job.imageCount),
         });
       }
-      imageResults.push({ index, nodeId, resultUrl, status: 'success' });
+      imageResults.push({
+        index,
+        nodeId,
+        resultUrl,
+        status: 'success',
+        requestedResolution: providerMetadata.requestedResolution || job.imageResolution,
+        ...(Number.isInteger(providerMetadata.actualWidth)
+          ? { actualWidth: providerMetadata.actualWidth }
+          : {}),
+        ...(Number.isInteger(providerMetadata.actualHeight)
+          ? { actualHeight: providerMetadata.actualHeight }
+          : {}),
+      });
       job.imageResults = imageResults;
       job.resultUrls = imageResults.map(item => item.resultUrl);
       job.resultUrl = job.resultUrls[0];
@@ -381,6 +416,7 @@ async function executeJob(job, context) {
           id: task.videoNodeId, filename: saved.filename, prompt: job.videoPrompt, model: job.videoModel,
           aspectRatio: job.videoAspectRatio, duration: job.videoDuration, createdAt: new Date().toISOString(),
           type: 'videos', sourceJobId: job.id, sourceImageNodeId: task.imageNodeId,
+          batchIndex: task.index, batchCount: imageResults.length,
         });
       } catch (videoError) {
         if (isOperationCancelled(videoError) || signal.aborted) {
@@ -468,7 +504,20 @@ export function createProductSceneJob(payload, context) {
   if (Number(payload.imageCount || 1) !== imageCount) {
     throw new Error(`${imageProvider.name} 单次最多生成 ${imageProvider.maxOutputCount} 张图片`);
   }
+  const storedImageResolution = String(payload.imageResolution || '').trim();
+  const automaticImageResolution = !storedImageResolution
+    || ['auto', '自动'].includes(storedImageResolution.toLowerCase());
+  if (!automaticImageResolution
+      && !imageProvider.resolutions.some(option =>
+        option.toLowerCase() === storedImageResolution.toLowerCase())) {
+    throw new Error(
+      `${imageProvider.name} 不支持 ${storedImageResolution}；支持 ${imageProvider.resolutions.join('/')}`
+    );
+  }
   const recognitionProvider = payload.recognitionProvider === 'gemini-web' ? 'gemini-web' : 'codex-cli';
+  const imageResolution = normalizeImageResolution(payload.imageModel, payload.imageResolution)
+    || payload.imageResolution
+    || 'Auto';
   // 比例由用户在节点上统一指定，替换图和短视频用同一个值 —— 替换图就是视频首帧，
   // 两者比例不一致时平台只会裁掉或加黑边，而且不报错。这里再按图片模型能力收一次口，
   // 防止切换模型后留下它不支持的比例。
@@ -509,6 +558,7 @@ export function createProductSceneJob(payload, context) {
     : findLatestJobForNode(payload.nodeId, payload.workflowId, context.dirs);
   const canReusePartialResults = previous?.status === 'partial_failed'
     && previous.imageModel === payload.imageModel
+    && (previous.imageResolution || 'Auto') === imageResolution
     && Number(previous.imageCount || 1) === imageCount
     && previous.sceneImage === payload.sceneImage
     && previous.productImage === payload.productImage
@@ -547,7 +597,7 @@ export function createProductSceneJob(payload, context) {
     personaBrief: String(payload.personaBrief || '').trim(),
     imageModel: payload.imageModel,
     imageCount,
-    imageResolution: payload.imageResolution || 'Auto',
+    imageResolution,
     aspectRatio,
     recognitionProvider,
     recognitionModel: recognitionProvider === 'gemini-web' ? 'Gemini Web' : (context.recognitionModel || 'gpt-5.6-sol'),

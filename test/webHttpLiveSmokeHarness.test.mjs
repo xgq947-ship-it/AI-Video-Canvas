@@ -23,6 +23,12 @@ test('真实冒烟矩阵覆盖每个 Web 图片模型的所有已声明能力', 
         assert.equal(modes.has('multi-reference'), model.supportsMultipleReferenceImages && model.maxReferenceImages >= 2);
         assert.equal(modes.has('multi-output'), model.supportsMultipleOutputs && model.maxOutputCount >= 2);
     }
+    assert.ok(
+        matrix
+            .filter(item => item.provider === 'google-flow' && item.kind === 'image')
+            .every(item => item.resolution === '2K'),
+        'Flow 真实冒烟必须覆盖默认 2K，而不是退回 capability 的第一项 1K'
+    );
     const free = matrix.filter(item => item.quotaClass === 'free');
     assert.ok(free.length > 0);
     assert.ok(free.every(item => item.modelId === 'jimeng-image-5-0-lite'));

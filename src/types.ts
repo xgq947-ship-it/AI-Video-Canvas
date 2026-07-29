@@ -38,6 +38,8 @@ export interface NodeData {
   id: string;
   type: NodeType;
   title?: string; // Custom title for the node (defaults to type if not set)
+  displayName?: string; // Sidebar-only user label; never renames the underlying media file.
+  resultName?: string; // Optional provider/task result name used after a real filename.
   x: number;
   y: number;
   prompt: string;
@@ -142,6 +144,12 @@ export interface NodeData {
   assetDescription?: string;
 
   // 产品场景替换节点：两张参考图分别承担场景与产品外观职责。
+  productSceneInputMapping?: {
+    version: 1;
+    sceneReferenceNodeId?: string;
+    productImageNodeId?: string;
+    promptSourceNodeId?: string;
+  };
   sceneReferenceId?: string;
   sceneAspectReferenceId?: string;
   productReferenceId?: string;
@@ -186,6 +194,13 @@ export interface NodeData {
   }>;
   productSceneResultNodeId?: string;
   productSceneSourceJobId?: string; // 普通图片结果节点用于防止恢复时重复创建
+  batchIndex?: number; // Original batch order; independent from async completion order.
+  batchCount?: number;
+  productSceneLayoutVersion?: number;
+  productSceneLayoutSourceNodeId?: string;
+  productSceneBatchJobId?: string;
+  productSceneBatchVersion?: number;
+  productSceneLayoutRowStep?: number;
 
   // ==========================================================================
   // AI 漫剧生产节点字段（配音/音效/BGM/字幕/成片）

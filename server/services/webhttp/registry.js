@@ -145,18 +145,21 @@ const BASELINE_MODELS = [
         provider: 'google-flow', id: 'google-flow-nano-banana-pro', displayName: 'Nano Banana Pro', type: 'image',
         inputModes: ['text', 'reference-image', 'multi-reference'],
         aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16'],
+        resolutions: ['1K', '2K'], defaultResolution: '2K',
         maxReferenceImages: 10, maxBatchCount: 4
     },
     {
         provider: 'google-flow', id: 'google-flow-nano-banana-2', displayName: 'Nano Banana 2', type: 'image',
         inputModes: ['text', 'reference-image', 'multi-reference'],
         aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16'],
+        resolutions: ['1K', '2K'], defaultResolution: '2K',
         maxReferenceImages: 10, maxBatchCount: 4
     },
     {
         provider: 'google-flow', id: 'google-flow-nano-banana-2-lite', displayName: 'Nano Banana 2 Lite', type: 'image',
         inputModes: ['text', 'reference-image', 'multi-reference'],
         aspectRatios: ['16:9', '4:3', '1:1', '3:4', '9:16'],
+        resolutions: ['1K', '2K'], defaultResolution: '2K',
         maxReferenceImages: 10, maxBatchCount: 4
     },
     {
@@ -220,6 +223,7 @@ function toDefinition(provider, model, type, discovered) {
         inputModes: [...inputModes],
         aspectRatios: model.aspectRatios,
         resolutions: model.resolutions,
+        defaultResolution: model.defaultResolution,
         durations: model.durations,
         maxReferenceImages: model.maxReferenceImages,
         maxBatchCount: model.maxBatchCount,

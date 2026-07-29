@@ -54,14 +54,19 @@ import {
     buildGenerateVideoRequest,
     buildFlowMediaUrl,
     buildProjectMediaRequest,
+    buildUpsampleImageRequest,
     extractFlowModels,
     isFlowVideoCompleted,
+    normalizeFlowImageResolution,
     parseGenerateImagesResponse,
     parseGenerateVideoResponse,
+    parseUpsampleImageResponse,
     parseUploadImageResponse,
     resolveFlowVideoVariant,
-    toFlowImageAspectRatio
+    toFlowImageAspectRatio,
+    validateFlowImageDimensions
 } from '../server/services/webhttp/flow/protocol.js';
+import { shouldRetryFlowUpsampleError } from '../server/services/webhttp/flow/provider.js';
 
 import { crc32Hex, parseApplyUploadResponse, signImageXRequest } from '../server/services/webhttp/jimeng/imagex.js';
 import { WebProviderError, classifyHttpFailure, redactSecrets } from '../server/services/webhttp/errors.js';
@@ -660,6 +665,92 @@ test('Flow 文生图请求带 recaptcha / projectId，参考图走 mediaId', () 
     ]);
     // 同一批次内 seed 必须不同，否则多张结果会一模一样。
     assert.notEqual(body.requests[0].seed, body.requests[1].seed);
+});
+
+test('Flow 2K 使用官方 upsampleImage 协议并解析新的媒体关系', () => {
+    const auth = {
+        accessToken: 'token',
+        projectId: 'proj-1',
+        sessionId: ';1',
+        recaptchaToken: 'rc-upsample',
+        userPaygateTier: 'PAYGATE_TIER_ONE'
+    };
+    const spec = buildUpsampleImageRequest({
+        auth,
+        mediaId: 'source-media',
+        resolution: '2K'
+    });
+    assert.equal(spec.url, 'https://aisandbox-pa.googleapis.com/v1/flow/upsampleImage');
+    assert.equal(spec.method, 'POST');
+    assert.equal(spec.headers.authorization, 'Bearer token');
+    const body = JSON.parse(spec.body);
+    assert.equal(body.mediaId, 'source-media');
+    assert.equal(body.targetResolution, 'UPSAMPLE_IMAGE_RESOLUTION_2K');
+    assert.equal(body.clientContext.recaptchaContext.token, 'rc-upsample');
+    assert.equal(body.clientContext.projectId, 'proj-1');
+    assert.equal(body.clientContext.tool, 'PINHOLE');
+
+    const parsed = parseUpsampleImageResponse({
+        media: {
+            name: 'upscaled-media',
+            workflowId: 'workflow-1',
+            mediaMetadata: { mediaBlobSize: '1234' },
+            image: {
+                generatedImage: {
+                    upsampleMetadata: { imageUpsampleResolution: 'IMAGE_UPSAMPLE_RESOLUTION_2K' }
+                }
+            }
+        },
+        encodedImage: Buffer.from('jpeg bytes').toString('base64')
+    });
+    assert.equal(parsed.mediaId, 'upscaled-media');
+    assert.equal(parsed.workflowId, 'workflow-1');
+    assert.equal(parsed.resolution, 'IMAGE_UPSAMPLE_RESOLUTION_2K');
+    assert.equal(Buffer.from(parsed.encodedImage, 'base64').toString(), 'jpeg bytes');
+    assert.equal(parsed.size, 1234);
+});
+
+test('Flow 分辨率兼容旧 Auto，实际像素按对应原图比例校验', () => {
+    assert.equal(normalizeFlowImageResolution(undefined), '2K');
+    assert.equal(normalizeFlowImageResolution('Auto'), '2K');
+    assert.equal(normalizeFlowImageResolution('自动'), '2K');
+    assert.equal(normalizeFlowImageResolution('1K'), '1K');
+    assert.throws(() => normalizeFlowImageResolution('4K'), /只支持 1K\/2K/);
+
+    assert.equal(validateFlowImageDimensions({
+        requestedResolution: '1K',
+        sourceWidth: 1376,
+        sourceHeight: 768,
+        actualWidth: 1376,
+        actualHeight: 768
+    }).valid, true);
+    assert.equal(validateFlowImageDimensions({
+        requestedResolution: '2K',
+        sourceWidth: 1376,
+        sourceHeight: 768,
+        actualWidth: 2752,
+        actualHeight: 1536
+    }).valid, true);
+    const fake2K = validateFlowImageDimensions({
+        requestedResolution: '2K',
+        sourceWidth: 1376,
+        sourceHeight: 768,
+        actualWidth: 1376,
+        actualHeight: 768
+    });
+    assert.equal(fake2K.valid, false);
+    assert.match(fake2K.reason, /期望 2752×1536/);
+
+    // 缺少源尺寸时也不能让已知 1K 长边冒充 2K。
+    assert.equal(validateFlowImageDimensions({
+        requestedResolution: '2K',
+        actualWidth: 1376,
+        actualHeight: 768
+    }).valid, false);
+
+    assert.equal(shouldRetryFlowUpsampleError({ code: 'RECAPTCHA_REQUIRED' }, 1), true);
+    assert.equal(shouldRetryFlowUpsampleError({ code: 'RECAPTCHA_REQUIRED' }, 2), false);
+    assert.equal(shouldRetryFlowUpsampleError({ code: 'BRIDGE_UNAVAILABLE' }, 1), false);
 });
 
 test('Flow 视频按文本 / 首帧 / 多参考图切换真实 endpoint 与模型 key', () => {

@@ -170,6 +170,7 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
     const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
     const [loading, setLoading] = useState(false);
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+    const [desktopPlatform, setDesktopPlatform] = useState('');
 
     // Inline rename state (double-click a card's title)
     const [editingTitleFor, setEditingTitleFor] = useState<string | null>(null);
@@ -195,6 +196,14 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
             fetchWorkflows();
         }
     }, [isOpen]);
+
+    useEffect(() => {
+        let cancelled = false;
+        void window.evanDesktop?.getAppInfo()
+            .then(info => { if (!cancelled) setDesktopPlatform(info.platform); })
+            .catch(() => undefined);
+        return () => { cancelled = true; };
+    }, []);
 
     const fetchWorkflows = async () => {
         setLoading(true);
@@ -277,15 +286,20 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
     const handleRevealAssets = async (id: string, e: React.MouseEvent) => {
         e.stopPropagation();
         try {
+            if (window.evanDesktop?.revealProject) {
+                await window.evanDesktop.revealProject(id);
+                return;
+            }
             const response = await fetch(`/api/workflows/${id}/reveal-assets`, {
                 method: 'POST'
             });
             if (!response.ok) {
                 const data = await response.json().catch(() => ({}));
-                console.error('Failed to reveal assets folder:', data.error);
+                throw new Error(data.error || '无法打开项目目录');
             }
         } catch (error) {
             console.error('Failed to reveal assets folder:', error);
+            window.alert(error instanceof Error ? error.message : '无法打开项目目录');
         }
     };
 
@@ -437,11 +451,15 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
 
                                             {/* Action buttons */}
                                             <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                                                {/* Reveal assets folder in Finder */}
+                                                {/* Reveal the real project root in the platform file manager. */}
                                                 <button
                                                     onClick={(e) => handleRevealAssets(workflow.id, e)}
                                                     className="p-1.5 bg-black/50 hover:bg-blue-500 rounded-lg transition-all"
-                                                    title="在 Finder 中打开项目素材"
+                                                    title={desktopPlatform === 'darwin'
+                                                        ? '在 Finder 中显示'
+                                                        : desktopPlatform === 'win32'
+                                                            ? '在文件资源管理器中显示'
+                                                            : '打开文件位置'}
                                                 >
                                                     <FolderOpen size={14} className="text-white" />
                                                 </button>

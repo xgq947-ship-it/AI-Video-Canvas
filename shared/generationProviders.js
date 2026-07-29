@@ -33,7 +33,8 @@ export const IMAGE_GENERATION_PROVIDERS = Object.freeze([
     maxReferenceImages: 10,
     supportsMultipleOutputs: true,
     maxOutputCount: 4,
-    resolutions: ['自动'],
+    resolutions: ['1K', '2K'],
+    defaultResolution: '2K',
     supportedAspectRatios: ['1:1', '16:9', '4:3', '3:4', '9:16'],
   })),
   ...[
@@ -140,7 +141,7 @@ const CAPABILITY_KEYS = new Set([
   'name', 'maxReferenceImages', 'maxOutputCount', 'supportsMultipleOutputs',
   'supportsMultipleReferenceImages', 'supportsImageToImage', 'supportsImageToVideo',
   'supportsTextToVideo', 'supportsNativeAudio', 'resolutions', 'supportedAspectRatios',
-  'supportedDurations'
+  'supportedDurations', 'defaultResolution'
 ]);
 
 function withOverlay(model) {
@@ -168,6 +169,9 @@ export function applyDiscoveredModelRegistry(registry) {
       overlay.supportedAspectRatios = model.aspectRatios;
     }
     if (Array.isArray(model.resolutions) && model.resolutions.length) overlay.resolutions = model.resolutions;
+    if (typeof model.defaultResolution === 'string' && model.defaultResolution) {
+      overlay.defaultResolution = model.defaultResolution;
+    }
     if (Array.isArray(model.durations) && model.durations.length) overlay.supportedDurations = model.durations;
     if (Number(model.maxReferenceImages) > 0) {
       overlay.maxReferenceImages = Number(model.maxReferenceImages);
@@ -224,6 +228,30 @@ export const getImageGenerationProvider = id =>
 export const getVideoGenerationProvider = id =>
   withOverlay(VIDEO_GENERATION_PROVIDERS.find(item => item.id === id))
   || null;
+
+/**
+ * Resolve a stored image-node value through the selected model capability.
+ *
+ * Flow used to persist Auto/自动 because it exposed no resolution choice. Those
+ * legacy values, and a missing field, now resolve to Flow's explicit 2K
+ * default. An explicit stored 1K remains 1K.
+ */
+export function normalizeImageResolution(modelId, value) {
+  const provider = getImageGenerationProvider(modelId);
+  if (!provider) return value;
+  const requested = String(value || '').trim();
+  const exact = provider.resolutions.find(option => option.toLowerCase() === requested.toLowerCase());
+  if (exact) return exact;
+  const isAutomatic = !requested || ['auto', '自动'].includes(requested.toLowerCase());
+  if (provider.defaultResolution && isAutomatic) return provider.defaultResolution;
+  if (provider.defaultResolution && !exact) return provider.defaultResolution;
+  if (isAutomatic) {
+    return provider.resolutions.find(option => ['auto', '自动'].includes(option.toLowerCase()))
+      || provider.resolutions[0]
+      || requested;
+  }
+  return requested;
+}
 
 export function clampImageOutputCount(modelId, requestedCount) {
   const provider = getImageGenerationProvider(modelId);

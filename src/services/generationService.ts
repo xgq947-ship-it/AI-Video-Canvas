@@ -106,6 +106,7 @@ export interface ProductSceneJob {
   recognitionProvider: 'codex-cli' | 'gemini-web';
   recognitionModel: string;
   imageModel: string;
+  imageResolution?: string;
   aspectRatio: string;
   prompt?: string;
   sceneAnalysis?: string;
@@ -115,7 +116,16 @@ export interface ProductSceneJob {
   resultUrl?: string;
   resultNodeIds?: string[];
   resultUrls?: string[];
+  imageResults?: Array<{
+    index: number;
+    nodeId: string;
+    resultUrl: string;
+    requestedResolution?: string;
+    actualWidth?: number;
+    actualHeight?: number;
+  }>;
   imageCount?: number;
+  version?: number;
   autoGenerateVideo?: boolean;
   videoPrompt?: string;
   videoPromptSourceId?: string;

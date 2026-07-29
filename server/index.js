@@ -48,6 +48,11 @@ import {
     trashWorkflowNodes,
     purgeAllProjectTrash
 } from './services/projectTrash.js';
+import {
+    readProjectAssetMetadata,
+    resolveProjectAssetDisplayName,
+    updateProjectAssetDisplayName
+} from './services/projectAssetNames.js';
 import { execFile } from 'child_process';
 import {
     buildPromptOptimizationInstruction,
@@ -847,15 +852,17 @@ app.get('/api/projects/:id/assets', (req, res) => {
                 : type === 'videos' ? /\.(mp4|webm|mov|m4v|mkv)$/i : /\.(mp3|wav|aac|ogg|m4a)$/i;
             for (const filename of fs.readdirSync(dir).filter(name => allowed.test(name))) {
                 const base = filename.slice(0, filename.lastIndexOf('.'));
-                let meta = {};
-                const sidecar = path.join(dir, `${base}.json`);
-                try { if (fs.existsSync(sidecar)) meta = JSON.parse(fs.readFileSync(sidecar, 'utf8')); } catch { /* ignore bad sidecar */ }
+                const { metadata: meta } = readProjectAssetMetadata(dir, filename);
                 const stat = fs.statSync(path.join(dir, filename));
                 result.push({
                     ...meta,
                     id: meta.id || `${type}:${base}`,
                     filename,
-                    name: meta.prompt || meta.originalName || meta.text || filename,
+                    displayName: meta.displayName || undefined,
+                    name: resolveProjectAssetDisplayName(meta, filename, {
+                        type,
+                        index: result.length + 1
+                    }),
                     type: type === 'images' ? 'image' : type === 'videos' ? 'video' : 'audio',
                     url: `/library/projects/${encodeURIComponent(workflow.projectDirName)}/${type}/${encodeURIComponent(filename)}`,
                     createdAt: meta.createdAt || stat.mtime.toISOString()
@@ -867,6 +874,72 @@ app.get('/api/projects/:id/assets', (req, res) => {
     } catch (error) {
         console.error('List project assets error:', error);
         res.status(500).json({ error: error.message });
+    }
+});
+
+app.put('/api/projects/:id/assets/:type/:filename/display-name', (req, res) => {
+    try {
+        const workflowPath = path.join(WORKFLOWS_DIR, `${req.params.id}.json`);
+        if (!fs.existsSync(workflowPath)) return res.status(404).json({ error: '项目不存在' });
+        const workflow = JSON.parse(fs.readFileSync(workflowPath, 'utf8'));
+        const projectRoot = resolveWorkflowProjectRoot(workflow, PROJECTS_DIR);
+        if (!projectRoot || !fs.existsSync(projectRoot)) {
+            return res.status(404).json({ error: '项目目录不存在' });
+        }
+
+        const metadata = updateProjectAssetDisplayName(
+            projectRoot,
+            req.params.type,
+            req.params.filename,
+            req.body?.displayName
+        );
+
+        // Keep canvas rows and the asset tab consistent when both reference the
+        // same local file. Only the display label changes; URLs and files stay put.
+        const targetFilename = req.params.filename;
+        const targetType = req.params.type;
+        let workflowChanged = false;
+        workflow.nodes = (workflow.nodes || []).map(node => {
+            const mediaValues = [
+                node.resultUrl,
+                node.editorBackgroundUrl,
+                node.lastFrame,
+                node.mediaUrl,
+                node.renderOutputUrl,
+            ];
+            const referencesTarget = mediaValues.some(value => {
+                if (typeof value !== 'string' || !value) return false;
+                try {
+                    const pathname = value.startsWith('http') ? new URL(value).pathname : value.split('?')[0];
+                    const segments = pathname.split('/').filter(Boolean).map(segment => decodeURIComponent(segment));
+                    return (
+                        segments.at(-4) === 'projects'
+                        && segments.at(-3) === workflow.projectDirName
+                        && segments.at(-2) === targetType
+                        && segments.at(-1) === targetFilename
+                    );
+                } catch {
+                    return false;
+                }
+            });
+            if (!referencesTarget || node.displayName === metadata.displayName) return node;
+            workflowChanged = true;
+            return { ...node, displayName: metadata.displayName };
+        });
+        if (workflowChanged) {
+            workflow.updatedAt = new Date().toISOString();
+            fs.writeFileSync(workflowPath, JSON.stringify(workflow, null, 2));
+            writeProjectManifest(workflow);
+        }
+
+        res.json({ success: true, displayName: metadata.displayName });
+    } catch (error) {
+        const status = ['ENOENT'].includes(error.code)
+            ? 404
+            : ['EMPTY_DISPLAY_NAME', 'INVALID_ASSET_FILENAME', 'UNSUPPORTED_MEDIA_TYPE'].includes(error.code)
+                ? 400
+                : 500;
+        res.status(status).json({ error: error.message });
     }
 });
 
@@ -1359,7 +1432,8 @@ app.post('/api/browser/open', async (_req, res) => {
     }
 });
 
-// 在系统文件管理器中打开该项目的素材目录（Finder / 资源管理器 / 桌面环境默认）
+// Web 开发模式的兼容入口。桌面安装版走 Electron shell.openPath IPC；
+// 这里同样只打开既有项目根目录，绝不因“显示目录”而重建丢失路径。
 app.post('/api/workflows/:id/reveal-assets', async (req, res) => {
     try {
         const filePath = path.join(WORKFLOWS_DIR, `${req.params.id}.json`);
@@ -1371,9 +1445,11 @@ app.post('/api/workflows/:id/reveal-assets', async (req, res) => {
             return res.status(404).json({ error: "该项目还没有生成任何素材" });
         }
         const dir = workflow.projectDirName
-            ? ensureProjectFolder(workflow, { projectsDir: PROJECTS_DIR })
+            ? resolveWorkflowProjectRoot(workflow, PROJECTS_DIR)
             : path.join(IMAGES_DIR, workflow.assetsDirName);
-        fs.mkdirSync(dir, { recursive: true });
+        if (!dir || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+            return res.status(404).json({ error: '项目目录不存在' });
+        }
         // 三平台各自的「打开目录」命令，写法与 server/routes/render.js 保持一致。
         const opener = process.platform === 'darwin'
             ? 'open'

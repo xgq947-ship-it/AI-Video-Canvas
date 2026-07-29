@@ -73,6 +73,7 @@ import { CanvasZoomControl } from './components/canvas/CanvasZoomControl';
 import { collectNodeReferences, type NodeReference } from './utils/nodeReferences.js';
 import { upsertProductSceneResultNode } from './utils/productSceneResult.js';
 import { getImageGenerationProvider } from '@/shared/generationProviders.js';
+import { assignProductSceneInputOnConnect } from './utils/productSceneInputMapping.js';
 
 // ============================================================================
 // MAIN COMPONENT
@@ -717,20 +718,29 @@ export default function App() {
 
   const connectSelected = React.useCallback(() => {
     if (selectedNodeIds.length < 2) return;
-    const ordered = nodes
-      .filter(node => selectedNodeIds.includes(node.id))
-      .sort((a, b) => a.x - b.x || a.y - b.y);
-    setNodes(prev => prev.map(node => {
-      const childIndex = ordered.findIndex(item => item.id === node.id);
-      if (childIndex <= 0) return node;
-      const parent = ordered[childIndex - 1];
-      if (!isValidNodeConnection(parent.type, node.type)) return node;
-      const parentIds = node.parentIds || [];
-      return parentIds.includes(parent.id)
-        ? node
-        : { ...node, parentIds: [...parentIds, parent.id] };
-    }));
-  }, [nodes, selectedNodeIds, setNodes]);
+    setNodes(prev => {
+      const ordered = prev
+        .filter(node => selectedNodeIds.includes(node.id))
+        .sort((a, b) => a.x - b.x || a.y - b.y);
+      return prev.map(node => {
+        const childIndex = ordered.findIndex(item => item.id === node.id);
+        if (childIndex <= 0) return node;
+        const parent = ordered[childIndex - 1];
+        if (!isValidNodeConnection(parent.type, node.type)) return node;
+        const parentIds = node.parentIds || [];
+        return parentIds.includes(parent.id)
+          ? node
+          : {
+            ...node,
+            parentIds: [...parentIds, parent.id],
+            ...(parent.type === NodeType.TEXT && parent.prompt ? { prompt: parent.prompt } : {}),
+            ...(node.type === NodeType.PRODUCT_SCENE_REPLACE
+              ? assignProductSceneInputOnConnect(node, parent, prev)
+              : {}),
+          };
+      });
+    });
+  }, [selectedNodeIds, setNodes]);
 
   const generateSelected = React.useCallback(async () => {
     const generatableTypes = new Set([
@@ -797,6 +807,7 @@ export default function App() {
   const locateNodeFromSidebar = React.useCallback((id: string) => {
     const node = nodes.find(item => item.id === id);
     if (!node) return;
+    setSelectedConnection(null);
     setSelectedNodeIds([id]);
 
     const rect = getCanvasRect();
@@ -817,7 +828,64 @@ export default function App() {
       ...prev,
       ...computeFitViewport(rect, box, { minZoom: ZOOM_MIN, maxZoom: ZOOM_MAX }),
     }));
-  }, [nodes, viewport.zoom, setSelectedNodeIds, setViewport]);
+  }, [nodes, viewport.zoom, setSelectedConnection, setSelectedNodeIds, setViewport]);
+
+  const revealCurrentProject = React.useCallback(async () => {
+    if (!workflowId) {
+      showToast('请先打开项目', { tone: 'error' });
+      return;
+    }
+    if (!window.evanDesktop?.revealProject) {
+      showToast('打开项目目录仅在 Evan 桌面应用中可用', { tone: 'error' });
+      return;
+    }
+    try {
+      await window.evanDesktop.revealProject(workflowId);
+      showToast('已打开项目目录');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '无法打开项目目录', { tone: 'error' });
+    }
+  }, [workflowId, showToast]);
+
+  const renameSidebarNode = React.useCallback((id: string, displayName: string, syncAsset = true) => {
+    const nextName = displayName.trim();
+    if (!nextName) return;
+    updateNode(id, { displayName: nextName });
+    if (!syncAsset) return;
+
+    const node = nodes.find(item => item.id === id);
+    const mediaUrl = node?.resultUrl || node?.editorBackgroundUrl || node?.lastFrame;
+    if (!workflowId || !mediaUrl) return;
+    try {
+      const pathname = mediaUrl.startsWith('http')
+        ? new URL(mediaUrl).pathname
+        : mediaUrl.split('?')[0];
+      const segments = pathname.split('/').filter(Boolean).map(segment => decodeURIComponent(segment));
+      if (
+        segments.at(-4) !== 'projects'
+        || segments.at(-3) !== projectDirName
+        || segments.at(-2) !== 'images'
+        || !segments.at(-1)
+      ) return;
+      const filename = segments.at(-1)!;
+      void fetch(
+        `/api/projects/${encodeURIComponent(workflowId)}/assets/images/${encodeURIComponent(filename)}/display-name`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ displayName: nextName }),
+        }
+      ).then(async response => {
+        if (response.ok) return;
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error || '图片名称未能同步到素材列表');
+      }).catch(error => {
+        showToast(error instanceof Error ? error.message : '图片名称未能同步到素材列表', { tone: 'error' });
+      });
+    } catch {
+      // Non-project/data/blob URLs still keep their project-level displayName.
+    }
+  }, [nodes, workflowId, projectDirName, updateNode, showToast]);
 
   const {
     handleCopy,
@@ -1122,8 +1190,8 @@ export default function App() {
     openHistoryPanel(contextMenu.y, closeWorkflowPanel);
   };
 
-  const handleSidebarAssetPreview = (asset: SidebarAssetPreview, e: React.MouseEvent<HTMLElement>) => {
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  const handleSidebarAssetPreview = (asset: SidebarAssetPreview, anchor: HTMLElement) => {
+    const rect = anchor.getBoundingClientRect();
     setSidebarAssetPreview({ ...asset, panelY: rect.top });
     closeAssetLibrary();
     closeHistoryPanel();
@@ -1727,16 +1795,35 @@ export default function App() {
    * Handle when a connection is made between nodes
    * Syncs prompt if parent is a Text node
    */
-  const handleConnectionMade = React.useCallback((parentId: string, childId: string) => {
-    // Find the parent node
-    const parentNode = nodes.find(n => n.id === parentId);
-    if (!parentNode) return;
+  const handleConnectionMade = React.useCallback((
+    parentId: string,
+    childId: string,
+    currentNodes: NodeData[] = nodes
+  ): Partial<NodeData> => {
+    const parentNode = currentNodes.find(n => n.id === parentId);
+    const childNode = currentNodes.find(n => n.id === childId);
+    if (!parentNode || !childNode) return {};
 
-    // If parent is a Text node, sync its prompt to the child
+    const updates: Partial<NodeData> = {};
     if (parentNode.type === NodeType.TEXT && parentNode.prompt) {
-      updateNode(childId, { prompt: parentNode.prompt });
+      updates.prompt = parentNode.prompt;
     }
-  }, [nodes, updateNode]);
+    if (childNode.type === NodeType.PRODUCT_SCENE_REPLACE) {
+      Object.assign(updates, assignProductSceneInputOnConnect(childNode, parentNode, currentNodes));
+    }
+    return updates;
+  }, [nodes]);
+
+  const handleCanvasEdgeClick = React.useCallback((
+    event: React.MouseEvent,
+    parentId: string,
+    childId: string
+  ) => {
+    // Edge and node selections are mutually exclusive. This also prevents a
+    // stale selected child node from winning the subsequent Delete key.
+    setSelectedNodeIds([]);
+    handleEdgeClick(event, parentId, childId);
+  }, [handleEdgeClick, setSelectedNodeIds]);
 
   const handleGlobalPointerUp = (e: React.PointerEvent) => {
     // 1. Handle Selection Box End
@@ -1874,7 +1961,10 @@ export default function App() {
       refreshCanvasOffset();
       nodeCallbacksRef.current.handleConnectorPointerDown(e, id, side);
     },
-    onSelect: (id: string) => nodeCallbacksRef.current.setSelectedNodeIds([id]),
+    onSelect: (id: string) => {
+      setSelectedConnection(null);
+      nodeCallbacksRef.current.setSelectedNodeIds([id]);
+    },
     onOpenEditor: (id: string) => nodeCallbacksRef.current.handleOpenEditor(id),
     onUpload: (id: string, imageDataUrl: string) =>
       nodeCallbacksRef.current.handleUpload(id, imageDataUrl),
@@ -1889,6 +1979,7 @@ export default function App() {
     onExtractLastFrame: (id: string) => nodeCallbacksRef.current.handleExtractLastFrame(id),
     onAutoSubtitle: (id: string) => nodeCallbacksRef.current.handleAutoSubtitle(id),
     onNodePointerDown: (e: React.PointerEvent, id: string) => {
+      setSelectedConnection(null);
       const current = nodeCallbacksRef.current;
       const currentSelection = current.selectedNodeIds;
       if (e.altKey) {
@@ -1938,6 +2029,8 @@ export default function App() {
           onOpenStoryboard={storyboardGenerator.openModal}
           onCreateProject={handleRequestNewProject}
           onDeleteProject={handleDeleteCurrentProject}
+          onRevealProject={revealCurrentProject}
+          onRenameNode={renameSidebarNode}
           onCollapsedChange={setSidebarCollapsed}
           canvasTheme={canvasTheme}
         />
@@ -2124,7 +2217,7 @@ export default function App() {
               tempConnectionEnd={tempConnectionEnd}
               canvasOffset={canvasOffset}
               selectedConnection={selectedConnection}
-              onEdgeClick={handleEdgeClick}
+              onEdgeClick={handleCanvasEdgeClick}
             />
           </svg>
 

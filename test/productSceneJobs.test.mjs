@@ -61,7 +61,18 @@ test('产品场景任务一次识别两张图、持久化阶段并输出独立�
     },
     generateImage: async request => {
       generationRequest = request;
-      return { buffer: Buffer.from('generated-image'), extension: 'png' };
+      return {
+        buffer: Buffer.from('generated-image'),
+        extension: 'png',
+        metadata: {
+          requestedResolution: '2K',
+          actualWidth: 2752,
+          actualHeight: 1536,
+          sourceMediaId: 'flow-source',
+          finalMediaId: 'flow-2k',
+          downloadProtocol: 'flow.upsampleImage',
+        },
+      };
     },
   };
 
@@ -78,9 +89,23 @@ test('产品场景任务一次识别两张图、持久化阶段并输出独立�
   // 竞品场景图只用于识图，绝不能进生图模型——一旦进去，成图里的人就是原视频那个人。
   assert.deepEqual(recognitionRequest.imageDataUrls.length, 2);
   assert.deepEqual(generationRequest.referenceImageInputs, [PIXEL]);
+  assert.equal(generationRequest.resolution, '2K');
+  assert.equal(completed.imageResolution, '2K');
+  assert.deepEqual(completed.imageResults.map(item => ({
+    requestedResolution: item.requestedResolution,
+    actualWidth: item.actualWidth,
+    actualHeight: item.actualHeight,
+  })), [{ requestedResolution: '2K', actualWidth: 2752, actualHeight: 1536 }]);
   assert.equal(completed.personaAnalysis, '25-30 岁女性，中长发，浅灰家居服');
   assert.match(completed.resultUrl, /\/images\/img_/);
-  assert.ok(fs.existsSync(path.join(env.dirs.projectsDir, '测试项目_workflow', 'images', `${completed.resultNodeId}.json`)));
+  const resultMetadataPath = path.join(env.dirs.projectsDir, '测试项目_workflow', 'images', `${completed.resultNodeId}.json`);
+  assert.ok(fs.existsSync(resultMetadataPath));
+  const resultMetadata = JSON.parse(fs.readFileSync(resultMetadataPath, 'utf8'));
+  assert.equal(resultMetadata.requestedResolution, '2K');
+  assert.equal(resultMetadata.actualWidth, 2752);
+  assert.equal(resultMetadata.actualHeight, 1536);
+  assert.equal(resultMetadata.flowSourceMediaId, 'flow-source');
+  assert.equal(resultMetadata.flowMediaId, 'flow-2k');
   assert.ok(fs.existsSync(path.join(env.dirs.projectsDir, '测试项目_workflow', '.jobs', 'product-scene', `${completed.id}.json`)));
 });
 
@@ -118,6 +143,45 @@ test('Google Flow 失败后重试复用已完成的 Codex 分析', async t => {
   assert.equal(completed.status, 'completed');
   assert.equal(recognitionCalls, 1);
   assert.equal(generationCalls, 2);
+});
+
+test('产品短视频节点的 Flow 图片默认 2K，旧项目明确 1K 时保持 1K', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const requestedResolutions = [];
+  const context = {
+    dirs: env.dirs,
+    libraryDir: env.root,
+    runRecognition: async () => JSON.stringify({
+      sceneSpec: '客厅场景',
+      personaSpec: '通用女性形象',
+      compositionSpec: '半身入画，产品在腹部',
+      productSpec: '白色揉腹仪',
+    }),
+    generateImage: async request => {
+      requestedResolutions.push(request.resolution);
+      return { buffer: Buffer.from(`image-${request.resolution}`), extension: 'png' };
+    },
+  };
+
+  const defaultJob = createProductSceneJob({
+    ...payload,
+    nodeId: 'control-default-2k',
+    imageResolution: undefined,
+  }, context);
+  const explicitOneKJob = createProductSceneJob({
+    ...payload,
+    nodeId: 'control-explicit-1k',
+    imageResolution: '1K',
+  }, context);
+  const [defaultCompleted, explicitCompleted] = await Promise.all([
+    waitForTerminalJob(defaultJob.id, context),
+    waitForTerminalJob(explicitOneKJob.id, context),
+  ]);
+
+  assert.equal(defaultCompleted.imageResolution, '2K');
+  assert.equal(explicitCompleted.imageResolution, '1K');
+  assert.deepEqual(new Set(requestedResolutions), new Set(['1K', '2K']));
 });
 
 test('客户端预分配任务 ID 可幂等创建，最新任务可用于页面恢复', async t => {

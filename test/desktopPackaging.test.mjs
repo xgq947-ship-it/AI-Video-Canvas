@@ -158,6 +158,7 @@ test('macOS 绝不走应用内安装：Squirrel.Mac 会校验签名而我们的�
 test('更新的 IPC 通道在主进程注册并通过 preload 暴露', () => {
   for (const channel of [
     'app:info',
+    'project:reveal',
     'update:get-state',
     'update:check',
     'update:download',

@@ -5,6 +5,10 @@ import {
   resolveReferenceVideoFromUrl,
   saveReferenceVideoStream,
 } from '../services/videoRemix/referenceVideo.js';
+import {
+  preprocessReferenceVideo,
+  updateVideoRemixShotTimeline,
+} from '../services/videoRemix/shotPreprocessing.js';
 
 const router = express.Router();
 
@@ -29,13 +33,55 @@ function sendError(res, error) {
   const status = Number(error?.status);
   const safeStatus = status >= 400 && status <= 599 ? status : 500;
   if (safeStatus >= 500) {
-    console.error('[Video Remix Reference]', error);
+    console.error('[Video Remix]', error);
   }
   res.status(safeStatus).json({
     error: error?.message || '参考视频处理失败',
     code: error?.code || 'REFERENCE_VIDEO_FAILED',
   });
 }
+
+router.post('/preprocess', async (req, res) => {
+  try {
+    const {
+      workflowId,
+      remixId,
+      source,
+      threshold,
+    } = req.body || {};
+    const result = await preprocessReferenceVideo({
+      workflowId: String(workflowId || ''),
+      remixId: String(remixId || ''),
+      source,
+      threshold,
+    }, requestContext(req));
+    res.json({ success: true, ...result });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.put('/shots', async (req, res) => {
+  try {
+    const {
+      workflowId,
+      remixId,
+      source,
+      cutPoints,
+      previousShots,
+    } = req.body || {};
+    const result = await updateVideoRemixShotTimeline({
+      workflowId: String(workflowId || ''),
+      remixId: String(remixId || ''),
+      source,
+      cutPoints,
+      previousShots,
+    }, requestContext(req));
+    res.json({ success: true, ...result });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
 
 router.post('/reference/import', async (req, res) => {
   try {

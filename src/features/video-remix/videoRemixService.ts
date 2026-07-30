@@ -1,8 +1,20 @@
-import type { ReferenceVideo } from '../../../shared/videoRemix.js';
+import type {
+  ReferenceVideo,
+  ShotAnalysis,
+} from '../../../shared/videoRemix.js';
 
 interface ReferenceResponse {
   success: boolean;
   source: ReferenceVideo;
+  error?: string;
+  code?: string;
+}
+
+interface ShotPreprocessingResponse {
+  success: boolean;
+  source: ReferenceVideo;
+  proxyUrl: string;
+  shots: ShotAnalysis[];
   error?: string;
   code?: string;
 }
@@ -25,6 +37,23 @@ async function readReferenceResponse(response: Response): Promise<ReferenceVideo
     throw new Error(payload.error || `参考视频处理失败（HTTP ${response.status}）`);
   }
   return payload.source;
+}
+
+async function readShotPreprocessingResponse(response: Response) {
+  const payload = await response.json().catch(() => ({})) as Partial<ShotPreprocessingResponse>;
+  if (
+    !response.ok
+    || !payload.source
+    || !payload.proxyUrl
+    || !Array.isArray(payload.shots)
+  ) {
+    throw new Error(payload.error || `镜头预处理失败（HTTP ${response.status}）`);
+  }
+  return {
+    source: payload.source,
+    proxyUrl: payload.proxyUrl,
+    shots: payload.shots,
+  };
 }
 
 export async function importLocalReferenceVideo({
@@ -83,4 +112,50 @@ export async function useCanvasVideoAsReference({
     body: JSON.stringify({ workflowId, remixId, sourceUrl, title }),
   });
   return readReferenceResponse(response);
+}
+
+export async function preprocessReferenceVideo({
+  workflowId,
+  remixId,
+  source,
+  threshold = 0.3,
+}: {
+  workflowId: string;
+  remixId: string;
+  source: ReferenceVideo;
+  threshold?: number;
+}) {
+  const response = await fetch('/api/video-remix/preprocess', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workflowId, remixId, source, threshold }),
+  });
+  return readShotPreprocessingResponse(response);
+}
+
+export async function updateVideoRemixShotTimeline({
+  workflowId,
+  remixId,
+  source,
+  cutPoints,
+  previousShots,
+}: {
+  workflowId: string;
+  remixId: string;
+  source: ReferenceVideo;
+  cutPoints: number[];
+  previousShots: ShotAnalysis[];
+}) {
+  const response = await fetch('/api/video-remix/shots', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workflowId,
+      remixId,
+      source,
+      cutPoints,
+      previousShots,
+    }),
+  });
+  return readShotPreprocessingResponse(response);
 }

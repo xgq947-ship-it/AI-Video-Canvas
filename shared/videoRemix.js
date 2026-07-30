@@ -10,6 +10,8 @@ export const VIDEO_REMIX_SCHEMA_VERSION = 1;
 
 export const VIDEO_REMIX_STAGES = Object.freeze([
   'source',
+  'preprocessing',
+  'shots_ready',
   'analyzing',
   'analysis_ready',
   'assets_ready',
@@ -46,6 +48,8 @@ export const HIGH_FIDELITY_LOCKS = Object.freeze({
 
 const TAB_BY_STAGE = Object.freeze({
   source: 'source',
+  preprocessing: 'source',
+  shots_ready: 'shots',
   analyzing: 'analysis',
   analysis_ready: 'analysis',
   assets_ready: 'assets',
@@ -57,6 +61,180 @@ const TAB_BY_STAGE = Object.freeze({
   completed: 'final',
   error: 'source',
 });
+
+export const SHOT_ANALYSIS_FRAME_POSITIONS = Object.freeze([
+  'start',
+  'quarter',
+  'middle',
+  'three_quarter',
+  'end',
+]);
+
+const roundShotTime = value => Math.round(Number(value) * 1000) / 1000;
+
+const emptyEditableField = () => ({
+  value: '',
+  source: 'ai',
+  confidence: 0,
+  locked: false,
+});
+
+export function createVideoRemixShot({
+  shotId,
+  start,
+  end,
+  detectionSource = 'manual',
+  detectionScore,
+  analysisFrames = [],
+}) {
+  const normalizedStart = roundShotTime(Math.max(0, Number(start) || 0));
+  const normalizedEnd = roundShotTime(Math.max(normalizedStart, Number(end) || 0));
+  return {
+    shotId: String(shotId),
+    start: normalizedStart,
+    end: normalizedEnd,
+    duration: roundShotTime(normalizedEnd - normalizedStart),
+    storyBeat: emptyEditableField(),
+    characters: [],
+    scene: {},
+    props: [],
+    frameBlueprint: {
+      shotSize: emptyEditableField(),
+      cameraAngle: emptyEditableField(),
+      subjects: [],
+      props: [],
+    },
+    motionBlueprint: {
+      subjects: [],
+      propInteractions: [],
+    },
+    cameraBlueprint: {
+      shotSize: emptyEditableField(),
+      angle: emptyEditableField(),
+      movement: [],
+    },
+    timingBlueprint: {
+      phases: [],
+    },
+    audioBlueprint: {
+      dialogue: [],
+      environment: emptyEditableField(),
+      soundEvents: [],
+    },
+    motionComplexity: 'medium',
+    transition: 'hard_cut',
+    analysisFrames,
+    detection: {
+      source: detectionSource,
+      ...(Number.isFinite(Number(detectionScore))
+        ? { score: Number(detectionScore) }
+        : {}),
+    },
+  };
+}
+
+export function normalizeVideoRemixCutPoints(duration, cutPoints = [], {
+  minShotDuration = 0.35,
+} = {}) {
+  const safeDuration = roundShotTime(Number(duration));
+  if (!(safeDuration > 0)) return [];
+  const minimum = Math.max(0.05, Number(minShotDuration) || 0.35);
+  const candidates = [
+    0,
+    ...cutPoints,
+    safeDuration,
+  ]
+    .map(Number)
+    .filter(Number.isFinite)
+    .map(value => roundShotTime(Math.min(safeDuration, Math.max(0, value))))
+    .sort((left, right) => left - right);
+
+  const normalized = [0];
+  for (const candidate of candidates) {
+    if (candidate <= 0 || candidate >= safeDuration) continue;
+    if (candidate - normalized.at(-1) < minimum) continue;
+    if (safeDuration - candidate < minimum) continue;
+    if (candidate !== normalized.at(-1)) normalized.push(candidate);
+  }
+  normalized.push(safeDuration);
+  return normalized;
+}
+
+function nextShotId(usedIds) {
+  let index = 1;
+  while (usedIds.has(`shot_${String(index).padStart(3, '0')}`)) index += 1;
+  const id = `shot_${String(index).padStart(3, '0')}`;
+  usedIds.add(id);
+  return id;
+}
+
+function findPreviousShot(interval, previousShots, claimedIds) {
+  const exact = previousShots.find(shot => (
+    !claimedIds.has(shot?.shotId)
+    && Math.abs(Number(shot?.start) - interval.start) < 0.002
+    && Math.abs(Number(shot?.end) - interval.end) < 0.002
+  ));
+  if (exact) return { shot: exact, exact: true };
+
+  let best = null;
+  let bestOverlap = 0;
+  for (const shot of previousShots) {
+    if (!shot?.shotId || claimedIds.has(shot.shotId)) continue;
+    const overlap = Math.max(
+      0,
+      Math.min(interval.end, Number(shot.end)) - Math.max(interval.start, Number(shot.start))
+    );
+    if (overlap > bestOverlap) {
+      best = shot;
+      bestOverlap = overlap;
+    }
+  }
+  return best ? { shot: best, exact: false } : null;
+}
+
+export function buildVideoRemixShots({
+  duration,
+  cutPoints = [],
+  previousShots = [],
+  detectionSource = 'manual',
+  detections = [],
+  minShotDuration = 0.35,
+} = {}) {
+  const normalizedCuts = normalizeVideoRemixCutPoints(duration, cutPoints, { minShotDuration });
+  if (normalizedCuts.length < 2) return [];
+  const usedIds = new Set(
+    previousShots
+      .map(shot => String(shot?.shotId || ''))
+      .filter(Boolean)
+  );
+  const claimedIds = new Set();
+
+  return normalizedCuts.slice(0, -1).map((start, index) => {
+    const end = normalizedCuts[index + 1];
+    const interval = { start, end };
+    const previous = findPreviousShot(interval, previousShots, claimedIds);
+    const shotId = previous?.shot?.shotId || nextShotId(usedIds);
+    claimedIds.add(shotId);
+    const detection = detections.find(item => Math.abs(Number(item?.time) - start) < 0.01);
+
+    if (previous?.exact) {
+      return {
+        ...previous.shot,
+        start,
+        end,
+        duration: roundShotTime(end - start),
+        analysisFrames: [],
+      };
+    }
+    return createVideoRemixShot({
+      shotId,
+      start,
+      end,
+      detectionSource,
+      detectionScore: detection?.score,
+    });
+  });
+}
 
 function createRemixId() {
   if (globalThis.crypto?.randomUUID) return `remix_${globalThis.crypto.randomUUID()}`;
@@ -167,6 +345,74 @@ export function setVideoRemixSourceError(state, message, retryable = true) {
       {
         scope: 'source',
         message: String(message || '参考视频处理失败'),
+        retryable: Boolean(retryable),
+      },
+    ],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function beginVideoRemixPreprocessing(state) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (!current.source) return current;
+  return {
+    ...current,
+    stage: 'preprocessing',
+    errors: current.errors.filter(item => item?.scope !== 'preprocessing'),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function completeVideoRemixPreprocessing(state, {
+  source,
+  proxyUrl,
+  shots,
+}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const nextSource = source || current.source;
+  if (!nextSource || !proxyUrl || !Array.isArray(shots)) return current;
+  return {
+    ...current,
+    source: {
+      ...nextSource,
+      proxyUrl,
+    },
+    stage: 'shots_ready',
+    story: null,
+    assets: {
+      characters: [],
+      scenes: [],
+      props: [],
+    },
+    shots,
+    prompts: {},
+    keyframes: [],
+    generatedVideos: [],
+    timeline: shots.map((shot, order) => ({
+      shotId: shot.shotId,
+      order,
+      start: shot.start,
+      end: shot.end,
+      transition: shot.transition === 'fade' ? 'fade' : 'hard_cut',
+    })),
+    output: null,
+    errors: current.errors.filter(item => item?.scope !== 'preprocessing'),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function setVideoRemixPreprocessingError(state, message, retryable = true) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  return {
+    ...current,
+    stage: current.stage === 'preprocessing'
+      ? (current.source?.proxyUrl && current.shots.length > 0 ? 'shots_ready' : 'source')
+      : current.stage,
+    errors: [
+      ...current.errors.filter(item => item?.scope !== 'preprocessing'),
+      {
+        scope: 'preprocessing',
+        message: String(message || '视频预处理失败'),
         retryable: Boolean(retryable),
       },
     ],

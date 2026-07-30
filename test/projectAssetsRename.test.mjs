@@ -189,8 +189,14 @@ test('renaming a modern project renames the single root folder and rewrites imag
                 source: {
                     localUrl: '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/video-remix/remix_1/source/ref_1/original.mp4',
                     previewUrl: 'http://localhost:3001/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/video-remix/remix_1/source/ref_1/original.mp4?t=1',
+                    proxyUrl: '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/video-remix/remix_1/preprocess/run_1/analysis_proxy.mp4',
                     sourceUrl: 'https://example.com/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/external.mp4'
                 },
+                shots: [{
+                    analysisFrames: [{
+                        url: '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/video-remix/remix_1/preprocess/run_1/shots/shot_001/frames/start.jpg'
+                    }]
+                }],
                 assets: {
                     characters: [{
                         referenceImages: [
@@ -233,6 +239,14 @@ test('renaming a modern project renames the single root folder and rewrites imag
     assert.equal(
         workflow.nodes[0].videoRemix.source.sourceUrl,
         'https://example.com/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/external.mp4'
+    );
+    assert.equal(
+        workflow.nodes[0].videoRemix.source.proxyUrl,
+        '/library/projects/%E6%96%B0%E9%A1%B9%E7%9B%AE/video-remix/remix_1/preprocess/run_1/analysis_proxy.mp4'
+    );
+    assert.equal(
+        workflow.nodes[0].videoRemix.shots[0].analysisFrames[0].url,
+        '/library/projects/%E6%96%B0%E9%A1%B9%E7%9B%AE/video-remix/remix_1/preprocess/run_1/shots/shot_001/frames/start.jpg'
     );
     assert.equal(
         workflow.nodes[0].videoRemix.assets.characters[0].referenceImages[0],

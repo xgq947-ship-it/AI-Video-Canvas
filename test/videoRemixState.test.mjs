@@ -6,9 +6,14 @@ import {
   VIDEO_REMIX_SCHEMA_VERSION,
   VIDEO_REMIX_STAGES,
   VIDEO_REMIX_WORKSPACE_TABS,
+  beginVideoRemixPreprocessing,
+  buildVideoRemixShots,
+  completeVideoRemixPreprocessing,
   createVideoRemixState,
   isVideoRemixState,
+  normalizeVideoRemixCutPoints,
   replaceVideoRemixSource,
+  setVideoRemixPreprocessingError,
   setVideoRemixSourceError,
   summarizeVideoRemixState,
   workspaceTabForStage,
@@ -34,8 +39,73 @@ test('Video Remix 阶段和工作台页签保持稳定映射', () => {
     ['source', 'analysis', 'assets', 'shots', 'keyframes', 'videos', 'final']
   );
   assert.equal(workspaceTabForStage('analyzing'), 'analysis');
+  assert.equal(workspaceTabForStage('preprocessing'), 'source');
+  assert.equal(workspaceTabForStage('shots_ready'), 'shots');
   assert.equal(workspaceTabForStage('videos_ready'), 'videos');
   assert.equal(workspaceTabForStage('completed'), 'final');
+});
+
+test('镜头切点会排序、去重并过滤过短镜头', () => {
+  assert.deepEqual(
+    normalizeVideoRemixCutPoints(4, [3.9, 2, 0.1, 2, 1]),
+    [0, 1, 2, 4]
+  );
+  assert.deepEqual(normalizeVideoRemixCutPoints(0, [1]), []);
+});
+
+test('Shot 占位蓝图完整，移动边界时保留镜头 id 并清空旧语义', () => {
+  const original = buildVideoRemixShots({
+    duration: 4,
+    cutPoints: [2],
+    detectionSource: 'ffmpeg',
+    detections: [{ time: 2, score: 0.72 }],
+  });
+  original[0].storyBeat.value = '旧语义';
+  const adjusted = buildVideoRemixShots({
+    duration: 4,
+    cutPoints: [2.4],
+    previousShots: original,
+    detectionSource: 'manual',
+  });
+
+  assert.equal(original.length, 2);
+  assert.equal(original[1].detection.score, 0.72);
+  assert.equal(original[0].analysisFrames.length, 0);
+  assert.equal(adjusted[0].shotId, original[0].shotId);
+  assert.equal(adjusted[0].storyBeat.value, '');
+  assert.equal(adjusted[0].detection.source, 'manual');
+  assert.equal(adjusted[0].frameBlueprint.subjects.length, 0);
+  assert.equal(adjusted[0].audioBlueprint.dialogue.length, 0);
+});
+
+test('预处理状态会写入代理、Shot 与时间线，并可恢复为可重试错误', () => {
+  const source = {
+    id: 'ref_1',
+    localUrl: '/library/source.mp4',
+    duration: 4,
+  };
+  const state = createVideoRemixState({ remixId: 'remix_preprocess', source });
+  const processing = beginVideoRemixPreprocessing(state);
+  const shots = buildVideoRemixShots({ duration: 4, cutPoints: [2] });
+  const ready = completeVideoRemixPreprocessing(processing, {
+    source,
+    proxyUrl: '/library/proxy.mp4',
+    shots,
+  });
+
+  assert.equal(processing.stage, 'preprocessing');
+  assert.equal(ready.stage, 'shots_ready');
+  assert.equal(ready.source.proxyUrl, '/library/proxy.mp4');
+  assert.deepEqual(ready.timeline.map(item => item.shotId), shots.map(item => item.shotId));
+  assert.equal(ready.timeline[1].start, 2);
+
+  const failed = setVideoRemixPreprocessingError(processing, '自动拆镜失败');
+  assert.equal(failed.stage, 'source');
+  assert.deepEqual(failed.errors.at(-1), {
+    scope: 'preprocessing',
+    message: '自动拆镜失败',
+    retryable: true,
+  });
 });
 
 test('Video Remix 摘要只统计已确认关键帧和已完成镜头视频', () => {

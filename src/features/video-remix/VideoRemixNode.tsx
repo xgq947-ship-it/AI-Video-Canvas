@@ -16,6 +16,8 @@ interface VideoRemixNodeProps {
 
 const STAGE_LABELS: Record<string, string> = {
   source: '等待导入',
+  preprocessing: '正在自动拆镜',
+  shots_ready: '镜头待确认',
   analyzing: '正在分析',
   analysis_ready: '分析待确认',
   assets_ready: '资产已确认',
@@ -52,6 +54,7 @@ export const VideoRemixNode: React.FC<VideoRemixNodeProps> = ({
   const isDark = canvasTheme === 'dark';
   const previewUrl = state.source?.previewUrl || state.source?.localUrl;
   const isBusy = [
+    'preprocessing',
     'analyzing',
     'keyframes_generating',
     'videos_generating',

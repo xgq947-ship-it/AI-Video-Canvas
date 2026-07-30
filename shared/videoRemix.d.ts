@@ -2,6 +2,8 @@ export const VIDEO_REMIX_SCHEMA_VERSION: 1;
 
 export type VideoRemixStage =
   | 'source'
+  | 'preprocessing'
+  | 'shots_ready'
   | 'analyzing'
   | 'analysis_ready'
   | 'assets_ready'
@@ -24,6 +26,12 @@ export type VideoRemixWorkspaceTab =
 
 export type MotionComplexity = 'simple' | 'medium' | 'complex';
 export type AssetSource = 'analysis' | 'generated' | 'upload' | 'library';
+export type ShotAnalysisFramePosition =
+  | 'start'
+  | 'quarter'
+  | 'middle'
+  | 'three_quarter'
+  | 'end';
 
 export interface EditableField<T> {
   value: T;
@@ -229,6 +237,15 @@ export interface ShotAnalysis {
   startState?: ContinuityState;
   endState?: ContinuityState;
   transition?: 'hard_cut' | 'fade' | 'flash' | 'zoom' | 'match_motion' | 'other';
+  analysisFrames: Array<{
+    position: ShotAnalysisFramePosition;
+    time: number;
+    url: string;
+  }>;
+  detection: {
+    source: 'ffmpeg' | 'manual';
+    score?: number;
+  };
 }
 
 export interface ShotPromptState {
@@ -316,6 +333,7 @@ export interface VideoRemixState {
 }
 
 export const VIDEO_REMIX_STAGES: readonly VideoRemixStage[];
+export const SHOT_ANALYSIS_FRAME_POSITIONS: readonly ShotAnalysisFramePosition[];
 export const VIDEO_REMIX_WORKSPACE_TABS: readonly {
   id: VideoRemixWorkspaceTab;
   label: string;
@@ -340,6 +358,41 @@ export function replaceVideoRemixSource(
   source: ReferenceVideo
 ): VideoRemixState;
 export function setVideoRemixSourceError(
+  state: unknown,
+  message: string,
+  retryable?: boolean
+): VideoRemixState;
+export function createVideoRemixShot(input: {
+  shotId: string;
+  start: number;
+  end: number;
+  detectionSource?: 'ffmpeg' | 'manual';
+  detectionScore?: number;
+  analysisFrames?: ShotAnalysis['analysisFrames'];
+}): ShotAnalysis;
+export function normalizeVideoRemixCutPoints(
+  duration: number,
+  cutPoints?: number[],
+  options?: { minShotDuration?: number }
+): number[];
+export function buildVideoRemixShots(input?: {
+  duration?: number;
+  cutPoints?: number[];
+  previousShots?: ShotAnalysis[];
+  detectionSource?: 'ffmpeg' | 'manual';
+  detections?: Array<{ time: number; score?: number }>;
+  minShotDuration?: number;
+}): ShotAnalysis[];
+export function beginVideoRemixPreprocessing(state: unknown): VideoRemixState;
+export function completeVideoRemixPreprocessing(
+  state: unknown,
+  result: {
+    source?: ReferenceVideo;
+    proxyUrl: string;
+    shots: ShotAnalysis[];
+  }
+): VideoRemixState;
+export function setVideoRemixPreprocessingError(
   state: unknown,
   message: string,
   retryable?: boolean

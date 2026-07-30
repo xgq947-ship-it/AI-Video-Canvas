@@ -14,25 +14,37 @@ import {
   Lock,
   Package,
   Play,
+  Plus,
+  RotateCcw,
+  Save,
   ScanSearch,
+  Scissors,
   Sparkles,
+  Trash2,
   Upload,
   Users,
   X,
 } from 'lucide-react';
 import {
   VIDEO_REMIX_WORKSPACE_TABS,
+  beginVideoRemixPreprocessing,
+  completeVideoRemixPreprocessing,
   createVideoRemixState,
+  normalizeVideoRemixCutPoints,
   replaceVideoRemixSource,
+  setVideoRemixPreprocessingError,
   setVideoRemixSourceError,
   summarizeVideoRemixState,
   workspaceTabForStage,
+  type ShotAnalysisFramePosition,
   type VideoRemixWorkspaceTab,
 } from '../../../shared/videoRemix.js';
 import { NodeData } from '../../types';
 import {
   importLocalReferenceVideo,
+  preprocessReferenceVideo,
   resolveUrlReferenceVideo,
+  updateVideoRemixShotTimeline,
 } from './videoRemixService';
 
 interface VideoRemixWorkspaceProps {
@@ -166,6 +178,7 @@ export const VideoRemixWorkspace: React.FC<VideoRemixWorkspaceProps> = ({
               node={node}
               workflowId={workflowId}
               onUpdateNode={onUpdateNode}
+              onSelectTab={setActiveTab}
             />
           </div>
         </div>
@@ -182,7 +195,8 @@ const WorkspaceContent: React.FC<{
   node: NodeData;
   workflowId?: string;
   onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
-}> = ({ activeTab, state, summary, dark, node, workflowId, onUpdateNode }) => {
+  onSelectTab: (tab: VideoRemixWorkspaceTab) => void;
+}> = ({ activeTab, state, summary, dark, node, workflowId, onUpdateNode, onSelectTab }) => {
   const title = VIDEO_REMIX_WORKSPACE_TABS.find(tab => tab.id === activeTab)?.label || 'Video Remix';
   const descriptions: Record<VideoRemixWorkspaceTab, string> = {
     source: '导入本地视频、画布视频或分享链接，并保留不可修改的原始文件。',
@@ -218,6 +232,16 @@ const WorkspaceContent: React.FC<{
           summary={summary}
           workflowId={workflowId}
           onUpdateNode={onUpdateNode}
+          onSelectShots={() => onSelectTab('shots')}
+          dark={dark}
+        />
+      ) : activeTab === 'shots' ? (
+        <ShotsWorkspace
+          node={node}
+          state={state}
+          workflowId={workflowId}
+          onUpdateNode={onUpdateNode}
+          onSelectSource={() => onSelectTab('source')}
           dark={dark}
         />
       ) : (
@@ -260,15 +284,19 @@ const SourceWorkspace: React.FC<{
   summary: ReturnType<typeof summarizeVideoRemixState>;
   workflowId?: string;
   onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
+  onSelectShots: () => void;
   dark: boolean;
-}> = ({ node, state, summary, workflowId, onUpdateNode, dark }) => {
+}> = ({ node, state, summary, workflowId, onUpdateNode, onSelectShots, dark }) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [urlInput, setUrlInput] = React.useState('');
-  const [busy, setBusy] = React.useState<'local' | 'url' | null>(null);
+  const [sceneThreshold, setSceneThreshold] = React.useState(0.3);
+  const [busy, setBusy] = React.useState<'local' | 'url' | 'preprocess' | null>(null);
   const [localError, setLocalError] = React.useState('');
   const sourceError = busy
     ? ''
-    : localError || state.errors.find(item => item.scope === 'source')?.message || '';
+    : localError
+      || state.errors.find(item => ['source', 'preprocessing'].includes(item.scope))?.message
+      || '';
 
   const storeFailure = React.useCallback((error: unknown) => {
     const message = error instanceof Error ? error.message : '参考视频处理失败';
@@ -330,6 +358,39 @@ const SourceWorkspace: React.FC<{
       storeSource(source);
     } catch (error) {
       storeFailure(error);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handlePreprocess = async () => {
+    if (busy) return;
+    if (!state.source) {
+      storeFailure(new Error('请先导入参考视频'));
+      return;
+    }
+    setBusy('preprocess');
+    setLocalError('');
+    onUpdateNode(node.id, {
+      videoRemix: beginVideoRemixPreprocessing(state),
+    });
+    try {
+      const result = await preprocessReferenceVideo({
+        workflowId: requireProject(),
+        remixId: state.remixId,
+        source: state.source,
+        threshold: sceneThreshold,
+      });
+      onUpdateNode(node.id, {
+        videoRemix: completeVideoRemixPreprocessing(state, result),
+      });
+      onSelectShots();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '视频预处理失败';
+      setLocalError(message);
+      onUpdateNode(node.id, {
+        videoRemix: setVideoRemixPreprocessingError(state, message),
+      });
     } finally {
       setBusy(null);
     }
@@ -450,8 +511,48 @@ const SourceWorkspace: React.FC<{
           </div>
         )}
 
+        <div className={`mt-4 rounded-2xl border p-4 ${
+          dark ? 'border-cyan-400/15 bg-cyan-400/[0.035]' : 'border-cyan-100 bg-cyan-50/60'
+        }`}>
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <ScanSearch size={16} className="text-cyan-400" />
+                本地自动拆镜
+              </div>
+              <div className={`mt-1 text-[11px] leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-500'}`}>
+                生成 720p / 15fps H.264 分析代理，通过 FFmpeg 场景分数确定切点，并为每个镜头抽取五帧。
+              </div>
+            </div>
+            <label className={`min-w-[180px] text-[11px] ${dark ? 'text-neutral-400' : 'text-neutral-600'}`}>
+              切镜阈值 {sceneThreshold.toFixed(2)}
+              <input
+                type="range"
+                min="0.1"
+                max="0.7"
+                step="0.05"
+                value={sceneThreshold}
+                disabled={Boolean(busy)}
+                onChange={event => setSceneThreshold(Number(event.target.value))}
+                className="mt-2 block w-full accent-cyan-400"
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            disabled={Boolean(busy) || !state.source}
+            onClick={() => void handlePreprocess()}
+            className={`mt-4 flex h-11 w-full items-center justify-center gap-2 rounded-xl text-sm font-medium disabled:cursor-not-allowed disabled:opacity-45 ${
+              dark ? 'bg-cyan-400 text-neutral-950 hover:bg-cyan-300' : 'bg-cyan-600 text-white hover:bg-cyan-500'
+            }`}
+          >
+            {busy === 'preprocess' ? <Loader2 size={16} className="animate-spin" /> : <Scissors size={16} />}
+            {busy === 'preprocess' ? '正在生成代理、检测切点并抽帧…' : state.shots.length ? '重新自动拆镜' : '生成分析代理并自动拆镜'}
+          </button>
+        </div>
+
         <div className={`mt-4 text-[11px] leading-5 ${dark ? 'text-neutral-600' : 'text-neutral-400'}`}>
-          此步骤只使用公开媒体解析接口与 Evan 内置 FFprobe，不调用 Gemini；未登录 Gemini 也能正常导入。
+          导入与自动拆镜只使用公开媒体解析接口及 Evan 内置 FFmpeg / FFprobe，不调用 Gemini。
         </div>
       </section>
 
@@ -498,6 +599,350 @@ const SourceWorkspace: React.FC<{
         </section>
         <OverviewCards summary={summary} dark={dark} />
       </div>
+    </div>
+  );
+};
+
+const FRAME_LABELS: Record<ShotAnalysisFramePosition, string> = {
+  start: 'Start',
+  quarter: '25%',
+  middle: '50%',
+  three_quarter: '75%',
+  end: 'End',
+};
+
+const ShotsWorkspace: React.FC<{
+  node: NodeData;
+  state: ReturnType<typeof createVideoRemixState>;
+  workflowId?: string;
+  onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
+  onSelectSource: () => void;
+  dark: boolean;
+}> = ({ node, state, workflowId, onUpdateNode, onSelectSource, dark }) => {
+  const videoRef = React.useRef<HTMLVideoElement>(null);
+  const duration = Math.max(0, Number(state.source?.duration) || 0);
+  const savedCuts = React.useMemo(
+    () => state.shots.slice(0, -1).map(shot => Number(shot.end)),
+    [state.shots]
+  );
+  const [draftCuts, setDraftCuts] = React.useState<number[]>(savedCuts);
+  const [currentTime, setCurrentTime] = React.useState(0);
+  const [busy, setBusy] = React.useState(false);
+  const [localError, setLocalError] = React.useState('');
+
+  React.useEffect(() => {
+    setDraftCuts(savedCuts);
+  }, [savedCuts]);
+
+  const normalizedDraftCuts = React.useMemo(
+    () => normalizeVideoRemixCutPoints(duration, draftCuts).slice(1, -1),
+    [draftCuts, duration]
+  );
+  const dirty = JSON.stringify(normalizedDraftCuts) !== JSON.stringify(savedCuts);
+  const boundaries = [0, ...normalizedDraftCuts, duration];
+
+  const seekTo = (time: number) => {
+    const safeTime = Math.min(duration, Math.max(0, time));
+    setCurrentTime(safeTime);
+    if (videoRef.current) videoRef.current.currentTime = safeTime;
+  };
+
+  const moveCut = (index: number, value: number) => {
+    setDraftCuts(current => {
+      const next = [...current];
+      const previousBoundary = index === 0 ? 0 : next[index - 1];
+      const nextBoundary = index === next.length - 1 ? duration : next[index + 1];
+      next[index] = Math.round(
+        Math.min(nextBoundary - 0.35, Math.max(previousBoundary + 0.35, value)) * 1000
+      ) / 1000;
+      return next;
+    });
+  };
+
+  const splitAtCurrentTime = () => {
+    const candidate = Math.round(
+      Math.min(duration, Math.max(0, videoRef.current?.currentTime ?? currentTime)) * 1000
+    ) / 1000;
+    const allBoundaries = [0, ...normalizedDraftCuts, duration];
+    if (allBoundaries.some(value => Math.abs(value - candidate) < 0.35)) {
+      setLocalError('新切点需与相邻切点至少间隔 0.35 秒');
+      return;
+    }
+    setLocalError('');
+    setDraftCuts(current => [...current, candidate].sort((left, right) => left - right));
+  };
+
+  const saveTimeline = async () => {
+    if (busy || !state.source) return;
+    if (!workflowId) {
+      setLocalError('请先把当前画布保存为项目');
+      return;
+    }
+    setBusy(true);
+    setLocalError('');
+    onUpdateNode(node.id, {
+      videoRemix: beginVideoRemixPreprocessing(state),
+    });
+    try {
+      const result = await updateVideoRemixShotTimeline({
+        workflowId,
+        remixId: state.remixId,
+        source: state.source,
+        cutPoints: normalizedDraftCuts,
+        previousShots: state.shots,
+      });
+      onUpdateNode(node.id, {
+        videoRemix: completeVideoRemixPreprocessing(state, result),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '镜头时间线保存失败';
+      setLocalError(message);
+      onUpdateNode(node.id, {
+        videoRemix: setVideoRemixPreprocessingError(state, message),
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!state.source?.proxyUrl || state.shots.length === 0) {
+    return (
+      <div className={`mt-7 flex min-h-[360px] items-center justify-center rounded-[26px] border ${
+        dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
+      }`}>
+        <div className="max-w-sm text-center">
+          <Scissors size={28} className="mx-auto text-cyan-400" />
+          <div className="mt-4 text-sm font-medium">尚未生成镜头时间线</div>
+          <p className={`mt-2 text-xs leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+            先在源视频页生成分析代理并执行本地自动拆镜。
+          </p>
+          <button
+            type="button"
+            onClick={onSelectSource}
+            className={`mt-5 rounded-xl px-5 py-2.5 text-xs font-medium ${
+              dark ? 'bg-white text-neutral-950' : 'bg-neutral-900 text-white'
+            }`}
+          >
+            返回源视频
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-7 space-y-5">
+      <section className={`rounded-[26px] border p-5 ${
+        dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
+      }`}>
+        <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+          <div>
+            <video
+              ref={videoRef}
+              src={state.source.proxyUrl}
+              controls
+              preload="metadata"
+              onTimeUpdate={event => setCurrentTime(event.currentTarget.currentTime)}
+              className={`aspect-video max-h-[420px] w-full rounded-2xl object-contain ${
+                dark ? 'bg-black' : 'bg-neutral-100'
+              }`}
+            />
+            <button
+              type="button"
+              onClick={event => {
+                const bounds = event.currentTarget.getBoundingClientRect();
+                seekTo(((event.clientX - bounds.left) / bounds.width) * duration);
+              }}
+              className={`mt-4 flex h-12 w-full overflow-hidden rounded-xl ${
+                dark ? 'bg-black/40' : 'bg-neutral-100'
+              }`}
+              aria-label="镜头时间线，点击可定位播放头"
+            >
+              {boundaries.slice(0, -1).map((start, index) => {
+                const end = boundaries[index + 1];
+                return (
+                  <span
+                    key={`${start}-${end}`}
+                    className={`flex min-w-[2px] items-center justify-center border-r text-[10px] font-medium ${
+                      index % 2 === 0
+                        ? dark ? 'border-black/40 bg-cyan-400/25 text-cyan-100' : 'border-white bg-cyan-100 text-cyan-800'
+                        : dark ? 'border-black/40 bg-blue-400/20 text-blue-100' : 'border-white bg-blue-100 text-blue-800'
+                    }`}
+                    style={{ width: `${((end - start) / duration) * 100}%` }}
+                  >
+                    {index + 1}
+                  </span>
+                );
+              })}
+            </button>
+            <div className={`mt-2 flex justify-between text-[10px] ${dark ? 'text-neutral-600' : 'text-neutral-400'}`}>
+              <span>00:00.0</span>
+              <span>播放头 {formatDuration(currentTime)}</span>
+              <span>{formatDuration(duration)}</span>
+            </div>
+          </div>
+
+          <div className={`rounded-2xl border p-4 ${
+            dark ? 'border-white/8 bg-white/[0.025]' : 'border-neutral-200 bg-neutral-50'
+          }`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium">切点编辑</div>
+                <div className={`mt-1 text-[11px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+                  {boundaries.length - 1} 个镜头 · 最短 0.35 秒
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={splitAtCurrentTime}
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs disabled:opacity-50 ${
+                  dark ? 'bg-white/8 text-neutral-200 hover:bg-white/12' : 'bg-white text-neutral-700 shadow-sm'
+                }`}
+              >
+                <Plus size={13} />
+                在播放头拆分
+              </button>
+            </div>
+
+            <div className="mt-4 max-h-[230px] space-y-3 overflow-y-auto pr-1">
+              {normalizedDraftCuts.length === 0 ? (
+                <div className={`rounded-xl border border-dashed px-3 py-5 text-center text-xs ${
+                  dark ? 'border-white/8 text-neutral-600' : 'border-neutral-200 text-neutral-400'
+                }`}>
+                  当前只有一个镜头，可播放到目标位置后新增切点
+                </div>
+              ) : normalizedDraftCuts.map((cut, index) => {
+                const previousBoundary = index === 0 ? 0 : normalizedDraftCuts[index - 1];
+                const nextBoundary = index === normalizedDraftCuts.length - 1
+                  ? duration
+                  : normalizedDraftCuts[index + 1];
+                return (
+                  <div key={index} className={`rounded-xl border px-3 py-2.5 ${
+                    dark ? 'border-white/8 bg-black/20' : 'border-neutral-200 bg-white'
+                  }`}>
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span>切点 {index + 1} · {formatDuration(cut)}</span>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setDraftCuts(current => current.filter((_, itemIndex) => itemIndex !== index))}
+                        className={`flex items-center gap-1 rounded-md px-2 py-1 ${
+                          dark ? 'text-neutral-500 hover:bg-red-500/10 hover:text-red-300' : 'text-neutral-400 hover:bg-red-50 hover:text-red-600'
+                        }`}
+                      >
+                        <Trash2 size={11} />
+                        合并
+                      </button>
+                    </div>
+                    <input
+                      type="range"
+                      min={previousBoundary + 0.35}
+                      max={nextBoundary - 0.35}
+                      step="0.01"
+                      value={cut}
+                      disabled={busy}
+                      onChange={event => moveCut(index, Number(event.target.value))}
+                      className="mt-2 block w-full accent-cyan-400"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+
+            {localError && (
+              <div className={`mt-3 flex items-start gap-2 rounded-xl px-3 py-2 text-xs ${
+                dark ? 'bg-red-500/8 text-red-300' : 'bg-red-50 text-red-700'
+              }`}>
+                <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                {localError}
+              </div>
+            )}
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={busy || !dirty}
+                onClick={() => {
+                  setDraftCuts(savedCuts);
+                  setLocalError('');
+                }}
+                className={`flex h-10 items-center justify-center gap-2 rounded-xl text-xs disabled:opacity-40 ${
+                  dark ? 'bg-white/6 text-neutral-300' : 'bg-white text-neutral-600 shadow-sm'
+                }`}
+              >
+                <RotateCcw size={13} />
+                撤销调整
+              </button>
+              <button
+                type="button"
+                disabled={busy || !dirty}
+                onClick={() => void saveTimeline()}
+                className={`flex h-10 items-center justify-center gap-2 rounded-xl text-xs font-medium disabled:opacity-40 ${
+                  dark ? 'bg-cyan-400 text-neutral-950' : 'bg-cyan-600 text-white'
+                }`}
+              >
+                {busy ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+                {busy ? '重建五帧中…' : '保存镜头时间线'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className={`rounded-[26px] border p-5 ${
+        dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
+      }`}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-medium">Shot 分析帧</div>
+            <div className={`mt-1 text-[11px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+              每镜头固定抽取 Start / 25% / 50% / 75% / End，供下一阶段语义分析使用。
+            </div>
+          </div>
+          {dirty && (
+            <span className={`rounded-full px-3 py-1 text-[10px] ${
+              dark ? 'bg-amber-400/10 text-amber-300' : 'bg-amber-50 text-amber-700'
+            }`}>
+              保存后刷新分析帧
+            </span>
+          )}
+        </div>
+        <div className="mt-5 space-y-4">
+          {state.shots.map((shot, index) => (
+            <article key={shot.shotId} className={`rounded-2xl border p-4 ${
+              dark ? 'border-white/8 bg-black/20' : 'border-neutral-200 bg-neutral-50'
+            }`}>
+              <div className="flex items-center justify-between gap-4">
+                <div className="text-xs font-medium">Shot {String(index + 1).padStart(2, '0')}</div>
+                <div className={`text-[11px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+                  {formatDuration(shot.start)} – {formatDuration(shot.end)} · {Number(shot.duration).toFixed(2)}s
+                </div>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                {(shot.analysisFrames || []).map(frame => (
+                  <figure key={frame.position} className={`overflow-hidden rounded-xl border ${
+                    dark ? 'border-white/8 bg-black' : 'border-neutral-200 bg-white'
+                  }`}>
+                    <img
+                      src={frame.url}
+                      alt={`${shot.shotId} ${FRAME_LABELS[frame.position]}`}
+                      loading="lazy"
+                      className="aspect-video w-full object-cover"
+                    />
+                    <figcaption className={`flex justify-between px-2 py-1.5 text-[9px] ${
+                      dark ? 'text-neutral-500' : 'text-neutral-400'
+                    }`}>
+                      <span>{FRAME_LABELS[frame.position]}</span>
+                      <span>{formatDuration(frame.time)}</span>
+                    </figcaption>
+                  </figure>
+                ))}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
     </div>
   );
 };

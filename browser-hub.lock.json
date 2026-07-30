@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "repository": "xgq947-ship-it/ai-browser-hub",
+  "channel": "stable",
+  "version": "0.1.0",
+  "tag": "v0.1.0",
+  "protocolVersion": "1.0.0",
+  "assets": {
+    "darwin-arm64": {
+      "name": "AI-Browser-Hub-v0.1.0-darwin-arm64.zip",
+      "sha256": "f9fc6254b530b601c02a2633f08194abaec9201bdeb7d0a942450c0ddc44b4bc"
+    },
+    "darwin-x64": {
+      "name": "AI-Browser-Hub-v0.1.0-darwin-x64.zip",
+      "sha256": "b4949f751a408423db8f451c7e63236f1ef3bf47495c8b4f4dd588065283f108"
+    },
+    "win32-x64": {
+      "name": "AI-Browser-Hub-v0.1.0-win32-x64.zip",
+      "sha256": "63cad03e2e5beb9fffc8293c0d6bd384a4e2faf0124e28eba703ba712366f40b"
+    }
+  }
+}

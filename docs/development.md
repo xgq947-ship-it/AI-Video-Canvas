@@ -101,6 +101,11 @@ Flow、Gemini Web、即梦的 HTTP Provider 分层、并发策略、健康接口
 `userData`。开发版、安装版、Reverse Prompt 及后续 App 都从 Hub 取得短期租约和动态 CDP，
 禁止硬编码调试端口。`test/runtimePaths.test.mjs` 与独立 Hub 仓库测试负责守卫该边界。
 
+Hub 依赖只在仓库根目录的 `browser-hub.lock.json` 锁定一次，包含稳定版版本、协议和三平台
+SHA-256。`.github/workflows/sync-browser-hub.yml` 每六小时检查 Hub 最新稳定 Release；发现
+兼容新版本后先在 macOS runner 下载锁定载荷并运行类型检查、构建和完整测试，全部通过才由
+GitHub Actions 更新 `main`。普通构建只读取锁文件，不在构建过程中临时选择 `latest`。
+
 ## 媒体工具
 
 FFmpeg `6.1.1` 与 FFprobe `6.1.1` 由锁定的 `ffmpeg-ffprobe-static` 平台包提供。源码模式

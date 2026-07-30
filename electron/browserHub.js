@@ -2,8 +2,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const BROWSER_HUB_VERSION = '0.1.1';
-
 export function sharedBrowserHubHome(environment = process.env, {
     platform = process.platform,
     homeDir = os.homedir()

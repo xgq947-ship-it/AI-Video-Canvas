@@ -8,11 +8,14 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
+import { browserHubAsset, readBrowserHubLock } from './browser-hub-lock.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const HUB_VERSION = '0.1.1';
+const HUB_LOCK = await readBrowserHubLock();
+const HUB_VERSION = HUB_LOCK.version;
 const platform = process.platform;
 const arch = process.env.AI_BROWSER_HUB_RUNTIME_ARCH || process.arch;
+const lockedAsset = browserHubAsset(HUB_LOCK, platform, arch);
 const payloadName = `payload-${platform}-${arch}`;
 const destination = path.join(ROOT, 'desktop-runtime', 'current', 'browser-hub');
 
@@ -20,6 +23,7 @@ async function validPayload(directory) {
     try {
         const manifest = JSON.parse(await readFile(path.join(directory, 'manifest.json'), 'utf8'));
         return manifest.version === HUB_VERSION
+            && manifest.protocolVersion === HUB_LOCK.protocolVersion
             && manifest.platform === platform
             && manifest.arch === arch
             && existsSync(path.join(directory, 'server', 'daemon.mjs'))
@@ -37,7 +41,10 @@ async function localPayload() {
         ? repository
         : path.join(repository, 'dist', payloadName);
     if (await validPayload(direct)) return direct;
-    if (!existsSync(path.join(repository, 'package.json'))) return null;
+    const sourcePackagePath = path.join(repository, 'package.json');
+    if (!existsSync(sourcePackagePath)) return null;
+    const sourcePackage = JSON.parse(await readFile(sourcePackagePath, 'utf8'));
+    if (sourcePackage.version !== HUB_VERSION) return null;
     const prepare = spawnSync(process.execPath, [path.join(repository, 'scripts', 'prepare-node-runtime.mjs')], {
         cwd: repository,
         stdio: 'inherit',
@@ -54,32 +61,34 @@ async function localPayload() {
 
 async function downloadPayload() {
     const tag = `v${HUB_VERSION}`;
-    const asset = `AI-Browser-Hub-${tag}-${platform}-${arch}.zip`;
-    const url = `https://github.com/xgq947-ship-it/ai-browser-hub/releases/download/${tag}/${asset}`;
+    const asset = lockedAsset.name;
+    const url = `https://github.com/${HUB_LOCK.repository}/releases/download/${tag}/${asset}`;
     const temporary = await mkdtemp(path.join(tmpdir(), 'evan-browser-hub-'));
-    const archive = path.join(temporary, asset);
-    const response = await fetch(url);
-    if (!response.ok || !response.body) throw new Error(`AI Browser Hub 下载失败：HTTP ${response.status}`);
-    await finished(Readable.fromWeb(response.body).pipe(createWriteStream(archive)));
-    const checksumResponse = await fetch(`${url}.sha256`);
-    if (!checksumResponse.ok) throw new Error(`AI Browser Hub 校验文件下载失败：HTTP ${checksumResponse.status}`);
-    const expected = (await checksumResponse.text()).trim().match(/^[a-fA-F0-9]{64}/)?.[0]?.toLowerCase();
-    const actual = createHash('sha256').update(await readFile(archive)).digest('hex');
-    if (!expected || actual !== expected) throw new Error('AI Browser Hub 载荷 SHA-256 校验失败。');
-    const extracted = path.join(temporary, 'extracted');
-    await mkdir(extracted, { recursive: true });
-    if (platform === 'win32') {
-        execFileSync('powershell.exe', [
-            '-NoProfile', '-NonInteractive', '-Command',
-            'Expand-Archive -LiteralPath $env:HUB_ARCHIVE -DestinationPath $env:HUB_EXTRACT -Force'
-        ], { env: { ...process.env, HUB_ARCHIVE: archive, HUB_EXTRACT: extracted } });
-    } else {
-        execFileSync('ditto', ['-x', '-k', archive, extracted]);
+    try {
+        const archive = path.join(temporary, asset);
+        const response = await fetch(url);
+        if (!response.ok || !response.body) throw new Error(`AI Browser Hub 下载失败：HTTP ${response.status}`);
+        await finished(Readable.fromWeb(response.body).pipe(createWriteStream(archive)));
+        const actual = createHash('sha256').update(await readFile(archive)).digest('hex');
+        if (actual !== lockedAsset.sha256) throw new Error('AI Browser Hub 载荷与锁文件 SHA-256 不一致。');
+        const extracted = path.join(temporary, 'extracted');
+        await mkdir(extracted, { recursive: true });
+        if (platform === 'win32') {
+            execFileSync('powershell.exe', [
+                '-NoProfile', '-NonInteractive', '-Command',
+                'Expand-Archive -LiteralPath $env:HUB_ARCHIVE -DestinationPath $env:HUB_EXTRACT -Force'
+            ], { env: { ...process.env, HUB_ARCHIVE: archive, HUB_EXTRACT: extracted } });
+        } else {
+            execFileSync('ditto', ['-x', '-k', archive, extracted]);
+        }
+        const entries = await readdir(extracted);
+        const root = entries.length === 1 ? path.join(extracted, entries[0]) : extracted;
+        if (!await validPayload(root)) throw new Error('下载的 AI Browser Hub 载荷校验失败。');
+        return { root, temporary };
+    } catch (error) {
+        await rm(temporary, { recursive: true, force: true });
+        throw error;
     }
-    const entries = await readdir(extracted);
-    const root = entries.length === 1 ? path.join(extracted, entries[0]) : extracted;
-    if (!await validPayload(root)) throw new Error('下载的 AI Browser Hub 载荷校验失败。');
-    return { root, temporary };
 }
 
 let source = await localPayload();

@@ -19,6 +19,10 @@ const installerWorkflow = fs.readFileSync(
   new URL('../.github/workflows/desktop-installers.yml', import.meta.url),
   'utf8'
 );
+const hubSyncWorkflow = fs.readFileSync(
+  new URL('../.github/workflows/sync-browser-hub.yml', import.meta.url),
+  'utf8'
+);
 const electronMain = fs.readFileSync(new URL('../electron/main.js', import.meta.url), 'utf8');
 const electronPreload = fs.readFileSync(new URL('../electron/preload.cjs', import.meta.url), 'utf8');
 const serverMain = fs.readFileSync(new URL('../server/index.js', import.meta.url), 'utf8');
@@ -97,11 +101,21 @@ test('共享 Hub 载荷包含 Node 许可证并校验远程归档', () => {
   const prepareHub = fs.readFileSync(new URL('../scripts/prepare-browser-hub.mjs', import.meta.url), 'utf8');
   assert.match(prepareHub, /NODE-LICENSE/);
   assert.match(prepareHub, /createHash\('sha256'\)/);
+  assert.match(prepareHub, /readBrowserHubLock/);
+  assert.match(prepareHub, /lockedAsset\.sha256/);
   assert.match(runtimeVerifier, /NODE-LICENSE/);
   const electronHub = fs.readFileSync(new URL('../electron/browserHub.js', import.meta.url), 'utf8');
-  const pinnedVersion = prepareHub.match(/const HUB_VERSION = '([^']+)'/)?.[1];
-  assert.ok(pinnedVersion);
-  assert.match(electronHub, new RegExp(`BROWSER_HUB_VERSION = '${pinnedVersion.replaceAll('.', '\\.')}'`));
+  assert.doesNotMatch(electronHub, /BROWSER_HUB_VERSION/);
+  assert.doesNotMatch(prepareHub, /const HUB_VERSION = '\d/);
+});
+
+test('Hub stable Release 自动同步单一锁文件，验证失败不会写入 main', () => {
+  assert.match(hubSyncWorkflow, /cron: '17 \*\/6 \* \* \*'/);
+  assert.match(hubSyncWorkflow, /scripts\/sync-browser-hub-lock\.mjs/);
+  assert.match(hubSyncWorkflow, /npm test/);
+  assert.match(hubSyncWorkflow, /macos-15/);
+  assert.match(hubSyncWorkflow, /git status --porcelain/);
+  assert.match(hubSyncWorkflow, /git push origin HEAD:main/);
 });
 
 test('Electron 与普通 npm run dev 都会自动启动内置共享 Hub', () => {

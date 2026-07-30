@@ -1,0 +1,74 @@
+name: Sync AI Browser Hub
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-ai-browser-hub
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      version: ${{ steps.sync.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - id: sync
+        name: Resolve latest stable Hub release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/sync-browser-hub-lock.mjs
+      - if: steps.sync.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-hub-lock-${{ github.run_id }}
+          path: browser-hub.lock.json
+          retention-days: 1
+
+  verify-and-sync:
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: browser-hub-lock-${{ github.run_id }}
+          path: .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - name: Verify locked native Hub payload
+        run: node scripts/prepare-browser-hub.mjs
+      - name: Commit verified lock
+        env:
+          HUB_VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          test "$(git status --porcelain --untracked-files=all)" = " M browser-hub.lock.json"
+          git fetch origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add browser-hub.lock.json
+          git commit -m "chore: sync AI Browser Hub v${HUB_VERSION}"
+          git push origin HEAD:main

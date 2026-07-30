@@ -28,6 +28,7 @@
     "desktop:icons": "node scripts/generate-desktop-icons.mjs",
     "desktop:runtime": "node scripts/prepare-desktop-runtime.mjs && node scripts/prepare-browser-hub.mjs",
     "desktop:verify": "node scripts/verify-desktop-runtime.mjs",
+    "hub:sync": "node scripts/sync-browser-hub-lock.mjs",
     "desktop:prepare": "npm run desktop:icons && npm run desktop:runtime && npm run desktop:verify",
     "desktop:pack": "npm run build && npm run desktop:prepare && electron-builder --dir",
     "desktop:dist": "npm run build && npm run desktop:prepare && electron-builder",

@@ -150,6 +150,8 @@ Hub 控制面和 Chrome CDP 都使用随机 loopback 端口。状态文件含随
 ## 6. 更新与数据迁移
 
 - 版本号以 `package.json` 为唯一来源，发布由 `vX.Y.Z` Tag 触发。
+- Hub 依赖以 `browser-hub.lock.json` 为唯一来源；自动同步工作流只接受协议主版本兼容、
+  三平台 SHA-256 完整且通过 App 全量回归的最新稳定 Release。
 - 更新只替换安装资源，不直接写用户数据。
 - 数据结构使用独立 `schemaVersion`，迁移必须可重复、原子写入并先备份。
 - 不在用户机器保存私有 GitHub Token；更新源使用公开下载端点或自有对象存储。

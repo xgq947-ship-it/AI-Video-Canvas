@@ -36,6 +36,7 @@ import {
   beginVideoRemixAnalysis,
   completeVideoRemixPreprocessing,
   createVideoRemixState,
+  invalidateVideoRemixShotPrompts,
   normalizeVideoRemixCutPoints,
   replaceVideoRemixSource,
   restoreVideoRemixAnalysis as restoreVideoRemixAnalysisState,
@@ -62,6 +63,7 @@ import {
   updateVideoRemixShotTimeline,
 } from './videoRemixService';
 import { VideoRemixAssetsWorkspace } from './VideoRemixAssetsWorkspace';
+import { VideoRemixPromptsWorkspace } from './VideoRemixPromptsWorkspace';
 
 interface VideoRemixWorkspaceProps {
   node: NodeData;
@@ -276,6 +278,7 @@ const WorkspaceContent: React.FC<{
           workflowId={workflowId}
           onUpdateNode={onUpdateNode}
           onSelectSource={() => onSelectTab('source')}
+          onSelectAssets={() => onSelectTab('assets')}
           dark={dark}
         />
       ) : (
@@ -866,11 +869,11 @@ const AnalysisWorkspace: React.FC<{
       if (path === 'audioBlueprint.environment') next.audioBlueprint.environment = field;
       return next;
     });
-    persist({
+    persist(invalidateVideoRemixShotPrompts({
       ...state,
       shots,
       updatedAt: new Date().toISOString(),
-    });
+    }, [shotId]));
   };
 
   if (!state.source?.proxyUrl || state.shots.length === 0) {
@@ -1248,8 +1251,17 @@ const ShotsWorkspace: React.FC<{
   workflowId?: string;
   onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
   onSelectSource: () => void;
+  onSelectAssets: () => void;
   dark: boolean;
-}> = ({ node, state, workflowId, onUpdateNode, onSelectSource, dark }) => {
+}> = ({
+  node,
+  state,
+  workflowId,
+  onUpdateNode,
+  onSelectSource,
+  onSelectAssets,
+  dark,
+}) => {
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const duration = Math.max(0, Number(state.source?.duration) || 0);
   const savedCuts = React.useMemo(
@@ -1574,6 +1586,14 @@ const ShotsWorkspace: React.FC<{
           ))}
         </div>
       </section>
+
+      <VideoRemixPromptsWorkspace
+        node={node}
+        state={state}
+        onUpdateNode={onUpdateNode}
+        onSelectAssets={onSelectAssets}
+        dark={dark}
+      />
     </div>
   );
 };

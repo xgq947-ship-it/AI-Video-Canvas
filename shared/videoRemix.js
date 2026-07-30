@@ -58,6 +58,10 @@ const DEFAULT_ASSET_REVIEW = Object.freeze({
   confirmed: false,
 });
 
+const DEFAULT_PROMPT_REVIEW = Object.freeze({
+  confirmed: false,
+});
+
 const TAB_BY_STAGE = Object.freeze({
   source: 'source',
   preprocessing: 'source',
@@ -263,6 +267,7 @@ export function createVideoRemixState(overrides = {}) {
     source: null,
     analysisRun: { ...DEFAULT_ANALYSIS_RUN },
     assetReview: { ...DEFAULT_ASSET_REVIEW },
+    promptReview: { ...DEFAULT_PROMPT_REVIEW },
     story: null,
     assets: {
       characters: [],
@@ -297,6 +302,10 @@ export function createVideoRemixState(overrides = {}) {
   state.assetReview = {
     ...DEFAULT_ASSET_REVIEW,
     ...(overrides.assetReview || {}),
+  };
+  state.promptReview = {
+    ...DEFAULT_PROMPT_REVIEW,
+    ...(overrides.promptReview || {}),
   };
   state.locks = { ...HIGH_FIDELITY_LOCKS, ...(overrides.locks || {}) };
   state.bgm = { mode: 'none', ...(overrides.bgm || {}) };
@@ -406,6 +415,7 @@ export function completeVideoRemixPreprocessing(state, {
       totalShots: shots.length,
     },
     assetReview: { ...DEFAULT_ASSET_REVIEW },
+    promptReview: { ...DEFAULT_PROMPT_REVIEW },
     story: null,
     assets: {
       characters: [],
@@ -581,7 +591,16 @@ export function applyVideoRemixGlobalAnalysis(state, result) {
       ...DEFAULT_ASSET_REVIEW,
       updatedAt: new Date().toISOString(),
     },
+    promptReview: { ...DEFAULT_PROMPT_REVIEW },
     shots,
+    prompts: {},
+    keyframes: [],
+    generatedVideos: [],
+    timeline: (current.timeline || []).map(item => {
+      const { videoUrl, ...rest } = item;
+      return rest;
+    }),
+    output: null,
     analysisRun: {
       ...DEFAULT_ANALYSIS_RUN,
       ...(current.analysisRun || {}),
@@ -693,6 +712,19 @@ export function applyVideoRemixShotAnalysis(state, analyzedShot) {
     ...current,
     stage: completedShots === shots.length ? 'analysis_ready' : 'analysis_partial',
     shots,
+    promptReview: { ...DEFAULT_PROMPT_REVIEW },
+    prompts: Object.fromEntries(
+      Object.entries(current.prompts || {}).filter(([shotId]) => (
+        shotId !== analyzedShot.shotId
+      ))
+    ),
+    keyframes: [],
+    generatedVideos: [],
+    timeline: (current.timeline || []).map(item => {
+      const { videoUrl, ...rest } = item;
+      return rest;
+    }),
+    output: null,
     analysisRun: {
       ...DEFAULT_ANALYSIS_RUN,
       ...(current.analysisRun || {}),
@@ -843,15 +875,19 @@ function stageAfterAssetChange(current) {
 }
 
 function withInvalidatedAssetDerivatives(current, updates) {
-  return {
+  const nextCore = {
     ...current,
     ...updates,
+  };
+  return {
+    ...nextCore,
     stage: stageAfterAssetChange(current),
     assetReview: {
       confirmed: false,
       updatedAt: new Date().toISOString(),
     },
-    prompts: {},
+    promptReview: { ...DEFAULT_PROMPT_REVIEW },
+    prompts: refreshPromptRecordsForAssets(nextCore),
     keyframes: [],
     generatedVideos: [],
     timeline: (current.timeline || []).map(item => {
@@ -1042,5 +1078,847 @@ export function resolveVideoRemixShotCharacter(state, shotId, characterId) {
   return {
     character,
     ...(baseLook ? { look: resolveVideoRemixCharacterLook(baseLook) } : {}),
+  };
+}
+
+const PROMPT_TEMPLATE_TOKEN_RE = /\{\{([A-Za-z0-9_-]+)\}\}/g;
+
+const editableText = value => (
+  value && typeof value === 'object' && Object.hasOwn(value, 'value')
+    ? String(value.value || '').trim()
+    : String(value || '').trim()
+);
+
+const compactPromptText = value => String(value || '')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+function stablePromptValue(value) {
+  if (Array.isArray(value)) return value.map(stablePromptValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map(key => [key, stablePromptValue(value[key])])
+  );
+}
+
+function promptValueHash(value) {
+  const input = JSON.stringify(stablePromptValue(value));
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function promptTemplateTokens(value) {
+  const tokens = [];
+  for (const match of String(value || '').matchAll(PROMPT_TEMPLATE_TOKEN_RE)) {
+    if (!tokens.includes(match[1])) tokens.push(match[1]);
+  }
+  return tokens;
+}
+
+export function validateVideoRemixPromptTemplate(sourceTemplate, candidateTemplate) {
+  const expected = promptTemplateTokens(sourceTemplate);
+  const actual = promptTemplateTokens(candidateTemplate);
+  const missing = expected.filter(token => !actual.includes(token));
+  const unknown = actual.filter(token => !expected.includes(token));
+  return {
+    valid: missing.length === 0 && unknown.length === 0,
+    missing,
+    unknown,
+  };
+}
+
+function placeholder(assetId) {
+  return `{{${String(assetId || '')}}}`;
+}
+
+function timeRange(start, end) {
+  return `${Number(start || 0).toFixed(1)}-${Number(end || 0).toFixed(1)} 秒`;
+}
+
+function frameSubjectLine(subject) {
+  const details = [
+    `中心约在画面 ${Math.round(Number(subject.x || 0) * 100)}% × ${Math.round(Number(subject.y || 0) * 100)}%`,
+    `画面占比约 ${Math.round(Number(subject.scale || 0) * 100)}%`,
+    subject.facing ? `朝向 ${subject.facing}` : '',
+    subject.pose ? `姿势 ${subject.pose}` : '',
+  ].filter(Boolean);
+  return `${placeholder(subject.id)}：${details.join('；')}`;
+}
+
+function framePropLine(prop) {
+  return `${placeholder(prop.id)}：位于画面 ${Math.round(Number(prop.x || 0) * 100)}% × ${Math.round(Number(prop.y || 0) * 100)}%${prop.scale === undefined ? '' : `，画面占比约 ${Math.round(Number(prop.scale || 0) * 100)}%`}`;
+}
+
+const ACTION_CATEGORY_LABELS = Object.freeze({
+  body: '身体',
+  pose: '姿态',
+  hand: '手部',
+  facial: '表情',
+  object: '道具交互',
+});
+
+const PROP_CATEGORY_LABELS = Object.freeze({
+  hero: '主道具',
+  interactive: '交互道具',
+  background: '背景道具',
+});
+
+const HAND_LABELS = Object.freeze({
+  left: '左手',
+  right: '右手',
+  both: '双手',
+});
+
+export function buildVideoRemixRawPrompt(state, shotId) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const shot = current.shots.find(item => item.shotId === String(shotId || ''));
+  if (!shot) return '';
+  const lines = [
+    `【时长】持续约 ${Number(shot.duration || 0).toFixed(2)} 秒，保持原 Shot 时长与单镜头结构。`,
+  ];
+  const storyBeat = editableText(shot.storyBeat);
+  if (storyBeat) lines.push(`【剧情】${storyBeat}`);
+  if (shot.scene?.sceneId) {
+    lines.push(`【场景】${placeholder(shot.scene.sceneId)}${shot.scene.sceneZone ? `，使用功能区 ${shot.scene.sceneZone}` : ''}`);
+  }
+  if (shot.characters.length > 0) {
+    lines.push(`【人物】${shot.characters.map(item => placeholder(item.characterId)).join('；')}`);
+  }
+  const visibleProps = shot.props.filter(item => (
+    !current.assets.props.find(prop => prop.id === item.propId)?.removed
+  ));
+  if (visibleProps.length > 0) {
+    lines.push(`【道具】${visibleProps.map(item => (
+      `${placeholder(item.propId)}${item.role ? `（${item.role}）` : ''}`
+    )).join('；')}`);
+  }
+  const frameLines = [
+    editableText(shot.frameBlueprint?.shotSize)
+      ? `景别 ${editableText(shot.frameBlueprint.shotSize)}`
+      : '',
+    editableText(shot.frameBlueprint?.cameraAngle)
+      ? `机位 ${editableText(shot.frameBlueprint.cameraAngle)}`
+      : '',
+    ...(shot.frameBlueprint?.subjects || []).map(frameSubjectLine),
+    ...(shot.frameBlueprint?.props || [])
+      .filter(prop => !current.assets.props.find(item => item.id === prop.id)?.removed)
+      .map(framePropLine),
+  ].filter(Boolean);
+  if (frameLines.length > 0) lines.push(`【构图】\n${frameLines.join('\n')}`);
+
+  const actionLines = [];
+  for (const subject of shot.motionBlueprint?.subjects || []) {
+    for (const action of subject.actionSequence || []) {
+      actionLines.push(
+        `${timeRange(action.start, action.end)}：${placeholder(subject.characterId)} ${action.action}${action.category ? `（${ACTION_CATEGORY_LABELS[action.category] || action.category}）` : ''}`
+      );
+    }
+    if (subject.movementDirection) {
+      actionLines.push(`${placeholder(subject.characterId)} 整体移动方向：${subject.movementDirection}`);
+    }
+  }
+  for (const interaction of shot.motionBlueprint?.propInteractions || []) {
+    const prop = current.assets.props.find(item => item.id === interaction.prop);
+    actionLines.push(
+      `${timeRange(interaction.start, interaction.end)}：${placeholder(interaction.actor)} 用${HAND_LABELS[interaction.hand] || '手'}执行 ${interaction.action}，${prop?.removed ? '保持原手部运动路径并维持空手状态' : `交互对象为 ${placeholder(interaction.prop)}`}`
+    );
+  }
+  if (actionLines.length > 0) lines.push(`【动作】\n${actionLines.join('\n')}`);
+
+  const cameraLines = [
+    editableText(shot.cameraBlueprint?.shotSize)
+      ? `景别保持 ${editableText(shot.cameraBlueprint.shotSize)}`
+      : '',
+    editableText(shot.cameraBlueprint?.angle)
+      ? `摄影机角度 ${editableText(shot.cameraBlueprint.angle)}`
+      : '',
+    ...(shot.cameraBlueprint?.movement || []).map(movement => (
+      `${movement.start === undefined || movement.end === undefined ? '' : `${timeRange(movement.start, movement.end)}：`}${movement.type}`
+    )),
+    editableText(shot.cameraBlueprint?.lensFeel)
+      ? `镜头观感 ${editableText(shot.cameraBlueprint.lensFeel)}`
+      : '',
+  ].filter(Boolean);
+  if (cameraLines.length > 0) lines.push(`【运镜】\n${cameraLines.join('\n')}`);
+
+  const timingLines = (shot.timingBlueprint?.phases || []).map(phase => (
+    `${timeRange(phase.start, phase.end)}：${phase.phase}`
+  ));
+  if (timingLines.length > 0) lines.push(`【节奏】\n${timingLines.join('\n')}`);
+
+  const audioLines = [];
+  for (const dialogue of shot.audioBlueprint?.dialogue || []) {
+    const timing = dialogue.start === undefined || dialogue.end === undefined
+      ? ''
+      : `${timeRange(dialogue.start, dialogue.end)}：`;
+    audioLines.push(
+      `${timing}${placeholder(dialogue.characterId)}${dialogue.emotion ? `以${dialogue.emotion}情绪` : ''}说道：“${editableText(dialogue.text)}”`
+    );
+  }
+  const environment = editableText(shot.audioBlueprint?.environment);
+  if (environment) audioLines.push(`环境声：${environment}`);
+  for (const event of shot.audioBlueprint?.soundEvents || []) {
+    audioLines.push(`${timeRange(event.start, event.end)}：${event.description}`);
+  }
+  if (audioLines.length > 0) lines.push(`【声音】\n${audioLines.join('\n')}`);
+
+  if (current.story?.style) lines.push(`【视觉风格】${current.story.style}`);
+  lines.push('【锁定】保持原剧情、人物数量、动作顺序、构图、运镜、镜头边界和时长；只替换已经确认的资产外观。');
+  return lines.join('\n');
+}
+
+export function buildVideoRemixImagePrompt(state, shotId) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const shot = current.shots.find(item => item.shotId === String(shotId || ''));
+  if (!shot) return '';
+  const lines = ['【任务】生成该 Shot 的静态关键帧，不描述完整时间动作路径。'];
+  if (shot.scene?.sceneId) {
+    lines.push(`【场景】${placeholder(shot.scene.sceneId)}${shot.scene.sceneZone ? `，画面位于功能区 ${shot.scene.sceneZone}` : ''}`);
+  }
+  if (shot.characters.length > 0) {
+    lines.push(`【人物】${shot.characters.map(item => placeholder(item.characterId)).join('；')}`);
+  }
+  const frameLines = [
+    editableText(shot.frameBlueprint?.shotSize)
+      ? `景别 ${editableText(shot.frameBlueprint.shotSize)}`
+      : '',
+    editableText(shot.frameBlueprint?.cameraAngle)
+      ? `机位 ${editableText(shot.frameBlueprint.cameraAngle)}`
+      : '',
+    ...(shot.frameBlueprint?.subjects || []).map(frameSubjectLine),
+    ...(shot.frameBlueprint?.props || [])
+      .filter(prop => !current.assets.props.find(item => item.id === prop.id)?.removed)
+      .map(framePropLine),
+  ].filter(Boolean);
+  if (frameLines.length > 0) lines.push(`【构图与姿势】\n${frameLines.join('\n')}`);
+  const lighting = shot.startState?.lighting;
+  if (lighting) lines.push(`【灯光】${lighting}`);
+  if (current.story?.style) lines.push(`【视觉风格】${current.story.style}`);
+  lines.push('【锁定】人物数量、位置、朝向、景别、机位、透视、场景功能区和关键道具位置与原参考帧一致。');
+  return lines.join('\n');
+}
+
+function taggedReferenceModel(targetModel) {
+  const model = String(targetModel || '');
+  return model.startsWith('jimeng-') || model === 'seedance-2-0';
+}
+
+function referencePrefix(asset, targetModel, imagePrompt) {
+  if (
+    !imagePrompt
+    && taggedReferenceModel(targetModel)
+    && Array.isArray(asset.referenceImages)
+    && asset.referenceImages.length > 0
+  ) {
+    return `@${asset.id}`;
+  }
+  return asset.name;
+}
+
+function characterPromptDescription(current, shot, assetId, targetModel, imagePrompt) {
+  const resolved = resolveVideoRemixShotCharacter(current, shot.shotId, assetId);
+  if (!resolved) return null;
+  const { character, look } = resolved;
+  const referenceAsset = {
+    ...character,
+    referenceImages: [
+      ...(character.referenceImages || []),
+      ...(look?.referenceImages || []),
+    ],
+  };
+  const details = [
+    `资产 ${character.id}`,
+    character.identity,
+    look ? `造型 ${look.name}：${look.description}` : '',
+  ].filter(Boolean).map(compactPromptText);
+  return `${referencePrefix(referenceAsset, targetModel, imagePrompt)}（${details.join('；')}）`;
+}
+
+function scenePromptDescription(current, shot, assetId, targetModel, imagePrompt) {
+  const base = current.assets.scenes.find(item => item.id === assetId);
+  if (!base) return null;
+  const scene = resolveVideoRemixAsset(base);
+  const zone = scene.zones?.find(item => item.id === shot.scene?.sceneZone);
+  const details = [
+    `资产 ${scene.id}`,
+    scene.visualDescription,
+    zone ? `功能区 ${zone.name}：${zone.description}` : '',
+    scene.audioDescription ? `环境声 ${scene.audioDescription}` : '',
+  ].filter(Boolean).map(compactPromptText);
+  return `${referencePrefix(scene, targetModel, imagePrompt)}（${details.join('；')}）`;
+}
+
+function propPromptDescription(current, assetId, targetModel, imagePrompt) {
+  const base = current.assets.props.find(item => item.id === assetId);
+  if (!base) return null;
+  if (base.removed) return '保持原手部运动路径的空手交互锚点';
+  const prop = resolveVideoRemixAsset(base);
+  const details = [
+    `资产 ${prop.id}`,
+    prop.description,
+    `类型 ${PROP_CATEGORY_LABELS[prop.category] || prop.category}`,
+  ].filter(Boolean).map(compactPromptText);
+  return `${referencePrefix(prop, targetModel, imagePrompt)}（${details.join('；')}）`;
+}
+
+export function resolveVideoRemixPromptTemplate(
+  state,
+  shotId,
+  template,
+  { targetModel = '', imagePrompt = false } = {}
+) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const shot = current.shots.find(item => item.shotId === String(shotId || ''));
+  if (!shot) return String(template || '');
+  return String(template || '').replace(PROMPT_TEMPLATE_TOKEN_RE, (match, assetId) => (
+    characterPromptDescription(current, shot, assetId, targetModel, imagePrompt)
+    || scenePromptDescription(current, shot, assetId, targetModel, imagePrompt)
+    || propPromptDescription(current, assetId, targetModel, imagePrompt)
+    || match
+  ));
+}
+
+function semanticShotForPromptHash(shot) {
+  if (!shot) return null;
+  const {
+    analysisFrames: ignoredFrames,
+    detection: ignoredDetection,
+    analysisStatus: ignoredStatus,
+    analysisError: ignoredError,
+    analyzedAt: ignoredAnalyzedAt,
+    ...semantic
+  } = shot;
+  return semantic;
+}
+
+function promptAssetSnapshot(current, shot) {
+  return {
+    characters: shot.characters.map(item => {
+      const resolved = resolveVideoRemixShotCharacter(
+        current,
+        shot.shotId,
+        item.characterId
+      );
+      return resolved ? {
+        character: resolved.character,
+        look: resolved.look || null,
+      } : { characterId: item.characterId };
+    }),
+    scene: shot.scene?.sceneId
+      ? resolveVideoRemixAsset(
+        current.assets.scenes.find(item => item.id === shot.scene.sceneId)
+      )
+      : null,
+    props: shot.props.map(item => {
+      const base = current.assets.props.find(prop => prop.id === item.propId);
+      return base ? resolveVideoRemixAsset(base) : { id: item.propId };
+    }),
+  };
+}
+
+function promptLayerReady(source, value) {
+  return ['optimizer', 'user'].includes(source) && Boolean(String(value || '').trim());
+}
+
+function createPromptRecord(current, shot, targetModel, {
+  resetVideoOptimization = false,
+  resetImageOptimization = false,
+} = {}) {
+  const previous = current.prompts?.[shot.shotId];
+  const analysisHash = promptValueHash(semanticShotForPromptHash(shot));
+  const generatedRawPrompt = buildVideoRemixRawPrompt(current, shot.shotId);
+  const preserveUserRaw = previous?.analysisHash === analysisHash
+    && previous?.rawSource === 'user'
+    && previous.rawPrompt;
+  const rawPrompt = preserveUserRaw ? previous.rawPrompt : generatedRawPrompt;
+  const rawSource = preserveUserRaw ? 'user' : 'analysis';
+  const rawImagePrompt = buildVideoRemixImagePrompt(current, shot.shotId);
+  const model = String(targetModel || previous?.targetModel || '');
+  const assetHash = promptValueHash(promptAssetSnapshot(current, shot));
+  const videoOptimizationHash = promptValueHash({
+    analysisHash,
+    rawPrompt,
+    targetModel: model,
+  });
+  const imageOptimizationHash = promptValueHash({
+    analysisHash,
+    rawImagePrompt,
+  });
+  const sameVideoInput = !resetVideoOptimization
+    && previous?.videoOptimizationHash === videoOptimizationHash;
+  const sameImageInput = !resetImageOptimization
+    && previous?.imageOptimizationHash === imageOptimizationHash;
+  let optimizedTemplate = sameVideoInput ? previous?.optimizedTemplate || '' : '';
+  let optimizedSource = optimizedTemplate ? 'optimizer' : '';
+  let optimizedPrompt = optimizedTemplate
+    ? resolveVideoRemixPromptTemplate(current, shot.shotId, optimizedTemplate, {
+      targetModel: model,
+    })
+    : '';
+  if (
+    sameVideoInput
+    && previous?.optimizedSource === 'user'
+    && previous?.assetHash === assetHash
+    && previous.optimizedPrompt
+  ) {
+    optimizedTemplate = '';
+    optimizedSource = 'user';
+    optimizedPrompt = previous.optimizedPrompt;
+  }
+
+  let imagePromptTemplate = sameImageInput
+    ? previous?.imagePromptTemplate || ''
+    : '';
+  let imagePromptSource = imagePromptTemplate ? 'optimizer' : 'analysis';
+  let imagePrompt = imagePromptTemplate
+    ? resolveVideoRemixPromptTemplate(current, shot.shotId, imagePromptTemplate, {
+      imagePrompt: true,
+    })
+    : resolveVideoRemixPromptTemplate(current, shot.shotId, rawImagePrompt, {
+      imagePrompt: true,
+    });
+  if (
+    sameImageInput
+    && previous?.imagePromptSource === 'user'
+    && previous?.assetHash === assetHash
+    && previous.imagePrompt
+  ) {
+    imagePromptTemplate = '';
+    imagePromptSource = 'user';
+    imagePrompt = previous.imagePrompt;
+  }
+
+  const resolvedPrompt = resolveVideoRemixPromptTemplate(
+    current,
+    shot.shotId,
+    rawPrompt,
+    { targetModel: model }
+  );
+  const ready = promptLayerReady(optimizedSource, optimizedPrompt)
+    && promptLayerReady(imagePromptSource, imagePrompt);
+  const preserveFailure = previous?.optimizationStatus === 'failed'
+    && sameVideoInput
+    && sameImageInput
+    && !ready;
+  return {
+    analysis: shot,
+    analysisHash,
+    rawPrompt,
+    rawSource,
+    resolvedPrompt,
+    rawImagePrompt,
+    optimizedTemplate,
+    optimizedPrompt,
+    optimizedSource,
+    imagePromptTemplate,
+    imagePrompt,
+    imagePromptSource,
+    targetModel: model,
+    assetHash,
+    videoOptimizationHash,
+    imageOptimizationHash,
+    promptHash: promptValueHash({
+      rawPrompt,
+      resolvedPrompt,
+      optimizedPrompt,
+      imagePrompt,
+      targetModel: model,
+    }),
+    optimizationStatus: ready ? 'ready' : preserveFailure ? 'failed' : 'draft',
+    ...(preserveFailure && previous?.optimizationError
+      ? { optimizationError: previous.optimizationError }
+      : {}),
+    ...(sameVideoInput && previous?.videoProfileId
+      ? { videoProfileId: previous.videoProfileId }
+      : {}),
+    ...(sameImageInput && previous?.imageProfileId
+      ? { imageProfileId: previous.imageProfileId }
+      : {}),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function refreshPromptRecordsForAssets(current) {
+  return Object.fromEntries(
+    Object.keys(current.prompts || {}).flatMap(shotId => {
+      const shot = current.shots.find(item => item.shotId === shotId);
+      if (!shot) return [];
+      return [[
+        shotId,
+        createPromptRecord(
+          current,
+          shot,
+          current.prompts[shotId]?.targetModel
+            || current.promptReview?.targetModel
+            || ''
+        ),
+      ]];
+    })
+  );
+}
+
+function stageAfterPromptChange(current) {
+  if ([
+    'keyframes_generating',
+    'keyframes_ready',
+    'videos_generating',
+    'videos_ready',
+    'rendering',
+    'completed',
+  ].includes(current.stage)) {
+    return current.assetReview?.confirmed ? 'assets_ready' : 'analysis_ready';
+  }
+  return current.stage;
+}
+
+function withInvalidatedPromptDerivatives(current, updates, targetModel) {
+  return {
+    ...current,
+    ...updates,
+    stage: stageAfterPromptChange(current),
+    promptReview: {
+      ...DEFAULT_PROMPT_REVIEW,
+      targetModel: String(
+        targetModel
+        || updates.promptReview?.targetModel
+        || current.promptReview?.targetModel
+        || ''
+      ),
+      updatedAt: new Date().toISOString(),
+    },
+    keyframes: [],
+    generatedVideos: [],
+    timeline: (current.timeline || []).map(item => {
+      const { videoUrl, ...rest } = item;
+      return rest;
+    }),
+    output: null,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function buildVideoRemixShotPrompts(
+  state,
+  shotId,
+  targetModel = '',
+  options = {}
+) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const shot = current.shots.find(item => item.shotId === String(shotId || ''));
+  if (!shot || shot.analysisStatus !== 'ready') return current;
+  const model = String(
+    targetModel
+    || current.promptReview?.targetModel
+    || current.prompts?.[shot.shotId]?.targetModel
+    || ''
+  );
+  return withInvalidatedPromptDerivatives(current, {
+    prompts: {
+      ...(current.prompts || {}),
+      [shot.shotId]: createPromptRecord(current, shot, model, options),
+    },
+  }, model);
+}
+
+export function buildAllVideoRemixPrompts(state, targetModel = '', options = {}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const model = String(targetModel || current.promptReview?.targetModel || '');
+  const prompts = Object.fromEntries(
+    current.shots
+      .filter(shot => shot.analysisStatus === 'ready')
+      .map(shot => [
+        shot.shotId,
+        createPromptRecord(current, shot, model, options),
+      ])
+  );
+  return withInvalidatedPromptDerivatives(current, { prompts }, model);
+}
+
+export function updateVideoRemixPromptLayer(state, shotId, layer, value) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const shot = current.shots.find(item => item.shotId === String(shotId || ''));
+  if (!shot || !['rawPrompt', 'optimizedPrompt', 'imagePrompt'].includes(layer)) {
+    return current;
+  }
+  const existing = current.prompts?.[shot.shotId]
+    || createPromptRecord(
+      current,
+      shot,
+      current.promptReview?.targetModel || ''
+    );
+  const nextValue = String(value || '').trim();
+  let prompt = { ...existing, updatedAt: new Date().toISOString() };
+  if (layer === 'rawPrompt') {
+    const rawPrompt = nextValue;
+    const resolvedPrompt = resolveVideoRemixPromptTemplate(
+      current,
+      shot.shotId,
+      rawPrompt,
+      { targetModel: existing.targetModel || '' }
+    );
+    prompt = {
+      ...prompt,
+      rawPrompt,
+      rawSource: 'user',
+      resolvedPrompt,
+      optimizedTemplate: '',
+      optimizedPrompt: '',
+      optimizedSource: '',
+      videoOptimizationHash: promptValueHash({
+        analysisHash: existing.analysisHash,
+        rawPrompt,
+        targetModel: existing.targetModel || '',
+      }),
+      optimizationStatus: 'draft',
+      optimizationError: undefined,
+      videoProfileId: undefined,
+    };
+  }
+  if (layer === 'optimizedPrompt') {
+    prompt = {
+      ...prompt,
+      optimizedTemplate: '',
+      optimizedPrompt: nextValue,
+      optimizedSource: nextValue ? 'user' : '',
+      optimizationStatus: promptLayerReady('user', nextValue)
+        && promptLayerReady(prompt.imagePromptSource, prompt.imagePrompt)
+        ? 'ready'
+        : 'draft',
+      optimizationError: undefined,
+      videoProfileId: undefined,
+    };
+  }
+  if (layer === 'imagePrompt') {
+    prompt = {
+      ...prompt,
+      imagePromptTemplate: '',
+      imagePrompt: nextValue,
+      imagePromptSource: nextValue ? 'user' : 'analysis',
+      optimizationStatus: promptLayerReady(prompt.optimizedSource, prompt.optimizedPrompt)
+        && promptLayerReady(nextValue ? 'user' : 'analysis', nextValue)
+        ? 'ready'
+        : 'draft',
+      optimizationError: undefined,
+      imageProfileId: undefined,
+    };
+  }
+  prompt.promptHash = promptValueHash({
+    rawPrompt: prompt.rawPrompt,
+    resolvedPrompt: prompt.resolvedPrompt,
+    optimizedPrompt: prompt.optimizedPrompt,
+    imagePrompt: prompt.imagePrompt,
+    targetModel: prompt.targetModel,
+  });
+  return withInvalidatedPromptDerivatives(current, {
+    prompts: {
+      ...(current.prompts || {}),
+      [shot.shotId]: prompt,
+    },
+  }, prompt.targetModel);
+}
+
+export function beginVideoRemixPromptOptimization(state, shotId) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const safeShotId = String(shotId || '');
+  const prompt = current.prompts?.[safeShotId];
+  if (!prompt) return current;
+  return withInvalidatedPromptDerivatives(current, {
+    prompts: {
+      ...current.prompts,
+      [safeShotId]: {
+        ...prompt,
+        optimizationStatus: 'optimizing',
+        optimizationError: undefined,
+        updatedAt: new Date().toISOString(),
+      },
+    },
+  }, prompt.targetModel);
+}
+
+export function applyVideoRemixPromptOptimization(state, shotId, {
+  optimizedTemplate,
+  imagePromptTemplate,
+  videoProfileId,
+  imageProfileId,
+} = {}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const safeShotId = String(shotId || '');
+  const prompt = current.prompts?.[safeShotId];
+  if (!prompt) return current;
+  const next = { ...prompt };
+  if (optimizedTemplate !== undefined) {
+    const validation = validateVideoRemixPromptTemplate(
+      prompt.rawPrompt,
+      optimizedTemplate
+    );
+    if (!validation.valid) {
+      const detail = [
+        validation.missing.length ? `缺少 ${validation.missing.join(', ')}` : '',
+        validation.unknown.length ? `新增未知 ${validation.unknown.join(', ')}` : '',
+      ].filter(Boolean).join('；');
+      throw new Error(`视频 Prompt 优化结果破坏了资产占位符：${detail}`);
+    }
+    next.optimizedTemplate = String(optimizedTemplate || '').trim();
+    next.optimizedPrompt = resolveVideoRemixPromptTemplate(
+      current,
+      safeShotId,
+      next.optimizedTemplate,
+      { targetModel: prompt.targetModel || '' }
+    );
+    next.optimizedSource = 'optimizer';
+    next.videoProfileId = videoProfileId;
+  }
+  if (imagePromptTemplate !== undefined) {
+    const validation = validateVideoRemixPromptTemplate(
+      prompt.rawImagePrompt,
+      imagePromptTemplate
+    );
+    if (!validation.valid) {
+      const detail = [
+        validation.missing.length ? `缺少 ${validation.missing.join(', ')}` : '',
+        validation.unknown.length ? `新增未知 ${validation.unknown.join(', ')}` : '',
+      ].filter(Boolean).join('；');
+      throw new Error(`关键帧 Prompt 优化结果破坏了资产占位符：${detail}`);
+    }
+    next.imagePromptTemplate = String(imagePromptTemplate || '').trim();
+    next.imagePrompt = resolveVideoRemixPromptTemplate(
+      current,
+      safeShotId,
+      next.imagePromptTemplate,
+      { imagePrompt: true }
+    );
+    next.imagePromptSource = 'optimizer';
+    next.imageProfileId = imageProfileId;
+  }
+  const ready = promptLayerReady(next.optimizedSource, next.optimizedPrompt)
+    && promptLayerReady(next.imagePromptSource, next.imagePrompt);
+  next.optimizationStatus = ready ? 'ready' : 'optimizing';
+  next.optimizationError = undefined;
+  next.promptHash = promptValueHash({
+    rawPrompt: next.rawPrompt,
+    resolvedPrompt: next.resolvedPrompt,
+    optimizedPrompt: next.optimizedPrompt,
+    imagePrompt: next.imagePrompt,
+    targetModel: next.targetModel,
+  });
+  next.updatedAt = new Date().toISOString();
+  return withInvalidatedPromptDerivatives(current, {
+    prompts: {
+      ...current.prompts,
+      [safeShotId]: next,
+    },
+    errors: current.errors.filter(item => !(
+      item?.scope === 'prompt' && item?.id === safeShotId
+    )),
+  }, prompt.targetModel);
+}
+
+export function setVideoRemixPromptOptimizationError(
+  state,
+  shotId,
+  message,
+  retryable = true
+) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const safeShotId = String(shotId || '');
+  const prompt = current.prompts?.[safeShotId];
+  if (!prompt) return current;
+  return {
+    ...current,
+    prompts: {
+      ...current.prompts,
+      [safeShotId]: {
+        ...prompt,
+        optimizationStatus: 'failed',
+        optimizationError: String(message || 'Prompt 优化失败'),
+        updatedAt: new Date().toISOString(),
+      },
+    },
+    promptReview: {
+      ...DEFAULT_PROMPT_REVIEW,
+      targetModel: prompt.targetModel || current.promptReview?.targetModel || '',
+      updatedAt: new Date().toISOString(),
+    },
+    errors: [
+      ...current.errors.filter(item => !(
+        item?.scope === 'prompt' && item?.id === safeShotId
+      )),
+      {
+        scope: 'prompt',
+        id: safeShotId,
+        message: String(message || 'Prompt 优化失败'),
+        retryable: Boolean(retryable),
+      },
+    ],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function invalidateVideoRemixShotPrompts(state, shotIds = []) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const targets = new Set(
+    (Array.isArray(shotIds) ? shotIds : [shotIds]).map(String)
+  );
+  const prompts = Object.fromEntries(
+    Object.entries(current.prompts || {}).filter(([shotId]) => (
+      !targets.has(shotId)
+    ))
+  );
+  return withInvalidatedPromptDerivatives(current, { prompts });
+}
+
+export function getVideoRemixPromptReadiness(state) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const total = current.shots.length;
+  const ready = current.shots.filter(shot => {
+    const prompt = current.prompts?.[shot.shotId];
+    return Boolean(
+      prompt
+      && prompt.optimizationStatus === 'ready'
+      && promptLayerReady(prompt.optimizedSource, prompt.optimizedPrompt)
+      && promptLayerReady(prompt.imagePromptSource, prompt.imagePrompt)
+      && promptTemplateTokens(prompt.resolvedPrompt).length === 0
+      && promptTemplateTokens(prompt.optimizedPrompt).length === 0
+      && promptTemplateTokens(prompt.imagePrompt).length === 0
+    );
+  }).length;
+  const failed = current.shots.filter(shot => (
+    current.prompts?.[shot.shotId]?.optimizationStatus === 'failed'
+  )).length;
+  return {
+    total,
+    ready,
+    failed,
+    confirmed: Boolean(current.promptReview?.confirmed),
+  };
+}
+
+export function confirmVideoRemixPrompts(state) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const readiness = getVideoRemixPromptReadiness(current);
+  if (
+    !current.assetReview?.confirmed
+    || readiness.total === 0
+    || readiness.ready !== readiness.total
+  ) {
+    return current;
+  }
+  const now = new Date().toISOString();
+  return {
+    ...current,
+    promptReview: {
+      confirmed: true,
+      confirmedAt: now,
+      updatedAt: now,
+      targetModel: current.promptReview?.targetModel || '',
+    },
+    errors: current.errors.filter(item => item?.scope !== 'prompt'),
+    updatedAt: now,
   };
 }

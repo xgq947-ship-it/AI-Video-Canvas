@@ -332,7 +332,11 @@ test('资产全局替换作用于所有 Shot，单 Shot 只覆盖所选造型', 
   assert.equal(resolveVideoRemixAsset(state.assets.props[0]).name, '按摩器');
   assert.equal(resolveVideoRemixShotCharacter(state, shots[0].shotId, 'CHAR_01').character.name, '新人物');
   assert.equal(resolveVideoRemixShotCharacter(state, shots[1].shotId, 'CHAR_01').character.name, '新人物');
-  assert.deepEqual(state.prompts, {});
+  assert.match(state.prompts[shots[0].shotId].rawPrompt, /\{\{CHAR_01\}\}/);
+  assert.match(state.prompts[shots[0].shotId].resolvedPrompt, /新人物/);
+  assert.match(state.prompts[shots[0].shotId].resolvedPrompt, /酒店/);
+  assert.match(state.prompts[shots[0].shotId].resolvedPrompt, /按摩器/);
+  assert.equal(state.prompts[shots[0].shotId].optimizedPrompt, '');
   assert.deepEqual(state.keyframes, []);
   assert.deepEqual(state.generatedVideos, []);
   assert.equal(state.output, null);

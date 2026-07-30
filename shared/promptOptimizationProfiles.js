@@ -41,6 +41,7 @@ export const PROMPT_OPTIMIZATION_PROFILES = {
     id: 'video',
     nodeType: 'video',
     videoProvider: 'jimeng',
+    preserveReferenceTags: true,
     label: '即梦 / Seedance',
     description: '保留 @参考图 标签，参考素材靠标签指认',
     systemInstruction: `把用户现有内容改写成可直接投给 Seedance 视频模型生成的中文分镜提示词。
@@ -96,6 +97,7 @@ export const PROMPT_OPTIMIZATION_PROFILES = {
     id: 'video-flow',
     nodeType: 'video',
     videoProvider: 'google-flow',
+    preserveReferenceTags: false,
     label: 'Google Flow',
     description: '不用 @ 标签，参考画面直接写进描述',
     systemInstruction: `把用户现有内容改写成可直接投给 Google Flow 视频模型生成的中文分镜提示词。
@@ -148,6 +150,31 @@ export const PROMPT_OPTIMIZATION_PROFILES = {
 - 环境互动要写出物理反馈：雨水打湿头发、风吹动衣料、雪落在皮肤上融化。
 - 不出现导演姓名、具体影视作品或摄影器材型号这类指涉。`,
   },
+  'video-remix-generic': {
+    id: 'video-remix-generic',
+    nodeType: 'video-remix',
+    videoProvider: 'generic',
+    preserveReferenceTags: false,
+    label: 'Video Remix 通用视频优化',
+    description: '面向 Gemini Web、Seedance API 与后续通用视频模型',
+    systemInstruction: `把 Video Remix 的单个 Shot 模板优化成可直接用于视频生成的中文提示词。
+
+严格保留原模板中的剧情事实、人物数量、动作顺序、构图、运镜、时长、对白、声音事件和全部资产占位符。不得新增人物、事件、对白、旁白、切镜或剧情结果。把表达整理为【场景】【首帧】【镜头】【运镜】【动作】【物理】【光线】【声音】【锁定】等必要模块；没有内容的模块直接省略。
+
+动作按原始秒数顺序书写，人物动作、道具交互和摄影机运动分开表达。补充的内容只能用于澄清动作连续性、接触关系、惯性、光线方向、声音空间感和模型容易误解的物理逻辑。输出只包含成品提示词，不解释修改过程。`,
+  },
+  'image-remix-keyframe': {
+    id: 'image-remix-keyframe',
+    nodeType: 'image-remix',
+    preserveReferenceTags: false,
+    label: 'Video Remix 关键帧优化',
+    description: '保持原构图，只描述一个静态时刻',
+    systemInstruction: `把 Video Remix 的关键帧模板优化成可直接用于图片生成的中文提示词。
+
+关键帧是单一静态画面。严格保留人物数量、人物与道具位置、朝向、姿势、景别、机位、透视、场景功能区、灯光和全部资产占位符。允许补充清晰可见的服装材质、表情、接触阴影、空间层次和摄影参数，但不得加入完整动作路径、时间段、运镜过程、对白、字幕、拼图、分镜板或新剧情。
+
+输出按【场景】【人物】【构图与姿势】【道具】【灯光】【摄影】【锁定】组织；没有内容的模块直接省略。只返回成品提示词，不解释修改过程。`,
+  },
 };
 
 export const IMAGE_PROMPT_OPTIMIZATION_PROFILES = Object.values(PROMPT_OPTIMIZATION_PROFILES)
@@ -169,28 +196,49 @@ export function resolveVideoProfileForModel(videoModel = '') {
     : PROMPT_OPTIMIZATION_PROFILES.video;
 }
 
+export function resolveVideoRemixPromptProfileForModel(videoModel = '') {
+  const model = String(videoModel || '');
+  if (model.startsWith('google-flow')) {
+    return PROMPT_OPTIMIZATION_PROFILES['video-flow'];
+  }
+  if (model.startsWith('jimeng-') || model === 'seedance-2-0') {
+    return PROMPT_OPTIMIZATION_PROFILES.video;
+  }
+  return PROMPT_OPTIMIZATION_PROFILES['video-remix-generic'];
+}
+
 export function getPromptOptimizationProfile(profileId = 'video') {
   return PROMPT_OPTIMIZATION_PROFILES[profileId] || null;
 }
 
 export function buildPromptOptimizationInstruction(profile, context = {}) {
   const contextLines = [];
+  if (context.task) contextLines.push(`任务：${context.task}`);
   if (context.targetModel) contextLines.push(`目标模型：${context.targetModel}`);
   if (context.aspectRatio) contextLines.push(`节点当前画幅：${context.aspectRatio}`);
   if (context.duration) contextLines.push(`视频时长：${context.duration}秒`);
 
+  const isImageProfile = ['image', 'image-remix'].includes(profile.nodeType);
+  const isVideoProfile = ['video', 'video-remix'].includes(profile.nodeType);
   const profileInstruction = profile.nodeType === 'image'
     ? `以下内容是角色库标准文档中的权威提示词模板。必须完整继承模板中的每一项画面要求、身份约束、材质要求和禁止项，不得删减、概括、弱化或改写为另一套结构。只能根据用户输入填充【】中的角色信息，并在不改变模板结构的前提下补充用户已经明确的角色、服装、发型、配饰和参考素材信息。用户信息与模板冲突时以模板为准。\n\n权威模板正文：\n${profile.systemInstruction}`
     : profile.systemInstruction;
+  const referenceTagRule = profile.preserveReferenceTags === false
+    ? '- 输入中若有 @参考标签，必须改写为可见外观描述，输出不保留 @ 标签。'
+    : '- 必须保留原提示词中的每一个 @参考标签，名称和拼写不得改变或删除。';
+  const placeholderRule = context.preservePlaceholders
+    ? '- `{{ASSET_ID}}` 形式的资产占位符是机器契约：每一个都必须原样保留，不能改名、删除、展开成资产描述，也不能新增输入中不存在的占位符。'
+    : '';
 
   return `${profileInstruction}
 
 通用硬性要求：
-- 必须保留原提示词中的每一个 @参考标签，名称和拼写不得改变或删除。
-- 图片优化必须输出完整的权威模板成品，不能只返回新增或修改的部分。
+${referenceTagRule}
+${placeholderRule}
+${isImageProfile ? '- 图片优化必须输出完整的权威模板成品，不能只返回新增或修改的部分。' : ''}
 - 补足生成所需的明确细节，但不得篡改用户已经明确的事实。
 - 输出中文成品提示词，不解释修改过程，不使用代码围栏或用引号包裹全文。
-${profile.nodeType === 'video'
+${isVideoProfile
     ? '- 必须按视频模块要求分模块输出，每个用到的模块单独一行写出【】方括号标题（如"【场景】"），标题后换行接内容；不得省略标题把内容并回一整段连续叙述，也不得使用 #、##、** 等 Markdown 标记。'
     : '- 不使用 Markdown 的 #、##、** 等标题标记。'}
 ${profile.aspectRatio ? `- 输出内容的第一行必须是：输出图片尺寸比例：${profile.aspectRatio}` : ''}

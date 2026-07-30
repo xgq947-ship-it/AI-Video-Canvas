@@ -6,7 +6,8 @@ import {
     buildPromptOptimizationInstruction,
     formatOptimizedPrompt,
     getPromptOptimizationProfile,
-    resolveVideoProfileForModel
+    resolveVideoProfileForModel,
+    resolveVideoRemixPromptProfileForModel
 } from '../shared/promptOptimizationProfiles.js';
 
 test('图片提示词优化配置固定包含三种角色身份图', () => {
@@ -95,4 +96,43 @@ test('两套视频 profile 都挂在 video 节点下且各自标明供应商', (
         assert.equal(profile.nodeType, 'video');
         assert.ok(profile.videoProvider, `${profile.id} 缺少 videoProvider`);
     }
+});
+
+test('Video Remix 按目标模型复用现有视频 Profile，并为通用模型使用隔离适配器', () => {
+    assert.equal(
+        resolveVideoRemixPromptProfileForModel('google-flow-veo-3-1-fast').id,
+        'video-flow'
+    );
+    assert.equal(
+        resolveVideoRemixPromptProfileForModel('jimeng-seedance-2-0').id,
+        'video'
+    );
+    assert.equal(
+        resolveVideoRemixPromptProfileForModel('seedance-2-0').id,
+        'video'
+    );
+    assert.equal(
+        resolveVideoRemixPromptProfileForModel('gemini-web-video').id,
+        'video-remix-generic'
+    );
+});
+
+test('Video Remix 优化指令把资产占位符声明为不可破坏的机器契约', () => {
+    const profile = resolveVideoRemixPromptProfileForModel('google-flow-omni-flash');
+    const instruction = buildPromptOptimizationInstruction(profile, {
+        task: 'optimize_video_remix_video_prompt',
+        targetModel: 'google-flow-omni-flash',
+        preservePlaceholders: true,
+    });
+    assert.match(instruction, /\{\{ASSET_ID\}\}/);
+    assert.match(instruction, /每一个都必须原样保留/);
+    assert.match(instruction, /输出不保留 @ 标签/);
+    assert.match(instruction, /任务：optimize_video_remix_video_prompt/);
+});
+
+test('关键帧优化器只描述静态画面，不复用完整视频动作路径', () => {
+    const profile = getPromptOptimizationProfile('image-remix-keyframe');
+    assert.equal(profile.nodeType, 'image-remix');
+    assert.match(profile.systemInstruction, /单一静态画面/);
+    assert.match(profile.systemInstruction, /不得加入完整动作路径/);
 });

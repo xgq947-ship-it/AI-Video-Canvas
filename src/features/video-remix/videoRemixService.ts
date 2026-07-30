@@ -399,3 +399,51 @@ export async function uploadVideoRemixAssetImage({
   if (!payload.url) throw new Error('上传没有返回项目内地址');
   return payload.url;
 }
+
+export async function optimizeVideoRemixPrompt({
+  prompt,
+  profileId,
+  targetModel,
+  aspectRatio,
+  duration,
+}: {
+  prompt: string;
+  profileId: string;
+  targetModel: string;
+  aspectRatio: string;
+  duration: number;
+}): Promise<string> {
+  const response = await fetch('/api/prompt/optimize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt,
+      profileId,
+      context: {
+        task: profileId === 'image-remix-keyframe'
+          ? 'optimize_video_remix_keyframe_prompt'
+          : 'optimize_video_remix_video_prompt',
+        targetModel,
+        aspectRatio,
+        duration,
+        preservePlaceholders: true,
+      },
+    }),
+  });
+  const payload = await response.json().catch(() => ({})) as {
+    optimizedPrompt?: string;
+    error?: string;
+    code?: string;
+    retryable?: boolean;
+  };
+  if (!response.ok || !payload.optimizedPrompt) {
+    throw new VideoRemixRequestError(
+      payload.error || `Prompt 优化失败（HTTP ${response.status}）`,
+      {
+        code: payload.code || 'PROMPT_OPTIMIZATION_FAILED',
+        retryable: payload.retryable ?? response.status >= 500,
+      }
+    );
+  }
+  return payload.optimizedPrompt;
+}

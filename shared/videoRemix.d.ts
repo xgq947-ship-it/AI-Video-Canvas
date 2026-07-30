@@ -306,12 +306,27 @@ export interface VideoRemixGlobalAnalysis {
 
 export interface ShotPromptState {
   analysis: ShotAnalysis;
+  analysisHash: string;
   rawPrompt: string;
+  rawSource: 'analysis' | 'user';
   resolvedPrompt: string;
+  rawImagePrompt: string;
+  optimizedTemplate?: string;
   optimizedPrompt: string;
-  imagePrompt?: string;
-  assetHash?: string;
-  promptHash?: string;
+  optimizedSource?: 'optimizer' | 'user' | '';
+  imagePromptTemplate?: string;
+  imagePrompt: string;
+  imagePromptSource: 'analysis' | 'optimizer' | 'user';
+  targetModel: string;
+  assetHash: string;
+  videoOptimizationHash: string;
+  imageOptimizationHash: string;
+  promptHash: string;
+  videoProfileId?: string;
+  imageProfileId?: string;
+  optimizationStatus: 'draft' | 'optimizing' | 'ready' | 'failed';
+  optimizationError?: string;
+  updatedAt?: string;
 }
 
 export interface KeyframeResult {
@@ -375,6 +390,12 @@ export interface VideoRemixState {
     confirmed: boolean;
     confirmedAt?: string;
     updatedAt?: string;
+  };
+  promptReview: {
+    confirmed: boolean;
+    confirmedAt?: string;
+    updatedAt?: string;
+    targetModel?: string;
   };
   story: {
     summary: string;
@@ -536,3 +557,69 @@ export function resolveVideoRemixShotCharacter(
   shotId: string,
   characterId: string
 ): { character: CharacterAsset; look?: CharacterLook } | null;
+export function validateVideoRemixPromptTemplate(
+  sourceTemplate: string,
+  candidateTemplate: string
+): { valid: boolean; missing: string[]; unknown: string[] };
+export function buildVideoRemixRawPrompt(state: unknown, shotId: string): string;
+export function buildVideoRemixImagePrompt(state: unknown, shotId: string): string;
+export function resolveVideoRemixPromptTemplate(
+  state: unknown,
+  shotId: string,
+  template: string,
+  options?: { targetModel?: string; imagePrompt?: boolean }
+): string;
+export function buildVideoRemixShotPrompts(
+  state: unknown,
+  shotId: string,
+  targetModel?: string,
+  options?: {
+    resetVideoOptimization?: boolean;
+    resetImageOptimization?: boolean;
+  }
+): VideoRemixState;
+export function buildAllVideoRemixPrompts(
+  state: unknown,
+  targetModel?: string,
+  options?: {
+    resetVideoOptimization?: boolean;
+    resetImageOptimization?: boolean;
+  }
+): VideoRemixState;
+export function updateVideoRemixPromptLayer(
+  state: unknown,
+  shotId: string,
+  layer: 'rawPrompt' | 'optimizedPrompt' | 'imagePrompt',
+  value: string
+): VideoRemixState;
+export function beginVideoRemixPromptOptimization(
+  state: unknown,
+  shotId: string
+): VideoRemixState;
+export function applyVideoRemixPromptOptimization(
+  state: unknown,
+  shotId: string,
+  result: {
+    optimizedTemplate?: string;
+    imagePromptTemplate?: string;
+    videoProfileId?: string;
+    imageProfileId?: string;
+  }
+): VideoRemixState;
+export function setVideoRemixPromptOptimizationError(
+  state: unknown,
+  shotId: string,
+  message: string,
+  retryable?: boolean
+): VideoRemixState;
+export function invalidateVideoRemixShotPrompts(
+  state: unknown,
+  shotIds?: string | string[]
+): VideoRemixState;
+export function getVideoRemixPromptReadiness(state: unknown): {
+  total: number;
+  ready: number;
+  failed: number;
+  confirmed: boolean;
+};
+export function confirmVideoRemixPrompts(state: unknown): VideoRemixState;

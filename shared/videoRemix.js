@@ -54,6 +54,10 @@ const DEFAULT_ANALYSIS_RUN = Object.freeze({
   totalShots: 0,
 });
 
+const DEFAULT_ASSET_REVIEW = Object.freeze({
+  confirmed: false,
+});
+
 const TAB_BY_STAGE = Object.freeze({
   source: 'source',
   preprocessing: 'source',
@@ -258,6 +262,7 @@ export function createVideoRemixState(overrides = {}) {
     stage: 'source',
     source: null,
     analysisRun: { ...DEFAULT_ANALYSIS_RUN },
+    assetReview: { ...DEFAULT_ASSET_REVIEW },
     story: null,
     assets: {
       characters: [],
@@ -288,6 +293,10 @@ export function createVideoRemixState(overrides = {}) {
   state.analysisRun = {
     ...DEFAULT_ANALYSIS_RUN,
     ...(overrides.analysisRun || {}),
+  };
+  state.assetReview = {
+    ...DEFAULT_ASSET_REVIEW,
+    ...(overrides.assetReview || {}),
   };
   state.locks = { ...HIGH_FIDELITY_LOCKS, ...(overrides.locks || {}) };
   state.bgm = { mode: 'none', ...(overrides.bgm || {}) };
@@ -396,6 +405,7 @@ export function completeVideoRemixPreprocessing(state, {
       ...DEFAULT_ANALYSIS_RUN,
       totalShots: shots.length,
     },
+    assetReview: { ...DEFAULT_ASSET_REVIEW },
     story: null,
     assets: {
       characters: [],
@@ -477,6 +487,84 @@ export function applyVideoRemixGlobalAnalysis(state, result) {
     };
   });
   const completedShots = shots.filter(shot => shot.analysisStatus === 'ready').length;
+  const referenceFramesFor = (appearsInShots, maximum = 4) => {
+    const expected = new Set((appearsInShots || []).map(String));
+    const references = [];
+    for (const shot of shots) {
+      if (!expected.has(shot.shotId)) continue;
+      const frames = Array.isArray(shot.analysisFrames) ? shot.analysisFrames : [];
+      for (const position of ['middle', 'quarter', 'three_quarter', 'start', 'end']) {
+        const url = frames.find(frame => frame.position === position)?.url;
+        if (url && !references.includes(url)) references.push(url);
+        if (references.length >= maximum) return references;
+      }
+    }
+    return references;
+  };
+  const previousCharacters = new Map(
+    (current.assets?.characters || []).map(asset => [asset.id, asset])
+  );
+  const previousScenes = new Map(
+    (current.assets?.scenes || []).map(asset => [asset.id, asset])
+  );
+  const previousProps = new Map(
+    (current.assets?.props || []).map(asset => [asset.id, asset])
+  );
+  const characters = (Array.isArray(result.characters) ? result.characters : []).map(asset => {
+    const previous = previousCharacters.get(asset.id);
+    const extractedReferences = referenceFramesFor(asset.appearsInShots);
+    const looks = (asset.looks || []).map(look => {
+      const previousLook = previous?.looks?.find(item => item.id === look.id);
+      return {
+        ...look,
+        source: look.source || 'analysis',
+        referenceImages: look.referenceImages?.length
+          ? look.referenceImages
+          : extractedReferences,
+        ...(previousLook?.replacement ? { replacement: previousLook.replacement } : {}),
+      };
+    });
+    for (const previousLook of previous?.looks || []) {
+      if (
+        previousLook?.source !== 'analysis'
+        && !looks.some(look => look.id === previousLook.id)
+      ) {
+        looks.push(previousLook);
+      }
+    }
+    return {
+      ...asset,
+      source: asset.source || 'analysis',
+      referenceImages: asset.referenceImages?.length
+        ? asset.referenceImages
+        : extractedReferences,
+      looks,
+      ...(previous?.replacement ? { replacement: previous.replacement } : {}),
+    };
+  });
+  const scenes = (Array.isArray(result.scenes) ? result.scenes : []).map(asset => {
+    const previous = previousScenes.get(asset.id);
+    return {
+      ...asset,
+      source: asset.source || 'analysis',
+      referenceImages: asset.referenceImages?.length
+        ? asset.referenceImages
+        : referenceFramesFor(asset.appearsInShots),
+      ...(previous?.replacement ? { replacement: previous.replacement } : {}),
+    };
+  });
+  const props = (Array.isArray(result.props) ? result.props : []).map(asset => {
+    const previous = previousProps.get(asset.id);
+    return {
+      ...asset,
+      source: asset.source || 'analysis',
+      referenceImages: asset.referenceImages?.length
+        ? asset.referenceImages
+        : referenceFramesFor(asset.appearsInShots),
+      ...(previous?.replacement ? { replacement: previous.replacement } : {}),
+      ...(previous?.removed ? { removed: true } : {}),
+    };
+  });
   return {
     ...current,
     stage: completedShots === shots.length ? 'analysis_ready' : 'analyzing',
@@ -485,9 +573,13 @@ export function applyVideoRemixGlobalAnalysis(state, result) {
       ...(result.style ? { style: result.style } : {}),
     },
     assets: {
-      characters: Array.isArray(result.characters) ? result.characters : [],
-      scenes: Array.isArray(result.scenes) ? result.scenes : [],
-      props: Array.isArray(result.props) ? result.props : [],
+      characters,
+      scenes,
+      props,
+    },
+    assetReview: {
+      ...DEFAULT_ASSET_REVIEW,
+      updatedAt: new Date().toISOString(),
     },
     shots,
     analysisRun: {
@@ -511,7 +603,10 @@ function isLockedUserEditable(value) {
     && typeof value === 'object'
     && value.source === 'user'
     && value.locked === true
-    && Object.hasOwn(value, 'value')
+    && (
+      Object.hasOwn(value, 'value')
+      || Object.hasOwn(value, 'lookId')
+    )
   );
 }
 
@@ -525,15 +620,36 @@ function containsLockedUserEditable(value) {
   );
 }
 
+function analysisArrayIdentity(value) {
+  if (!value || typeof value !== 'object') return '';
+  return String(
+    value.shotId
+    || value.characterId
+    || value.sceneId
+    || value.propId
+    || value.id
+    || ''
+  );
+}
+
 function mergeUserLockedEditables(previous, incoming) {
   if (isLockedUserEditable(previous)) return previous;
   if (Array.isArray(incoming)) {
     const prior = Array.isArray(previous) ? previous : [];
-    const merged = incoming.map((value, index) => (
-      mergeUserLockedEditables(prior[index], value)
-    ));
+    const matched = new Set();
+    const merged = incoming.map((value, index) => {
+      const identity = analysisArrayIdentity(value);
+      const previousIndex = identity
+        ? prior.findIndex((candidate, candidateIndex) => (
+          !matched.has(candidateIndex)
+          && analysisArrayIdentity(candidate) === identity
+        ))
+        : (!matched.has(index) ? index : -1);
+      if (previousIndex >= 0) matched.add(previousIndex);
+      return mergeUserLockedEditables(prior[previousIndex], value);
+    });
     prior.forEach((value, index) => {
-      if (index >= incoming.length && containsLockedUserEditable(value)) merged.push(value);
+      if (!matched.has(index) && containsLockedUserEditable(value)) merged.push(value);
     });
     return merged;
   }
@@ -672,4 +788,259 @@ export function restoreVideoRemixAnalysis(state, snapshot) {
     restored = applyVideoRemixShotAnalysis(restored, shot);
   }
   return restored;
+}
+
+function normalizeAssetReplacement(value) {
+  if (!value || typeof value !== 'object') return undefined;
+  const source = ['analysis', 'generated', 'upload', 'library'].includes(value.source)
+    ? value.source
+    : 'analysis';
+  const replacement = {
+    ...value,
+    source,
+    updatedAt: value.updatedAt || new Date().toISOString(),
+  };
+  if (value.referenceImages !== undefined) {
+    replacement.referenceImages = [...new Set(
+      (Array.isArray(value.referenceImages) ? value.referenceImages : [])
+        .map(String)
+        .filter(Boolean)
+    )];
+  }
+  return replacement;
+}
+
+export function resolveVideoRemixAsset(asset) {
+  if (!asset || typeof asset !== 'object') return asset;
+  const replacement = normalizeAssetReplacement(asset.replacement);
+  if (!replacement) return asset;
+  return {
+    ...asset,
+    ...replacement,
+    referenceImages: replacement.referenceImages === undefined
+      ? asset.referenceImages || []
+      : replacement.referenceImages,
+    replacement: asset.replacement,
+  };
+}
+
+export function resolveVideoRemixCharacterLook(look) {
+  return resolveVideoRemixAsset(look);
+}
+
+function stageAfterAssetChange(current) {
+  const laterStages = new Set([
+    'assets_ready',
+    'keyframes_generating',
+    'keyframes_ready',
+    'videos_generating',
+    'videos_ready',
+    'rendering',
+    'completed',
+  ]);
+  if (laterStages.has(current.stage)) return 'analysis_ready';
+  return current.stage;
+}
+
+function withInvalidatedAssetDerivatives(current, updates) {
+  return {
+    ...current,
+    ...updates,
+    stage: stageAfterAssetChange(current),
+    assetReview: {
+      confirmed: false,
+      updatedAt: new Date().toISOString(),
+    },
+    prompts: {},
+    keyframes: [],
+    generatedVideos: [],
+    timeline: (current.timeline || []).map(item => {
+      const { videoUrl, ...rest } = item;
+      return rest;
+    }),
+    output: null,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function replaceVideoRemixAsset(state, kind, assetId, replacement) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (!['characters', 'scenes', 'props'].includes(kind)) return current;
+  const id = String(assetId || '');
+  let found = false;
+  const nextAssets = current.assets[kind].map(asset => {
+    if (asset.id !== id) return asset;
+    found = true;
+    const normalized = normalizeAssetReplacement(replacement);
+    if (!normalized) {
+      const { replacement: ignored, ...base } = asset;
+      return base;
+    }
+    return { ...asset, replacement: normalized };
+  });
+  if (!found) return current;
+  return withInvalidatedAssetDerivatives(current, {
+    assets: {
+      ...current.assets,
+      [kind]: nextAssets,
+    },
+  });
+}
+
+export function replaceVideoRemixCharacterLook(
+  state,
+  characterId,
+  lookId,
+  replacement
+) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  let found = false;
+  const characters = current.assets.characters.map(character => {
+    if (character.id !== String(characterId || '')) return character;
+    const looks = character.looks.map(look => {
+      if (look.id !== String(lookId || '')) return look;
+      found = true;
+      const normalized = normalizeAssetReplacement(replacement);
+      if (!normalized) {
+        const { replacement: ignored, ...base } = look;
+        return base;
+      }
+      return { ...look, replacement: normalized };
+    });
+    return found ? { ...character, looks } : character;
+  });
+  if (!found) return current;
+  return withInvalidatedAssetDerivatives(current, {
+    assets: { ...current.assets, characters },
+  });
+}
+
+export function addVideoRemixCharacterLook(state, characterId, look) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const id = String(look?.id || '');
+  if (
+    !id
+    || !/^[A-Za-z0-9_-]+$/.test(id)
+    || !String(look?.name || '').trim()
+    || !String(look?.description || '').trim()
+  ) {
+    return current;
+  }
+  let found = false;
+  const characters = current.assets.characters.map(character => {
+    if (character.id !== String(characterId || '')) return character;
+    found = true;
+    const normalizedLook = {
+      id,
+      name: String(look.name).trim(),
+      description: String(look.description).trim(),
+      referenceImages: [...new Set(
+        (Array.isArray(look.referenceImages) ? look.referenceImages : [])
+          .map(String)
+          .filter(Boolean)
+      )],
+      source: ['generated', 'upload', 'library'].includes(look.source)
+        ? look.source
+        : 'upload',
+    };
+    const existingIndex = character.looks.findIndex(item => item.id === id);
+    const looks = [...character.looks];
+    if (existingIndex >= 0) looks[existingIndex] = normalizedLook;
+    else looks.push(normalizedLook);
+    return { ...character, looks };
+  });
+  if (!found) return current;
+  return withInvalidatedAssetDerivatives(current, {
+    assets: { ...current.assets, characters },
+  });
+}
+
+export function setVideoRemixShotCharacterLook(
+  state,
+  shotId,
+  characterId,
+  lookId
+) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const character = current.assets.characters.find(
+    item => item.id === String(characterId || '')
+  );
+  if (!character?.looks.some(look => look.id === String(lookId || ''))) return current;
+  let found = false;
+  const shots = current.shots.map(shot => {
+    if (shot.shotId !== String(shotId || '')) return shot;
+    const characters = shot.characters.map(item => {
+      if (item.characterId !== character.id) return item;
+      found = true;
+      return {
+        ...item,
+        lookId: String(lookId),
+        lookOverride: {
+          lookId: String(lookId),
+          source: 'user',
+          locked: true,
+        },
+      };
+    });
+    return found ? { ...shot, characters } : shot;
+  });
+  if (!found) return current;
+  return withInvalidatedAssetDerivatives(current, { shots });
+}
+
+export function setVideoRemixPropRemoved(state, propId, removed = true) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  let found = false;
+  const props = current.assets.props.map(prop => {
+    if (prop.id !== String(propId || '')) return prop;
+    found = true;
+    return { ...prop, removed: Boolean(removed) };
+  });
+  if (!found) return current;
+  return withInvalidatedAssetDerivatives(current, {
+    assets: { ...current.assets, props },
+  });
+}
+
+export function confirmVideoRemixAssets(state) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (
+    !current.story
+    || current.shots.length === 0
+    || current.shots.some(shot => shot.analysisStatus !== 'ready')
+  ) {
+    return current;
+  }
+  const now = new Date().toISOString();
+  return {
+    ...current,
+    stage: 'assets_ready',
+    assetReview: {
+      confirmed: true,
+      confirmedAt: now,
+      updatedAt: now,
+    },
+    updatedAt: now,
+  };
+}
+
+export function resolveVideoRemixShotCharacter(state, shotId, characterId) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const shot = current.shots.find(item => item.shotId === String(shotId || ''));
+  const shotCharacter = shot?.characters?.find(
+    item => item.characterId === String(characterId || '')
+  );
+  const baseCharacter = current.assets.characters.find(
+    item => item.id === String(characterId || '')
+  );
+  if (!shotCharacter || !baseCharacter) return null;
+  const character = resolveVideoRemixAsset(baseCharacter);
+  const activeLookId = shotCharacter.lookOverride?.locked
+    ? shotCharacter.lookOverride.lookId
+    : shotCharacter.lookId;
+  const baseLook = baseCharacter.looks.find(look => look.id === activeLookId);
+  return {
+    character,
+    ...(baseLook ? { look: resolveVideoRemixCharacterLook(baseLook) } : {}),
+  };
 }

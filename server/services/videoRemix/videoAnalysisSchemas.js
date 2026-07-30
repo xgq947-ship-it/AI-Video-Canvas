@@ -287,7 +287,11 @@ export function normalizeGlobalVideoAnalysis(raw, expectedShotIds) {
     story: parsed.story,
     characters: parsed.characters.map(character => ({
       ...character,
-      looks: character.looks.map(look => ({ ...look, referenceImages: [] })),
+      looks: character.looks.map(look => ({
+        ...look,
+        referenceImages: [],
+        source: 'analysis',
+      })),
       referenceImages: [],
       source: 'analysis',
     })),
@@ -319,7 +323,10 @@ function isLockedUserField(value) {
     && typeof value === 'object'
     && value.source === 'user'
     && value.locked === true
-    && Object.hasOwn(value, 'value')
+    && (
+      Object.hasOwn(value, 'value')
+      || Object.hasOwn(value, 'lookId')
+    )
   );
 }
 

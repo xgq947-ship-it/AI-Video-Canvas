@@ -6,17 +6,24 @@ import {
   VIDEO_REMIX_SCHEMA_VERSION,
   VIDEO_REMIX_STAGES,
   VIDEO_REMIX_WORKSPACE_TABS,
+  addVideoRemixCharacterLook,
   applyVideoRemixGlobalAnalysis,
   applyVideoRemixShotAnalysis,
   beginVideoRemixAnalysis,
   beginVideoRemixPreprocessing,
   buildVideoRemixShots,
+  confirmVideoRemixAssets,
   completeVideoRemixPreprocessing,
   createVideoRemixState,
   isVideoRemixState,
   normalizeVideoRemixCutPoints,
+  replaceVideoRemixAsset,
   replaceVideoRemixSource,
+  resolveVideoRemixAsset,
+  resolveVideoRemixShotCharacter,
+  setVideoRemixPropRemoved,
   setVideoRemixPreprocessingError,
+  setVideoRemixShotCharacterLook,
   setVideoRemixShotAnalysisError,
   setVideoRemixSourceError,
   summarizeVideoRemixState,
@@ -165,6 +172,287 @@ test('全片与逐 Shot 分析可以增量落状态，单镜头失败不清空�
   assert.equal(state.shots[0].storyBeat.value, '用户锁定');
   assert.equal(state.shots[1].analysisStatus, 'failed');
   assert.equal(state.errors.at(-1).id, state.shots[1].shotId);
+});
+
+test('全片资产自动引用原 Shot 分析帧，重新分析保留用户替换与新增造型', () => {
+  const shots = buildVideoRemixShots({ duration: 1 }).map(shot => ({
+    ...shot,
+    analysisFrames: [{
+      position: 'middle',
+      time: 0.5,
+      url: '/library/projects/test/frame-middle.jpg',
+    }],
+  }));
+  const global = {
+    story: { summary: '故事', structure: ['开始'] },
+    characters: [{
+      id: 'CHAR_01',
+      name: '人物',
+      identity: '身份',
+      looks: [{
+        id: 'LOOK_01',
+        name: '日常',
+        description: '白衣',
+        referenceImages: [],
+        source: 'analysis',
+      }],
+      referenceImages: [],
+      appearsInShots: [shots[0].shotId],
+      source: 'analysis',
+    }],
+    scenes: [],
+    props: [],
+    shotComplexities: [{
+      shotId: shots[0].shotId,
+      motionComplexity: 'simple',
+      confidence: 0.9,
+    }],
+  };
+  let state = applyVideoRemixGlobalAnalysis(createVideoRemixState({
+    remixId: 'remix_asset_frames',
+    source: { id: 'source', duration: 1 },
+    shots,
+  }), global);
+
+  assert.deepEqual(state.assets.characters[0].referenceImages, [
+    '/library/projects/test/frame-middle.jpg',
+  ]);
+  assert.deepEqual(state.assets.characters[0].looks[0].referenceImages, [
+    '/library/projects/test/frame-middle.jpg',
+  ]);
+
+  state = replaceVideoRemixAsset(state, 'characters', 'CHAR_01', {
+    source: 'upload',
+    name: '替换人物',
+    identity: '替换身份',
+    referenceImages: ['/library/projects/test/replacement.jpg'],
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  });
+  state = addVideoRemixCharacterLook(state, 'CHAR_01', {
+    id: 'LOOK_USER',
+    name: '新增造型',
+    description: '黑衣',
+    referenceImages: ['/library/projects/test/look.jpg'],
+    source: 'upload',
+  });
+  state = applyVideoRemixGlobalAnalysis(state, global);
+
+  assert.equal(resolveVideoRemixAsset(state.assets.characters[0]).name, '替换人物');
+  assert.equal(
+    state.assets.characters[0].looks.some(look => look.id === 'LOOK_USER'),
+    true
+  );
+  assert.equal(state.assetReview.confirmed, false);
+});
+
+test('资产全局替换作用于所有 Shot，单 Shot 只覆盖所选造型', () => {
+  const shots = buildVideoRemixShots({ duration: 2, cutPoints: [1] }).map((shot, index) => ({
+    ...shot,
+    analysisStatus: 'ready',
+    characters: [{ characterId: 'CHAR_01', lookId: 'LOOK_01' }],
+    scene: { sceneId: 'SCENE_01', sceneZone: 'ZONE_01' },
+    props: [{ propId: 'PROP_01', role: '手持' }],
+    analysisFrames: [{
+      position: 'middle',
+      time: shot.start + 0.5,
+      url: `/library/frame-${index + 1}.jpg`,
+    }],
+  }));
+  let state = createVideoRemixState({
+    remixId: 'remix_assets',
+    stage: 'analysis_ready',
+    story: { summary: '测试', structure: ['开始'] },
+    shots,
+    assets: {
+      characters: [{
+        id: 'CHAR_01',
+        name: '原人物',
+        identity: '原身份',
+        looks: [{
+          id: 'LOOK_01',
+          name: '原造型',
+          description: '白衣',
+          referenceImages: ['/library/original-look.jpg'],
+          source: 'analysis',
+        }],
+        referenceImages: ['/library/original-character.jpg'],
+        appearsInShots: shots.map(shot => shot.shotId),
+        source: 'analysis',
+      }],
+      scenes: [{
+        id: 'SCENE_01',
+        name: '咖啡厅',
+        visualDescription: '咖啡厅室内',
+        zones: [{ id: 'ZONE_01', name: '入口', description: '门口' }],
+        referenceImages: [],
+        appearsInShots: shots.map(shot => shot.shotId),
+        source: 'analysis',
+      }],
+      props: [{
+        id: 'PROP_01',
+        name: '杯子',
+        category: 'interactive',
+        description: '白杯',
+        referenceImages: [],
+        appearsInShots: shots.map(shot => shot.shotId),
+        source: 'analysis',
+      }],
+    },
+    prompts: { shot_001: { rawPrompt: 'stale' } },
+    keyframes: [{ id: 'old', status: 'confirmed' }],
+    generatedVideos: [{ id: 'old', status: 'completed' }],
+    output: { url: '/library/old.mp4', duration: 2 },
+  });
+
+  state = replaceVideoRemixAsset(state, 'characters', 'CHAR_01', {
+    source: 'library',
+    name: '新人物',
+    identity: '新身份',
+    referenceImages: ['/library/new-character.jpg'],
+    libraryAssetId: 'asset_character',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  });
+  state = replaceVideoRemixAsset(state, 'scenes', 'SCENE_01', {
+    source: 'upload',
+    name: '酒店',
+    visualDescription: '酒店大堂',
+    referenceImages: ['/library/hotel.jpg'],
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  });
+  state = replaceVideoRemixAsset(state, 'props', 'PROP_01', {
+    source: 'generated',
+    name: '按摩器',
+    description: '手持按摩器',
+    referenceImages: ['/library/massager.jpg'],
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  });
+
+  assert.equal(resolveVideoRemixAsset(state.assets.characters[0]).name, '新人物');
+  assert.equal(resolveVideoRemixAsset(state.assets.scenes[0]).name, '酒店');
+  assert.equal(resolveVideoRemixAsset(state.assets.props[0]).name, '按摩器');
+  assert.equal(resolveVideoRemixShotCharacter(state, shots[0].shotId, 'CHAR_01').character.name, '新人物');
+  assert.equal(resolveVideoRemixShotCharacter(state, shots[1].shotId, 'CHAR_01').character.name, '新人物');
+  assert.deepEqual(state.prompts, {});
+  assert.deepEqual(state.keyframes, []);
+  assert.deepEqual(state.generatedVideos, []);
+  assert.equal(state.output, null);
+
+  state = addVideoRemixCharacterLook(state, 'CHAR_01', {
+    id: 'LOOK_LIBRARY',
+    name: '晚宴造型',
+    description: '黑色礼服',
+    referenceImages: ['/library/look-library.jpg'],
+    source: 'library',
+  });
+  state = setVideoRemixShotCharacterLook(
+    state,
+    shots[1].shotId,
+    'CHAR_01',
+    'LOOK_LIBRARY'
+  );
+
+  assert.equal(resolveVideoRemixShotCharacter(state, shots[0].shotId, 'CHAR_01').look.id, 'LOOK_01');
+  assert.equal(resolveVideoRemixShotCharacter(state, shots[1].shotId, 'CHAR_01').look.id, 'LOOK_LIBRARY');
+
+  state = applyVideoRemixShotAnalysis(state, {
+    ...state.shots[1],
+    characters: [{ characterId: 'CHAR_01', lookId: 'LOOK_01' }],
+  });
+  assert.equal(
+    resolveVideoRemixShotCharacter(state, shots[1].shotId, 'CHAR_01').look.id,
+    'LOOK_LIBRARY'
+  );
+
+  state = setVideoRemixPropRemoved(state, 'PROP_01', true);
+  assert.equal(state.assets.props[0].removed, true);
+  state = confirmVideoRemixAssets(state);
+  assert.equal(state.stage, 'assets_ready');
+  assert.equal(state.assetReview.confirmed, true);
+});
+
+test('单 Shot 造型覆盖按人物 ID 合并，不受重新分析返回顺序影响', () => {
+  const [shot] = buildVideoRemixShots({ duration: 1 });
+  let state = createVideoRemixState({
+    remixId: 'remix_look_reorder',
+    stage: 'analysis_ready',
+    story: { summary: '测试', structure: ['开始'] },
+    shots: [{
+      ...shot,
+      analysisStatus: 'ready',
+      characters: [
+        { characterId: 'CHAR_01', lookId: 'LOOK_01' },
+        { characterId: 'CHAR_02', lookId: 'LOOK_03' },
+      ],
+    }],
+    assets: {
+      characters: [
+        {
+          id: 'CHAR_01',
+          name: '人物一',
+          identity: '身份一',
+          looks: [
+            {
+              id: 'LOOK_01',
+              name: '日常',
+              description: '日常装',
+              referenceImages: [],
+              source: 'analysis',
+            },
+            {
+              id: 'LOOK_02',
+              name: '礼服',
+              description: '晚礼服',
+              referenceImages: [],
+              source: 'analysis',
+            },
+          ],
+          referenceImages: [],
+          appearsInShots: [shot.shotId],
+          source: 'analysis',
+        },
+        {
+          id: 'CHAR_02',
+          name: '人物二',
+          identity: '身份二',
+          looks: [{
+            id: 'LOOK_03',
+            name: '固定造型',
+            description: '固定装束',
+            referenceImages: [],
+            source: 'analysis',
+          }],
+          referenceImages: [],
+          appearsInShots: [shot.shotId],
+          source: 'analysis',
+        },
+      ],
+      scenes: [],
+      props: [],
+    },
+  });
+
+  state = setVideoRemixShotCharacterLook(
+    state,
+    shot.shotId,
+    'CHAR_01',
+    'LOOK_02'
+  );
+  state = applyVideoRemixShotAnalysis(state, {
+    ...state.shots[0],
+    characters: [
+      { characterId: 'CHAR_02', lookId: 'LOOK_03' },
+      { characterId: 'CHAR_01', lookId: 'LOOK_01' },
+    ],
+  });
+
+  assert.equal(
+    resolveVideoRemixShotCharacter(state, shot.shotId, 'CHAR_01').look.id,
+    'LOOK_02'
+  );
+  assert.equal(
+    state.shots[0].characters.find(item => item.characterId === 'CHAR_02').lookOverride,
+    undefined
+  );
 });
 
 test('Video Remix 摘要只统计已确认关键帧和已完成镜头视频', () => {

@@ -215,6 +215,42 @@ function parseAnyLibraryUrl(url) {
             pathname = parsed.pathname;
         } catch { return null; }
     }
+    const curatedMatch = pathname.match(/^\/library\/assets\/(.+)$/);
+    if (curatedMatch) {
+        let segments;
+        try {
+            segments = curatedMatch[1].split('/').map(decodeURIComponent);
+        } catch {
+            return null;
+        }
+        if (
+            segments.length < 2
+            || segments.some(segment => (
+                !segment
+                || segment === '.'
+                || segment === '..'
+                || path.basename(segment) !== segment
+            ))
+        ) {
+            return null;
+        }
+        const filename = segments.at(-1);
+        const extension = path.extname(filename).toLowerCase();
+        const type = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif', '.bmp'].includes(extension)
+            ? 'images'
+            : ['.mp4', '.mov', '.webm', '.m4v'].includes(extension)
+                ? 'videos'
+                : null;
+        if (!type) return null;
+        return {
+            origin,
+            type,
+            projectDir: null,
+            filename,
+            assetSegments: segments,
+            layout: 'curated'
+        };
+    }
     const audioMatch = pathname.match(/^\/library\/audio\/([^/]+)$/);
     if (!audioMatch) return null;
     try {
@@ -392,6 +428,9 @@ function sourcePathFor(parsed, { libraryDir, projectsDir, imagesDir, videosDir, 
     if (parsed.layout === 'project') {
         return path.join(projectsDir, parsed.projectDir, parsed.type, parsed.filename);
     }
+    if (parsed.layout === 'curated') {
+        return path.join(libraryDir, 'assets', ...parsed.assetSegments);
+    }
     const bases = {
         images: imagesDir || path.join(libraryDir, 'images'),
         videos: videosDir || path.join(libraryDir, 'videos'),
@@ -430,9 +469,24 @@ export function importProjectAsset(workflow, sourceUrl, dirs) {
         error.code = 'ENOENT';
         throw error;
     }
-    const destination = path.join(dirs.projectsDir, workflow.projectDirName, parsed.type, parsed.filename);
+    const destinationFilename = parsed.layout === 'curated'
+        ? `${path.basename(parsed.filename, path.extname(parsed.filename))}_${crypto
+            .createHash('sha256')
+            .update(parsed.assetSegments.join('/'))
+            .digest('hex')
+            .slice(0, 8)}${path.extname(parsed.filename)}`
+        : parsed.filename;
+    const destination = path.join(
+        dirs.projectsDir,
+        workflow.projectDirName,
+        parsed.type,
+        destinationFilename
+    );
     copyIfNeeded(sourcePath, destination);
-    return { url: projectUrl(workflow.projectDirName, parsed.type, parsed.filename, parsed.origin), type: parsed.type };
+    return {
+        url: projectUrl(workflow.projectDirName, parsed.type, destinationFilename, parsed.origin),
+        type: parsed.type
+    };
 }
 
 /**

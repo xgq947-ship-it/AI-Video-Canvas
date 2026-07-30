@@ -67,6 +67,8 @@ export interface CharacterLook {
   name: string;
   description: string;
   referenceImages: string[];
+  source?: AssetSource;
+  replacement?: VideoRemixAssetReplacement;
 }
 
 export interface VoiceDescription {
@@ -78,6 +80,24 @@ export interface VoiceDescription {
   speakingStyle?: string;
 }
 
+export interface VideoRemixAssetReplacement {
+  source: AssetSource;
+  name?: string;
+  description?: string;
+  identity?: string;
+  visualDescription?: string;
+  audioDescription?: string;
+  voiceDescription?: VoiceDescription;
+  zones?: SceneZone[];
+  category?: 'hero' | 'interactive' | 'background';
+  referenceImages?: string[];
+  libraryAssetId?: string;
+  libraryCharacterId?: string;
+  libraryLookId?: string;
+  generatedPrompt?: string;
+  updatedAt: string;
+}
+
 export interface CharacterAsset {
   id: string;
   name: string;
@@ -87,6 +107,7 @@ export interface CharacterAsset {
   referenceImages: string[];
   appearsInShots: string[];
   source: AssetSource;
+  replacement?: VideoRemixAssetReplacement;
 }
 
 export interface SceneZone {
@@ -104,6 +125,7 @@ export interface SceneAsset {
   referenceImages: string[];
   appearsInShots: string[];
   source: AssetSource;
+  replacement?: VideoRemixAssetReplacement;
 }
 
 export interface PropAsset {
@@ -114,6 +136,8 @@ export interface PropAsset {
   referenceImages: string[];
   appearsInShots: string[];
   source: AssetSource;
+  replacement?: VideoRemixAssetReplacement;
+  removed?: boolean;
 }
 
 export interface FrameSubject {
@@ -226,7 +250,15 @@ export interface ShotAnalysis {
   end: number;
   duration: number;
   storyBeat: EditableField<string>;
-  characters: Array<{ characterId: string; lookId?: string }>;
+  characters: Array<{
+    characterId: string;
+    lookId?: string;
+    lookOverride?: {
+      lookId: string;
+      source: 'user';
+      locked: true;
+    };
+  }>;
   scene: { sceneId?: string; sceneZone?: string };
   props: Array<{ propId: string; role?: string }>;
   frameBlueprint: FrameBlueprint;
@@ -337,6 +369,11 @@ export interface VideoRemixState {
     completedShots: number;
     totalShots: number;
     analysisKey?: string;
+    updatedAt?: string;
+  };
+  assetReview: {
+    confirmed: boolean;
+    confirmedAt?: string;
     updatedAt?: string;
   };
   story: {
@@ -461,3 +498,41 @@ export function restoreVideoRemixAnalysis(
     mode?: 'fast' | 'deep';
   }
 ): VideoRemixState;
+export function resolveVideoRemixAsset(asset: CharacterAsset): CharacterAsset;
+export function resolveVideoRemixAsset(asset: SceneAsset): SceneAsset;
+export function resolveVideoRemixAsset(asset: PropAsset): PropAsset;
+export function resolveVideoRemixCharacterLook(look: CharacterLook): CharacterLook;
+export function replaceVideoRemixAsset(
+  state: unknown,
+  kind: 'characters' | 'scenes' | 'props',
+  assetId: string,
+  replacement: VideoRemixAssetReplacement | null
+): VideoRemixState;
+export function replaceVideoRemixCharacterLook(
+  state: unknown,
+  characterId: string,
+  lookId: string,
+  replacement: VideoRemixAssetReplacement | null
+): VideoRemixState;
+export function addVideoRemixCharacterLook(
+  state: unknown,
+  characterId: string,
+  look: CharacterLook
+): VideoRemixState;
+export function setVideoRemixShotCharacterLook(
+  state: unknown,
+  shotId: string,
+  characterId: string,
+  lookId: string
+): VideoRemixState;
+export function setVideoRemixPropRemoved(
+  state: unknown,
+  propId: string,
+  removed?: boolean
+): VideoRemixState;
+export function confirmVideoRemixAssets(state: unknown): VideoRemixState;
+export function resolveVideoRemixShotCharacter(
+  state: unknown,
+  shotId: string,
+  characterId: string
+): { character: CharacterAsset; look?: CharacterLook } | null;

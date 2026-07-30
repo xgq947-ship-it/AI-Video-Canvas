@@ -169,6 +169,59 @@ test('importing another project asset creates an independent copy', (t) => {
     assert.equal(fs.readFileSync(path.join(dirs.projectsDir, '项目乙', 'images', '共享图.png'), 'utf8'), 'source');
 });
 
+test('素材库分类图片导入项目时使用稳定唯一文件名并隔离源文件', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'twitcanva-curated-copy-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const dirs = {
+        libraryDir: root,
+        projectsDir: path.join(root, 'projects'),
+        imagesDir: path.join(root, 'images'),
+        videosDir: path.join(root, 'videos'),
+        audioDir: path.join(root, 'audio')
+    };
+    const sourceDir = path.join(root, 'assets', 'Character', '苏曼');
+    const otherSourceDir = path.join(root, 'assets', 'Character', '林舟');
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.mkdirSync(otherSourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, '正面.png'), 'character-source');
+    fs.writeFileSync(path.join(otherSourceDir, '正面.png'), 'other-character-source');
+    const target = { id: 'project-remix', title: '二创项目', projectDirName: '二创项目' };
+
+    const first = importProjectAsset(
+        target,
+        '/library/assets/Character/%E8%8B%8F%E6%9B%BC/%E6%AD%A3%E9%9D%A2.png',
+        dirs
+    );
+    const second = importProjectAsset(
+        target,
+        '/library/assets/Character/%E8%8B%8F%E6%9B%BC/%E6%AD%A3%E9%9D%A2.png',
+        dirs
+    );
+
+    assert.equal(first.url, second.url);
+    assert.match(first.url, /^\/library\/projects\/%E4%BA%8C%E5%88%9B%E9%A1%B9%E7%9B%AE\/images\/%E6%AD%A3%E9%9D%A2_[a-f0-9]{8}\.png$/);
+    const other = importProjectAsset(
+        target,
+        '/library/assets/Character/%E6%9E%97%E8%88%9F/%E6%AD%A3%E9%9D%A2.png',
+        dirs
+    );
+    assert.notEqual(first.url, other.url);
+    const importedName = decodeURIComponent(first.url.split('/').at(-1));
+    fs.writeFileSync(path.join(sourceDir, '正面.png'), 'changed');
+    assert.equal(
+        fs.readFileSync(path.join(dirs.projectsDir, '二创项目', 'images', importedName), 'utf8'),
+        'character-source'
+    );
+    assert.throws(
+        () => importProjectAsset(
+            target,
+            '/library/assets/Character/%2E%2E/secret.png',
+            dirs
+        ),
+        error => error?.code === 'UNSUPPORTED_ASSET_URL'
+    );
+});
+
 test('renaming a modern project renames the single root folder and rewrites image video audio URLs', (t) => {
     const dirs = makeLibrary();
     t.after(() => fs.rmSync(dirs.root, { recursive: true, force: true }));

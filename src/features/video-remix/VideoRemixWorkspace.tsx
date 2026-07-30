@@ -61,6 +61,7 @@ import {
   restoreVideoRemixAnalysis,
   updateVideoRemixShotTimeline,
 } from './videoRemixService';
+import { VideoRemixAssetsWorkspace } from './VideoRemixAssetsWorkspace';
 
 interface VideoRemixWorkspaceProps {
   node: NodeData;
@@ -257,6 +258,15 @@ const WorkspaceContent: React.FC<{
           workflowId={workflowId}
           onUpdateNode={onUpdateNode}
           onSelectShots={() => onSelectTab('shots')}
+          dark={dark}
+        />
+      ) : activeTab === 'assets' ? (
+        <VideoRemixAssetsWorkspace
+          node={node}
+          state={state}
+          workflowId={workflowId}
+          onUpdateNode={onUpdateNode}
+          onSelectAnalysis={() => onSelectTab('analysis')}
           dark={dark}
         />
       ) : activeTab === 'shots' ? (

@@ -40,6 +40,11 @@ interface AssetLibraryPanelProps {
     variant?: 'panel' | 'modal';
     canvasTheme?: 'dark' | 'light';
     previewAsset?: { name: string; url: string; type: 'image' | 'video' } | null;
+    allowedCategories?: string[];
+    allowedTypes?: Array<'image' | 'video'>;
+    initialCategory?: string;
+    title?: string;
+    selectOnly?: boolean;
 }
 
 const MASSAGE_CATEGORY = MASSAGE_EQUIPMENT_CATEGORY;
@@ -95,9 +100,16 @@ export const AssetLibraryPanel: React.FC<AssetLibraryPanelProps> = ({
     panelLeft = 80,
     variant = 'panel',
     canvasTheme = 'dark',
-    previewAsset = null
+    previewAsset = null,
+    allowedCategories,
+    allowedTypes,
+    initialCategory,
+    title = '素材库',
+    selectOnly = false
 }) => {
-    const [selectedCategory, setSelectedCategory] = useState('All');
+    const [selectedCategory, setSelectedCategory] = useState(
+        initialCategory || allowedCategories?.[0] || 'All'
+    );
     const [selectedSubcategory, setSelectedSubcategory] = useState<string | null>(null);
     const [assets, setAssets] = useState<LibraryAsset[]>([]);
     const [loading, setLoading] = useState(false);
@@ -105,6 +117,17 @@ export const AssetLibraryPanel: React.FC<AssetLibraryPanelProps> = ({
     useEffect(() => {
         if (isOpen && !previewAsset) void fetchLibrary();
     }, [isOpen, previewAsset]);
+
+    useEffect(() => {
+        if (
+            isOpen
+            && allowedCategories?.length
+            && !allowedCategories.includes(selectedCategory)
+        ) {
+            setSelectedCategory(initialCategory || allowedCategories[0]);
+            setSelectedSubcategory(null);
+        }
+    }, [allowedCategories, initialCategory, isOpen, selectedCategory]);
 
     const fetchLibrary = async () => {
         setLoading(true);
@@ -182,6 +205,9 @@ export const AssetLibraryPanel: React.FC<AssetLibraryPanelProps> = ({
             onAssetsUploaded={uploaded => setAssets(current => [...uploaded, ...current])}
             variant={variant}
             canvasTheme={canvasTheme}
+            allowedCategories={allowedCategories}
+            allowedTypes={allowedTypes}
+            selectOnly={selectOnly}
         />
     );
 
@@ -194,8 +220,12 @@ export const AssetLibraryPanel: React.FC<AssetLibraryPanelProps> = ({
                 >
                     <div className={`flex h-[72px] shrink-0 items-center justify-between border-b px-6 ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}>
                         <div>
-                            <h2 className={`text-xl font-semibold ${isDark ? 'text-white' : 'text-neutral-900'}`}>素材库</h2>
-                            <p className={`mt-1 text-xs ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>集中管理角色、场景、道具和按摩器材素材</p>
+                            <h2 className={`text-xl font-semibold ${isDark ? 'text-white' : 'text-neutral-900'}`}>{title}</h2>
+                            <p className={`mt-1 text-xs ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+                                {selectOnly
+                                    ? '选中后会复制到当前项目，不依赖素材库原文件'
+                                    : '集中管理角色、场景、道具和按摩器材素材'}
+                            </p>
                         </div>
                         <button onClick={onClose} className={`rounded-xl p-2.5 transition-colors ${isDark ? 'text-neutral-400 hover:bg-neutral-800 hover:text-white' : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900'}`} aria-label="关闭素材库">
                             <X size={21} />
@@ -234,6 +264,9 @@ interface AssetLibraryContentProps {
     onAssetsUploaded: (assets: LibraryAsset[]) => void;
     variant: 'panel' | 'modal';
     canvasTheme?: 'dark' | 'light';
+    allowedCategories?: string[];
+    allowedTypes?: Array<'image' | 'video'>;
+    selectOnly?: boolean;
 }
 
 const AssetLibraryContent: React.FC<AssetLibraryContentProps> = ({
@@ -247,7 +280,10 @@ const AssetLibraryContent: React.FC<AssetLibraryContentProps> = ({
     onDeleteAsset,
     onAssetsUploaded,
     variant,
-    canvasTheme = 'dark'
+    canvasTheme = 'dark',
+    allowedCategories,
+    allowedTypes,
+    selectOnly = false
 }) => {
     const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
     const [characterFilter, setCharacterFilter] = useState('All');
@@ -258,7 +294,19 @@ const AssetLibraryContent: React.FC<AssetLibraryContentProps> = ({
     const folderInputRef = useRef<HTMLInputElement>(null);
     const isDark = canvasTheme === 'dark';
 
-    const visibleAssets = assets.filter(asset => VISIBLE_CATEGORIES.has(asset.category));
+    const allowedCategorySet = allowedCategories?.length
+        ? new Set(allowedCategories)
+        : VISIBLE_CATEGORIES;
+    const allowedTypeSet = allowedTypes?.length ? new Set(allowedTypes) : null;
+    const availableTopCategories = TOP_CATEGORIES.filter(category => (
+        category.value === 'All'
+            ? !allowedCategories?.length
+            : allowedCategorySet.has(category.value)
+    ));
+    const visibleAssets = assets.filter(asset => (
+        allowedCategorySet.has(asset.category)
+        && (!allowedTypeSet || allowedTypeSet.has(asset.type))
+    ));
     const characterNames = [...new Set(
         visibleAssets.filter(asset => asset.category === 'Character' && asset.characterName)
             .map(asset => asset.characterName as string)
@@ -282,7 +330,7 @@ const AssetLibraryContent: React.FC<AssetLibraryContentProps> = ({
             .localeCompare(`${b.characterName || ''}|${b.lookName || '身份库'}|${b.name}`, 'zh-CN');
     });
 
-    const canUpload = selectedCategory !== 'All' &&
+    const canUpload = !selectOnly && selectedCategory !== 'All' &&
         (selectedCategory !== MASSAGE_CATEGORY || Boolean(selectedSubcategory));
 
     const uploadFiles = React.useCallback(async (incomingFiles: File[]) => {
@@ -412,7 +460,7 @@ const AssetLibraryContent: React.FC<AssetLibraryContentProps> = ({
 
             <div className={`shrink-0 border-b px-5 py-4 ${isDark ? 'border-neutral-800/80' : 'border-neutral-200'}`}>
                 <div className="flex gap-2 overflow-x-auto scrollbar-hide">
-                    {TOP_CATEGORIES.map(category => (
+                    {availableTopCategories.map(category => (
                         <button
                             key={category.value}
                             onClick={() => selectTopCategory(category.value)}
@@ -454,7 +502,11 @@ const AssetLibraryContent: React.FC<AssetLibraryContentProps> = ({
                                 <span className={`text-sm font-medium ${isDark ? 'text-neutral-200' : 'text-neutral-800'}`}>{categoryLabel(selectedCategory)}</span>
                             )}
                             <p className={`mt-1 text-xs ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-                                {showMassageFolders ? '按产品类型进入对应素材文件夹' : '支持点击上传、粘贴，以及拖入文件或整个文件夹'}
+                                {showMassageFolders
+                                    ? '按产品类型进入对应素材文件夹'
+                                    : selectOnly
+                                        ? '选择一个素材作为当前资产'
+                                        : '支持点击上传、粘贴，以及拖入文件或整个文件夹'}
                             </p>
                         </div>
 
@@ -550,10 +602,18 @@ const AssetLibraryContent: React.FC<AssetLibraryContentProps> = ({
                             {canUpload ? <Upload size={23} /> : <FolderOpen size={23} />}
                         </span>
                         <p className={`mt-4 text-sm font-medium ${isDark ? 'text-neutral-300' : 'text-neutral-700'}`}>
-                            {canUpload ? '这里还没有素材' : '素材库暂时为空'}
+                            {canUpload
+                                ? '这里还没有素材'
+                                : selectOnly
+                                    ? '当前分类没有可选素材'
+                                    : '素材库暂时为空'}
                         </p>
                         <p className={`mt-1.5 max-w-sm text-xs leading-5 ${isDark ? 'text-neutral-600' : 'text-neutral-400'}`}>
-                            {canUpload ? '点击上传，或直接粘贴、拖入图片与视频；拖入文件夹时会批量导入其中的素材。' : '选择一个具体分类后即可上传素材。'}
+                            {canUpload
+                                ? '点击上传，或直接粘贴、拖入图片与视频；拖入文件夹时会批量导入其中的素材。'
+                                : selectOnly
+                                    ? '关闭后可在资产页直接上传，或先到主素材库添加素材。'
+                                    : '选择一个具体分类后即可上传素材。'}
                         </p>
                         {canUpload && (
                             <button onClick={() => fileInputRef.current?.click()} className="mt-5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-500">
@@ -587,7 +647,7 @@ const AssetLibraryContent: React.FC<AssetLibraryContentProps> = ({
                                     </div>
                                 )}
 
-                                {deleteConfirmId === asset.id ? (
+                                {!selectOnly && deleteConfirmId === asset.id ? (
                                     <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/85" onClick={event => event.stopPropagation()}>
                                         <span className="text-xs font-medium text-white">确认删除？</span>
                                         <div className="flex gap-2">
@@ -601,7 +661,7 @@ const AssetLibraryContent: React.FC<AssetLibraryContentProps> = ({
                                             }}>取消</button>
                                         </div>
                                     </div>
-                                ) : (
+                                ) : !selectOnly ? (
                                     <button
                                         className="absolute right-1.5 top-1.5 z-10 rounded-md bg-black/65 p-1.5 text-white opacity-0 transition-opacity hover:bg-red-500/90 group-hover:opacity-100"
                                         onClick={event => {
@@ -612,7 +672,7 @@ const AssetLibraryContent: React.FC<AssetLibraryContentProps> = ({
                                     >
                                         <Trash2 size={13} />
                                     </button>
-                                )}
+                                ) : null}
                             </div>
                         ))}
                     </div>

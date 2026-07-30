@@ -27,6 +27,28 @@ interface AnalysisErrorPayload {
   authRequired?: boolean;
 }
 
+export interface VideoRemixLibraryAsset {
+  id: string;
+  name: string;
+  category: string;
+  subcategory?: string;
+  url: string;
+  type: 'image' | 'video';
+  description?: string;
+  characterId?: string;
+  characterName?: string;
+  characterAssetRole?:
+    | 'identity-face'
+    | 'identity-angles'
+    | 'identity-board'
+    | 'identity-fullbody'
+    | 'identity-expression'
+    | 'look-fullbody'
+    | 'look-board';
+  lookId?: string;
+  lookName?: string;
+}
+
 export class VideoRemixRequestError extends Error {
   code: string;
   retryable: boolean;
@@ -306,4 +328,74 @@ export async function openGeminiLogin() {
     method: 'POST',
   });
   return readAnalysisPayload<{ success: boolean }>(response);
+}
+
+export async function listVideoRemixLibraryAssets(): Promise<VideoRemixLibraryAsset[]> {
+  const response = await fetch('/api/library', { cache: 'no-store' });
+  const payload = await response.json().catch(() => []);
+  if (!response.ok) {
+    throw new VideoRemixRequestError(
+      (payload as AnalysisErrorPayload)?.error || '素材库读取失败'
+    );
+  }
+  return Array.isArray(payload) ? payload : [];
+}
+
+export async function importVideoRemixLibraryAsset({
+  workflowId,
+  sourceUrl,
+}: {
+  workflowId: string;
+  sourceUrl: string;
+}): Promise<string> {
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(workflowId)}/assets/import`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sourceUrl }),
+    }
+  );
+  const payload = await readAnalysisPayload<{ success: boolean; url?: string }>(response);
+  if (!payload.url) throw new Error('素材没有返回项目内地址');
+  return payload.url;
+}
+
+export async function uploadVideoRemixAssetImage({
+  workflowId,
+  file,
+  prompt,
+}: {
+  workflowId: string;
+  file: File;
+  prompt: string;
+}): Promise<string> {
+  if (!file.type.startsWith('image/')) {
+    throw new VideoRemixRequestError('请选择图片文件', {
+      code: 'UNSUPPORTED_IMAGE',
+      retryable: false,
+    });
+  }
+  if (file.size > 100 * 1024 * 1024) {
+    throw new VideoRemixRequestError('图片不能超过 100MB', {
+      code: 'IMAGE_TOO_LARGE',
+      retryable: false,
+    });
+  }
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(workflowId)}/assets/upload-image-binary`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': file.type,
+        'X-Evan-Mime': file.type,
+        'X-Evan-Filename': encodeURIComponent(file.name),
+        'X-Evan-Prompt': encodeURIComponent(prompt),
+      },
+      body: file,
+    }
+  );
+  const payload = await readAnalysisPayload<{ success: boolean; url?: string }>(response);
+  if (!payload.url) throw new Error('上传没有返回项目内地址');
+  return payload.url;
 }

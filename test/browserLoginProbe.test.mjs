@@ -50,6 +50,31 @@ test('HTTP 桥接只向 Hub 申请租约，并在 finally 释放', () => {
     assert.doesNotMatch(block, /subprocess\.Popen|_instance_is_headless|_instance_supports_playwright/);
 });
 
+test('HTTP 平台页按 targetId 注册给当前 Hub 租约', { skip: !ready }, () => {
+    const script = `
+import json, sys
+sys.path.insert(0, 'sessionhub')
+from scene import browser_hub as b
+
+events = []
+b._lease_id = 'lease-page-test'
+b._page_key = 'ai-video-canvas:gemini-web'
+b.rpc = lambda method, params=None: events.append({'method': method, 'params': params}) or {'registered': True}
+result = b.register_page('target-gemini-1234')
+print(json.dumps({'result': result, 'events': events}))
+`;
+    const result = runPython(script);
+    assert.equal(result.result.registered, true);
+    assert.deepEqual(result.events, [{
+        method: 'page.register',
+        params: { leaseId: 'lease-page-test', targetId: 'target-gemini-1234' }
+    }]);
+
+    const source = fs.readFileSync(path.join(PYTHON_ROOT, 'ops_cli', 'webhttp.py'), 'utf8');
+    assert.match(source, /_register_hub_page\(initial_target_id\)/);
+    assert.match(source, /_register_hub_page\(replacement_target_id\)/);
+});
+
 test('HTTP 页面只复用明确项目标签，不会占用同域未标记页面', { skip: !ready }, () => {
     const script = `
 import json, os, tempfile

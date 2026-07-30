@@ -98,6 +98,10 @@ test('共享 Hub 载荷包含 Node 许可证并校验远程归档', () => {
   assert.match(prepareHub, /NODE-LICENSE/);
   assert.match(prepareHub, /createHash\('sha256'\)/);
   assert.match(runtimeVerifier, /NODE-LICENSE/);
+  const electronHub = fs.readFileSync(new URL('../electron/browserHub.js', import.meta.url), 'utf8');
+  const pinnedVersion = prepareHub.match(/const HUB_VERSION = '([^']+)'/)?.[1];
+  assert.ok(pinnedVersion);
+  assert.match(electronHub, new RegExp(`BROWSER_HUB_VERSION = '${pinnedVersion.replaceAll('.', '\\.')}'`));
 });
 
 test('Electron 与普通 npm run dev 都会自动启动内置共享 Hub', () => {

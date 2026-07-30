@@ -91,7 +91,7 @@ Evan 为安装版创建独立的 `CODEX_HOME`，登录资料和画布 Skill 保�
 ## 6. 卸载和更新
 
 - 更新：安装新版并覆盖“应用程序”中的旧版，用户数据和登录资料保留。
-- 关闭 Evan 主窗口只退出 Evan；共享 Chrome 在所有 App 都空闲 120 秒后自动关闭。
+- 关闭 Evan 主窗口只退出 Evan；共享 Chrome 在所有 App 都空闲 60 秒后自动关闭。
 - 卸载程序：删除“应用程序”中的 Evan。
 - 完全删除数据：卸载后再手动删除
   `~/Library/Application Support/Evan AI Video Canvas/`。

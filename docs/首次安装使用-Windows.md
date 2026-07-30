@@ -96,7 +96,7 @@ Evan 安装版使用 `%APPDATA%\Evan AI Video Canvas\data\codex-home\` 保存独
 ## 7. 更新与卸载
 
 - 更新：运行新版安装器覆盖安装，项目和浏览器登录状态保留。
-- 关闭 Evan 主窗口只退出 Evan；共享 Chrome 在所有 App 都空闲 120 秒后自动关闭。
+- 关闭 Evan 主窗口只退出 Evan；共享 Chrome 在所有 App 都空闲 60 秒后自动关闭。
 - 卸载：Windows“设置 → 应用 → 已安装的应用”中卸载 Evan。
 - 完全删除数据：卸载后手动删除
   `%APPDATA%\Evan AI Video Canvas\`。

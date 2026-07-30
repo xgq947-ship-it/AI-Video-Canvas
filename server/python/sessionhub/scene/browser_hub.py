@@ -99,6 +99,7 @@ def status() -> dict[str, Any]:
 _lease_lock = threading.Lock()
 _lease_id: str | None = None
 _cdp_endpoint: str | None = None
+_page_key: str | None = None
 _heartbeat_stop: threading.Event | None = None
 _heartbeat_thread: threading.Thread | None = None
 
@@ -123,19 +124,21 @@ def _provider_for_url(url: str) -> str:
 
 
 def acquire_browser(initial_url: str = "about:blank") -> tuple[str, int | None]:
-    global _lease_id, _cdp_endpoint, _heartbeat_stop, _heartbeat_thread
+    global _lease_id, _cdp_endpoint, _page_key, _heartbeat_stop, _heartbeat_thread
     with _lease_lock:
         if _lease_id and _cdp_endpoint:
             port = int(_cdp_endpoint.rsplit(":", 1)[1])
             browser = status().get("browser") or {}
             return _cdp_endpoint, int(browser.get("pid")) if browser.get("pid") else None
+        provider = _provider_for_url(initial_url)
+        page_key = f"ai-video-canvas:{provider}"
         result = rpc(
             "browser.acquire",
             {
                 "appId": "com.evan.aivideocanvas",
                 "taskId": str(uuid.uuid4()),
-                "provider": _provider_for_url(initial_url),
-                "pageKey": f"ai-video-canvas:{_provider_for_url(initial_url)}",
+                "provider": provider,
+                "pageKey": page_key,
                 "clientPid": os.getpid(),
                 "url": initial_url,
                 "ttlMs": 120_000,
@@ -151,6 +154,7 @@ def acquire_browser(initial_url: str = "about:blank") -> tuple[str, int | None]:
             raise BrowserHubError("HUB_RESPONSE_INVALID", "共享浏览器没有返回调试连接。")
         _lease_id = lease_id
         _cdp_endpoint = endpoint
+        _page_key = page_key
         _heartbeat_stop = threading.Event()
         _heartbeat_thread = threading.Thread(
             target=_heartbeat,
@@ -163,12 +167,13 @@ def acquire_browser(initial_url: str = "about:blank") -> tuple[str, int | None]:
 
 
 def release_browser() -> bool:
-    global _lease_id, _cdp_endpoint, _heartbeat_stop, _heartbeat_thread
+    global _lease_id, _cdp_endpoint, _page_key, _heartbeat_stop, _heartbeat_thread
     with _lease_lock:
         lease_id = _lease_id
         stop = _heartbeat_stop
         _lease_id = None
         _cdp_endpoint = None
+        _page_key = None
         _heartbeat_stop = None
         _heartbeat_thread = None
     if stop:
@@ -180,6 +185,19 @@ def release_browser() -> bool:
         return True
     except BrowserHubError:
         return False
+
+
+def register_page(target_id: str) -> dict[str, Any]:
+    with _lease_lock:
+        lease_id = _lease_id
+        page_key = _page_key
+    if not lease_id or not page_key:
+        raise BrowserHubError("LEASE_NOT_FOUND", "当前没有可绑定标签的浏览器租约。")
+    result = rpc("page.register", {
+        "leaseId": lease_id,
+        "targetId": str(target_id),
+    })
+    return result if isinstance(result, dict) else {}
 
 
 def open_login(url: str) -> dict[str, Any]:

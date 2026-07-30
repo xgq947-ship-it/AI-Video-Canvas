@@ -37,7 +37,10 @@ AI Browser Hub（当前用户级共享运行时）
 ### 2.1 关闭应用与生成中断
 
 - macOS 与 Windows 关闭最后一个 Evan 窗口都会退出 Electron，并释放本 App 租约；不会
-  关闭其他 App 正在使用的共享 Chrome。最后一个租约释放 120 秒后由 Hub 回收 Chrome。
+  关闭其他 App 正在使用的共享 Chrome。最后一个租约释放 60 秒后由 Hub 回收 Chrome。
+- Hub 只管理业务 App 通过 `page.register` 明确登记的标签：任务后保温 30 秒、每个稳定
+  `pageKey` 只复用一个标签，累计 50 次任务或存活两小时后在任务边界重建。未登记的登录页
+  和用户页面永不自动关闭；生命周期检查只发生在 acquire/register/release 事件，不做周期轮询。
 - 后台异常退出但 Electron 仍存活时，主进程会在一分钟窗口内最多自动重启三次，并让
   页面连接新的随机 loopback 地址；连续崩溃超过上限后才要求用户完整重启应用。
 - 本地后端退出不会暂停远程平台任务。Flow/Gemini Web/即梦已经提交的任务可能继续在平台生成，

@@ -484,6 +484,21 @@ def _load_sessionhub() -> Any:
     return chrome_cdp
 
 
+def _register_hub_page(target_id: str | None) -> bool:
+    if not target_id:
+        return False
+    chrome_cdp = _load_sessionhub()
+    try:
+        chrome_cdp.browser_hub.register_page(target_id)
+        return True
+    except chrome_cdp.browser_hub.BrowserHubError as exc:
+        # Additive protocol method: older compatible Hub versions keep using
+        # Evan's existing page cleanup until the bundled runtime is upgraded.
+        if exc.code in {"METHOD_NOT_FOUND", "HUB_UNAVAILABLE", "HUB_NOT_RUNNING", "LEASE_NOT_FOUND"}:
+            return False
+        raise WebHttpBridgeError(str(exc), error_code=exc.code) from exc
+
+
 def _connect(
     handler: Any,
     *,
@@ -1151,7 +1166,9 @@ def _provider_page(context: Any, provider: str, desired_url: str | None = None) 
         # Persist before navigation: if Chrome crashes or a platform redirects
         # cross-site and clears JS markers, the next request can still identify
         # this exact target instead of opening another one.
-        _write_bridge_target_id(provider, _page_target_id(context, page))
+        initial_target_id = _page_target_id(context, page)
+        _write_bridge_target_id(provider, initial_target_id)
+        _register_hub_page(initial_target_id)
         if not _mark_project_page(page, provider):
             # A direct cold-start URL can still be loading; _park_provider_page
             # waits for DOM readiness and marks it again.
@@ -1208,7 +1225,9 @@ def _provider_page(context: Any, provider: str, desired_url: str | None = None) 
                 )
                 created = True
                 selected_snapshot = None
-                _write_bridge_target_id(provider, _page_target_id(context, page))
+                replacement_target_id = _page_target_id(context, page)
+                _write_bridge_target_id(provider, replacement_target_id)
+                _register_hub_page(replacement_target_id)
 
     raise WebHttpBridgeError(
         f"{provider} 项目标签不可用",

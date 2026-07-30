@@ -10,7 +10,7 @@ import { finished } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const HUB_VERSION = '0.1.0';
+const HUB_VERSION = '0.1.1';
 const platform = process.platform;
 const arch = process.env.AI_BROWSER_HUB_RUNTIME_ARCH || process.arch;
 const payloadName = `payload-${platform}-${arch}`;

@@ -13,6 +13,7 @@ export const VIDEO_REMIX_STAGES = Object.freeze([
   'preprocessing',
   'shots_ready',
   'analyzing',
+  'analysis_partial',
   'analysis_ready',
   'assets_ready',
   'keyframes_generating',
@@ -46,11 +47,19 @@ export const HIGH_FIDELITY_LOCKS = Object.freeze({
   style: false,
 });
 
+const DEFAULT_ANALYSIS_RUN = Object.freeze({
+  mode: 'fast',
+  globalStatus: 'idle',
+  completedShots: 0,
+  totalShots: 0,
+});
+
 const TAB_BY_STAGE = Object.freeze({
   source: 'source',
   preprocessing: 'source',
   shots_ready: 'shots',
   analyzing: 'analysis',
+  analysis_partial: 'analysis',
   analysis_ready: 'analysis',
   assets_ready: 'assets',
   keyframes_generating: 'keyframes',
@@ -248,6 +257,7 @@ export function createVideoRemixState(overrides = {}) {
     mode: 'high_fidelity',
     stage: 'source',
     source: null,
+    analysisRun: { ...DEFAULT_ANALYSIS_RUN },
     story: null,
     assets: {
       characters: [],
@@ -274,6 +284,10 @@ export function createVideoRemixState(overrides = {}) {
     scenes: [],
     props: [],
     ...(overrides.assets || {}),
+  };
+  state.analysisRun = {
+    ...DEFAULT_ANALYSIS_RUN,
+    ...(overrides.analysisRun || {}),
   };
   state.locks = { ...HIGH_FIDELITY_LOCKS, ...(overrides.locks || {}) };
   state.bgm = { mode: 'none', ...(overrides.bgm || {}) };
@@ -378,6 +392,10 @@ export function completeVideoRemixPreprocessing(state, {
       proxyUrl,
     },
     stage: 'shots_ready',
+    analysisRun: {
+      ...DEFAULT_ANALYSIS_RUN,
+      totalShots: shots.length,
+    },
     story: null,
     assets: {
       characters: [],
@@ -418,4 +436,240 @@ export function setVideoRemixPreprocessingError(state, message, retryable = true
     ],
     updatedAt: new Date().toISOString(),
   };
+}
+
+export function beginVideoRemixAnalysis(state, mode = 'fast') {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (!current.source || current.shots.length === 0) return current;
+  return {
+    ...current,
+    stage: 'analyzing',
+    analysisRun: {
+      ...DEFAULT_ANALYSIS_RUN,
+      ...(current.analysisRun || {}),
+      mode: mode === 'deep' ? 'deep' : 'fast',
+      globalStatus: 'analyzing',
+      completedShots: current.shots.filter(shot => shot?.analysisStatus === 'ready').length,
+      totalShots: current.shots.length,
+      updatedAt: new Date().toISOString(),
+    },
+    errors: current.errors.filter(item => item?.scope !== 'analysis'),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function applyVideoRemixGlobalAnalysis(state, result) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (!result?.story || !Array.isArray(result?.shotComplexities)) return current;
+  const complexityByShot = new Map(
+    result.shotComplexities.map(item => [item.shotId, item])
+  );
+  const shots = current.shots.map(shot => {
+    const classification = complexityByShot.get(shot.shotId);
+    return {
+      ...shot,
+      motionComplexity: classification?.motionComplexity || shot.motionComplexity || 'medium',
+      ...(Number.isFinite(Number(classification?.confidence))
+        ? { motionComplexityConfidence: Number(classification.confidence) }
+        : {}),
+      analysisStatus: 'pending',
+      analysisError: undefined,
+    };
+  });
+  const completedShots = shots.filter(shot => shot.analysisStatus === 'ready').length;
+  return {
+    ...current,
+    stage: completedShots === shots.length ? 'analysis_ready' : 'analyzing',
+    story: {
+      ...result.story,
+      ...(result.style ? { style: result.style } : {}),
+    },
+    assets: {
+      characters: Array.isArray(result.characters) ? result.characters : [],
+      scenes: Array.isArray(result.scenes) ? result.scenes : [],
+      props: Array.isArray(result.props) ? result.props : [],
+    },
+    shots,
+    analysisRun: {
+      ...DEFAULT_ANALYSIS_RUN,
+      ...(current.analysisRun || {}),
+      mode: result.mode === 'deep' ? 'deep' : current.analysisRun?.mode || 'fast',
+      analysisKey: result.analysisKey || current.analysisRun?.analysisKey,
+      globalStatus: 'ready',
+      completedShots,
+      totalShots: shots.length,
+      updatedAt: new Date().toISOString(),
+    },
+    errors: current.errors.filter(item => item?.scope !== 'analysis'),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function isLockedUserEditable(value) {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && value.source === 'user'
+    && value.locked === true
+    && Object.hasOwn(value, 'value')
+  );
+}
+
+function containsLockedUserEditable(value) {
+  if (isLockedUserEditable(value)) return true;
+  if (Array.isArray(value)) return value.some(containsLockedUserEditable);
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && Object.values(value).some(containsLockedUserEditable)
+  );
+}
+
+function mergeUserLockedEditables(previous, incoming) {
+  if (isLockedUserEditable(previous)) return previous;
+  if (Array.isArray(incoming)) {
+    const prior = Array.isArray(previous) ? previous : [];
+    const merged = incoming.map((value, index) => (
+      mergeUserLockedEditables(prior[index], value)
+    ));
+    prior.forEach((value, index) => {
+      if (index >= incoming.length && containsLockedUserEditable(value)) merged.push(value);
+    });
+    return merged;
+  }
+  if (incoming && typeof incoming === 'object') {
+    const keys = new Set(Object.keys(incoming));
+    if (previous && typeof previous === 'object') {
+      Object.entries(previous).forEach(([key, value]) => {
+        if (containsLockedUserEditable(value)) keys.add(key);
+      });
+    }
+    return Object.fromEntries([...keys].map(key => [
+      key,
+      Object.hasOwn(incoming, key)
+        ? mergeUserLockedEditables(previous?.[key], incoming[key])
+        : previous[key],
+    ]));
+  }
+  return incoming;
+}
+
+export function applyVideoRemixShotAnalysis(state, analyzedShot) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (!analyzedShot?.shotId) return current;
+  let found = false;
+  const shots = current.shots.map(shot => {
+    if (shot.shotId !== analyzedShot.shotId) return shot;
+    found = true;
+    const merged = mergeUserLockedEditables(shot, analyzedShot);
+    return {
+      ...merged,
+      analysisFrames: shot.analysisFrames || merged.analysisFrames || [],
+      detection: shot.detection || merged.detection || { source: 'manual' },
+      analysisStatus: 'ready',
+      analysisError: undefined,
+      analyzedAt: merged.analyzedAt || new Date().toISOString(),
+    };
+  });
+  if (!found) return current;
+  const completedShots = shots.filter(shot => shot.analysisStatus === 'ready').length;
+  return {
+    ...current,
+    stage: completedShots === shots.length ? 'analysis_ready' : 'analysis_partial',
+    shots,
+    analysisRun: {
+      ...DEFAULT_ANALYSIS_RUN,
+      ...(current.analysisRun || {}),
+      globalStatus: 'ready',
+      completedShots,
+      totalShots: shots.length,
+      updatedAt: new Date().toISOString(),
+    },
+    errors: current.errors.filter(item => !(
+      item?.scope === 'analysis' && item?.id === analyzedShot.shotId
+    )),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function setVideoRemixShotAnalysisError(state, shotId, message, {
+  code,
+  retryable = true,
+} = {}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const safeShotId = String(shotId || '');
+  const shots = current.shots.map(shot => (
+    shot.shotId === safeShotId
+      ? { ...shot, analysisStatus: 'failed', analysisError: String(message || 'Shot 分析失败') }
+      : shot
+  ));
+  const completedShots = shots.filter(shot => shot.analysisStatus === 'ready').length;
+  return {
+    ...current,
+    stage: 'analysis_partial',
+    shots,
+    analysisRun: {
+      ...DEFAULT_ANALYSIS_RUN,
+      ...(current.analysisRun || {}),
+      globalStatus: current.analysisRun?.globalStatus || 'ready',
+      completedShots,
+      totalShots: shots.length,
+      updatedAt: new Date().toISOString(),
+    },
+    errors: [
+      ...current.errors.filter(item => !(
+        item?.scope === 'analysis' && item?.id === safeShotId
+      )),
+      {
+        scope: 'analysis',
+        id: safeShotId,
+        message: String(message || 'Shot 分析失败'),
+        retryable: Boolean(retryable),
+        ...(code ? { code: String(code) } : {}),
+      },
+    ],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function setVideoRemixGlobalAnalysisError(state, message, {
+  code,
+  retryable = true,
+} = {}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  return {
+    ...current,
+    stage: current.shots.some(shot => shot?.analysisStatus === 'ready')
+      ? 'analysis_partial'
+      : 'shots_ready',
+    analysisRun: {
+      ...DEFAULT_ANALYSIS_RUN,
+      ...(current.analysisRun || {}),
+      globalStatus: 'failed',
+      updatedAt: new Date().toISOString(),
+    },
+    errors: [
+      ...current.errors.filter(item => !(item?.scope === 'analysis' && !item?.id)),
+      {
+        scope: 'analysis',
+        message: String(message || '全片分析失败'),
+        retryable: Boolean(retryable),
+        ...(code ? { code: String(code) } : {}),
+      },
+    ],
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function restoreVideoRemixAnalysis(state, snapshot) {
+  if (!snapshot?.global) return state;
+  let restored = applyVideoRemixGlobalAnalysis(state, {
+    ...snapshot.global,
+    analysisKey: snapshot.analysisKey,
+    mode: snapshot.mode,
+  });
+  for (const shot of snapshot.shots || []) {
+    restored = applyVideoRemixShotAnalysis(restored, shot);
+  }
+  return restored;
 }

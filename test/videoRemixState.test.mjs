@@ -6,6 +6,9 @@ import {
   VIDEO_REMIX_SCHEMA_VERSION,
   VIDEO_REMIX_STAGES,
   VIDEO_REMIX_WORKSPACE_TABS,
+  applyVideoRemixGlobalAnalysis,
+  applyVideoRemixShotAnalysis,
+  beginVideoRemixAnalysis,
   beginVideoRemixPreprocessing,
   buildVideoRemixShots,
   completeVideoRemixPreprocessing,
@@ -14,6 +17,7 @@ import {
   normalizeVideoRemixCutPoints,
   replaceVideoRemixSource,
   setVideoRemixPreprocessingError,
+  setVideoRemixShotAnalysisError,
   setVideoRemixSourceError,
   summarizeVideoRemixState,
   workspaceTabForStage,
@@ -106,6 +110,61 @@ test('预处理状态会写入代理、Shot 与时间线，并可恢复为可重
     message: '自动拆镜失败',
     retryable: true,
   });
+});
+
+test('全片与逐 Shot 分析可以增量落状态，单镜头失败不清空已完成结果', () => {
+  const source = {
+    id: 'ref_analysis',
+    localUrl: '/library/source.mp4',
+    proxyUrl: '/library/proxy.mp4',
+    duration: 2,
+  };
+  const shots = buildVideoRemixShots({ duration: 2, cutPoints: [1] });
+  let state = createVideoRemixState({
+    remixId: 'remix_analysis',
+    source,
+    shots,
+    stage: 'shots_ready',
+  });
+  state = beginVideoRemixAnalysis(state, 'deep');
+  state = applyVideoRemixGlobalAnalysis(state, {
+    story: { summary: '故事', genre: '剧情', structure: ['开始'] },
+    characters: [],
+    scenes: [],
+    props: [],
+    style: '写实',
+    mode: 'deep',
+    analysisKey: 'analysis_1',
+    shotComplexities: shots.map(shot => ({
+      shotId: shot.shotId,
+      motionComplexity: 'simple',
+      confidence: 0.8,
+    })),
+  });
+
+  assert.equal(state.analysisRun.globalStatus, 'ready');
+  assert.equal(state.analysisRun.analysisKey, 'analysis_1');
+  assert.equal(state.shots[0].analysisStatus, 'pending');
+  assert.equal(state.shots[0].motionComplexity, 'simple');
+
+  state.shots[0].storyBeat = {
+    value: '用户锁定',
+    source: 'user',
+    locked: true,
+  };
+  state = applyVideoRemixShotAnalysis(state, {
+    ...state.shots[0],
+    storyBeat: { value: 'AI 第一镜', source: 'ai', confidence: 0.9, locked: false },
+  });
+  state = setVideoRemixShotAnalysisError(state, state.shots[1].shotId, '第二镜失败', {
+    code: 'ANALYSIS_SCHEMA_INVALID',
+  });
+
+  assert.equal(state.stage, 'analysis_partial');
+  assert.equal(state.analysisRun.completedShots, 1);
+  assert.equal(state.shots[0].storyBeat.value, '用户锁定');
+  assert.equal(state.shots[1].analysisStatus, 'failed');
+  assert.equal(state.errors.at(-1).id, state.shots[1].shotId);
 });
 
 test('Video Remix 摘要只统计已确认关键帧和已完成镜头视频', () => {

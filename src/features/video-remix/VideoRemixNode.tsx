@@ -19,6 +19,7 @@ const STAGE_LABELS: Record<string, string> = {
   preprocessing: '正在自动拆镜',
   shots_ready: '镜头待确认',
   analyzing: '正在分析',
+  analysis_partial: '部分分析待重试',
   analysis_ready: '分析待确认',
   assets_ready: '资产已确认',
   keyframes_generating: '生成关键帧',

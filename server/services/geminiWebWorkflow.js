@@ -97,3 +97,29 @@ export const runGeminiWebMediaTextTask = options => runWithAuthRecovery({
         http: async () => (await runGeminiMediaTextTaskHttp(options)).text
     })
 });
+
+/**
+ * Interactive structured media analysis.
+ *
+ * Unlike background generation jobs this returns AUTH_EXPIRED directly to the
+ * workspace so it can show a login/retry action. The returned conversation
+ * tuple lets schema-correction retries keep the already-uploaded media instead
+ * of uploading the full video again.
+ */
+export const runGeminiWebStructuredMediaTask = options => runWithExecutionMode({
+    mode: options?.executionMode,
+    provider: 'gemini-web',
+    label: options?.label || 'Gemini Web 视频结构化分析',
+    signal: options?.signal,
+    metadata: {
+        kind: 'analysis',
+        modelId: 'gemini-web-video-analysis',
+        nodeId: options?.nodeId,
+        workflowId: options?.workflowId
+    },
+    // Media is intentionally uploaded once per analysis run. Schema repair
+    // happens in the same conversation above this layer; replaying this HTTP
+    // closure would upload the complete proxy a second time.
+    httpAttempts: 1,
+    http: () => runGeminiMediaTextTaskHttp(options)
+});

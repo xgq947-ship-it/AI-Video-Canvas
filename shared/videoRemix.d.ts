@@ -5,6 +5,7 @@ export type VideoRemixStage =
   | 'preprocessing'
   | 'shots_ready'
   | 'analyzing'
+  | 'analysis_partial'
   | 'analysis_ready'
   | 'assets_ready'
   | 'keyframes_generating'
@@ -234,6 +235,7 @@ export interface ShotAnalysis {
   timingBlueprint: TimingBlueprint;
   audioBlueprint: AudioBlueprint;
   motionComplexity: MotionComplexity;
+  motionComplexityConfidence?: number;
   startState?: ContinuityState;
   endState?: ContinuityState;
   transition?: 'hard_cut' | 'fade' | 'flash' | 'zoom' | 'match_motion' | 'other';
@@ -246,6 +248,28 @@ export interface ShotAnalysis {
     source: 'ffmpeg' | 'manual';
     score?: number;
   };
+  analysisStatus?: 'pending' | 'analyzing' | 'ready' | 'failed';
+  analysisError?: string;
+  analyzedAt?: string;
+}
+
+export interface VideoRemixGlobalAnalysis {
+  story: {
+    summary: string;
+    genre?: string;
+    structure: string[];
+  };
+  characters: CharacterAsset[];
+  scenes: SceneAsset[];
+  props: PropAsset[];
+  style?: string;
+  shotComplexities: Array<{
+    shotId: string;
+    motionComplexity: MotionComplexity;
+    confidence: number;
+  }>;
+  analysisKey?: string;
+  mode?: 'fast' | 'deep';
 }
 
 export interface ShotPromptState {
@@ -307,6 +331,14 @@ export interface VideoRemixState {
   mode: 'high_fidelity';
   stage: VideoRemixStage;
   source: ReferenceVideo | null;
+  analysisRun: {
+    mode: 'fast' | 'deep';
+    globalStatus: 'idle' | 'analyzing' | 'ready' | 'failed';
+    completedShots: number;
+    totalShots: number;
+    analysisKey?: string;
+    updatedAt?: string;
+  };
   story: {
     summary: string;
     genre?: string;
@@ -327,7 +359,7 @@ export interface VideoRemixState {
   subtitles: { enabled: boolean; style: string };
   output: { url: string; duration: number } | null;
   locks: VideoRemixLocks;
-  errors: Array<{ scope: string; id?: string; message: string; retryable: boolean }>;
+  errors: Array<{ scope: string; id?: string; message: string; retryable: boolean; code?: string }>;
   createdAt: string;
   updatedAt: string;
 }
@@ -396,4 +428,36 @@ export function setVideoRemixPreprocessingError(
   state: unknown,
   message: string,
   retryable?: boolean
+): VideoRemixState;
+export function beginVideoRemixAnalysis(
+  state: unknown,
+  mode?: 'fast' | 'deep'
+): VideoRemixState;
+export function applyVideoRemixGlobalAnalysis(
+  state: unknown,
+  result: VideoRemixGlobalAnalysis
+): VideoRemixState;
+export function applyVideoRemixShotAnalysis(
+  state: unknown,
+  analyzedShot: ShotAnalysis
+): VideoRemixState;
+export function setVideoRemixShotAnalysisError(
+  state: unknown,
+  shotId: string,
+  message: string,
+  options?: { code?: string; retryable?: boolean }
+): VideoRemixState;
+export function setVideoRemixGlobalAnalysisError(
+  state: unknown,
+  message: string,
+  options?: { code?: string; retryable?: boolean }
+): VideoRemixState;
+export function restoreVideoRemixAnalysis(
+  state: unknown,
+  snapshot: {
+    global: VideoRemixGlobalAnalysis;
+    shots?: ShotAnalysis[];
+    analysisKey?: string;
+    mode?: 'fast' | 'deep';
+  }
 ): VideoRemixState;

@@ -9,6 +9,11 @@ import {
   preprocessReferenceVideo,
   updateVideoRemixShotTimeline,
 } from '../services/videoRemix/shotPreprocessing.js';
+import {
+  analyzeVideoRemixGlobal,
+  analyzeVideoRemixShot,
+  loadVideoRemixAnalysisSnapshot,
+} from '../services/videoRemix/videoAnalysis.js';
 
 const router = express.Router();
 
@@ -30,7 +35,14 @@ function decodeHeader(value) {
 }
 
 function sendError(res, error) {
-  const status = Number(error?.status);
+  const statusByCode = {
+    AUTH_EXPIRED: 401,
+    RECAPTCHA_REQUIRED: 401,
+    RATE_LIMIT: 429,
+    QUOTA_EXHAUSTED: 402,
+    CONTENT_POLICY: 422,
+  };
+  const status = Number(error?.status || statusByCode[error?.code]);
   const safeStatus = status >= 400 && status <= 599 ? status : 500;
   if (safeStatus >= 500) {
     console.error('[Video Remix]', error);
@@ -38,8 +50,82 @@ function sendError(res, error) {
   res.status(safeStatus).json({
     error: error?.message || '参考视频处理失败',
     code: error?.code || 'REFERENCE_VIDEO_FAILED',
+    retryable: error?.retryable !== false,
+    authRequired: ['AUTH_EXPIRED', 'RECAPTCHA_REQUIRED'].includes(error?.code),
   });
 }
+
+router.post('/analysis/global', async (req, res) => {
+  try {
+    const {
+      workflowId,
+      remixId,
+      source,
+      shots,
+      mode,
+    } = req.body || {};
+    const global = await analyzeVideoRemixGlobal({
+      workflowId: String(workflowId || ''),
+      remixId: String(remixId || ''),
+      source,
+      shots,
+      mode,
+    }, requestContext(req));
+    res.json({ success: true, global });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.post('/analysis/shot', async (req, res) => {
+  try {
+    const {
+      workflowId,
+      remixId,
+      source,
+      shots,
+      shotId,
+      mode,
+      analysisKey,
+    } = req.body || {};
+    const result = await analyzeVideoRemixShot({
+      workflowId: String(workflowId || ''),
+      remixId: String(remixId || ''),
+      source,
+      shots,
+      shotId: String(shotId || ''),
+      mode,
+      analysisKey,
+    }, requestContext(req));
+    res.json({ success: true, ...result });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.post('/analysis/restore', async (req, res) => {
+  try {
+    const {
+      workflowId,
+      remixId,
+      source,
+      shots,
+      mode,
+      analysisKey,
+    } = req.body || {};
+    const snapshot = await loadVideoRemixAnalysisSnapshot({
+      workflowId: String(workflowId || ''),
+      remixId: String(remixId || ''),
+      source,
+      shots,
+      mode,
+      analysisKey,
+    }, requestContext(req));
+    res.json({ success: true, snapshot });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
 
 router.post('/preprocess', async (req, res) => {
   try {

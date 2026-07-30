@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   AlertCircle,
+  BrainCircuit,
   Boxes,
   Check,
   ChevronRight,
@@ -10,12 +11,14 @@ import {
   Images,
   LayoutDashboard,
   Link2,
+  LogIn,
   Loader2,
   Lock,
   Package,
   Play,
   Plus,
   RotateCcw,
+  RefreshCw,
   Save,
   ScanSearch,
   Scissors,
@@ -27,23 +30,35 @@ import {
 } from 'lucide-react';
 import {
   VIDEO_REMIX_WORKSPACE_TABS,
+  applyVideoRemixGlobalAnalysis,
+  applyVideoRemixShotAnalysis,
   beginVideoRemixPreprocessing,
+  beginVideoRemixAnalysis,
   completeVideoRemixPreprocessing,
   createVideoRemixState,
   normalizeVideoRemixCutPoints,
   replaceVideoRemixSource,
+  restoreVideoRemixAnalysis as restoreVideoRemixAnalysisState,
+  setVideoRemixGlobalAnalysisError,
   setVideoRemixPreprocessingError,
+  setVideoRemixShotAnalysisError,
   setVideoRemixSourceError,
   summarizeVideoRemixState,
   workspaceTabForStage,
+  type EditableField,
   type ShotAnalysisFramePosition,
   type VideoRemixWorkspaceTab,
 } from '../../../shared/videoRemix.js';
 import { NodeData } from '../../types';
 import {
+  VideoRemixRequestError,
+  analyzeVideoRemixGlobal,
+  analyzeVideoRemixShot,
   importLocalReferenceVideo,
+  openGeminiLogin,
   preprocessReferenceVideo,
   resolveUrlReferenceVideo,
+  restoreVideoRemixAnalysis,
   updateVideoRemixShotTimeline,
 } from './videoRemixService';
 
@@ -230,6 +245,15 @@ const WorkspaceContent: React.FC<{
           node={node}
           state={state}
           summary={summary}
+          workflowId={workflowId}
+          onUpdateNode={onUpdateNode}
+          onSelectShots={() => onSelectTab('shots')}
+          dark={dark}
+        />
+      ) : activeTab === 'analysis' ? (
+        <AnalysisWorkspace
+          node={node}
+          state={state}
           workflowId={workflowId}
           onUpdateNode={onUpdateNode}
           onSelectShots={() => onSelectTab('shots')}
@@ -602,6 +626,603 @@ const SourceWorkspace: React.FC<{
     </div>
   );
 };
+
+type VideoAnalysisMode = 'fast' | 'deep';
+type EditableShotPath =
+  | 'storyBeat'
+  | 'frameBlueprint.shotSize'
+  | 'frameBlueprint.cameraAngle'
+  | 'cameraBlueprint.angle'
+  | 'audioBlueprint.environment';
+
+const AnalysisWorkspace: React.FC<{
+  node: NodeData;
+  state: ReturnType<typeof createVideoRemixState>;
+  workflowId?: string;
+  onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
+  onSelectShots: () => void;
+  dark: boolean;
+}> = ({ node, state, workflowId, onUpdateNode, onSelectShots, dark }) => {
+  const [mode, setMode] = React.useState<VideoAnalysisMode>(
+    state.analysisRun?.mode === 'deep' ? 'deep' : 'fast'
+  );
+  const [busy, setBusy] = React.useState<'global' | 'login' | string | null>(null);
+  const [localError, setLocalError] = React.useState('');
+  const [authRequired, setAuthRequired] = React.useState(
+    state.errors.some(item => item.scope === 'analysis' && item.code === 'AUTH_EXPIRED')
+  );
+  const recoveryKeyRef = React.useRef('');
+  const running = Boolean(busy);
+  const completedShots = state.shots.filter(shot => shot.analysisStatus === 'ready').length;
+  const hasGlobal = state.analysisRun?.globalStatus === 'ready' && Boolean(state.story);
+  const pendingShotIds = state.shots
+    .filter(shot => shot.analysisStatus !== 'ready')
+    .map(shot => shot.shotId);
+
+  const errorDetails = (error: unknown) => ({
+    message: error instanceof Error ? error.message : 'Gemini 分析失败',
+    code: error instanceof VideoRemixRequestError ? error.code : undefined,
+    retryable: error instanceof VideoRemixRequestError ? error.retryable : true,
+    authRequired: error instanceof VideoRemixRequestError ? error.authRequired : false,
+  });
+
+  React.useEffect(() => {
+    if (
+      busy
+      || !workflowId
+      || !state.source?.proxyUrl
+      || state.shots.length === 0
+    ) return;
+    const recoveryKey = JSON.stringify({
+      source: state.source.sourceHash || state.source.id,
+      shots: state.shots.map(shot => [shot.shotId, shot.start, shot.end]),
+      mode: state.analysisRun?.mode || mode,
+      analysisKey: state.analysisRun?.analysisKey || '',
+    });
+    if (recoveryKeyRef.current === recoveryKey) return;
+    recoveryKeyRef.current = recoveryKey;
+    void restoreVideoRemixAnalysis({
+      workflowId,
+      remixId: state.remixId,
+      source: state.source,
+      shots: state.shots,
+      mode: state.analysisRun?.mode === 'deep' ? 'deep' : mode,
+      analysisKey: state.analysisRun?.analysisKey,
+    }).then(snapshot => {
+      const restored = restoreVideoRemixAnalysisState(state, snapshot);
+      if (
+        !state.story
+        || restored.analysisRun.analysisKey !== state.analysisRun?.analysisKey
+        || restored.analysisRun.completedShots > completedShots
+      ) {
+        onUpdateNode(node.id, { videoRemix: restored });
+      }
+    }).catch(error => {
+      if (
+        error instanceof VideoRemixRequestError
+        && ['ANALYSIS_RESULT_NOT_FOUND', 'ANALYSIS_STALE'].includes(error.code)
+      ) return;
+    });
+  }, [
+    busy,
+    completedShots,
+    mode,
+    node.id,
+    onUpdateNode,
+    state,
+    workflowId,
+  ]);
+
+  const persist = (nextState: ReturnType<typeof createVideoRemixState>) => {
+    onUpdateNode(node.id, { videoRemix: nextState });
+  };
+
+  const analyzeShotIds = async (
+    initialState: ReturnType<typeof createVideoRemixState>,
+    shotIds: string[]
+  ) => {
+    let working = initialState;
+    for (const shotId of shotIds) {
+      if (!working.source || !working.analysisRun?.analysisKey) break;
+      const activeSource = working.source;
+      const activeAnalysisKey = working.analysisRun.analysisKey;
+      setBusy(shotId);
+      working = {
+        ...working,
+        stage: 'analyzing',
+        shots: working.shots.map(shot => (
+          shot.shotId === shotId
+            ? { ...shot, analysisStatus: 'analyzing', analysisError: undefined }
+            : shot
+        )),
+        updatedAt: new Date().toISOString(),
+      };
+      persist(working);
+      try {
+        const result = await analyzeVideoRemixShot({
+          workflowId: workflowId!,
+          remixId: working.remixId,
+          source: activeSource,
+          shots: working.shots,
+          shotId,
+          mode: working.analysisRun.mode,
+          analysisKey: activeAnalysisKey,
+        });
+        working = applyVideoRemixShotAnalysis(working, result.shot);
+        persist(working);
+      } catch (error) {
+        const details = errorDetails(error);
+        working = setVideoRemixShotAnalysisError(
+          working,
+          shotId,
+          details.message,
+          details
+        );
+        persist(working);
+        setLocalError(details.message);
+        if (details.authRequired) {
+          setAuthRequired(true);
+          break;
+        }
+      }
+    }
+    setBusy(null);
+    return working;
+  };
+
+  const runFullAnalysis = async () => {
+    if (running) return;
+    if (!workflowId || !state.source) {
+      setLocalError('请先保存项目，并完成参考视频导入与自动拆镜');
+      return;
+    }
+    setLocalError('');
+    setAuthRequired(false);
+    setBusy('global');
+    let working = beginVideoRemixAnalysis(state, mode);
+    persist(working);
+    try {
+      const global = await analyzeVideoRemixGlobal({
+        workflowId,
+        remixId: working.remixId,
+        source: working.source!,
+        shots: working.shots,
+        mode,
+      });
+      working = applyVideoRemixGlobalAnalysis(working, global);
+      persist(working);
+      await analyzeShotIds(working, working.shots.map(shot => shot.shotId));
+    } catch (error) {
+      const details = errorDetails(error);
+      working = setVideoRemixGlobalAnalysisError(working, details.message, details);
+      persist(working);
+      setLocalError(details.message);
+      setAuthRequired(details.authRequired);
+      setBusy(null);
+    }
+  };
+
+  const retryPendingShots = async () => {
+    if (running) return;
+    if (!workflowId || !state.source || !state.analysisRun?.analysisKey || !hasGlobal) {
+      await runFullAnalysis();
+      return;
+    }
+    setLocalError('');
+    setAuthRequired(false);
+    await analyzeShotIds(state, pendingShotIds);
+  };
+
+  const retryOneShot = async (shotId: string) => {
+    if (running || !workflowId || !state.source || !state.analysisRun?.analysisKey) return;
+    setLocalError('');
+    setAuthRequired(false);
+    await analyzeShotIds(state, [shotId]);
+  };
+
+  const handleLogin = async () => {
+    if (running) return;
+    setBusy('login');
+    setLocalError('');
+    try {
+      await openGeminiLogin();
+      setLocalError('登录窗口已打开。完成 Google 登录后，回到这里点击“重试未完成 Shot”。');
+    } catch (error) {
+      setLocalError(errorDetails(error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const updateEditableField = (
+    shotId: string,
+    path: EditableShotPath,
+    value: string,
+    locked: boolean
+  ) => {
+    if (running) return;
+    const shots = state.shots.map(shot => {
+      if (shot.shotId !== shotId) return shot;
+      const next = structuredClone(shot);
+      const field: EditableField<string> = {
+        value,
+        source: 'user',
+        locked,
+      };
+      if (path === 'storyBeat') next.storyBeat = field;
+      if (path === 'frameBlueprint.shotSize') next.frameBlueprint.shotSize = field;
+      if (path === 'frameBlueprint.cameraAngle') next.frameBlueprint.cameraAngle = field;
+      if (path === 'cameraBlueprint.angle') next.cameraBlueprint.angle = field;
+      if (path === 'audioBlueprint.environment') next.audioBlueprint.environment = field;
+      return next;
+    });
+    persist({
+      ...state,
+      shots,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  if (!state.source?.proxyUrl || state.shots.length === 0) {
+    return (
+      <div className={`mt-7 flex min-h-[360px] items-center justify-center rounded-[26px] border ${
+        dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
+      }`}>
+        <div className="max-w-sm text-center">
+          <BrainCircuit size={28} className="mx-auto text-cyan-400" />
+          <div className="mt-4 text-sm font-medium">需要先确认 Shot 时间线</div>
+          <p className={`mt-2 text-xs leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+            Gemini 分析使用本地拆镜结果；未生成代理时不会上传原视频。
+          </p>
+          <button
+            type="button"
+            onClick={onSelectShots}
+            className={`mt-5 rounded-xl px-5 py-2.5 text-xs font-medium ${
+              dark ? 'bg-white text-neutral-950' : 'bg-neutral-900 text-white'
+            }`}
+          >
+            前往镜头页
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const progress = state.shots.length > 0
+    ? Math.round((completedShots / state.shots.length) * 100)
+    : 0;
+
+  return (
+    <div className="mt-7 space-y-5">
+      <section className={`rounded-[26px] border p-5 ${
+        dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
+      }`}>
+        <div className="flex flex-wrap items-start justify-between gap-5">
+          <div className="max-w-2xl">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <BrainCircuit size={17} className="text-cyan-400" />
+              结构化视频分析
+            </div>
+            <p className={`mt-2 text-xs leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-500'}`}>
+              完整代理视频只在全片阶段上传一次；随后 Simple Shot 使用三帧、Medium 使用五帧、
+              Complex 使用本地裁出的完整镜头。每个 Shot 独立保存并可单独重试。
+            </p>
+          </div>
+          <div className={`flex rounded-xl p-1 ${dark ? 'bg-black/35' : 'bg-neutral-100'}`}>
+            {([
+              ['fast', '快速'],
+              ['deep', '深度'],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                disabled={running}
+                onClick={() => setMode(id)}
+                className={`rounded-lg px-4 py-2 text-xs font-medium transition-colors ${
+                  mode === id
+                    ? dark ? 'bg-white text-neutral-950' : 'bg-white text-neutral-900 shadow-sm'
+                    : dark ? 'text-neutral-500' : 'text-neutral-500'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-5">
+          <div className={`h-2 overflow-hidden rounded-full ${dark ? 'bg-white/6' : 'bg-neutral-100'}`}>
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 transition-all"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          <div className={`mt-2 flex justify-between text-[11px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+            <span>全片：{state.analysisRun?.globalStatus || 'idle'}</span>
+            <span>Shot {completedShots}/{state.shots.length}</span>
+          </div>
+        </div>
+
+        {(authRequired || state.errors.some(item => (
+          item.scope === 'analysis' && ['AUTH_EXPIRED', 'RECAPTCHA_REQUIRED'].includes(item.code || '')
+        ))) && (
+          <div className={`mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-4 ${
+            dark ? 'border-amber-400/20 bg-amber-400/[0.06]' : 'border-amber-200 bg-amber-50'
+          }`}>
+            <div>
+              <div className={`text-xs font-medium ${dark ? 'text-amber-200' : 'text-amber-800'}`}>
+                Gemini 尚未登录或登录已失效
+              </div>
+              <div className={`mt-1 text-[11px] ${dark ? 'text-amber-300/60' : 'text-amber-700/70'}`}>
+                本地导入、拆镜和编辑不受影响；登录后只重试未完成的分析。
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={running}
+              onClick={() => void handleLogin()}
+              className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-medium disabled:opacity-50 ${
+                dark ? 'bg-amber-300 text-neutral-950' : 'bg-amber-600 text-white'
+              }`}
+            >
+              {busy === 'login' ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}
+              打开 Gemini 登录
+            </button>
+          </div>
+        )}
+
+        {localError && (
+          <div className={`mt-4 flex items-start gap-2 rounded-xl px-3 py-2.5 text-xs ${
+            authRequired
+              ? dark ? 'bg-amber-400/8 text-amber-200' : 'bg-amber-50 text-amber-800'
+              : dark ? 'bg-red-500/8 text-red-300' : 'bg-red-50 text-red-700'
+          }`}>
+            <AlertCircle size={14} className="mt-0.5 shrink-0" />
+            {localError}
+          </div>
+        )}
+
+        <div className="mt-5 flex flex-wrap gap-3">
+          {!hasGlobal ? (
+            <button
+              type="button"
+              disabled={running}
+              onClick={() => void runFullAnalysis()}
+              className={`flex h-11 items-center gap-2 rounded-xl px-5 text-sm font-medium disabled:opacity-50 ${
+                dark ? 'bg-cyan-400 text-neutral-950' : 'bg-cyan-600 text-white'
+              }`}
+            >
+              {busy === 'global' ? <Loader2 size={15} className="animate-spin" /> : <BrainCircuit size={15} />}
+              {busy === 'global' ? '正在上传一次代理并分析全片…' : '开始全片分析'}
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={running || pendingShotIds.length === 0}
+                onClick={() => void retryPendingShots()}
+                className={`flex h-11 items-center gap-2 rounded-xl px-5 text-sm font-medium disabled:opacity-40 ${
+                  dark ? 'bg-cyan-400 text-neutral-950' : 'bg-cyan-600 text-white'
+                }`}
+              >
+                {running && busy !== 'login' ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                {running && busy !== 'login' ? `正在分析 ${busy}…` : `重试未完成 Shot（${pendingShotIds.length}）`}
+              </button>
+              <button
+                type="button"
+                disabled={running}
+                onClick={() => void runFullAnalysis()}
+                className={`flex h-11 items-center gap-2 rounded-xl px-4 text-xs disabled:opacity-40 ${
+                  dark ? 'bg-white/6 text-neutral-300' : 'bg-neutral-100 text-neutral-600'
+                }`}
+              >
+                <RotateCcw size={14} />
+                重新分析全片
+              </button>
+            </>
+          )}
+        </div>
+      </section>
+
+      {state.story && (
+        <section className={`rounded-[26px] border p-5 ${
+          dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
+        }`}>
+          <div className="grid gap-5 lg:grid-cols-[1.25fr_0.75fr]">
+            <div>
+              <div className="text-sm font-medium">全片故事</div>
+              <p className={`mt-3 text-sm leading-7 ${dark ? 'text-neutral-300' : 'text-neutral-700'}`}>
+                {state.story.summary}
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {state.story.structure.map((beat, index) => (
+                  <span key={index} className={`rounded-full px-3 py-1 text-[10px] ${
+                    dark ? 'bg-white/6 text-neutral-400' : 'bg-neutral-100 text-neutral-600'
+                  }`}>
+                    {index + 1}. {beat}
+                  </span>
+                ))}
+              </div>
+              {state.story.style && (
+                <div className={`mt-4 rounded-xl p-3 text-xs leading-5 ${
+                  dark ? 'bg-black/25 text-neutral-400' : 'bg-neutral-50 text-neutral-600'
+                }`}>
+                  视觉风格：{state.story.style}
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <SummaryCard icon={<Users size={16} />} label="人物" value={state.assets.characters.length} dark={dark} />
+              <SummaryCard icon={<Images size={16} />} label="场景" value={state.assets.scenes.length} dark={dark} />
+              <SummaryCard icon={<Package size={16} />} label="道具" value={state.assets.props.length} dark={dark} />
+            </div>
+          </div>
+        </section>
+      )}
+
+      <section className={`rounded-[26px] border p-5 ${
+        dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
+      }`}>
+        <div>
+          <div className="text-sm font-medium">逐 Shot Blueprint</div>
+          <div className={`mt-1 text-[11px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+            修改字段会标记为 user + locked，后续重新分析不会覆盖；可手动解除锁定。
+          </div>
+        </div>
+        <div className="mt-5 space-y-4">
+          {state.shots.map((shot, index) => {
+            const shotBusy = busy === shot.shotId;
+            const status = shot.analysisStatus || 'pending';
+            const statusStyle = status === 'ready'
+              ? dark ? 'bg-emerald-400/10 text-emerald-300' : 'bg-emerald-50 text-emerald-700'
+              : status === 'failed'
+                ? dark ? 'bg-red-400/10 text-red-300' : 'bg-red-50 text-red-700'
+                : dark ? 'bg-white/6 text-neutral-400' : 'bg-neutral-100 text-neutral-500';
+            return (
+              <article key={shot.shotId} className={`rounded-2xl border p-4 ${
+                dark ? 'border-white/8 bg-black/20' : 'border-neutral-200 bg-neutral-50'
+              }`}>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="text-xs font-medium">Shot {String(index + 1).padStart(2, '0')}</div>
+                    <span className={`rounded-full px-2.5 py-1 text-[9px] ${statusStyle}`}>
+                      {shotBusy ? '分析中' : status === 'ready' ? '已完成' : status === 'failed' ? '失败' : '待分析'}
+                    </span>
+                    <span className={`text-[10px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+                      {shot.motionComplexity} · {shot.motionComplexityConfidence === undefined
+                        ? '待分类'
+                        : `${Math.round(shot.motionComplexityConfidence * 100)}%`}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className={`text-[10px] ${dark ? 'text-neutral-600' : 'text-neutral-400'}`}>
+                      {formatDuration(shot.start)} – {formatDuration(shot.end)}
+                    </span>
+                    {status === 'failed' && (
+                      <button
+                        type="button"
+                        disabled={running || !hasGlobal}
+                        onClick={() => void retryOneShot(shot.shotId)}
+                        className={`flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[10px] disabled:opacity-40 ${
+                          dark ? 'bg-white/8 text-neutral-300' : 'bg-white text-neutral-600 shadow-sm'
+                        }`}
+                      >
+                        <RefreshCw size={11} />
+                        单独重试
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {shot.analysisError && (
+                  <div className={`mt-3 rounded-lg px-3 py-2 text-[10px] ${
+                    dark ? 'bg-red-500/8 text-red-300' : 'bg-red-50 text-red-700'
+                  }`}>
+                    {shot.analysisError}
+                  </div>
+                )}
+
+                {status === 'ready' && (
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <EditableAnalysisField
+                      label="Story Beat"
+                      field={shot.storyBeat}
+                      disabled={running}
+                      dark={dark}
+                      onChange={(value, locked) => updateEditableField(shot.shotId, 'storyBeat', value, locked)}
+                    />
+                    <EditableAnalysisField
+                      label="景别"
+                      field={shot.frameBlueprint.shotSize}
+                      disabled={running}
+                      dark={dark}
+                      onChange={(value, locked) => updateEditableField(shot.shotId, 'frameBlueprint.shotSize', value, locked)}
+                    />
+                    <EditableAnalysisField
+                      label="构图角度"
+                      field={shot.frameBlueprint.cameraAngle}
+                      disabled={running}
+                      dark={dark}
+                      onChange={(value, locked) => updateEditableField(shot.shotId, 'frameBlueprint.cameraAngle', value, locked)}
+                    />
+                    <EditableAnalysisField
+                      label="运镜角度"
+                      field={shot.cameraBlueprint.angle}
+                      disabled={running}
+                      dark={dark}
+                      onChange={(value, locked) => updateEditableField(shot.shotId, 'cameraBlueprint.angle', value, locked)}
+                    />
+                    <div className="md:col-span-2">
+                      <EditableAnalysisField
+                        label="环境声音"
+                        field={shot.audioBlueprint.environment}
+                        disabled={running}
+                        dark={dark}
+                        onChange={(value, locked) => updateEditableField(shot.shotId, 'audioBlueprint.environment', value, locked)}
+                      />
+                    </div>
+                    <div className={`md:col-span-2 grid gap-3 rounded-xl p-3 text-[10px] sm:grid-cols-3 ${
+                      dark ? 'bg-white/[0.025] text-neutral-500' : 'bg-white text-neutral-500'
+                    }`}>
+                      <div>人物：{shot.characters.map(item => item.characterId).join('、') || '无'}</div>
+                      <div>场景：{shot.scene.sceneId || '未识别'}</div>
+                      <div>道具：{shot.props.map(item => item.propId).join('、') || '无'}</div>
+                      <div>动作段：{shot.motionBlueprint.subjects.reduce((sum, item) => sum + item.actionSequence.length, 0)}</div>
+                      <div>运镜段：{shot.cameraBlueprint.movement.length}</div>
+                      <div>对白：{shot.audioBlueprint.dialogue.length}</div>
+                    </div>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+};
+
+const EditableAnalysisField: React.FC<{
+  label: string;
+  field: EditableField<string>;
+  disabled: boolean;
+  dark: boolean;
+  onChange: (value: string, locked: boolean) => void;
+}> = ({ label, field, disabled, dark, onChange }) => (
+  <label className={`block rounded-xl border p-3 ${
+    dark ? 'border-white/8 bg-black/20' : 'border-neutral-200 bg-white'
+  }`}>
+    <span className="flex items-center justify-between gap-2">
+      <span className={`text-[10px] font-medium ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+        {label}
+      </span>
+      <button
+        type="button"
+        disabled={disabled || field.source !== 'user'}
+        onClick={event => {
+          event.preventDefault();
+          onChange(field.value, !field.locked);
+        }}
+        className={`rounded-full px-2 py-0.5 text-[9px] disabled:opacity-60 ${
+          field.source === 'user' && field.locked
+            ? dark ? 'bg-cyan-400/12 text-cyan-300' : 'bg-cyan-50 text-cyan-700'
+            : dark ? 'bg-white/5 text-neutral-600' : 'bg-neutral-100 text-neutral-400'
+        }`}
+      >
+        {field.source === 'user' ? field.locked ? '用户 · 已锁定' : '用户 · 未锁定' : `AI · ${Math.round((field.confidence || 0) * 100)}%`}
+      </button>
+    </span>
+    <textarea
+      value={field.value}
+      disabled={disabled}
+      onChange={event => onChange(event.target.value, true)}
+      rows={2}
+      className={`mt-2 w-full resize-none bg-transparent text-xs leading-5 outline-none disabled:opacity-60 ${
+        dark ? 'text-neutral-200' : 'text-neutral-700'
+      }`}
+    />
+  </label>
+);
 
 const FRAME_LABELS: Record<ShotAnalysisFramePosition, string> = {
   start: 'Start',

@@ -3,7 +3,7 @@ import type {
   ShotAnalysis,
   VideoRemixGlobalAnalysis,
 } from '../../../shared/videoRemix.js';
-import { generateImage } from '../../services/generationService';
+import { generateImage, generateVideo } from '../../services/generationService';
 
 interface ReferenceResponse {
   success: boolean;
@@ -475,4 +475,126 @@ export async function generateVideoRemixKeyframe({
     aspectRatio,
     resolution,
   });
+}
+
+export async function generateVideoRemixShot({
+  workflowId,
+  nodeId,
+  prompt,
+  imageBase64,
+  lastFrameBase64,
+  referenceImages,
+  referenceImageLabels,
+  videoModel,
+  aspectRatio,
+  resolution,
+  duration,
+  generateAudio,
+}: {
+  workflowId: string;
+  nodeId: string;
+  prompt: string;
+  imageBase64?: string;
+  lastFrameBase64?: string;
+  referenceImages: string[];
+  referenceImageLabels: string[];
+  videoModel: string;
+  aspectRatio: string;
+  resolution: string;
+  duration: number;
+  generateAudio: boolean;
+}): Promise<string> {
+  return generateVideo({
+    workflowId,
+    nodeId,
+    prompt,
+    imageBase64,
+    lastFrameBase64,
+    referenceImages: referenceImages.length > 0 ? referenceImages : undefined,
+    referenceImageLabels: referenceImageLabels.length > 0
+      ? referenceImageLabels
+      : undefined,
+    videoModel,
+    aspectRatio,
+    resolution,
+    duration,
+    generateAudio,
+  });
+}
+
+export interface VideoRemixCalibrationResult {
+  url: string;
+  sourceDuration: number;
+  targetDuration: number;
+  trimStart: number;
+  trimEnd: number;
+  speed: number;
+  calibration: 'none' | 'trim' | 'speed';
+  cached: boolean;
+}
+
+export async function calibrateVideoRemixGeneratedShot({
+  workflowId,
+  remixId,
+  shotId,
+  sourceUrl,
+  targetDuration,
+  trimStart,
+}: {
+  workflowId: string;
+  remixId: string;
+  shotId: string;
+  sourceUrl: string;
+  targetDuration: number;
+  trimStart?: number;
+}): Promise<VideoRemixCalibrationResult> {
+  const response = await fetch('/api/video-remix/videos/calibrate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workflowId,
+      remixId,
+      shotId,
+      sourceUrl,
+      targetDuration,
+      trimStart,
+    }),
+  });
+  const payload = await response.json().catch(() => ({})) as (
+    AnalysisErrorPayload & Partial<VideoRemixCalibrationResult>
+  );
+  if (!response.ok || !payload.url) {
+    throw new VideoRemixRequestError(
+      payload.error || `镜头视频校准失败（HTTP ${response.status}）`,
+      payload
+    );
+  }
+  return payload as VideoRemixCalibrationResult;
+}
+
+export async function findVideoRemixGeneratedVideo(
+  workflowId: string,
+  generationNodeId: string
+): Promise<string | null> {
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(workflowId)}/assets`,
+    { cache: 'no-store' }
+  );
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as AnalysisErrorPayload;
+    throw new VideoRemixRequestError(
+      payload.error || '无法检查项目视频素材',
+      payload
+    );
+  }
+  const assets = await response.json() as Array<{
+    id?: string;
+    type?: string;
+    url?: string;
+  }>;
+  return assets.find(asset => (
+    asset.type === 'video'
+    && asset.id === generationNodeId
+    && asset.url
+  ))?.url || null;
 }

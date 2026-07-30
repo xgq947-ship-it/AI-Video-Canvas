@@ -24,7 +24,8 @@ import {
   type ShotPromptState,
 } from '../../../shared/videoRemix.js';
 import {
-  listVideoGenerationProviders,
+  resolveVideoModelForAspectRatio,
+  videoModelsForAspectRatio,
 } from '../../../shared/generationProviders.js';
 import {
   resolveVideoRemixPromptProfileForModel,
@@ -37,13 +38,6 @@ import {
 
 type VideoRemixState = ReturnType<typeof createVideoRemixState>;
 type EditablePromptLayer = 'rawPrompt' | 'optimizedPrompt' | 'imagePrompt';
-
-const VIDEO_MODELS = listVideoGenerationProviders().filter(
-  model => model.supportsImageToVideo
-);
-const DEFAULT_VIDEO_MODEL = VIDEO_MODELS.find(
-  model => model.id === 'google-flow-omni-flash'
-)?.id || VIDEO_MODELS[0]?.id || '';
 
 const STATUS_LABEL: Record<ShotPromptState['optimizationStatus'], string> = {
   draft: '待优化',
@@ -95,13 +89,18 @@ export const VideoRemixPromptsWorkspace: React.FC<{
     onUpdateNode(node.id, { videoRemix: next });
   }, [node.id, onUpdateNode]);
 
-  const targetModel = state.promptReview?.targetModel
+  const aspectRatio = aspectRatioForState(state);
+  const videoModels = videoModelsForAspectRatio(aspectRatio);
+  const storedTargetModel = state.promptReview?.targetModel
     || Object.values(state.prompts || {})[0]?.targetModel
-    || DEFAULT_VIDEO_MODEL;
+    || '';
+  const targetModel = resolveVideoModelForAspectRatio(
+    aspectRatio,
+    storedTargetModel
+  )?.modelId || '';
   const readiness = getVideoRemixPromptReadiness(state);
   const selectedShot = state.shots.find(shot => shot.shotId === selectedShotId);
   const selectedPrompt = state.prompts?.[selectedShotId];
-  const aspectRatio = aspectRatioForState(state);
   const running = Boolean(busyShotId) || batchBusy;
 
   const buildDrafts = (model = targetModel, options = {}) => {
@@ -300,7 +299,7 @@ export const VideoRemixPromptsWorkspace: React.FC<{
                 : 'border-neutral-200 bg-white text-neutral-700'
             }`}
           >
-            {VIDEO_MODELS.map(model => (
+            {videoModels.map(model => (
               <option key={model.id} value={model.id}>{model.name}</option>
             ))}
           </select>

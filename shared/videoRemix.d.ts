@@ -362,14 +362,59 @@ export interface KeyframeResult {
 export interface GeneratedShotVideo {
   id: string;
   shotId: string;
+  generatedPrompt: string;
+  prompt: string;
+  promptSource: 'pipeline' | 'user';
+  sourcePromptHash: string;
+  inputHash: string;
+  videoModel: string;
+  aspectRatio: string;
+  resolution: string;
+  generateAudio: boolean;
+  requestDuration?: number;
+  calibration?: 'none' | 'trim' | 'speed';
+  planError?: string;
+  startFrameUrl: string;
+  endFrameUrl?: string;
+  imageBase64?: string;
+  lastFrameBase64?: string;
+  referenceImages: string[];
+  referenceImageLabels: string[];
+  references: Array<{
+    url: string;
+    label: string;
+    role: 'start' | 'character' | 'look' | 'scene' | 'prop';
+  }>;
+  rawUrl?: string;
   url?: string;
-  status: 'pending' | 'generating' | 'completed' | 'failed';
+  status:
+    | 'pending'
+    | 'generating'
+    | 'calibrating'
+    | 'completed'
+    | 'confirmed'
+    | 'failed';
   sourceDuration?: number;
   targetDuration?: number;
   trimStart?: number;
   trimEnd?: number;
   speed?: number;
   error?: string;
+  errorCode?: string;
+  errorStage?: 'generation' | 'calibration';
+  retryable?: boolean;
+  submitted?: boolean;
+  retryBlocked?: boolean;
+  attempt: number;
+  calibrationAttempt: number;
+  generationNodeId?: string;
+  generationStartedAt?: string;
+  calibrationStartedAt?: string;
+  generatedAt?: string;
+  calibratedAt?: string;
+  confirmedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface TimelineShot {
@@ -425,6 +470,15 @@ export interface VideoRemixState {
     imageModel?: string;
     aspectRatio?: string;
     resolution?: string;
+  };
+  videoReview: {
+    confirmed: boolean;
+    confirmedAt?: string;
+    updatedAt?: string;
+    videoModel?: string;
+    aspectRatio?: string;
+    resolution?: string;
+    generateAudio?: boolean;
   };
   story: {
     summary: string;
@@ -725,6 +779,108 @@ export function confirmVideoRemixKeyframe(
 ): VideoRemixState;
 export function confirmVideoRemixKeyframes(state: unknown): VideoRemixState;
 export function recoverStaleVideoRemixKeyframes(
+  state: unknown,
+  now?: number,
+  staleAfterMs?: number
+): VideoRemixState;
+export function planVideoRemixShotDuration(
+  videoModel: string,
+  targetDuration: number
+): {
+  supported: boolean;
+  requestDuration?: number;
+  sourceDuration?: number;
+  targetDuration: number;
+  trimStart?: number;
+  trimEnd?: number;
+  speed?: number;
+  calibration?: 'none' | 'trim' | 'speed';
+  reason?: string;
+};
+export function getVideoRemixShotVideoInputs(
+  state: unknown,
+  shotId: string,
+  videoModel: string
+): {
+  startFrameUrl: string;
+  endFrameUrl: string;
+  imageBase64?: string;
+  lastFrameBase64?: string;
+  referenceImages: string[];
+  referenceImageLabels: string[];
+  references: GeneratedShotVideo['references'];
+};
+export function prepareVideoRemixVideos(
+  state: unknown,
+  options?: {
+    videoModel?: string;
+    aspectRatio?: string;
+    resolution?: string;
+    generateAudio?: boolean;
+  }
+): VideoRemixState;
+export function beginVideoRemixVideoGeneration(
+  state: unknown,
+  videoId: string,
+  options?: { generationNodeId?: string }
+): VideoRemixState;
+export function applyVideoRemixRawVideoResult(
+  state: unknown,
+  videoId: string,
+  result: { rawUrl?: string; inputHash?: string }
+): VideoRemixState;
+export function beginVideoRemixVideoCalibration(
+  state: unknown,
+  videoId: string
+): VideoRemixState;
+export function applyVideoRemixVideoResult(
+  state: unknown,
+  videoId: string,
+  result: {
+    url?: string;
+    rawUrl?: string;
+    inputHash?: string;
+    sourceDuration?: number;
+    targetDuration?: number;
+    trimStart?: number;
+    trimEnd?: number;
+    speed?: number;
+  }
+): VideoRemixState;
+export function setVideoRemixVideoError(
+  state: unknown,
+  videoId: string,
+  message: string,
+  options?: {
+    code?: string;
+    retryable?: boolean;
+    submitted?: boolean;
+    inputHash?: string;
+    errorStage?: 'generation' | 'calibration';
+  }
+): VideoRemixState;
+export function finalizeVideoRemixVideoBatch(state: unknown): VideoRemixState;
+export function updateVideoRemixVideoPrompt(
+  state: unknown,
+  videoId: string,
+  value: string
+): VideoRemixState;
+export function getVideoRemixVideoReadiness(state: unknown): {
+  total: number;
+  completed: number;
+  confirmed: number;
+  pending: number;
+  generating: number;
+  failed: number;
+  unsupported: number;
+  reviewConfirmed: boolean;
+};
+export function confirmVideoRemixVideo(
+  state: unknown,
+  videoId: string
+): VideoRemixState;
+export function confirmVideoRemixVideos(state: unknown): VideoRemixState;
+export function recoverStaleVideoRemixVideos(
   state: unknown,
   now?: number,
   staleAfterMs?: number

@@ -6,6 +6,11 @@
  * validated by server-side tests without importing browser code.
  */
 
+import {
+  getVideoGenerationProvider,
+  getVideoProviderCapabilities,
+} from './generationProviders.js';
+
 export const VIDEO_REMIX_SCHEMA_VERSION = 1;
 
 export const VIDEO_REMIX_STAGES = Object.freeze([
@@ -63,6 +68,10 @@ const DEFAULT_PROMPT_REVIEW = Object.freeze({
 });
 
 const DEFAULT_KEYFRAME_REVIEW = Object.freeze({
+  confirmed: false,
+});
+
+const DEFAULT_VIDEO_REVIEW = Object.freeze({
   confirmed: false,
 });
 
@@ -279,6 +288,7 @@ export function createVideoRemixState(overrides = {}) {
     assetReview: { ...DEFAULT_ASSET_REVIEW },
     promptReview: { ...DEFAULT_PROMPT_REVIEW },
     keyframeReview: { ...DEFAULT_KEYFRAME_REVIEW },
+    videoReview: { ...DEFAULT_VIDEO_REVIEW },
     story: null,
     assets: {
       characters: [],
@@ -322,6 +332,10 @@ export function createVideoRemixState(overrides = {}) {
     ...DEFAULT_KEYFRAME_REVIEW,
     ...(overrides.keyframeReview || {}),
   };
+  state.videoReview = {
+    ...DEFAULT_VIDEO_REVIEW,
+    ...(overrides.videoReview || {}),
+  };
   state.locks = { ...HIGH_FIDELITY_LOCKS, ...(overrides.locks || {}) };
   state.bgm = { mode: 'none', ...(overrides.bgm || {}) };
   state.subtitles = { enabled: false, style: 'default', ...(overrides.subtitles || {}) };
@@ -355,7 +369,9 @@ export function summarizeVideoRemixState(state) {
     (total, shot) => total + keyframePositionsForComplexity(shot?.motionComplexity).length,
     0
   );
-  const completedVideos = safe.generatedVideos.filter(item => item?.status === 'completed').length;
+  const completedVideos = safe.generatedVideos.filter(item => (
+    ['completed', 'confirmed'].includes(item?.status)
+  )).length;
   return {
     shots,
     characters: safe.assets.characters.length,
@@ -446,6 +462,7 @@ export function completeVideoRemixPreprocessing(state, {
     shots,
     prompts: {},
     keyframes: [],
+    videoReview: { ...DEFAULT_VIDEO_REVIEW },
     generatedVideos: [],
     timeline: shots.map((shot, order) => ({
       shotId: shot.shotId,
@@ -617,6 +634,7 @@ export function applyVideoRemixGlobalAnalysis(state, result) {
     shots,
     prompts: {},
     keyframes: [],
+    videoReview: { ...DEFAULT_VIDEO_REVIEW },
     generatedVideos: [],
     timeline: (current.timeline || []).map(item => {
       const { videoUrl, ...rest } = item;
@@ -742,6 +760,7 @@ export function applyVideoRemixShotAnalysis(state, analyzedShot) {
       ))
     ),
     keyframes: [],
+    videoReview: { ...DEFAULT_VIDEO_REVIEW },
     generatedVideos: [],
     timeline: (current.timeline || []).map(item => {
       const { videoUrl, ...rest } = item;
@@ -913,6 +932,7 @@ function withInvalidatedAssetDerivatives(current, updates) {
     keyframeReview: { ...DEFAULT_KEYFRAME_REVIEW },
     prompts: refreshPromptRecordsForAssets(nextCore),
     keyframes: [],
+    videoReview: { ...DEFAULT_VIDEO_REVIEW },
     generatedVideos: [],
     timeline: (current.timeline || []).map(item => {
       const { videoUrl, ...rest } = item;
@@ -1618,6 +1638,7 @@ function withInvalidatedPromptDerivatives(current, updates, targetModel) {
     },
     keyframeReview: { ...DEFAULT_KEYFRAME_REVIEW },
     keyframes: [],
+    videoReview: { ...DEFAULT_VIDEO_REVIEW },
     generatedVideos: [],
     timeline: (current.timeline || []).map(item => {
       const { videoUrl, ...rest } = item;
@@ -2216,6 +2237,7 @@ function withInvalidatedKeyframeDerivatives(current, updates) {
       ),
       updatedAt: new Date().toISOString(),
     },
+    videoReview: { ...DEFAULT_VIDEO_REVIEW },
     generatedVideos: [],
     timeline: (current.timeline || []).map(item => {
       const { videoUrl, ...rest } = item;
@@ -2414,6 +2436,7 @@ export function applyVideoRemixKeyframeResult(state, keyframeId, {
     errors: current.errors.filter(item => !(
       item?.scope === 'keyframe' && item?.id === id
     )),
+    videoReview: { ...DEFAULT_VIDEO_REVIEW },
     generatedVideos: [],
     timeline: (current.timeline || []).map(item => {
       const { videoUrl, ...rest } = item;
@@ -2472,6 +2495,7 @@ export function setVideoRemixKeyframeError(state, keyframeId, message, {
         ...(code ? { code: String(code) } : {}),
       },
     ],
+    videoReview: { ...DEFAULT_VIDEO_REVIEW },
     generatedVideos: [],
     timeline: (current.timeline || []).map(item => {
       const { videoUrl, ...rest } = item;
@@ -2647,4 +2671,831 @@ export function recoverStaleVideoRemixKeyframes(
     recovered = true;
   }
   return recovered ? finalizeVideoRemixKeyframeBatch(next) : current;
+}
+
+const VIDEO_REMIX_MIN_SPEED = 0.85;
+
+function videoRemixAspectRatio(state) {
+  if (state.source?.orientation === 'portrait') return '9:16';
+  if (state.source?.orientation === 'square') return '1:1';
+  return '16:9';
+}
+
+export function planVideoRemixShotDuration(videoModel, targetDuration) {
+  const provider = getVideoGenerationProvider(videoModel);
+  const target = Math.max(0, Number(targetDuration) || 0);
+  if (!provider || !target) {
+    return {
+      supported: false,
+      targetDuration: target,
+      reason: provider ? 'Shot 时长无效' : '视频模型不存在',
+    };
+  }
+  const durations = [...new Set(
+    (provider.supportedDurations || [])
+      .map(Number)
+      .filter(value => Number.isFinite(value) && value > 0)
+  )].sort((left, right) => left - right);
+  if (durations.length === 0) {
+    return {
+      supported: true,
+      requestDuration: target,
+      sourceDuration: target,
+      targetDuration: target,
+      trimStart: 0,
+      trimEnd: target,
+      speed: 1,
+      calibration: 'none',
+    };
+  }
+  const covering = durations.find(value => value + 0.001 >= target);
+  if (covering) {
+    return {
+      supported: true,
+      requestDuration: covering,
+      sourceDuration: covering,
+      targetDuration: target,
+      trimStart: 0,
+      trimEnd: target,
+      speed: 1,
+      calibration: covering - target > 0.01 ? 'trim' : 'none',
+    };
+  }
+  const longest = durations.at(-1);
+  const speed = longest / target;
+  if (speed + 0.0001 >= VIDEO_REMIX_MIN_SPEED) {
+    return {
+      supported: true,
+      requestDuration: longest,
+      sourceDuration: longest,
+      targetDuration: target,
+      trimStart: 0,
+      trimEnd: longest,
+      speed: Math.round(speed * 1000) / 1000,
+      calibration: 'speed',
+    };
+  }
+  return {
+    supported: false,
+    requestDuration: longest,
+    sourceDuration: longest,
+    targetDuration: target,
+    reason: `${provider.name} 最长生成 ${longest}s，无法在不低于 0.85x 的情况下恢复 ${target.toFixed(2)}s Shot`,
+  };
+}
+
+function appendVideoReference(target, value, label, role) {
+  const urls = Array.isArray(value) ? value : [value];
+  for (const candidate of urls) {
+    const url = String(candidate || '');
+    if (!url || target.some(item => item.url === url)) continue;
+    const sameLabelCount = target.filter(item => item.baseLabel === label).length;
+    target.push({
+      url,
+      label: sameLabelCount > 0 ? `${label}_${sameLabelCount + 1}` : label,
+      baseLabel: label,
+      role,
+    });
+  }
+}
+
+function currentVideoRemixAssetReferences(current, shot) {
+  const references = [];
+  for (const shotCharacter of shot.characters || []) {
+    const resolved = resolveVideoRemixShotCharacter(
+      current,
+      shot.shotId,
+      shotCharacter.characterId
+    );
+    if (!resolved) continue;
+    appendVideoReference(
+      references,
+      resolved.character.referenceImages,
+      resolved.character.id,
+      'character'
+    );
+    if (resolved.look) {
+      appendVideoReference(
+        references,
+        resolved.look.referenceImages,
+        resolved.look.id,
+        'look'
+      );
+    }
+  }
+  if (shot.scene?.sceneId) {
+    const scene = resolveVideoRemixAsset(
+      current.assets.scenes.find(item => item.id === shot.scene.sceneId)
+    );
+    if (scene) {
+      appendVideoReference(
+        references,
+        scene.referenceImages,
+        scene.id,
+        'scene'
+      );
+    }
+  }
+  for (const shotProp of shot.props || []) {
+    const base = current.assets.props.find(item => item.id === shotProp.propId);
+    if (!base || base.removed) continue;
+    const prop = resolveVideoRemixAsset(base);
+    appendVideoReference(
+      references,
+      prop?.referenceImages,
+      prop?.id || shotProp.propId,
+      'prop'
+    );
+  }
+  return references;
+}
+
+export function getVideoRemixShotVideoInputs(state, shotId, videoModel) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const shot = current.shots.find(item => item.shotId === String(shotId || ''));
+  const capabilities = getVideoProviderCapabilities(videoModel);
+  if (!shot || !capabilities?.imageToVideo) {
+    return {
+      startFrameUrl: '',
+      endFrameUrl: '',
+      imageBase64: undefined,
+      lastFrameBase64: undefined,
+      referenceImages: [],
+      referenceImageLabels: [],
+      references: [],
+    };
+  }
+  const frame = position => current.keyframes.find(item => (
+    item.shotId === shot.shotId
+    && item.position === position
+    && item.status === 'confirmed'
+    && item.url
+  ));
+  const startFrameUrl = frame('start')?.url || '';
+  const endFrameUrl = frame('end')?.url || '';
+  const references = [];
+  let imageBase64;
+  let lastFrameBase64;
+  if (
+    capabilities.referenceMode === 'reference-materials'
+    || capabilities.multiReference
+  ) {
+    appendVideoReference(references, startFrameUrl, 'START_FRAME', 'start');
+    if (capabilities.characterReference) {
+      for (const reference of currentVideoRemixAssetReferences(current, shot)) {
+        appendVideoReference(
+          references,
+          reference.url,
+          reference.label,
+          reference.role
+        );
+      }
+    }
+  } else {
+    imageBase64 = capabilities.startFrame ? startFrameUrl || undefined : undefined;
+    lastFrameBase64 = capabilities.endFrame
+      ? endFrameUrl || undefined
+      : undefined;
+  }
+  const limited = references.slice(0, capabilities.maxReferenceImages);
+  return {
+    startFrameUrl,
+    endFrameUrl,
+    imageBase64,
+    lastFrameBase64,
+    referenceImages: limited.map(item => item.url),
+    referenceImageLabels: limited.map(item => item.label),
+    references: limited.map(({ baseLabel, ...item }) => item),
+  };
+}
+
+function videoStableId(shotId) {
+  const readable = String(shotId || '')
+    .replace(/[^A-Za-z0-9_-]+/g, '_')
+    .slice(0, 48);
+  return `video_${readable}_${promptValueHash(String(shotId || ''))}`;
+}
+
+function videoInputHash(record, prompt = record.prompt) {
+  return promptValueHash({
+    prompt,
+    videoModel: record.videoModel,
+    aspectRatio: record.aspectRatio,
+    resolution: record.resolution,
+    requestDuration: record.requestDuration,
+    targetDuration: record.targetDuration,
+    generateAudio: record.generateAudio,
+    imageBase64: record.imageBase64,
+    lastFrameBase64: record.lastFrameBase64,
+    referenceImages: record.referenceImages,
+    referenceImageLabels: record.referenceImageLabels,
+  });
+}
+
+function videoPlanSignature(videos) {
+  return promptValueHash(
+    (videos || []).map(item => ({
+      id: item.id,
+      inputHash: item.inputHash,
+      planError: item.planError,
+    }))
+  );
+}
+
+function stageAfterVideoInputChange(current) {
+  if (['rendering', 'completed'].includes(current.stage)) return 'videos_ready';
+  return current.stage;
+}
+
+function withoutTimelineVideoUrls(timeline) {
+  return (timeline || []).map(item => {
+    const { videoUrl, ...rest } = item;
+    return rest;
+  });
+}
+
+function withInvalidatedVideoDerivatives(current, updates) {
+  return {
+    ...current,
+    ...updates,
+    stage: stageAfterVideoInputChange(current),
+    videoReview: {
+      ...DEFAULT_VIDEO_REVIEW,
+      videoModel: String(
+        updates.videoReview?.videoModel
+        || current.videoReview?.videoModel
+        || ''
+      ),
+      aspectRatio: String(
+        updates.videoReview?.aspectRatio
+        || current.videoReview?.aspectRatio
+        || ''
+      ),
+      resolution: String(
+        updates.videoReview?.resolution
+        || current.videoReview?.resolution
+        || ''
+      ),
+      generateAudio: Boolean(
+        updates.videoReview?.generateAudio
+        ?? current.videoReview?.generateAudio
+      ),
+      updatedAt: new Date().toISOString(),
+    },
+    timeline: withoutTimelineVideoUrls(current.timeline),
+    output: null,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function prepareVideoRemixVideos(state, {
+  videoModel = '',
+  aspectRatio = '',
+  resolution = '',
+  generateAudio,
+} = {}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (
+    !current.promptReview?.confirmed
+    || !current.keyframeReview?.confirmed
+  ) {
+    return current;
+  }
+  const model = String(
+    videoModel
+    || current.videoReview?.videoModel
+    || current.promptReview?.targetModel
+    || ''
+  );
+  const provider = getVideoGenerationProvider(model);
+  const capabilities = getVideoProviderCapabilities(model);
+  if (!provider || !capabilities?.imageToVideo) return current;
+  if (current.shots.some(shot => current.prompts?.[shot.shotId]?.targetModel !== model)) {
+    return current;
+  }
+  const ratio = String(
+    aspectRatio
+    || current.videoReview?.aspectRatio
+    || videoRemixAspectRatio(current)
+  );
+  if (!provider.supportedAspectRatios.includes(ratio)) return current;
+  const quality = provider.resolutions.includes(resolution)
+    ? resolution
+    : provider.resolutions.includes(current.videoReview?.resolution)
+      ? current.videoReview.resolution
+      : provider.defaultResolution || provider.resolutions[0] || '自动';
+  const withAudio = capabilities.audioGeneration
+    && (generateAudio ?? current.videoReview?.generateAudio ?? true) !== false;
+  const previousById = new Map(
+    (current.generatedVideos || []).map(item => [item.id, item])
+  );
+  const now = new Date().toISOString();
+  const generatedVideos = current.shots.map(shot => {
+    const id = videoStableId(shot.shotId);
+    const previous = previousById.get(id);
+    const promptState = current.prompts?.[shot.shotId];
+    const generatedPrompt = String(promptState?.optimizedPrompt || '');
+    const sourcePromptHash = String(promptState?.promptHash || '');
+    const preserveUserPrompt = previous?.promptSource === 'user'
+      && previous?.sourcePromptHash === sourcePromptHash
+      && previous.prompt;
+    const prompt = preserveUserPrompt ? previous.prompt : generatedPrompt;
+    const durationPlan = planVideoRemixShotDuration(model, shot.duration);
+    const inputs = getVideoRemixShotVideoInputs(
+      current,
+      shot.shotId,
+      model
+    );
+    const draft = {
+      id,
+      shotId: shot.shotId,
+      generatedPrompt,
+      prompt,
+      promptSource: preserveUserPrompt ? 'user' : 'pipeline',
+      sourcePromptHash,
+      videoModel: model,
+      aspectRatio: ratio,
+      resolution: quality,
+      generateAudio: withAudio,
+      requestDuration: durationPlan.requestDuration,
+      sourceDuration: durationPlan.sourceDuration,
+      targetDuration: durationPlan.targetDuration,
+      trimStart: durationPlan.trimStart,
+      trimEnd: durationPlan.trimEnd,
+      speed: durationPlan.speed,
+      calibration: durationPlan.calibration,
+      planError: durationPlan.supported ? undefined : durationPlan.reason,
+      startFrameUrl: inputs.startFrameUrl,
+      endFrameUrl: inputs.endFrameUrl,
+      imageBase64: inputs.imageBase64,
+      lastFrameBase64: inputs.lastFrameBase64,
+      referenceImages: inputs.referenceImages,
+      referenceImageLabels: inputs.referenceImageLabels,
+      references: inputs.references,
+    };
+    const inputHash = videoInputHash(draft);
+    if (previous?.inputHash === inputHash) {
+      return {
+        ...previous,
+        ...draft,
+        inputHash,
+      };
+    }
+    return {
+      ...draft,
+      inputHash,
+      status: 'pending',
+      attempt: Number(previous?.attempt || 0),
+      calibrationAttempt: Number(previous?.calibrationAttempt || 0),
+      createdAt: previous?.createdAt || now,
+      updatedAt: now,
+    };
+  });
+  if (generatedVideos.length === 0) return current;
+  if (
+    videoPlanSignature(generatedVideos)
+    === videoPlanSignature(current.generatedVideos)
+  ) {
+    return current;
+  }
+  return withInvalidatedVideoDerivatives(current, {
+    generatedVideos,
+    videoReview: {
+      confirmed: false,
+      videoModel: model,
+      aspectRatio: ratio,
+      resolution: quality,
+      generateAudio: withAudio,
+    },
+  });
+}
+
+function updateVideoStage(videos) {
+  return videos.some(item => (
+    item.status === 'generating' || item.status === 'calibrating'
+  ))
+    ? 'videos_generating'
+    : 'videos_ready';
+}
+
+export function beginVideoRemixVideoGeneration(state, videoId, {
+  generationNodeId,
+} = {}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const id = String(videoId || '');
+  const existing = current.generatedVideos.find(item => item.id === id);
+  if (!existing || existing.planError || !existing.startFrameUrl) return current;
+  const now = new Date().toISOString();
+  const generatedVideos = current.generatedVideos.map(item => item.id === id
+    ? {
+      ...item,
+      status: 'generating',
+      attempt: Number(item.attempt || 0) + 1,
+      generationNodeId: String(generationNodeId || ''),
+      rawUrl: undefined,
+      url: undefined,
+      error: undefined,
+      errorCode: undefined,
+      errorStage: undefined,
+      retryable: undefined,
+      submitted: undefined,
+      retryBlocked: undefined,
+      generationStartedAt: now,
+      calibrationStartedAt: undefined,
+      updatedAt: now,
+    }
+    : item);
+  return {
+    ...withInvalidatedVideoDerivatives(current, {
+      generatedVideos,
+      videoReview: {
+        ...current.videoReview,
+        confirmed: false,
+      },
+    }),
+    stage: 'videos_generating',
+    errors: current.errors.filter(item => !(
+      item?.scope === 'video' && item?.id === id
+    )),
+  };
+}
+
+export function applyVideoRemixRawVideoResult(state, videoId, {
+  rawUrl,
+  inputHash,
+} = {}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const id = String(videoId || '');
+  const existing = current.generatedVideos.find(item => item.id === id);
+  if (
+    !existing
+    || !rawUrl
+    || (inputHash && existing.inputHash !== inputHash)
+  ) {
+    return current;
+  }
+  const now = new Date().toISOString();
+  return {
+    ...current,
+    stage: 'videos_generating',
+    generatedVideos: current.generatedVideos.map(item => item.id === id
+      ? {
+        ...item,
+        rawUrl: String(rawUrl),
+        status: 'calibrating',
+        error: undefined,
+        errorCode: undefined,
+        errorStage: undefined,
+        retryable: undefined,
+        submitted: undefined,
+        retryBlocked: undefined,
+        generationStartedAt: undefined,
+        generatedAt: now,
+        calibrationStartedAt: now,
+        updatedAt: now,
+      }
+      : item),
+    errors: current.errors.filter(item => !(
+      item?.scope === 'video' && item?.id === id
+    )),
+    updatedAt: now,
+  };
+}
+
+export function beginVideoRemixVideoCalibration(state, videoId) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const id = String(videoId || '');
+  const existing = current.generatedVideos.find(item => item.id === id);
+  if (!existing?.rawUrl) return current;
+  const now = new Date().toISOString();
+  const generatedVideos = current.generatedVideos.map(item => item.id === id
+    ? {
+      ...item,
+      status: 'calibrating',
+      calibrationAttempt: Number(item.calibrationAttempt || 0) + 1,
+      error: undefined,
+      errorCode: undefined,
+      errorStage: undefined,
+      retryable: undefined,
+      submitted: undefined,
+      retryBlocked: undefined,
+      calibrationStartedAt: now,
+      updatedAt: now,
+    }
+    : item);
+  return {
+    ...current,
+    stage: 'videos_generating',
+    generatedVideos,
+    videoReview: {
+      ...current.videoReview,
+      confirmed: false,
+      updatedAt: now,
+    },
+    errors: current.errors.filter(item => !(
+      item?.scope === 'video' && item?.id === id
+    )),
+    timeline: withoutTimelineVideoUrls(current.timeline),
+    output: null,
+    updatedAt: now,
+  };
+}
+
+export function applyVideoRemixVideoResult(state, videoId, {
+  url,
+  rawUrl,
+  inputHash,
+  sourceDuration,
+  targetDuration,
+  trimStart,
+  trimEnd,
+  speed,
+} = {}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const id = String(videoId || '');
+  const existing = current.generatedVideos.find(item => item.id === id);
+  if (
+    !existing
+    || !url
+    || (inputHash && existing.inputHash !== inputHash)
+  ) {
+    return current;
+  }
+  const now = new Date().toISOString();
+  const generatedVideos = current.generatedVideos.map(item => item.id === id
+    ? {
+      ...item,
+      url: String(url),
+      rawUrl: String(rawUrl || item.rawUrl || url),
+      status: 'completed',
+      sourceDuration: Number(sourceDuration) || item.sourceDuration,
+      targetDuration: Number(targetDuration) || item.targetDuration,
+      trimStart: Number.isFinite(Number(trimStart))
+        ? Number(trimStart)
+        : item.trimStart,
+      trimEnd: Number.isFinite(Number(trimEnd))
+        ? Number(trimEnd)
+        : item.trimEnd,
+      speed: Number(speed) || item.speed || 1,
+      error: undefined,
+      errorCode: undefined,
+      errorStage: undefined,
+      retryable: undefined,
+      submitted: undefined,
+      retryBlocked: undefined,
+      generationStartedAt: undefined,
+      calibrationStartedAt: undefined,
+      calibratedAt: now,
+      updatedAt: now,
+    }
+    : item);
+  return {
+    ...current,
+    stage: updateVideoStage(generatedVideos),
+    generatedVideos,
+    videoReview: {
+      ...current.videoReview,
+      confirmed: false,
+      updatedAt: now,
+    },
+    errors: current.errors.filter(item => !(
+      item?.scope === 'video' && item?.id === id
+    )),
+    timeline: withoutTimelineVideoUrls(current.timeline),
+    output: null,
+    updatedAt: now,
+  };
+}
+
+export function setVideoRemixVideoError(state, videoId, message, {
+  code,
+  retryable = true,
+  submitted = false,
+  inputHash,
+  errorStage = 'generation',
+} = {}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const id = String(videoId || '');
+  const existing = current.generatedVideos.find(item => item.id === id);
+  if (!existing || (inputHash && existing.inputHash !== inputHash)) return current;
+  const now = new Date().toISOString();
+  const calibrationError = errorStage === 'calibration';
+  const retryBlocked = !calibrationError && Boolean(submitted);
+  const errorMessage = String(message || '镜头视频生成失败');
+  const generatedVideos = current.generatedVideos.map(item => item.id === id
+    ? {
+      ...item,
+      status: 'failed',
+      error: errorMessage,
+      ...(code ? { errorCode: String(code) } : {}),
+      errorStage: calibrationError ? 'calibration' : 'generation',
+      retryable: Boolean(retryable),
+      submitted: calibrationError ? false : Boolean(submitted),
+      retryBlocked,
+      generationStartedAt: undefined,
+      calibrationStartedAt: undefined,
+      updatedAt: now,
+    }
+    : item);
+  return {
+    ...current,
+    stage: updateVideoStage(generatedVideos),
+    generatedVideos,
+    videoReview: {
+      ...current.videoReview,
+      confirmed: false,
+      updatedAt: now,
+    },
+    errors: [
+      ...current.errors.filter(item => !(
+        item?.scope === 'video' && item?.id === id
+      )),
+      {
+        scope: 'video',
+        id,
+        message: errorMessage,
+        retryable: Boolean(retryable) && !retryBlocked,
+        ...(code ? { code: String(code) } : {}),
+      },
+    ],
+    timeline: withoutTimelineVideoUrls(current.timeline),
+    output: null,
+    updatedAt: now,
+  };
+}
+
+export function finalizeVideoRemixVideoBatch(state) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (current.generatedVideos.length === 0) return current;
+  return {
+    ...current,
+    stage: updateVideoStage(current.generatedVideos),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function updateVideoRemixVideoPrompt(state, videoId, value) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const id = String(videoId || '');
+  const existing = current.generatedVideos.find(item => item.id === id);
+  if (!existing) return current;
+  const manual = String(value || '').trim();
+  const prompt = manual || existing.generatedPrompt || '';
+  const next = {
+    ...existing,
+    prompt,
+    promptSource: manual ? 'user' : 'pipeline',
+    inputHash: '',
+    status: 'pending',
+    attempt: Number(existing.attempt || 0),
+    calibrationAttempt: Number(existing.calibrationAttempt || 0),
+    rawUrl: undefined,
+    url: undefined,
+    error: undefined,
+    errorCode: undefined,
+    errorStage: undefined,
+    retryable: undefined,
+    submitted: undefined,
+    retryBlocked: undefined,
+    generationNodeId: undefined,
+    generationStartedAt: undefined,
+    calibrationStartedAt: undefined,
+    updatedAt: new Date().toISOString(),
+  };
+  next.inputHash = videoInputHash(next, prompt);
+  return withInvalidatedVideoDerivatives(current, {
+    generatedVideos: current.generatedVideos.map(item => (
+      item.id === id ? next : item
+    )),
+    videoReview: {
+      ...current.videoReview,
+      confirmed: false,
+    },
+    errors: current.errors.filter(item => !(
+      item?.scope === 'video' && item?.id === id
+    )),
+  });
+}
+
+export function getVideoRemixVideoReadiness(state) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const count = statuses => current.generatedVideos.filter(item => (
+    statuses.includes(item.status)
+  )).length;
+  return {
+    total: current.shots.length,
+    completed: count(['completed', 'confirmed']),
+    confirmed: count(['confirmed']),
+    pending: count(['pending']),
+    generating: count(['generating', 'calibrating']),
+    failed: count(['failed']),
+    unsupported: current.generatedVideos.filter(item => item.planError).length,
+    reviewConfirmed: Boolean(current.videoReview?.confirmed),
+  };
+}
+
+export function confirmVideoRemixVideo(state, videoId) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const id = String(videoId || '');
+  const existing = current.generatedVideos.find(item => item.id === id);
+  if (!existing?.url || !['completed', 'confirmed'].includes(existing.status)) {
+    return current;
+  }
+  const now = new Date().toISOString();
+  const generatedVideos = current.generatedVideos.map(item => item.id === id
+    ? { ...item, status: 'confirmed', confirmedAt: now, updatedAt: now }
+    : item);
+  const allConfirmed = generatedVideos.length > 0
+    && generatedVideos.length === current.shots.length
+    && generatedVideos.every(item => item.status === 'confirmed' && item.url);
+  return {
+    ...current,
+    stage: 'videos_ready',
+    generatedVideos,
+    videoReview: {
+      ...current.videoReview,
+      confirmed: allConfirmed,
+      ...(allConfirmed ? { confirmedAt: now } : {}),
+      updatedAt: now,
+    },
+    errors: current.errors.filter(item => !(
+      item?.scope === 'video' && item?.id === id
+    )),
+    updatedAt: now,
+  };
+}
+
+export function confirmVideoRemixVideos(state) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (
+    current.generatedVideos.length === 0
+    || current.generatedVideos.length !== current.shots.length
+    || current.generatedVideos.some(item => (
+      !item.url || !['completed', 'confirmed'].includes(item.status)
+    ))
+  ) {
+    return current;
+  }
+  const now = new Date().toISOString();
+  return {
+    ...current,
+    stage: 'videos_ready',
+    generatedVideos: current.generatedVideos.map(item => ({
+      ...item,
+      status: 'confirmed',
+      confirmedAt: item.confirmedAt || now,
+      updatedAt: now,
+    })),
+    videoReview: {
+      ...current.videoReview,
+      confirmed: true,
+      confirmedAt: now,
+      updatedAt: now,
+    },
+    errors: current.errors.filter(item => item?.scope !== 'video'),
+    updatedAt: now,
+  };
+}
+
+export function recoverStaleVideoRemixVideos(
+  state,
+  now = Date.now(),
+  staleAfterMs = 30 * 60 * 1000
+) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  let next = current;
+  let recovered = false;
+  for (const video of current.generatedVideos) {
+    if (!['generating', 'calibrating'].includes(video.status)) continue;
+    const startedAt = Date.parse(
+      video.status === 'calibrating'
+        ? video.calibrationStartedAt || video.generatedAt || ''
+        : video.generationStartedAt || ''
+    );
+    if (
+      Number.isFinite(startedAt)
+      && Number(now) - startedAt < Number(staleAfterMs)
+    ) {
+      continue;
+    }
+    const calibration = video.status === 'calibrating' && video.rawUrl;
+    next = setVideoRemixVideoError(
+      next,
+      video.id,
+      calibration
+        ? '上次本地时长校准已中断，可直接重新校准，不会再次调用生成平台'
+        : '上次视频任务状态未知，请先核对平台历史或项目素材，避免重复扣费',
+      {
+        code: calibration
+          ? 'VIDEO_CALIBRATION_INTERRUPTED'
+          : 'VIDEO_SUBMISSION_UNKNOWN',
+        retryable: true,
+        submitted: !calibration,
+        inputHash: video.inputHash,
+        errorStage: calibration ? 'calibration' : 'generation',
+      }
+    );
+    recovered = true;
+  }
+  return recovered ? finalizeVideoRemixVideoBatch(next) : current;
 }

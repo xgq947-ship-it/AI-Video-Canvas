@@ -14,6 +14,9 @@ import {
   analyzeVideoRemixShot,
   loadVideoRemixAnalysisSnapshot,
 } from '../services/videoRemix/videoAnalysis.js';
+import {
+  calibrateVideoRemixShot,
+} from '../services/videoRemix/shotVideo.js';
 
 const router = express.Router();
 
@@ -162,6 +165,30 @@ router.put('/shots', async (req, res) => {
       source,
       cutPoints,
       previousShots,
+    }, requestContext(req));
+    res.json({ success: true, ...result });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
+
+router.post('/videos/calibrate', async (req, res) => {
+  try {
+    const {
+      workflowId,
+      remixId,
+      shotId,
+      sourceUrl,
+      targetDuration,
+      trimStart,
+    } = req.body || {};
+    const result = await calibrateVideoRemixShot({
+      workflowId: String(workflowId || ''),
+      remixId: String(remixId || ''),
+      shotId: String(shotId || ''),
+      sourceUrl: String(sourceUrl || ''),
+      targetDuration: Number(targetDuration),
+      trimStart: Number(trimStart) || 0,
     }, requestContext(req));
     res.json({ success: true, ...result });
   } catch (error) {

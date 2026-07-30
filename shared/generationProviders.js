@@ -320,3 +320,41 @@ export function videoModelsForAspectRatio(aspectRatio) {
   return listVideoGenerationProviders().filter(model =>
     model.supportsImageToVideo && model.supportedAspectRatios.includes(aspectRatio));
 }
+
+/**
+ * Video Remix consumes a stricter capability contract than a regular canvas
+ * Video node. These values describe the protocol that the generation route
+ * actually exposes, not only the broad capability advertised by a model.
+ */
+export function getVideoProviderCapabilities(modelId) {
+  const provider = getVideoGenerationProvider(modelId);
+  if (!provider) return null;
+  const id = provider.id;
+  const isJimeng = id.startsWith('jimeng-');
+  const isGoogleFlow = id.startsWith('google-flow-');
+  const isGeminiWeb = id === 'gemini-web-video';
+  const isSeedanceApi = id === 'seedance-2-0';
+  const referenceMaterialsOnly = isJimeng || isGeminiWeb;
+  const multiReference = isJimeng
+    || (isGoogleFlow && provider.supportsMultipleReferenceImages);
+  const durations = (provider.supportedDurations || [])
+    .map(Number)
+    .filter(value => Number.isFinite(value) && value > 0);
+  return {
+    imageToVideo: Boolean(provider.supportsImageToVideo),
+    startFrame: !referenceMaterialsOnly,
+    endFrame: isSeedanceApi,
+    multiReference,
+    characterReference: referenceMaterialsOnly || multiReference,
+    audioGeneration: Boolean(provider.supportsNativeAudio),
+    maxDuration: durations.length > 0 ? Math.max(...durations) : 0,
+    maxReferenceImages: isSeedanceApi
+      ? 2
+      : Math.max(1, Number(provider.maxReferenceImages) || 1),
+    referenceMode: referenceMaterialsOnly
+      ? 'reference-materials'
+      : isSeedanceApi
+        ? 'start-end'
+        : 'start-frame',
+  };
+}

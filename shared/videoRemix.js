@@ -136,3 +136,40 @@ export function summarizeVideoRemixState(state) {
     completedVideos,
   };
 }
+
+/**
+ * Installing a different source invalidates every derived artifact. The old
+ * original remains on disk, but analysis, prompts and generated media must not
+ * silently carry over to the new reference.
+ */
+export function replaceVideoRemixSource(state, source) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  return createVideoRemixState({
+    remixId: current.remixId,
+    createdAt: current.createdAt,
+    mode: current.mode,
+    locks: current.locks,
+    source,
+    stage: 'source',
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+export function setVideoRemixSourceError(state, message, retryable = true) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  return {
+    ...current,
+    // A failed replacement must not invalidate a previously usable source and
+    // its derived work. New remixes without any source still enter error state.
+    stage: current.source ? current.stage : 'error',
+    errors: [
+      ...current.errors.filter(item => item?.scope !== 'source'),
+      {
+        scope: 'source',
+        message: String(message || '参考视频处理失败'),
+        retryable: Boolean(retryable),
+      },
+    ],
+    updatedAt: new Date().toISOString(),
+  };
+}

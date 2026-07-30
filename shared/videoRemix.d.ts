@@ -335,3 +335,12 @@ export function summarizeVideoRemixState(state: unknown): {
   confirmedKeyframes: number;
   completedVideos: number;
 };
+export function replaceVideoRemixSource(
+  state: unknown,
+  source: ReferenceVideo
+): VideoRemixState;
+export function setVideoRemixSourceError(
+  state: unknown,
+  message: string,
+  retryable?: boolean
+): VideoRemixState;

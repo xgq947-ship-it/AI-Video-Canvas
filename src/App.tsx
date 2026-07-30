@@ -75,6 +75,12 @@ import { upsertProductSceneResultNode } from './utils/productSceneResult.js';
 import { getImageGenerationProvider } from '@/shared/generationProviders.js';
 import { assignProductSceneInputOnConnect } from './utils/productSceneInputMapping.js';
 import { VideoRemixWorkspace } from './features/video-remix/VideoRemixWorkspace';
+import {
+  createVideoRemixState,
+  replaceVideoRemixSource,
+  setVideoRemixSourceError,
+} from '@/shared/videoRemix.js';
+import { useCanvasVideoAsReference } from './features/video-remix/videoRemixService';
 
 // ============================================================================
 // MAIN COMPONENT
@@ -1624,6 +1630,78 @@ export default function App() {
     updateNode(id, updates);
   }, [updateNode]);
 
+  const handleUseCanvasVideoAsReference = React.useCallback(async () => {
+    if (!canvasEditLock.guard()) return;
+    const sourceNode = nodes.find(node => node.id === contextMenu.sourceNodeId);
+    if (!sourceNode || sourceNode.type !== NodeType.VIDEO || !sourceNode.resultUrl) {
+      showToast('当前节点没有可用的视频结果', { tone: 'error' });
+      return;
+    }
+    if (!workflowId) {
+      showToast('请先新建或打开项目', { tone: 'error' });
+      return;
+    }
+
+    const remixNodeId = crypto.randomUUID();
+    const initialRemix = createVideoRemixState({ remixId: remixNodeId });
+    let targetY = sourceNode.y;
+    const targetX = sourceNode.x + DEFAULT_NODE_WIDTH + 100;
+    while (nodes.some(node => Math.abs(node.x - targetX) < 430 && Math.abs(node.y - targetY) < 320)) {
+      targetY += 340;
+    }
+    const remixNode: NodeData = {
+      id: remixNodeId,
+      type: NodeType.VIDEO_REMIX,
+      title: 'Video Remix',
+      x: targetX,
+      y: targetY,
+      prompt: '',
+      status: NodeStatus.IDLE,
+      model: 'Banana Pro',
+      aspectRatio: 'Auto',
+      resolution: 'Auto',
+      parentIds: [sourceNode.id],
+      videoRemix: initialRemix,
+    };
+
+    setNodes(previous => [...previous, remixNode]);
+    setSelectedNodeIds([remixNodeId]);
+    setVideoRemixWorkspaceNodeId(remixNodeId);
+
+    try {
+      const source = await useCanvasVideoAsReference({
+        workflowId,
+        remixId: remixNodeId,
+        sourceUrl: sourceNode.resultUrl,
+        title: sourceNode.displayName || sourceNode.resultName || sourceNode.title || '画布视频',
+      });
+      setNodes(previous => previous.map(node => node.id === remixNodeId
+        ? {
+            ...node,
+            videoRemix: replaceVideoRemixSource(node.videoRemix, source),
+          }
+        : node));
+      showToast('参考视频已复制到当前项目');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '画布视频导入失败';
+      setNodes(previous => previous.map(node => node.id === remixNodeId
+        ? {
+            ...node,
+            videoRemix: setVideoRemixSourceError(node.videoRemix, message),
+          }
+        : node));
+      showToast(message, { tone: 'error' });
+    }
+  }, [
+    canvasEditLock,
+    contextMenu.sourceNodeId,
+    nodes,
+    setNodes,
+    setSelectedNodeIds,
+    showToast,
+    workflowId,
+  ]);
+
   const subtitleLaunchesRef = useRef(new Set<string>());
   const handleAutoSubtitle = React.useCallback(async (sourceNodeId: string) => {
     if (!canvasEditLock.guard()) return;
@@ -2368,6 +2446,12 @@ export default function App() {
         onCopy={handleCopy}
         onDuplicate={handleDuplicate}
         onCreateAsset={handleContextMenuCreateAsset}
+        onUseAsReferenceVideo={() => void handleUseCanvasVideoAsReference()}
+        canUseAsReferenceVideo={nodes.some(node =>
+          node.id === contextMenu.sourceNodeId
+          && node.type === NodeType.VIDEO
+          && Boolean(node.resultUrl)
+        )}
         onAddAssets={handleContextMenuAddAssets}
         onOpenStoryboard={storyboardGenerator.openModal}
         onOpenHistory={handleContextMenuOpenHistory}
@@ -2379,7 +2463,9 @@ export default function App() {
       {videoRemixWorkspaceNodeId && nodes.find(node => node.id === videoRemixWorkspaceNodeId) && (
         <VideoRemixWorkspace
           node={nodes.find(node => node.id === videoRemixWorkspaceNodeId)!}
+          workflowId={workflowId || undefined}
           canvasTheme={canvasTheme}
+          onUpdateNode={updateNodeWithSync}
           onClose={() => setVideoRemixWorkspaceNodeId(null)}
         />
       )}

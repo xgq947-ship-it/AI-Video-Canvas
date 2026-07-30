@@ -1,31 +1,45 @@
 import React from 'react';
 import {
+  AlertCircle,
   Boxes,
   Check,
   ChevronRight,
+  CloudDownload,
+  FileVideo,
   Film,
   Images,
   LayoutDashboard,
+  Link2,
+  Loader2,
   Lock,
   Package,
   Play,
   ScanSearch,
   Sparkles,
+  Upload,
   Users,
   X,
 } from 'lucide-react';
 import {
   VIDEO_REMIX_WORKSPACE_TABS,
   createVideoRemixState,
+  replaceVideoRemixSource,
+  setVideoRemixSourceError,
   summarizeVideoRemixState,
   workspaceTabForStage,
   type VideoRemixWorkspaceTab,
 } from '../../../shared/videoRemix.js';
 import { NodeData } from '../../types';
+import {
+  importLocalReferenceVideo,
+  resolveUrlReferenceVideo,
+} from './videoRemixService';
 
 interface VideoRemixWorkspaceProps {
   node: NodeData;
+  workflowId?: string;
   canvasTheme?: 'dark' | 'light';
+  onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
   onClose: () => void;
 }
 
@@ -41,7 +55,9 @@ const TAB_ICONS: Record<VideoRemixWorkspaceTab, React.ReactNode> = {
 
 export const VideoRemixWorkspace: React.FC<VideoRemixWorkspaceProps> = ({
   node,
+  workflowId,
   canvasTheme = 'dark',
+  onUpdateNode,
   onClose,
 }) => {
   const state = node.videoRemix || createVideoRemixState({ remixId: node.id });
@@ -147,6 +163,9 @@ export const VideoRemixWorkspace: React.FC<VideoRemixWorkspaceProps> = ({
               state={state}
               summary={summary}
               dark={isDark}
+              node={node}
+              workflowId={workflowId}
+              onUpdateNode={onUpdateNode}
             />
           </div>
         </div>
@@ -160,7 +179,10 @@ const WorkspaceContent: React.FC<{
   state: ReturnType<typeof createVideoRemixState>;
   summary: ReturnType<typeof summarizeVideoRemixState>;
   dark: boolean;
-}> = ({ activeTab, state, summary, dark }) => {
+  node: NodeData;
+  workflowId?: string;
+  onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
+}> = ({ activeTab, state, summary, dark, node, workflowId, onUpdateNode }) => {
   const title = VIDEO_REMIX_WORKSPACE_TABS.find(tab => tab.id === activeTab)?.label || 'Video Remix';
   const descriptions: Record<VideoRemixWorkspaceTab, string> = {
     source: '导入本地视频、画布视频或分享链接，并保留不可修改的原始文件。',
@@ -190,32 +212,14 @@ const WorkspaceContent: React.FC<{
       </div>
 
       {activeTab === 'source' ? (
-        <div className="mt-7 grid gap-5 lg:grid-cols-[1.45fr_0.85fr]">
-          <section className={`min-h-[380px] rounded-[26px] border p-5 ${
-            dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
-          }`}>
-            <div className={`flex min-h-[300px] items-center justify-center rounded-[20px] border border-dashed ${
-              dark ? 'border-white/10 bg-black/30' : 'border-neutral-200 bg-neutral-50'
-            }`}>
-              {state.source ? (
-                <video src={state.source.localUrl} controls className="max-h-[300px] max-w-full rounded-xl" />
-              ) : (
-                <div className="max-w-sm text-center">
-                  <div className={`mx-auto flex h-14 w-14 items-center justify-center rounded-2xl ${
-                    dark ? 'bg-white/6 text-neutral-400' : 'bg-white text-neutral-500 shadow-sm'
-                  }`}>
-                    <Film size={25} />
-                  </div>
-                  <div className="mt-4 text-sm font-medium">尚未导入参考视频</div>
-                  <p className={`mt-2 text-xs leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-                    本地视频、画布已有视频和分享 URL 将在 Reference Video 阶段接入。
-                  </p>
-                </div>
-              )}
-            </div>
-          </section>
-          <OverviewCards summary={summary} dark={dark} />
-        </div>
+        <SourceWorkspace
+          node={node}
+          state={state}
+          summary={summary}
+          workflowId={workflowId}
+          onUpdateNode={onUpdateNode}
+          dark={dark}
+        />
       ) : (
         <div className={`mt-7 rounded-[26px] border p-7 ${
           dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
@@ -240,6 +244,270 @@ const WorkspaceContent: React.FC<{
     </>
   );
 };
+
+const SUPPORTED_VIDEO_FILE_RE = /\.(?:mp4|mov|webm)$/i;
+
+const formatDuration = (seconds: number) => {
+  const total = Math.max(0, Number(seconds) || 0);
+  const minutes = Math.floor(total / 60);
+  const remainder = total - minutes * 60;
+  return `${String(minutes).padStart(2, '0')}:${remainder.toFixed(1).padStart(4, '0')}`;
+};
+
+const SourceWorkspace: React.FC<{
+  node: NodeData;
+  state: ReturnType<typeof createVideoRemixState>;
+  summary: ReturnType<typeof summarizeVideoRemixState>;
+  workflowId?: string;
+  onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
+  dark: boolean;
+}> = ({ node, state, summary, workflowId, onUpdateNode, dark }) => {
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [urlInput, setUrlInput] = React.useState('');
+  const [busy, setBusy] = React.useState<'local' | 'url' | null>(null);
+  const [localError, setLocalError] = React.useState('');
+  const sourceError = busy
+    ? ''
+    : localError || state.errors.find(item => item.scope === 'source')?.message || '';
+
+  const storeFailure = React.useCallback((error: unknown) => {
+    const message = error instanceof Error ? error.message : '参考视频处理失败';
+    setLocalError(message);
+    onUpdateNode(node.id, {
+      videoRemix: setVideoRemixSourceError(state, message),
+    });
+  }, [node.id, onUpdateNode, state]);
+
+  const storeSource = React.useCallback((source: NonNullable<typeof state.source>) => {
+    setLocalError('');
+    onUpdateNode(node.id, {
+      videoRemix: replaceVideoRemixSource(state, source),
+    });
+  }, [node.id, onUpdateNode, state]);
+
+  const requireProject = () => {
+    if (!workflowId) throw new Error('请先把当前画布保存为项目，再导入参考视频');
+    return workflowId;
+  };
+
+  const handleFile = async (file?: File) => {
+    if (!file || busy) return;
+    if (!SUPPORTED_VIDEO_FILE_RE.test(file.name)) {
+      storeFailure(new Error('只支持 MP4、MOV 或 WebM 视频'));
+      return;
+    }
+    setBusy('local');
+    setLocalError('');
+    try {
+      const source = await importLocalReferenceVideo({
+        workflowId: requireProject(),
+        remixId: state.remixId,
+        file,
+      });
+      storeSource(source);
+    } catch (error) {
+      storeFailure(error);
+    } finally {
+      setBusy(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleResolve = async () => {
+    if (busy) return;
+    if (!urlInput.trim()) {
+      storeFailure(new Error('请粘贴分享链接或包含链接的整段分享文案'));
+      return;
+    }
+    setBusy('url');
+    setLocalError('');
+    try {
+      const source = await resolveUrlReferenceVideo({
+        workflowId: requireProject(),
+        remixId: state.remixId,
+        input: urlInput.trim(),
+      });
+      storeSource(source);
+    } catch (error) {
+      storeFailure(error);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="mt-7 grid gap-5 lg:grid-cols-[1.45fr_0.85fr]">
+      <section className={`rounded-[26px] border p-5 ${
+        dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
+      }`}>
+        <div className={`flex min-h-[300px] items-center justify-center overflow-hidden rounded-[20px] border ${
+          dark ? 'border-white/10 bg-black/40' : 'border-neutral-200 bg-neutral-50'
+        }`}>
+          {state.source ? (
+            <video
+              key={state.source.localUrl}
+              src={state.source.localUrl}
+              controls
+              preload="metadata"
+              className="max-h-[360px] max-w-full rounded-xl"
+            />
+          ) : (
+            <div className="max-w-sm px-6 text-center">
+              <div className={`mx-auto flex h-14 w-14 items-center justify-center rounded-2xl ${
+                dark ? 'bg-white/6 text-neutral-400' : 'bg-white text-neutral-500 shadow-sm'
+              }`}>
+                <Film size={25} />
+              </div>
+              <div className="mt-4 text-sm font-medium">尚未导入参考视频</div>
+              <p className={`mt-2 text-xs leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+                选择本地文件、拖入视频，或粘贴抖音、小红书、快手、Bilibili、TikTok 等分享文案。
+              </p>
+            </div>
+          )}
+        </div>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          accept=".mp4,.mov,.webm,video/mp4,video/quicktime,video/webm"
+          onChange={event => void handleFile(event.target.files?.[0])}
+        />
+
+        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+          <button
+            type="button"
+            disabled={Boolean(busy)}
+            onClick={() => fileInputRef.current?.click()}
+            onDragOver={event => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onDrop={event => {
+              event.preventDefault();
+              event.stopPropagation();
+              void handleFile(event.dataTransfer.files?.[0]);
+            }}
+            className={`flex min-h-[132px] items-center gap-4 rounded-2xl border border-dashed p-4 text-left transition-colors disabled:cursor-wait disabled:opacity-60 ${
+              dark
+                ? 'border-white/12 bg-white/[0.025] hover:border-cyan-400/50 hover:bg-cyan-400/[0.04]'
+                : 'border-neutral-300 bg-neutral-50 hover:border-cyan-500/50 hover:bg-cyan-50'
+            }`}
+          >
+            <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${
+              dark ? 'bg-white/6 text-cyan-300' : 'bg-white text-cyan-700 shadow-sm'
+            }`}>
+              {busy === 'local' ? <Loader2 size={20} className="animate-spin" /> : <Upload size={20} />}
+            </span>
+            <span>
+              <span className="block text-sm font-medium">
+                {busy === 'local' ? '正在复制并读取视频…' : '选择或拖入本地视频'}
+              </span>
+              <span className={`mt-1 block text-[11px] leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+                MP4 / MOV / WebM，原文件会独立保存且不被修改
+              </span>
+            </span>
+          </button>
+
+          <div className={`rounded-2xl border p-4 ${
+            dark ? 'border-white/8 bg-white/[0.025]' : 'border-neutral-200 bg-neutral-50'
+          }`}>
+            <div className="flex items-center gap-2 text-xs font-medium">
+              <Link2 size={14} className="text-cyan-400" />
+              分享链接或完整分享文案
+            </div>
+            <textarea
+              value={urlInput}
+              onChange={event => setUrlInput(event.target.value)}
+              onPointerDown={event => event.stopPropagation()}
+              placeholder="例如：复制打开抖音…… https://v.douyin.com/xxxx/"
+              className={`mt-2 h-[50px] w-full resize-none rounded-xl border px-3 py-2 text-xs outline-none ${
+                dark
+                  ? 'border-white/8 bg-black/30 text-white placeholder:text-neutral-600 focus:border-cyan-400/60'
+                  : 'border-neutral-200 bg-white text-neutral-900 placeholder:text-neutral-400 focus:border-cyan-500'
+              }`}
+            />
+            <button
+              type="button"
+              disabled={Boolean(busy)}
+              onClick={() => void handleResolve()}
+              className={`mt-2 flex h-9 w-full items-center justify-center gap-2 rounded-xl text-xs font-medium disabled:cursor-wait disabled:opacity-60 ${
+                dark ? 'bg-cyan-400 text-neutral-950 hover:bg-cyan-300' : 'bg-cyan-600 text-white hover:bg-cyan-500'
+              }`}
+            >
+              {busy === 'url' ? <Loader2 size={14} className="animate-spin" /> : <CloudDownload size={14} />}
+              {busy === 'url' ? '正在解析并下载…' : '解析并保存到当前项目'}
+            </button>
+          </div>
+        </div>
+
+        {sourceError && (
+          <div className={`mt-4 flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${
+            dark ? 'border-red-500/20 bg-red-500/8 text-red-300' : 'border-red-200 bg-red-50 text-red-700'
+          }`}>
+            <AlertCircle size={15} className="mt-0.5 shrink-0" />
+            <span>{sourceError}</span>
+          </div>
+        )}
+
+        <div className={`mt-4 text-[11px] leading-5 ${dark ? 'text-neutral-600' : 'text-neutral-400'}`}>
+          此步骤只使用公开媒体解析接口与 Evan 内置 FFprobe，不调用 Gemini；未登录 Gemini 也能正常导入。
+        </div>
+      </section>
+
+      <div className="flex flex-col gap-4">
+        <section className={`rounded-[22px] border p-5 ${
+          dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
+        }`}>
+          <div className="flex items-center gap-2 text-xs font-medium">
+            <FileVideo size={15} className="text-cyan-400" />
+            Reference Video
+          </div>
+          {state.source ? (
+            <div className="mt-4 space-y-3">
+              <div>
+                <div className="line-clamp-2 text-sm font-medium">
+                  {state.source.title || state.source.originalFilename || '参考视频'}
+                </div>
+                <div className={`mt-1 text-[11px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+                  {state.source.sourceType === 'url' ? state.source.platform || '分享链接' : state.source.sourceType === 'canvas' ? '画布视频' : '本地文件'}
+                </div>
+              </div>
+              <dl className={`grid grid-cols-2 gap-x-4 gap-y-3 border-t pt-4 text-xs ${
+                dark ? 'border-white/8' : 'border-neutral-100'
+              }`}>
+                <SourceStat label="时长" value={formatDuration(state.source.duration)} dark={dark} />
+                <SourceStat label="画面" value={`${state.source.width} × ${state.source.height}`} dark={dark} />
+                <SourceStat label="帧率" value={`${state.source.fps.toFixed(2)} fps`} dark={dark} />
+                <SourceStat label="声音" value={state.source.hasAudio ? state.source.audioCodec || '有音轨' : '无音轨'} dark={dark} />
+                <SourceStat label="视频编码" value={state.source.codec || '未知'} dark={dark} />
+                <SourceStat
+                  label="方向"
+                  value={state.source.orientation === 'portrait' ? '竖屏' : state.source.orientation === 'square' ? '方形' : '横屏'}
+                  dark={dark}
+                />
+              </dl>
+            </div>
+          ) : (
+            <div className={`mt-4 rounded-xl border border-dashed px-4 py-8 text-center text-xs ${
+              dark ? 'border-white/8 text-neutral-600' : 'border-neutral-200 text-neutral-400'
+            }`}>
+              导入后显示时长、分辨率、帧率、编码与音轨信息
+            </div>
+          )}
+        </section>
+        <OverviewCards summary={summary} dark={dark} />
+      </div>
+    </div>
+  );
+};
+
+const SourceStat: React.FC<{ label: string; value: string; dark: boolean }> = ({ label, value, dark }) => (
+  <div>
+    <dt className={dark ? 'text-neutral-600' : 'text-neutral-400'}>{label}</dt>
+    <dd className={`mt-1 truncate font-medium ${dark ? 'text-neutral-300' : 'text-neutral-700'}`}>{value}</dd>
+  </div>
+);
 
 const OverviewCards: React.FC<{
   summary: ReturnType<typeof summarizeVideoRemixState>;

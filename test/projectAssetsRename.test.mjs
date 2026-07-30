@@ -184,7 +184,32 @@ test('renaming a modern project renames the single root folder and rewrites imag
         nodes: [{
             resultUrl: '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/images/face.png',
             mediaUrl: '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/audio/voice.mp3',
-            imageVersions: [{ url: '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/images/face.png' }]
+            imageVersions: [{ url: '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/images/face.png' }],
+            videoRemix: {
+                source: {
+                    localUrl: '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/video-remix/remix_1/source/ref_1/original.mp4',
+                    previewUrl: 'http://localhost:3001/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/video-remix/remix_1/source/ref_1/original.mp4?t=1',
+                    sourceUrl: 'https://example.com/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/external.mp4'
+                },
+                assets: {
+                    characters: [{
+                        referenceImages: [
+                            '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/video-remix/remix_1/keyframes/character.png'
+                        ]
+                    }]
+                },
+                output: {
+                    url: '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/video-remix/remix_1/final/final.mp4'
+                }
+            }
+        }, {
+            videoRemix: {
+                source: {
+                    sourceType: 'canvas',
+                    sourceUrl: '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/videos/original-canvas.mp4',
+                    localUrl: '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/video-remix/remix_2/source/ref_2/original.mp4'
+                }
+            }
         }]
     };
 
@@ -197,4 +222,28 @@ test('renaming a modern project renames the single root folder and rewrites imag
     assert.equal(workflow.nodes[0].resultUrl, '/library/projects/%E6%96%B0%E9%A1%B9%E7%9B%AE/images/face.png');
     assert.equal(workflow.nodes[0].mediaUrl, '/library/projects/%E6%96%B0%E9%A1%B9%E7%9B%AE/audio/voice.mp3');
     assert.equal(workflow.nodes[0].imageVersions[0].url, '/library/projects/%E6%96%B0%E9%A1%B9%E7%9B%AE/images/face.png');
+    assert.equal(
+        workflow.nodes[0].videoRemix.source.localUrl,
+        '/library/projects/%E6%96%B0%E9%A1%B9%E7%9B%AE/video-remix/remix_1/source/ref_1/original.mp4'
+    );
+    assert.equal(
+        workflow.nodes[0].videoRemix.source.previewUrl,
+        'http://localhost:3001/library/projects/%E6%96%B0%E9%A1%B9%E7%9B%AE/video-remix/remix_1/source/ref_1/original.mp4?t=1'
+    );
+    assert.equal(
+        workflow.nodes[0].videoRemix.source.sourceUrl,
+        'https://example.com/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/external.mp4'
+    );
+    assert.equal(
+        workflow.nodes[0].videoRemix.assets.characters[0].referenceImages[0],
+        '/library/projects/%E6%96%B0%E9%A1%B9%E7%9B%AE/video-remix/remix_1/keyframes/character.png'
+    );
+    assert.equal(
+        workflow.nodes[0].videoRemix.output.url,
+        '/library/projects/%E6%96%B0%E9%A1%B9%E7%9B%AE/video-remix/remix_1/final/final.mp4'
+    );
+    assert.equal(
+        workflow.nodes[1].videoRemix.source.sourceUrl,
+        '/library/projects/%E6%96%B0%E9%A1%B9%E7%9B%AE/videos/original-canvas.mp4'
+    );
 });

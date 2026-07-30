@@ -28,6 +28,13 @@ const STAGE_LABELS: Record<string, string> = {
   error: '需要处理',
 };
 
+const formatDuration = (seconds: number) => {
+  const value = Math.max(0, Number(seconds) || 0);
+  const minutes = Math.floor(value / 60);
+  const remainder = Math.floor(value % 60);
+  return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+};
+
 export const VIDEO_REMIX_NODE_WIDTH = 420;
 export const VIDEO_REMIX_NODE_HEIGHT = 306;
 
@@ -105,11 +112,18 @@ export const VideoRemixNode: React.FC<VideoRemixNodeProps> = ({
         </div>
 
         <div className="flex gap-4 px-5 py-4">
-          <div className={`flex h-[104px] w-[150px] shrink-0 items-center justify-center overflow-hidden rounded-2xl ${
+          <div className={`relative flex h-[104px] w-[150px] shrink-0 items-center justify-center overflow-hidden rounded-2xl ${
             isDark ? 'bg-black/60' : 'bg-neutral-100'
           }`}>
             {previewUrl ? (
-              <video src={previewUrl} muted playsInline preload="metadata" className="h-full w-full object-cover" />
+              <>
+                <video src={previewUrl} muted playsInline preload="metadata" className="h-full w-full object-cover" />
+                {state.source && (
+                  <span className="absolute bottom-2 left-2 rounded-md bg-black/65 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                    {formatDuration(state.source.duration)}
+                  </span>
+                )}
+              </>
             ) : (
               <div className={`flex flex-col items-center gap-2 text-xs ${isDark ? 'text-neutral-600' : 'text-neutral-400'}`}>
                 <FolderOpen size={24} />

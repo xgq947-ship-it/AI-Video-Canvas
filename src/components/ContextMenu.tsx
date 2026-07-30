@@ -41,6 +41,8 @@ interface ContextMenuProps {
   onCopy?: () => void;
   onDuplicate?: () => void;
   onCreateAsset?: () => void;
+  onUseAsReferenceVideo?: () => void;
+  canUseAsReferenceVideo?: boolean;
   onAddAssets?: () => void;
   onOpenStoryboard?: () => void;
   onOpenHistory?: () => void;
@@ -60,6 +62,8 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onCopy,
   onDuplicate,
   onCreateAsset,
+  onUseAsReferenceVideo,
+  canUseAsReferenceVideo = false,
   onAddAssets,
   onOpenStoryboard,
   onOpenHistory,
@@ -165,6 +169,17 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
             active={false}
             canvasTheme={canvasTheme}
           />
+          {canUseAsReferenceVideo && (
+            <MenuItem
+              icon={<Film size={16} />}
+              label="用作参考视频"
+              onClick={() => {
+                onUseAsReferenceVideo?.();
+                onClose();
+              }}
+              canvasTheme={canvasTheme}
+            />
+          )}
           <div className={`my-1 border-t mx-1 ${canvasTheme === 'dark' ? 'border-neutral-800' : 'border-neutral-100'}`} />
 
           <MenuItem

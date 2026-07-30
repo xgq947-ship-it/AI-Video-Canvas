@@ -142,6 +142,64 @@ function parseProjectUrl(url) {
     }
 }
 
+const VIDEO_REMIX_PROJECT_URL_FIELDS = new Set([
+    'localUrl',
+    'proxyUrl',
+    'previewUrl',
+    'url',
+    'videoUrl',
+    'referenceImages'
+]);
+
+function rewriteProjectDirectoryUrl(url, oldDirName, newDirName) {
+    if (!url || typeof url !== 'string') return url;
+    let origin = '';
+    let pathname = url;
+    let suffix = '';
+    if (/^https?:\/\//i.test(url)) {
+        try {
+            const parsed = new URL(url);
+            origin = parsed.origin;
+            pathname = parsed.pathname;
+            suffix = `${parsed.search}${parsed.hash}`;
+        } catch {
+            return url;
+        }
+    } else {
+        const match = url.match(/^([^?#]*)([?#].*)?$/);
+        pathname = match?.[1] || url;
+        suffix = match?.[2] || '';
+    }
+    const match = pathname.match(/^\/library\/projects\/([^/]+)(\/.*)?$/);
+    if (!match) return url;
+    let projectDir;
+    try {
+        projectDir = decodeURIComponent(match[1]);
+    } catch {
+        return url;
+    }
+    if (projectDir !== oldDirName) return url;
+    return `${origin}/library/projects/${encodeURIComponent(newDirName)}${match[2] || ''}${suffix}`;
+}
+
+function rewriteVideoRemixProjectUrls(value, rewrite, fieldName = '') {
+    if (typeof value === 'string') {
+        return VIDEO_REMIX_PROJECT_URL_FIELDS.has(fieldName) ? rewrite(value) : value;
+    }
+    if (Array.isArray(value)) {
+        return value.map(item => rewriteVideoRemixProjectUrls(item, rewrite, fieldName));
+    }
+    if (!value || typeof value !== 'object') return value;
+    const rewritten = Object.fromEntries(Object.entries(value).map(([key, nested]) => [
+        key,
+        rewriteVideoRemixProjectUrls(nested, rewrite, key)
+    ]));
+    if (value.sourceType === 'canvas' && typeof value.sourceUrl === 'string') {
+        rewritten.sourceUrl = rewrite(value.sourceUrl);
+    }
+    return rewritten;
+}
+
 function parseAnyLibraryUrl(url) {
     const project = parseProjectUrl(url);
     if (project) return { ...project, layout: 'project' };
@@ -470,11 +528,7 @@ export function renameWorkflowAssetDirs(workflow, newTitle, { imagesDir, videosD
             throw error;
         }
         if (fs.existsSync(from)) fs.renameSync(from, to);
-        const rewrite = (url) => {
-            const parsed = parseProjectUrl(url);
-            if (!parsed || parsed.projectDir !== oldDirName) return url;
-            return projectUrl(newDirName, parsed.type, parsed.filename, parsed.origin);
-        };
+        const rewrite = (url) => rewriteProjectDirectoryUrl(url, oldDirName, newDirName);
         workflow.projectDirName = newDirName;
         for (const node of workflow.nodes || []) {
             for (const field of MEDIA_URL_FIELDS) {
@@ -482,6 +536,9 @@ export function renameWorkflowAssetDirs(workflow, newTitle, { imagesDir, videosD
             }
             if (Array.isArray(node.imageVersions)) {
                 node.imageVersions = node.imageVersions.map(version => ({ ...version, url: rewrite(version.url) }));
+            }
+            if (node.videoRemix && typeof node.videoRemix === 'object') {
+                node.videoRemix = rewriteVideoRemixProjectUrls(node.videoRemix, rewrite);
             }
         }
         if (typeof workflow.coverUrl === 'string') workflow.coverUrl = rewrite(workflow.coverUrl);

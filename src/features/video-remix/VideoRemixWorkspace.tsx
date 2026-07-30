@@ -63,6 +63,7 @@ import {
   updateVideoRemixShotTimeline,
 } from './videoRemixService';
 import { VideoRemixAssetsWorkspace } from './VideoRemixAssetsWorkspace';
+import { VideoRemixKeyframesWorkspace } from './VideoRemixKeyframesWorkspace';
 import { VideoRemixPromptsWorkspace } from './VideoRemixPromptsWorkspace';
 
 interface VideoRemixWorkspaceProps {
@@ -279,6 +280,15 @@ const WorkspaceContent: React.FC<{
           onUpdateNode={onUpdateNode}
           onSelectSource={() => onSelectTab('source')}
           onSelectAssets={() => onSelectTab('assets')}
+          dark={dark}
+        />
+      ) : activeTab === 'keyframes' ? (
+        <VideoRemixKeyframesWorkspace
+          node={node}
+          state={state}
+          workflowId={workflowId}
+          onUpdateNode={onUpdateNode}
+          onSelectShots={() => onSelectTab('shots')}
           dark={dark}
         />
       ) : (

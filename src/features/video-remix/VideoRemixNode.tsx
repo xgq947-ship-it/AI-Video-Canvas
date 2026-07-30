@@ -148,7 +148,7 @@ export const VideoRemixNode: React.FC<VideoRemixNodeProps> = ({
           <div className={`mb-2 flex items-center justify-between text-[11px] ${
             isDark ? 'text-neutral-500' : 'text-neutral-400'
           }`}>
-            <span>关键帧 {summary.confirmedKeyframes}/{summary.shots || 0}</span>
+            <span>关键帧 {summary.confirmedKeyframes}/{summary.requiredKeyframes || 0}</span>
             <span>视频 {summary.completedVideos}/{summary.shots || 0}</span>
           </div>
           <button

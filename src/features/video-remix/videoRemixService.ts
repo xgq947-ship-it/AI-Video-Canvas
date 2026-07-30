@@ -3,6 +3,7 @@ import type {
   ShotAnalysis,
   VideoRemixGlobalAnalysis,
 } from '../../../shared/videoRemix.js';
+import { generateImage } from '../../services/generationService';
 
 interface ReferenceResponse {
   success: boolean;
@@ -446,4 +447,32 @@ export async function optimizeVideoRemixPrompt({
     );
   }
   return payload.optimizedPrompt;
+}
+
+export async function generateVideoRemixKeyframe({
+  workflowId,
+  nodeId,
+  prompt,
+  referenceImages,
+  imageModel,
+  aspectRatio,
+  resolution,
+}: {
+  workflowId: string;
+  nodeId: string;
+  prompt: string;
+  referenceImages: string[];
+  imageModel: string;
+  aspectRatio: string;
+  resolution: string;
+}): Promise<string> {
+  return generateImage({
+    workflowId,
+    nodeId,
+    prompt,
+    imageBase64: referenceImages.length > 0 ? referenceImages : undefined,
+    imageModel,
+    aspectRatio,
+    resolution,
+  });
 }

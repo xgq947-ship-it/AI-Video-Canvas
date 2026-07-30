@@ -333,9 +333,30 @@ export interface KeyframeResult {
   id: string;
   shotId: string;
   position: 'start' | 'middle' | 'end';
+  sourceFrameUrl?: string;
+  sourceFrameTime?: number;
+  generatedPrompt: string;
+  prompt: string;
+  promptSource: 'pipeline' | 'user';
+  sourcePromptHash: string;
+  inputHash: string;
+  imageModel: string;
+  aspectRatio: string;
+  resolution: string;
+  referenceImages: string[];
   url?: string;
   status: 'pending' | 'generating' | 'ready' | 'confirmed' | 'failed';
+  attempt: number;
   error?: string;
+  errorCode?: string;
+  retryable?: boolean;
+  submitted?: boolean;
+  retryBlocked?: boolean;
+  generationStartedAt?: string;
+  generatedAt?: string;
+  confirmedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface GeneratedShotVideo {
@@ -397,6 +418,14 @@ export interface VideoRemixState {
     updatedAt?: string;
     targetModel?: string;
   };
+  keyframeReview: {
+    confirmed: boolean;
+    confirmedAt?: string;
+    updatedAt?: string;
+    imageModel?: string;
+    aspectRatio?: string;
+    resolution?: string;
+  };
   story: {
     summary: string;
     genre?: string;
@@ -424,6 +453,11 @@ export interface VideoRemixState {
 
 export const VIDEO_REMIX_STAGES: readonly VideoRemixStage[];
 export const SHOT_ANALYSIS_FRAME_POSITIONS: readonly ShotAnalysisFramePosition[];
+export const VIDEO_REMIX_KEYFRAME_POSITIONS: Readonly<{
+  simple: readonly ['start'];
+  medium: readonly ['start', 'end'];
+  complex: readonly ['start', 'middle', 'end'];
+}>;
 export const VIDEO_REMIX_WORKSPACE_TABS: readonly {
   id: VideoRemixWorkspaceTab;
   label: string;
@@ -441,6 +475,7 @@ export function summarizeVideoRemixState(state: unknown): {
   scenes: number;
   props: number;
   confirmedKeyframes: number;
+  requiredKeyframes: number;
   completedVideos: number;
 };
 export function replaceVideoRemixSource(
@@ -623,3 +658,74 @@ export function getVideoRemixPromptReadiness(state: unknown): {
   confirmed: boolean;
 };
 export function confirmVideoRemixPrompts(state: unknown): VideoRemixState;
+export function keyframePositionsForComplexity(
+  complexity?: MotionComplexity
+): Array<'start' | 'middle' | 'end'>;
+export function getVideoRemixKeyframeSourceFrame(
+  state: unknown,
+  shotId: string,
+  position: 'start' | 'middle' | 'end'
+): ShotAnalysis['analysisFrames'][number] | null;
+export function buildVideoRemixKeyframePrompt(
+  state: unknown,
+  shotId: string,
+  position?: 'start' | 'middle' | 'end'
+): string;
+export function getVideoRemixKeyframeReferenceImages(
+  state: unknown,
+  shotId: string,
+  position?: 'start' | 'middle' | 'end'
+): string[];
+export function prepareVideoRemixKeyframes(
+  state: unknown,
+  options?: {
+    imageModel?: string;
+    aspectRatio?: string;
+    resolution?: string;
+  }
+): VideoRemixState;
+export function beginVideoRemixKeyframeGeneration(
+  state: unknown,
+  keyframeId: string
+): VideoRemixState;
+export function applyVideoRemixKeyframeResult(
+  state: unknown,
+  keyframeId: string,
+  result: { url?: string; inputHash?: string }
+): VideoRemixState;
+export function setVideoRemixKeyframeError(
+  state: unknown,
+  keyframeId: string,
+  message: string,
+  options?: {
+    code?: string;
+    retryable?: boolean;
+    submitted?: boolean;
+    inputHash?: string;
+  }
+): VideoRemixState;
+export function finalizeVideoRemixKeyframeBatch(state: unknown): VideoRemixState;
+export function updateVideoRemixKeyframePrompt(
+  state: unknown,
+  keyframeId: string,
+  value: string
+): VideoRemixState;
+export function getVideoRemixKeyframeReadiness(state: unknown): {
+  total: number;
+  ready: number;
+  confirmed: number;
+  pending: number;
+  generating: number;
+  failed: number;
+  reviewConfirmed: boolean;
+};
+export function confirmVideoRemixKeyframe(
+  state: unknown,
+  keyframeId: string
+): VideoRemixState;
+export function confirmVideoRemixKeyframes(state: unknown): VideoRemixState;
+export function recoverStaleVideoRemixKeyframes(
+  state: unknown,
+  now?: number,
+  staleAfterMs?: number
+): VideoRemixState;

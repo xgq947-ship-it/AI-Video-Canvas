@@ -484,6 +484,7 @@ test('Video Remix 摘要只统计已确认关键帧和已完成镜头视频', ()
     scenes: 1,
     props: 2,
     confirmedKeyframes: 1,
+    requiredKeyframes: 4,
     completedVideos: 1,
   });
 });

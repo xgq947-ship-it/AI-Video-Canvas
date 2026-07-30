@@ -62,6 +62,16 @@ const DEFAULT_PROMPT_REVIEW = Object.freeze({
   confirmed: false,
 });
 
+const DEFAULT_KEYFRAME_REVIEW = Object.freeze({
+  confirmed: false,
+});
+
+export const VIDEO_REMIX_KEYFRAME_POSITIONS = Object.freeze({
+  simple: Object.freeze(['start']),
+  medium: Object.freeze(['start', 'end']),
+  complex: Object.freeze(['start', 'middle', 'end']),
+});
+
 const TAB_BY_STAGE = Object.freeze({
   source: 'source',
   preprocessing: 'source',
@@ -268,6 +278,7 @@ export function createVideoRemixState(overrides = {}) {
     analysisRun: { ...DEFAULT_ANALYSIS_RUN },
     assetReview: { ...DEFAULT_ASSET_REVIEW },
     promptReview: { ...DEFAULT_PROMPT_REVIEW },
+    keyframeReview: { ...DEFAULT_KEYFRAME_REVIEW },
     story: null,
     assets: {
       characters: [],
@@ -307,6 +318,10 @@ export function createVideoRemixState(overrides = {}) {
     ...DEFAULT_PROMPT_REVIEW,
     ...(overrides.promptReview || {}),
   };
+  state.keyframeReview = {
+    ...DEFAULT_KEYFRAME_REVIEW,
+    ...(overrides.keyframeReview || {}),
+  };
   state.locks = { ...HIGH_FIDELITY_LOCKS, ...(overrides.locks || {}) };
   state.bgm = { mode: 'none', ...(overrides.bgm || {}) };
   state.subtitles = { enabled: false, style: 'default', ...(overrides.subtitles || {}) };
@@ -336,6 +351,10 @@ export function summarizeVideoRemixState(state) {
   const safe = isVideoRemixState(state) ? state : createVideoRemixState();
   const shots = safe.shots.length;
   const confirmedKeyframes = safe.keyframes.filter(item => item?.status === 'confirmed').length;
+  const requiredKeyframes = safe.shots.reduce(
+    (total, shot) => total + keyframePositionsForComplexity(shot?.motionComplexity).length,
+    0
+  );
   const completedVideos = safe.generatedVideos.filter(item => item?.status === 'completed').length;
   return {
     shots,
@@ -343,6 +362,7 @@ export function summarizeVideoRemixState(state) {
     scenes: safe.assets.scenes.length,
     props: safe.assets.props.length,
     confirmedKeyframes,
+    requiredKeyframes,
     completedVideos,
   };
 }
@@ -416,6 +436,7 @@ export function completeVideoRemixPreprocessing(state, {
     },
     assetReview: { ...DEFAULT_ASSET_REVIEW },
     promptReview: { ...DEFAULT_PROMPT_REVIEW },
+    keyframeReview: { ...DEFAULT_KEYFRAME_REVIEW },
     story: null,
     assets: {
       characters: [],
@@ -592,6 +613,7 @@ export function applyVideoRemixGlobalAnalysis(state, result) {
       updatedAt: new Date().toISOString(),
     },
     promptReview: { ...DEFAULT_PROMPT_REVIEW },
+    keyframeReview: { ...DEFAULT_KEYFRAME_REVIEW },
     shots,
     prompts: {},
     keyframes: [],
@@ -713,6 +735,7 @@ export function applyVideoRemixShotAnalysis(state, analyzedShot) {
     stage: completedShots === shots.length ? 'analysis_ready' : 'analysis_partial',
     shots,
     promptReview: { ...DEFAULT_PROMPT_REVIEW },
+    keyframeReview: { ...DEFAULT_KEYFRAME_REVIEW },
     prompts: Object.fromEntries(
       Object.entries(current.prompts || {}).filter(([shotId]) => (
         shotId !== analyzedShot.shotId
@@ -887,6 +910,7 @@ function withInvalidatedAssetDerivatives(current, updates) {
       updatedAt: new Date().toISOString(),
     },
     promptReview: { ...DEFAULT_PROMPT_REVIEW },
+    keyframeReview: { ...DEFAULT_KEYFRAME_REVIEW },
     prompts: refreshPromptRecordsForAssets(nextCore),
     keyframes: [],
     generatedVideos: [],
@@ -1592,6 +1616,7 @@ function withInvalidatedPromptDerivatives(current, updates, targetModel) {
       ),
       updatedAt: new Date().toISOString(),
     },
+    keyframeReview: { ...DEFAULT_KEYFRAME_REVIEW },
     keyframes: [],
     generatedVideos: [],
     timeline: (current.timeline || []).map(item => {
@@ -1921,4 +1946,705 @@ export function confirmVideoRemixPrompts(state) {
     errors: current.errors.filter(item => item?.scope !== 'prompt'),
     updatedAt: now,
   };
+}
+
+export function keyframePositionsForComplexity(complexity = 'medium') {
+  return [...(
+    VIDEO_REMIX_KEYFRAME_POSITIONS[complexity]
+    || VIDEO_REMIX_KEYFRAME_POSITIONS.medium
+  )];
+}
+
+const KEYFRAME_POSITION_LABELS = Object.freeze({
+  start: 'Start',
+  middle: 'Middle',
+  end: 'End',
+});
+
+function keyframeTargetSecond(shot, position) {
+  if (position === 'end') return Math.max(0, Number(shot.duration) || 0);
+  if (position === 'middle') return Math.max(0, Number(shot.duration) || 0) / 2;
+  return 0;
+}
+
+export function getVideoRemixKeyframeSourceFrame(state, shotId, position) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const shot = current.shots.find(item => item.shotId === String(shotId || ''));
+  if (!shot) return null;
+  const preferred = position === 'middle'
+    ? ['middle', 'quarter', 'three_quarter', 'start', 'end']
+    : position === 'end'
+      ? ['end', 'three_quarter', 'middle', 'quarter', 'start']
+      : ['start', 'quarter', 'middle', 'three_quarter', 'end'];
+  for (const candidate of preferred) {
+    const frame = (shot.analysisFrames || []).find(item => item.position === candidate);
+    if (frame?.url) return frame;
+  }
+  return null;
+}
+
+function knownAssetMarker(current, assetId) {
+  const id = String(assetId || '');
+  const exists = [
+    ...current.assets.characters,
+    ...current.assets.scenes,
+    ...current.assets.props,
+  ].some(asset => asset.id === id);
+  return exists ? placeholder(id) : id;
+}
+
+function continuityPromptLines(current, continuity) {
+  if (!continuity || typeof continuity !== 'object') return [];
+  const lines = [];
+  for (const [characterId, characterState] of Object.entries(
+    continuity.characterStates || {}
+  )) {
+    const details = [
+      characterState.position ? `位置 ${characterState.position}` : '',
+      characterState.direction ? `朝向 ${characterState.direction}` : '',
+      characterState.emotion ? `情绪 ${characterState.emotion}` : '',
+      characterState.holding
+        ? `手持 ${knownAssetMarker(current, characterState.holding)}`
+        : '',
+    ].filter(Boolean);
+    if (details.length > 0) {
+      lines.push(`${knownAssetMarker(current, characterId)}：${details.join('；')}`);
+    }
+  }
+  if (continuity.sceneId) {
+    lines.push(
+      `${knownAssetMarker(current, continuity.sceneId)}${
+        continuity.sceneZone ? `，功能区 ${continuity.sceneZone}` : ''
+      }`
+    );
+  }
+  if (continuity.lighting) lines.push(`灯光 ${continuity.lighting}`);
+  if (continuity.time) lines.push(`时间 ${continuity.time}`);
+  return lines;
+}
+
+function activeMotionPromptLines(current, shot, second) {
+  const lines = [];
+  for (const subject of shot.motionBlueprint?.subjects || []) {
+    const active = (subject.actionSequence || []).filter(action => (
+      Number(action.start) <= second + 0.001
+      && Number(action.end) >= second - 0.001
+    ));
+    for (const action of active) {
+      lines.push(`${knownAssetMarker(current, subject.characterId)}：${action.action}`);
+    }
+  }
+  for (const interaction of shot.motionBlueprint?.propInteractions || []) {
+    if (
+      Number(interaction.start) <= second + 0.001
+      && Number(interaction.end) >= second - 0.001
+    ) {
+      const prop = current.assets.props.find(item => item.id === interaction.prop);
+      lines.push(
+        `${knownAssetMarker(current, interaction.actor)}：${
+          prop?.removed
+            ? '保持原手部姿势，但画面中为空手'
+            : `${interaction.action} ${knownAssetMarker(current, interaction.prop)}`
+        }`
+      );
+    }
+  }
+  return lines;
+}
+
+export function buildVideoRemixKeyframePrompt(state, shotId, position = 'start') {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const shot = current.shots.find(item => item.shotId === String(shotId || ''));
+  const prompt = shot ? current.prompts?.[shot.shotId] : null;
+  if (!shot || !prompt?.imagePrompt) return '';
+  const safePosition = ['start', 'middle', 'end'].includes(position)
+    ? position
+    : 'start';
+  const targetSecond = keyframeTargetSecond(shot, safePosition);
+  const stateLines = safePosition === 'start'
+    ? continuityPromptLines(current, shot.startState)
+    : safePosition === 'end'
+      ? continuityPromptLines(current, shot.endState)
+      : activeMotionPromptLines(current, shot, targetSecond);
+  const timingPhase = (shot.timingBlueprint?.phases || []).find(phase => (
+    Number(phase.start) <= targetSecond + 0.001
+    && Number(phase.end) >= targetSecond - 0.001
+  ));
+  const supplement = [
+    `【关键时刻】${KEYFRAME_POSITION_LABELS[safePosition]} Frame，Shot 内约 ${targetSecond.toFixed(2)} 秒的单一静态瞬间。`,
+    timingPhase ? `【当前节奏】${timingPhase.phase}` : '',
+    stateLines.length > 0 ? `【当前状态】\n${stateLines.join('\n')}` : '',
+    '【帧约束】只呈现这一时刻的可见姿势、接触关系与构图，不画动作轨迹、分镜拼图、字幕或时间标记。',
+  ].filter(Boolean).join('\n');
+  return [
+    prompt.imagePrompt.trim(),
+    resolveVideoRemixPromptTemplate(current, shot.shotId, supplement, {
+      imagePrompt: true,
+    }),
+  ].filter(Boolean).join('\n');
+}
+
+function appendUniqueImages(target, values) {
+  for (const value of values || []) {
+    const url = String(value || '');
+    if (url && !target.includes(url)) target.push(url);
+  }
+}
+
+export function getVideoRemixKeyframeReferenceImages(
+  state,
+  shotId,
+  position = 'start'
+) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const shot = current.shots.find(item => item.shotId === String(shotId || ''));
+  if (!shot) return [];
+  const priority = [];
+  const regular = [];
+  for (const shotCharacter of shot.characters || []) {
+    const base = current.assets.characters.find(
+      item => item.id === shotCharacter.characterId
+    );
+    const resolved = resolveVideoRemixShotCharacter(
+      current,
+      shot.shotId,
+      shotCharacter.characterId
+    );
+    if (!base || !resolved) continue;
+    const activeLook = base.looks?.find(
+      look => look.id === (
+        shotCharacter.lookOverride?.lookId
+        || shotCharacter.lookId
+      )
+    );
+    if (base.replacement) {
+      appendUniqueImages(priority, resolved.character.referenceImages);
+      appendUniqueImages(
+        activeLook?.replacement ? priority : regular,
+        resolved.look?.referenceImages
+      );
+    } else if (activeLook?.replacement) {
+      appendUniqueImages(priority, resolved.look?.referenceImages);
+      appendUniqueImages(regular, resolved.character.referenceImages);
+    } else {
+      appendUniqueImages(regular, resolved.look?.referenceImages);
+      appendUniqueImages(regular, resolved.character.referenceImages);
+    }
+  }
+  if (shot.scene?.sceneId) {
+    const base = current.assets.scenes.find(item => item.id === shot.scene.sceneId);
+    const resolved = resolveVideoRemixAsset(base);
+    appendUniqueImages(base?.replacement ? priority : regular, resolved?.referenceImages);
+  }
+  for (const shotProp of shot.props || []) {
+    const base = current.assets.props.find(item => item.id === shotProp.propId);
+    if (!base || base.removed) continue;
+    const resolved = resolveVideoRemixAsset(base);
+    appendUniqueImages(base.replacement ? priority : regular, resolved?.referenceImages);
+  }
+  const sourceFrame = getVideoRemixKeyframeSourceFrame(
+    current,
+    shot.shotId,
+    position
+  );
+  const references = [];
+  appendUniqueImages(references, priority);
+  appendUniqueImages(references, sourceFrame?.url ? [sourceFrame.url] : []);
+  appendUniqueImages(references, regular);
+  return references;
+}
+
+function keyframeStableId(shotId, position) {
+  const readable = String(shotId || '')
+    .replace(/[^A-Za-z0-9_-]+/g, '_')
+    .slice(0, 48);
+  return `kf_${readable}_${promptValueHash(String(shotId || ''))}_${position}`;
+}
+
+function keyframeInputHash(record, prompt = record.prompt) {
+  return promptValueHash({
+    prompt,
+    imageModel: record.imageModel,
+    aspectRatio: record.aspectRatio,
+    resolution: record.resolution,
+    referenceImages: record.referenceImages,
+  });
+}
+
+function keyframePlanSignature(keyframes) {
+  return promptValueHash(
+    (keyframes || []).map(item => ({
+      id: item.id,
+      inputHash: item.inputHash,
+    }))
+  );
+}
+
+function stageAfterKeyframeInputChange(current) {
+  if ([
+    'videos_generating',
+    'videos_ready',
+    'rendering',
+    'completed',
+  ].includes(current.stage)) {
+    return 'keyframes_ready';
+  }
+  return current.stage;
+}
+
+function withInvalidatedKeyframeDerivatives(current, updates) {
+  return {
+    ...current,
+    ...updates,
+    stage: stageAfterKeyframeInputChange(current),
+    keyframeReview: {
+      ...DEFAULT_KEYFRAME_REVIEW,
+      imageModel: String(
+        updates.keyframeReview?.imageModel
+        || current.keyframeReview?.imageModel
+        || ''
+      ),
+      aspectRatio: String(
+        updates.keyframeReview?.aspectRatio
+        || current.keyframeReview?.aspectRatio
+        || ''
+      ),
+      resolution: String(
+        updates.keyframeReview?.resolution
+        || current.keyframeReview?.resolution
+        || ''
+      ),
+      updatedAt: new Date().toISOString(),
+    },
+    generatedVideos: [],
+    timeline: (current.timeline || []).map(item => {
+      const { videoUrl, ...rest } = item;
+      return rest;
+    }),
+    output: null,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function prepareVideoRemixKeyframes(state, {
+  imageModel = '',
+  aspectRatio = '',
+  resolution = '',
+} = {}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (!current.promptReview?.confirmed) return current;
+  const model = String(
+    imageModel
+    || current.keyframeReview?.imageModel
+    || ''
+  );
+  const ratio = String(
+    aspectRatio
+    || current.keyframeReview?.aspectRatio
+    || ''
+  );
+  const quality = String(
+    resolution
+    || current.keyframeReview?.resolution
+    || ''
+  );
+  if (!model || !ratio) return current;
+  const previousById = new Map(
+    (current.keyframes || []).map(item => [item.id, item])
+  );
+  const now = new Date().toISOString();
+  const keyframes = current.shots.flatMap(shot => (
+    keyframePositionsForComplexity(shot.motionComplexity).map(position => {
+      const id = keyframeStableId(shot.shotId, position);
+      const previous = previousById.get(id);
+      const generatedPrompt = buildVideoRemixKeyframePrompt(
+        current,
+        shot.shotId,
+        position
+      );
+      const referenceImages = getVideoRemixKeyframeReferenceImages(
+        current,
+        shot.shotId,
+        position
+      );
+      const sourceFrame = getVideoRemixKeyframeSourceFrame(
+        current,
+        shot.shotId,
+        position
+      );
+      const sourcePromptHash = promptValueHash({
+        generatedPrompt,
+        promptHash: current.prompts?.[shot.shotId]?.promptHash || '',
+        position,
+      });
+      const preserveUserPrompt = previous?.promptSource === 'user'
+        && previous?.sourcePromptHash === sourcePromptHash
+        && previous.prompt;
+      const prompt = preserveUserPrompt ? previous.prompt : generatedPrompt;
+      const draft = {
+        id,
+        shotId: shot.shotId,
+        position,
+        sourceFrameUrl: sourceFrame?.url || '',
+        sourceFrameTime: sourceFrame?.time,
+        generatedPrompt,
+        prompt,
+        promptSource: preserveUserPrompt ? 'user' : 'pipeline',
+        sourcePromptHash,
+        imageModel: model,
+        aspectRatio: ratio,
+        resolution: quality,
+        referenceImages,
+      };
+      const inputHash = keyframeInputHash(draft);
+      if (previous?.inputHash === inputHash) {
+        return {
+          ...previous,
+          ...draft,
+          inputHash,
+        };
+      }
+      return {
+        ...draft,
+        inputHash,
+        status: 'pending',
+        attempt: 0,
+        createdAt: previous?.createdAt || now,
+        updatedAt: now,
+      };
+    })
+  ));
+  if (keyframes.length === 0) return current;
+  const changed = keyframePlanSignature(keyframes)
+    !== keyframePlanSignature(current.keyframes);
+  if (!changed) return current;
+  return withInvalidatedKeyframeDerivatives(current, {
+    keyframes,
+    keyframeReview: {
+      confirmed: false,
+      imageModel: model,
+      aspectRatio: ratio,
+      resolution: quality,
+    },
+  });
+}
+
+function updateKeyframeStage(keyframes) {
+  return keyframes.some(item => item.status === 'generating')
+    ? 'keyframes_generating'
+    : 'keyframes_ready';
+}
+
+export function beginVideoRemixKeyframeGeneration(state, keyframeId) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const id = String(keyframeId || '');
+  const found = current.keyframes.some(item => item.id === id);
+  if (!found) return current;
+  const now = new Date().toISOString();
+  const keyframes = current.keyframes.map(item => item.id === id
+    ? {
+      ...item,
+      status: 'generating',
+      attempt: Number(item.attempt || 0) + 1,
+      error: undefined,
+      errorCode: undefined,
+      retryable: undefined,
+      submitted: undefined,
+      retryBlocked: undefined,
+      generationStartedAt: now,
+      updatedAt: now,
+    }
+    : item);
+  return {
+    ...withInvalidatedKeyframeDerivatives(current, {
+      keyframes,
+      keyframeReview: {
+        ...current.keyframeReview,
+        confirmed: false,
+      },
+    }),
+    stage: 'keyframes_generating',
+    errors: current.errors.filter(item => !(
+      item?.scope === 'keyframe' && item?.id === id
+    )),
+  };
+}
+
+export function applyVideoRemixKeyframeResult(state, keyframeId, {
+  url,
+  inputHash,
+} = {}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const id = String(keyframeId || '');
+  const existing = current.keyframes.find(item => item.id === id);
+  if (
+    !existing
+    || !url
+    || (inputHash && existing.inputHash !== inputHash)
+  ) {
+    return current;
+  }
+  const now = new Date().toISOString();
+  const keyframes = current.keyframes.map(item => item.id === id
+    ? {
+      ...item,
+      url: String(url),
+      status: 'ready',
+      error: undefined,
+      errorCode: undefined,
+      retryable: undefined,
+      submitted: undefined,
+      retryBlocked: undefined,
+      generationStartedAt: undefined,
+      generatedAt: now,
+      updatedAt: now,
+    }
+    : item);
+  return {
+    ...current,
+    stage: updateKeyframeStage(keyframes),
+    keyframes,
+    keyframeReview: {
+      ...DEFAULT_KEYFRAME_REVIEW,
+      imageModel: existing.imageModel,
+      aspectRatio: existing.aspectRatio,
+      resolution: existing.resolution,
+      updatedAt: now,
+    },
+    errors: current.errors.filter(item => !(
+      item?.scope === 'keyframe' && item?.id === id
+    )),
+    generatedVideos: [],
+    timeline: (current.timeline || []).map(item => {
+      const { videoUrl, ...rest } = item;
+      return rest;
+    }),
+    output: null,
+    updatedAt: now,
+  };
+}
+
+export function setVideoRemixKeyframeError(state, keyframeId, message, {
+  code,
+  retryable = true,
+  submitted = false,
+  inputHash,
+} = {}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const id = String(keyframeId || '');
+  const existing = current.keyframes.find(item => item.id === id);
+  if (!existing || (inputHash && existing.inputHash !== inputHash)) return current;
+  const now = new Date().toISOString();
+  const errorMessage = String(message || '关键帧生成失败');
+  const keyframes = current.keyframes.map(item => item.id === id
+    ? {
+      ...item,
+      status: 'failed',
+      error: errorMessage,
+      ...(code ? { errorCode: String(code) } : {}),
+      retryable: Boolean(retryable),
+      submitted: Boolean(submitted),
+      retryBlocked: Boolean(submitted),
+      generationStartedAt: undefined,
+      updatedAt: now,
+    }
+    : item);
+  return {
+    ...current,
+    stage: updateKeyframeStage(keyframes),
+    keyframes,
+    keyframeReview: {
+      ...DEFAULT_KEYFRAME_REVIEW,
+      imageModel: existing.imageModel,
+      aspectRatio: existing.aspectRatio,
+      resolution: existing.resolution,
+      updatedAt: now,
+    },
+    errors: [
+      ...current.errors.filter(item => !(
+        item?.scope === 'keyframe' && item?.id === id
+      )),
+      {
+        scope: 'keyframe',
+        id,
+        message: errorMessage,
+        retryable: Boolean(retryable) && !submitted,
+        ...(code ? { code: String(code) } : {}),
+      },
+    ],
+    generatedVideos: [],
+    timeline: (current.timeline || []).map(item => {
+      const { videoUrl, ...rest } = item;
+      return rest;
+    }),
+    output: null,
+    updatedAt: now,
+  };
+}
+
+export function finalizeVideoRemixKeyframeBatch(state) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (current.keyframes.length === 0) return current;
+  return {
+    ...current,
+    stage: updateKeyframeStage(current.keyframes),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function updateVideoRemixKeyframePrompt(
+  state,
+  keyframeId,
+  value
+) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const id = String(keyframeId || '');
+  const existing = current.keyframes.find(item => item.id === id);
+  if (!existing) return current;
+  const manual = String(value || '').trim();
+  const prompt = manual || existing.generatedPrompt || '';
+  const next = {
+    ...existing,
+    prompt,
+    promptSource: manual ? 'user' : 'pipeline',
+    status: 'pending',
+    url: undefined,
+    error: undefined,
+    errorCode: undefined,
+    retryable: undefined,
+    submitted: undefined,
+    retryBlocked: undefined,
+    generationStartedAt: undefined,
+    updatedAt: new Date().toISOString(),
+  };
+  next.inputHash = keyframeInputHash(next, prompt);
+  return withInvalidatedKeyframeDerivatives(current, {
+    keyframes: current.keyframes.map(item => item.id === id ? next : item),
+    keyframeReview: {
+      ...current.keyframeReview,
+      confirmed: false,
+    },
+    errors: current.errors.filter(item => !(
+      item?.scope === 'keyframe' && item?.id === id
+    )),
+  });
+}
+
+export function getVideoRemixKeyframeReadiness(state) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const plannedTotal = current.shots.reduce(
+    (total, shot) => total + keyframePositionsForComplexity(
+      shot.motionComplexity
+    ).length,
+    0
+  );
+  const total = plannedTotal;
+  const count = status => current.keyframes.filter(item => (
+    status.includes(item.status)
+  )).length;
+  return {
+    total,
+    ready: count(['ready', 'confirmed']),
+    confirmed: count(['confirmed']),
+    pending: count(['pending']),
+    generating: count(['generating']),
+    failed: count(['failed']),
+    reviewConfirmed: Boolean(current.keyframeReview?.confirmed),
+  };
+}
+
+export function confirmVideoRemixKeyframe(state, keyframeId) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const id = String(keyframeId || '');
+  const existing = current.keyframes.find(item => item.id === id);
+  if (!existing?.url || !['ready', 'confirmed'].includes(existing.status)) {
+    return current;
+  }
+  const now = new Date().toISOString();
+  const keyframes = current.keyframes.map(item => item.id === id
+    ? { ...item, status: 'confirmed', confirmedAt: now, updatedAt: now }
+    : item);
+  const allConfirmed = keyframes.length > 0
+    && keyframes.length === getVideoRemixKeyframeReadiness(current).total
+    && keyframes.every(item => item.status === 'confirmed' && item.url);
+  return {
+    ...current,
+    stage: 'keyframes_ready',
+    keyframes,
+    keyframeReview: {
+      ...current.keyframeReview,
+      confirmed: allConfirmed,
+      ...(allConfirmed ? { confirmedAt: now } : {}),
+      updatedAt: now,
+    },
+    errors: current.errors.filter(item => !(
+      item?.scope === 'keyframe' && item?.id === id
+    )),
+    updatedAt: now,
+  };
+}
+
+export function confirmVideoRemixKeyframes(state) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (
+    current.keyframes.length === 0
+    || current.keyframes.length !== getVideoRemixKeyframeReadiness(current).total
+    || current.keyframes.some(item => (
+      !item.url || !['ready', 'confirmed'].includes(item.status)
+    ))
+  ) {
+    return current;
+  }
+  const now = new Date().toISOString();
+  return {
+    ...current,
+    stage: 'keyframes_ready',
+    keyframes: current.keyframes.map(item => ({
+      ...item,
+      status: 'confirmed',
+      confirmedAt: item.confirmedAt || now,
+      updatedAt: now,
+    })),
+    keyframeReview: {
+      ...current.keyframeReview,
+      confirmed: true,
+      confirmedAt: now,
+      updatedAt: now,
+    },
+    errors: current.errors.filter(item => item?.scope !== 'keyframe'),
+    updatedAt: now,
+  };
+}
+
+export function recoverStaleVideoRemixKeyframes(
+  state,
+  now = Date.now(),
+  staleAfterMs = 20 * 60 * 1000
+) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  let next = current;
+  let recovered = false;
+  for (const keyframe of current.keyframes) {
+    if (keyframe.status !== 'generating') continue;
+    const startedAt = Date.parse(keyframe.generationStartedAt || '');
+    if (
+      Number.isFinite(startedAt)
+      && Number(now) - startedAt < Number(staleAfterMs)
+    ) {
+      continue;
+    }
+    next = setVideoRemixKeyframeError(
+      next,
+      keyframe.id,
+      '上次关键帧任务已中断，可安全重试',
+      {
+        code: 'KEYFRAME_TASK_INTERRUPTED',
+        retryable: true,
+        submitted: false,
+        inputHash: keyframe.inputHash,
+      }
+    );
+    recovered = true;
+  }
+  return recovered ? finalizeVideoRemixKeyframeBatch(next) : current;
 }

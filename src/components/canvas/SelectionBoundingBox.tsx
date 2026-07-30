@@ -67,6 +67,7 @@ const getNodeWidth = (node: NodeData, allNodes?: NodeData[]): number => {
 
     if (node.type === NodeType.VIDEO) return 385;
     if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 460;
+    if (node.type === NodeType.VIDEO_REMIX) return 420;
     return 365;
 };
 
@@ -80,6 +81,7 @@ const getNodeHeight = (node: NodeData, allNodes?: NodeData[]): number => {
     // 控制节点固定高度：成图落在它自动创建的子 Image 节点上，自身不展示结果。
     // 716 是浏览器里实测的卡片高度，改动节点表单后要重新量，否则连线端点会偏。
     if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 716;
+    if (node.type === NodeType.VIDEO_REMIX) return 306;
     const baseWidth = getNodeWidth(node, allNodes);
 
     // Handle Image Editor nodes

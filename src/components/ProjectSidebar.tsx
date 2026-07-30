@@ -95,6 +95,7 @@ const typeLabel: Record<string, string> = {
   [NodeType.STORYBOARD]: '分镜',
   [NodeType.CAMERA_ANGLE]: '镜头角度',
   [NodeType.PRODUCT_SCENE_REPLACE]: '产品短视频生成',
+  [NodeType.VIDEO_REMIX]: '视频复刻',
   [NodeType.SFX]: '音效',
   [NodeType.BGM]: '背景音乐',
   [NodeType.SUBTITLE]: '字幕',

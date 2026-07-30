@@ -74,6 +74,7 @@ import { collectNodeReferences, type NodeReference } from './utils/nodeReference
 import { upsertProductSceneResultNode } from './utils/productSceneResult.js';
 import { getImageGenerationProvider } from '@/shared/generationProviders.js';
 import { assignProductSceneInputOnConnect } from './utils/productSceneInputMapping.js';
+import { VideoRemixWorkspace } from './features/video-remix/VideoRemixWorkspace';
 
 // ============================================================================
 // MAIN COMPONENT
@@ -130,6 +131,7 @@ export default function App() {
   const [sidebarAssetPreview, setSidebarAssetPreview] = useState<(SidebarAssetPreview & { panelY: number }) | null>(null);
   const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
   const [isMinimapOpen, setIsMinimapOpen] = useState(false);
+  const [videoRemixWorkspaceNodeId, setVideoRemixWorkspaceNodeId] = useState<string | null>(null);
 
   // Panel state management (history, asset library, expand)
   const {
@@ -1938,6 +1940,7 @@ export default function App() {
     handleChangeAngleGenerate,
     handleExtractLastFrame,
     handleAutoSubtitle,
+    setVideoRemixWorkspaceNodeId,
     handleDuplicate,
     handleNodePointerDown,
     setSelectedNodeIds,
@@ -1978,6 +1981,7 @@ export default function App() {
       nodeCallbacksRef.current.handleChangeAngleGenerate(id),
     onExtractLastFrame: (id: string) => nodeCallbacksRef.current.handleExtractLastFrame(id),
     onAutoSubtitle: (id: string) => nodeCallbacksRef.current.handleAutoSubtitle(id),
+    onOpenVideoRemix: (id: string) => nodeCallbacksRef.current.setVideoRemixWorkspaceNodeId(id),
     onNodePointerDown: (e: React.PointerEvent, id: string) => {
       setSelectedConnection(null);
       const current = nodeCallbacksRef.current;
@@ -2254,6 +2258,7 @@ export default function App() {
                 onChangeAngleGenerate={stableNodeHandlers.onChangeAngleGenerate}
                 onExtractLastFrame={stableNodeHandlers.onExtractLastFrame}
                 onAutoSubtitle={stableNodeHandlers.onAutoSubtitle}
+                onOpenVideoRemix={stableNodeHandlers.onOpenVideoRemix}
                 zoom={viewport.zoom}
                 onMouseEnter={handleNodeMouseEnter}
                 onMouseLeave={handleNodeMouseLeave}
@@ -2370,6 +2375,14 @@ export default function App() {
         canRedo={canRedo}
         canvasTheme={canvasTheme}
       />
+
+      {videoRemixWorkspaceNodeId && nodes.find(node => node.id === videoRemixWorkspaceNodeId) && (
+        <VideoRemixWorkspace
+          node={nodes.find(node => node.id === videoRemixWorkspaceNodeId)!}
+          canvasTheme={canvasTheme}
+          onClose={() => setVideoRemixWorkspaceNodeId(null)}
+        />
+      )}
 
       {/* Canvas navigation controls */}
       {!storyboardGenerator.isModalOpen && !isTikTokModalOpen && (

@@ -8,6 +8,7 @@
 import { useCallback, useState } from 'react';
 import { NodeData, NodeType, NodeStatus, Viewport } from '../types';
 import { DEFAULT_NODE_WIDTH, paneToCanvas } from '@/shared/canvasCoords.js';
+import { createVideoRemixState } from '@/shared/videoRemix.js';
 
 export const useNodeManagement = () => {
     // ============================================================================
@@ -71,6 +72,11 @@ export const useNodeManagement = () => {
             newNode.productSceneVideoAspectRatio = '9:16';
             newNode.productSceneVideoDuration = 10;
             newNode.productSceneVideoGenerateAudio = true;
+        }
+
+        if (type === NodeType.VIDEO_REMIX) {
+            newNode.title = 'Video Remix';
+            newNode.videoRemix = createVideoRemixState({ remixId: newNode.id });
         }
 
         setNodes(prev => [...prev, newNode]);
@@ -193,6 +199,11 @@ export const useNodeManagement = () => {
                     newNode.productSceneVideoAspectRatio = '9:16';
                     newNode.productSceneVideoDuration = 10;
                     newNode.productSceneVideoGenerateAudio = true;
+                }
+
+                if (type === NodeType.VIDEO_REMIX) {
+                    newNode.title = 'Video Remix';
+                    newNode.videoRemix = createVideoRemixState({ remixId: newNode.id });
                 }
 
                 setNodes(prev => [...prev, newNode]);

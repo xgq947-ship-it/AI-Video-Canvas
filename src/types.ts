@@ -1,4 +1,6 @@
 
+import type { VideoRemixState } from '../shared/videoRemix.js';
+
 export enum NodeType {
   TEXT = 'Text',
   IMAGE = 'Image',
@@ -9,6 +11,7 @@ export enum NodeType {
   STORYBOARD = 'Storyboard Manager',
   CAMERA_ANGLE = 'Camera Angle',
   PRODUCT_SCENE_REPLACE = 'Product Scene Replace',
+  VIDEO_REMIX = 'Video Remix',
   // Local open-source model nodes
   // AI 漫剧 0-1 生产节点（取值需与 shared/manifest.js 的 MANGA_NODE_TYPES 一致）
   SFX = 'SFX',            // 音效
@@ -201,6 +204,9 @@ export interface NodeData {
   productSceneBatchJobId?: string;
   productSceneBatchVersion?: number;
   productSceneLayoutRowStep?: number;
+
+  // Video Remix 子工作流容器。完整状态随项目节点一起持久化。
+  videoRemix?: VideoRemixState;
 
   // ==========================================================================
   // AI 漫剧生产节点字段（配音/音效/BGM/字幕/成片）

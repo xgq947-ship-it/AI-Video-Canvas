@@ -16,6 +16,7 @@ import { ChangeAnglePanel } from './ChangeAnglePanel';
 import { NodeHoverToolbar, NodeHoverToolbarAction } from './NodeHoverToolbar';
 import type { NodeReference } from '../../utils/nodeReferences.js';
 import { ProductSceneReplaceNode } from './ProductSceneReplaceNode';
+import { VideoRemixNode } from '../../features/video-remix/VideoRemixNode';
 
 interface CanvasNodeProps {
   workflowId?: string;
@@ -46,6 +47,7 @@ interface CanvasNodeProps {
   onChangeAngleGenerate?: (nodeId: string) => void;
   onExtractLastFrame?: (nodeId: string) => void;
   onAutoSubtitle?: (nodeId: string) => void;
+  onOpenVideoRemix?: (nodeId: string) => void;
   zoom: number;
   // 悬停回调带上 nodeId，调用方才能传稳定的引用（否则每次 render 都是新箭头函数，
   // React.memo 会全部失效）。
@@ -65,6 +67,7 @@ const NODE_TYPE_LABELS: Record<NodeType, string> = {
   [NodeType.STORYBOARD]: '分镜管理',
   [NodeType.CAMERA_ANGLE]: '镜头角度',
   [NodeType.PRODUCT_SCENE_REPLACE]: '产品短视频生成',
+  [NodeType.VIDEO_REMIX]: '视频复刻',
   [NodeType.SFX]: '音效',
   [NodeType.BGM]: '背景音乐',
   [NodeType.SUBTITLE]: '字幕',
@@ -98,6 +101,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   onChangeAngleGenerate,
   onExtractLastFrame,
   onAutoSubtitle,
+  onOpenVideoRemix,
   zoom,
   onMouseEnter,
   onMouseLeave,
@@ -242,6 +246,21 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   // ============================================================================
   // RENDER
   // ============================================================================
+
+  // 产品场景替换使用独立的双图角色与尺寸参数界面。
+  if (data.type === NodeType.VIDEO_REMIX) {
+    return (
+      <VideoRemixNode
+        data={data}
+        selected={selected}
+        canvasTheme={canvasTheme}
+        onNodePointerDown={onNodePointerDown}
+        onContextMenu={onContextMenu}
+        onConnectorDown={onConnectorDown}
+        onOpenWorkspace={onOpenVideoRemix}
+      />
+    );
+  }
 
   // 产品场景替换使用独立的双图角色与尺寸参数界面。
   if (data.type === NodeType.PRODUCT_SCENE_REPLACE) {

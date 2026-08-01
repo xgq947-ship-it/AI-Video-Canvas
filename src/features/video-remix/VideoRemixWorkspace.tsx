@@ -372,7 +372,9 @@ const SourceWorkspace: React.FC<{
   dark: boolean;
 }> = ({ node, state, summary, workflowId, onUpdateNode, onSelectShots, dark }) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const [urlInput, setUrlInput] = React.useState('');
+  const [urlInput, setUrlInput] = React.useState(
+    state.source?.sourceType === 'url' ? state.source.sourceUrl || '' : ''
+  );
   const [sceneThreshold, setSceneThreshold] = React.useState(0.3);
   const [busy, setBusy] = React.useState<'local' | 'url' | 'preprocess' | null>(null);
   const [localError, setLocalError] = React.useState('');
@@ -381,6 +383,12 @@ const SourceWorkspace: React.FC<{
     : localError
       || state.errors.find(item => ['source', 'preprocessing'].includes(item.scope))?.message
       || '';
+
+  React.useEffect(() => {
+    setUrlInput(
+      state.source?.sourceType === 'url' ? state.source.sourceUrl || '' : ''
+    );
+  }, [state.source?.sourceType, state.source?.sourceUrl]);
 
   const storeFailure = React.useCallback((error: unknown) => {
     const message = error instanceof Error ? error.message : '参考视频处理失败';
@@ -672,6 +680,16 @@ const SourceWorkspace: React.FC<{
                   dark={dark}
                 />
               </dl>
+              {state.source.sourceUrl && (
+                <div
+                  title={state.source.sourceUrl}
+                  className={`mt-4 break-all rounded-xl px-3 py-2 text-[10px] leading-4 ${
+                    dark ? 'bg-black/25 text-neutral-500' : 'bg-neutral-50 text-neutral-500'
+                  }`}
+                >
+                  来源 URL：{state.source.sourceUrl}
+                </div>
+              )}
             </div>
           ) : (
             <div className={`mt-4 rounded-xl border border-dashed px-4 py-8 text-center text-xs ${

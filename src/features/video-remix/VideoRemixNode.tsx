@@ -33,9 +33,10 @@ const STAGE_LABELS: Record<string, string> = {
 
 const formatDuration = (seconds: number) => {
   const value = Math.max(0, Number(seconds) || 0);
-  const minutes = Math.floor(value / 60);
-  const remainder = Math.floor(value % 60);
-  return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+  const totalTenths = Math.round(value * 10);
+  const minutes = Math.floor(totalTenths / 600);
+  const remainder = (totalTenths % 600) / 10;
+  return `${String(minutes).padStart(2, '0')}:${remainder.toFixed(1).padStart(4, '0')}`;
 };
 
 export const VIDEO_REMIX_NODE_WIDTH = 420;
@@ -50,7 +51,9 @@ export const VideoRemixNode: React.FC<VideoRemixNodeProps> = ({
   onConnectorDown,
   onOpenWorkspace,
 }) => {
-  const state = data.videoRemix || createVideoRemixState({ remixId: data.id });
+  const state = createVideoRemixState(
+    data.videoRemix || { remixId: data.id }
+  );
   const summary = summarizeVideoRemixState(state);
   const isDark = canvasTheme === 'dark';
   const previewUrl = state.source?.previewUrl || state.source?.localUrl;
@@ -61,6 +64,11 @@ export const VideoRemixNode: React.FC<VideoRemixNodeProps> = ({
     'videos_generating',
     'rendering',
   ].includes(state.stage);
+  const stageLabel = state.stage === 'keyframes_ready' && state.keyframeReview.confirmed
+    ? '关键帧已确认'
+    : state.stage === 'videos_ready' && state.videoReview.confirmed
+      ? '镜头视频已确认'
+      : STAGE_LABELS[state.stage] || state.stage;
 
   return (
     <div
@@ -111,7 +119,7 @@ export const VideoRemixNode: React.FC<VideoRemixNodeProps> = ({
               : isDark ? 'bg-white/6 text-neutral-300' : 'bg-neutral-100 text-neutral-600'
           }`}>
             {isBusy ? <Loader2 size={11} className="animate-spin" /> : state.stage === 'completed' ? <Check size={11} /> : null}
-            {STAGE_LABELS[state.stage] || state.stage}
+            {stageLabel}
           </div>
         </div>
 

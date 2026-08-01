@@ -20,15 +20,21 @@ const badManifest = {
 
 test('同一项目只允许一个进行中的渲染任务（单项目锁）', () => {
   _reset();
-  const r1 = createJob({ manifest: badManifest, libraryDir, rendersDir });
+  const r1 = createJob({
+    manifest: { ...badManifest, inputHash: 'timeline-hash-1' },
+    libraryDir,
+    rendersDir,
+  });
   assert.ok(r1.job, '首个任务应创建成功');
   assert.equal(r1.job.status, 'queued');
+  assert.equal(r1.job.inputHash, 'timeline-hash-1');
 
   // 同步再次提交（此时首个任务仍为 queued）→ 应 409
   const r2 = createJob({ manifest: badManifest, libraryDir, rendersDir });
   assert.equal(r2.code, 409);
   assert.ok(r2.existing);
   assert.equal(r2.existing.jobId, r1.job.jobId);
+  assert.equal(r2.existing.inputHash, 'timeline-hash-1');
 });
 
 test('不同项目可并行创建任务', () => {

@@ -63,6 +63,7 @@ import {
   updateVideoRemixShotTimeline,
 } from './videoRemixService';
 import { VideoRemixAssetsWorkspace } from './VideoRemixAssetsWorkspace';
+import { VideoRemixFinalWorkspace } from './VideoRemixFinalWorkspace';
 import { VideoRemixKeyframesWorkspace } from './VideoRemixKeyframesWorkspace';
 import { VideoRemixPromptsWorkspace } from './VideoRemixPromptsWorkspace';
 import { VideoRemixVideosWorkspace } from './VideoRemixVideosWorkspace';
@@ -72,6 +73,15 @@ interface VideoRemixWorkspaceProps {
   workflowId?: string;
   canvasTheme?: 'dark' | 'light';
   onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
+  onFinalOutput: (output: {
+    nodeId: string;
+    url: string;
+    duration: number;
+    width: number;
+    height: number;
+    fps: number;
+    aspectRatio: string;
+  }) => void;
   onClose: () => void;
 }
 
@@ -90,9 +100,15 @@ export const VideoRemixWorkspace: React.FC<VideoRemixWorkspaceProps> = ({
   workflowId,
   canvasTheme = 'dark',
   onUpdateNode,
+  onFinalOutput,
   onClose,
 }) => {
-  const state = node.videoRemix || createVideoRemixState({ remixId: node.id });
+  // Keep schema-v1 projects created before later phases readable: the shared
+  // factory supplies newly introduced defaults without changing persisted
+  // analysis or generation data.
+  const state = createVideoRemixState(
+    node.videoRemix || { remixId: node.id }
+  );
   const [activeTab, setActiveTab] = React.useState<VideoRemixWorkspaceTab>(
     workspaceTabForStage(state.stage)
   );
@@ -198,6 +214,7 @@ export const VideoRemixWorkspace: React.FC<VideoRemixWorkspaceProps> = ({
               node={node}
               workflowId={workflowId}
               onUpdateNode={onUpdateNode}
+              onFinalOutput={onFinalOutput}
               onSelectTab={setActiveTab}
             />
           </div>
@@ -215,8 +232,27 @@ const WorkspaceContent: React.FC<{
   node: NodeData;
   workflowId?: string;
   onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
+  onFinalOutput: (output: {
+    nodeId: string;
+    url: string;
+    duration: number;
+    width: number;
+    height: number;
+    fps: number;
+    aspectRatio: string;
+  }) => void;
   onSelectTab: (tab: VideoRemixWorkspaceTab) => void;
-}> = ({ activeTab, state, summary, dark, node, workflowId, onUpdateNode, onSelectTab }) => {
+}> = ({
+  activeTab,
+  state,
+  summary,
+  dark,
+  node,
+  workflowId,
+  onUpdateNode,
+  onFinalOutput,
+  onSelectTab,
+}) => {
   const title = VIDEO_REMIX_WORKSPACE_TABS.find(tab => tab.id === activeTab)?.label || 'Video Remix';
   const descriptions: Record<VideoRemixWorkspaceTab, string> = {
     source: '导入本地视频、画布视频或分享链接，并保留不可修改的原始文件。',
@@ -303,25 +339,15 @@ const WorkspaceContent: React.FC<{
           dark={dark}
         />
       ) : (
-        <div className={`mt-7 rounded-[26px] border p-7 ${
-          dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
-        }`}>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <SummaryCard icon={<Film size={18} />} label="镜头" value={summary.shots} dark={dark} />
-            <SummaryCard icon={<Users size={18} />} label="人物" value={summary.characters} dark={dark} />
-            <SummaryCard icon={<Images size={18} />} label="场景" value={summary.scenes} dark={dark} />
-            <SummaryCard icon={<Package size={18} />} label="道具" value={summary.props} dark={dark} />
-          </div>
-          <div className={`mt-6 flex min-h-[270px] items-center justify-center rounded-[20px] border border-dashed ${
-            dark ? 'border-white/10 bg-black/20 text-neutral-500' : 'border-neutral-200 bg-neutral-50 text-neutral-400'
-          }`}>
-            <div className="text-center">
-              <Check size={24} className="mx-auto mb-3 text-cyan-400" />
-              <div className="text-sm">工作台结构已就绪</div>
-              <div className="mt-1 text-xs">对应阶段的数据与操作将在后续 Phase 接入。</div>
-            </div>
-          </div>
-        </div>
+        <VideoRemixFinalWorkspace
+          node={node}
+          state={state}
+          workflowId={workflowId}
+          onUpdateNode={onUpdateNode}
+          onSelectVideos={() => onSelectTab('videos')}
+          onFinalOutput={onFinalOutput}
+          dark={dark}
+        />
       )}
     </>
   );

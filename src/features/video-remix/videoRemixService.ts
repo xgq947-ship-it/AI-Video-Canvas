@@ -3,6 +3,7 @@ import type {
   ShotAnalysis,
   VideoRemixGlobalAnalysis,
 } from '../../../shared/videoRemix.js';
+import type { ProjectManifest } from '../../../shared/manifest.js';
 import { generateImage, generateVideo } from '../../services/generationService';
 
 interface ReferenceResponse {
@@ -597,4 +598,234 @@ export async function findVideoRemixGeneratedVideo(
     && asset.id === generationNodeId
     && asset.url
   ))?.url || null;
+}
+
+export interface VideoRemixProjectAsset {
+  id: string;
+  type: 'image' | 'video' | 'audio';
+  url: string;
+  name?: string;
+  filename?: string;
+  createdAt?: string;
+}
+
+export async function listVideoRemixProjectAssets(
+  workflowId: string
+): Promise<VideoRemixProjectAsset[]> {
+  const response = await fetch(
+    `/api/projects/${encodeURIComponent(workflowId)}/assets`,
+    { cache: 'no-store' }
+  );
+  const payload = await response.json().catch(() => []) as (
+    AnalysisErrorPayload | VideoRemixProjectAsset[]
+  );
+  if (!response.ok) {
+    throw new VideoRemixRequestError(
+      !Array.isArray(payload) && payload.error
+        ? payload.error
+        : '无法读取当前项目素材'
+    );
+  }
+  return Array.isArray(payload) ? payload : [];
+}
+
+const readFileAsDataUrl = (file: File): Promise<string> => new Promise(
+  (resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('无法读取音频文件'));
+    reader.readAsDataURL(file);
+  }
+);
+
+export async function uploadVideoRemixBgm({
+  workflowId,
+  file,
+}: {
+  workflowId: string;
+  file: File;
+}): Promise<{ url: string; filename: string }> {
+  const supported = (
+    file.type.startsWith('audio/')
+    || /\.(mp3|wav|aac|ogg|m4a)$/i.test(file.name)
+  );
+  if (!supported) {
+    throw new VideoRemixRequestError('请选择 MP3、WAV、AAC、OGG 或 M4A 音频', {
+      code: 'UNSUPPORTED_AUDIO',
+      retryable: false,
+    });
+  }
+  if (file.size > 100 * 1024 * 1024) {
+    throw new VideoRemixRequestError('BGM 文件不能超过 100MB', {
+      code: 'AUDIO_TOO_LARGE',
+      retryable: false,
+    });
+  }
+  const dataUrl = await readFileAsDataUrl(file);
+  const response = await fetch('/api/audio/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      dataUrl,
+      filename: file.name,
+      subtype: 'bgm',
+      provider: 'import',
+      workflowId,
+    }),
+  });
+  const payload = await response.json().catch(() => ({})) as (
+    AnalysisErrorPayload & { url?: string; filename?: string }
+  );
+  if (!response.ok || !payload.url) {
+    throw new VideoRemixRequestError(
+      payload.error || `BGM 上传失败（HTTP ${response.status}）`,
+      payload
+    );
+  }
+  return {
+    url: payload.url,
+    filename: payload.filename || file.name,
+  };
+}
+
+export interface VideoRemixRenderJobResponse {
+  jobId: string;
+  projectId?: string;
+  inputHash?: string;
+  status: 'queued' | 'rendering' | 'success' | 'failed' | 'cancelled';
+  stage: string;
+  progress: number;
+  output?: string;
+  error?: string;
+  missing?: Array<{ kind: string; raw: string; reason: string }>;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+async function readRenderResponse(
+  response: Response,
+  fallback: string
+): Promise<VideoRemixRenderJobResponse> {
+  const payload = await response.json().catch(() => ({})) as (
+    AnalysisErrorPayload
+    & Partial<VideoRemixRenderJobResponse>
+    & { existing?: VideoRemixRenderJobResponse }
+  );
+  if (!response.ok) {
+    if (response.status === 409 && payload.existing?.jobId) {
+      return payload.existing;
+    }
+    const error = new VideoRemixRequestError(
+      payload.error || `${fallback}（HTTP ${response.status}）`,
+      {
+        ...payload,
+        retryable: response.status >= 500,
+      }
+    );
+    Object.assign(error, { missing: payload.missing });
+    throw error;
+  }
+  if (!payload.jobId) {
+    throw new VideoRemixRequestError(`${fallback}：响应缺少 jobId`);
+  }
+  return payload as VideoRemixRenderJobResponse;
+}
+
+export async function validateVideoRemixManifest(
+  manifest: ProjectManifest
+): Promise<{
+  valid: boolean;
+  errors: string[];
+  missing: Array<{ kind: string; raw: string; reason: string }>;
+}> {
+  const response = await fetch('/api/render/validate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ manifest }),
+  });
+  const payload = await response.json().catch(() => ({})) as {
+    valid?: boolean;
+    errors?: string[];
+    missing?: Array<{ kind: string; raw: string; reason: string }>;
+    error?: string;
+  };
+  if (!response.ok) {
+    throw new VideoRemixRequestError(
+      payload.error || `成片清单校验失败（HTTP ${response.status}）`
+    );
+  }
+  return {
+    valid: Boolean(payload.valid),
+    errors: payload.errors || [],
+    missing: payload.missing || [],
+  };
+}
+
+export async function startVideoRemixRender({
+  workflowId,
+  manifest,
+}: {
+  workflowId: string;
+  manifest: ProjectManifest;
+}): Promise<VideoRemixRenderJobResponse> {
+  const response = await fetch('/api/render/remotion', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workflowId, manifest }),
+  });
+  return readRenderResponse(response, '无法提交成片渲染');
+}
+
+export async function getVideoRemixRenderJob(
+  jobId: string
+): Promise<VideoRemixRenderJobResponse | null> {
+  const response = await fetch(
+    `/api/render/remotion/${encodeURIComponent(jobId)}`,
+    { cache: 'no-store' }
+  );
+  if (response.status === 404) return null;
+  return readRenderResponse(response, '无法读取渲染任务');
+}
+
+export async function cancelVideoRemixRender(
+  jobId: string
+): Promise<VideoRemixRenderJobResponse> {
+  const response = await fetch(
+    `/api/render/remotion/${encodeURIComponent(jobId)}/cancel`,
+    { method: 'POST' }
+  );
+  return readRenderResponse(response, '无法取消渲染任务');
+}
+
+export async function revealVideoRemixRender(
+  jobId: string,
+  workflowId?: string
+): Promise<void> {
+  const response = await fetch(
+    `/api/render/remotion/${encodeURIComponent(jobId)}/reveal`,
+    { method: 'POST' }
+  );
+  const payload = await response.json().catch(() => ({})) as AnalysisErrorPayload;
+  // Render jobs are intentionally in-memory. After an app restart the output
+  // remains in the project, but the old job id can no longer reveal it. Fall
+  // back to the existing project-folder action so a recovered result stays
+  // discoverable without weakening path validation.
+  if (!response.ok && response.status === 404 && workflowId) {
+    const fallback = await fetch(
+      `/api/workflows/${encodeURIComponent(workflowId)}/reveal-assets`,
+      { method: 'POST' }
+    );
+    if (fallback.ok) return;
+    const fallbackPayload = await fallback.json().catch(() => ({})) as AnalysisErrorPayload;
+    throw new VideoRemixRequestError(
+      fallbackPayload.error || payload.error || '无法打开成片所在项目目录',
+      fallbackPayload
+    );
+  }
+  if (!response.ok) {
+    throw new VideoRemixRequestError(
+      payload.error || '无法在文件管理器中显示成片',
+      payload
+    );
+  }
 }

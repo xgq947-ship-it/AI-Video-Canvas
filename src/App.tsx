@@ -72,6 +72,7 @@ import { CanvasMinimap } from './components/canvas/CanvasMinimap';
 import { CanvasZoomControl } from './components/canvas/CanvasZoomControl';
 import { collectNodeReferences, type NodeReference } from './utils/nodeReferences.js';
 import { upsertProductSceneResultNode } from './utils/productSceneResult.js';
+import { upsertVideoRemixFinalNode } from './utils/videoRemixFinalNode.js';
 import { getImageGenerationProvider } from '@/shared/generationProviders.js';
 import { assignProductSceneInputOnConnect } from './utils/productSceneInputMapping.js';
 import { VideoRemixWorkspace } from './features/video-remix/VideoRemixWorkspace';
@@ -1630,6 +1631,26 @@ export default function App() {
     updateNode(id, updates);
   }, [updateNode]);
 
+  const handleVideoRemixFinalOutput = React.useCallback((
+    remixNodeId: string,
+    output: {
+      nodeId: string;
+      url: string;
+      duration: number;
+      width: number;
+      height: number;
+      fps: number;
+      aspectRatio: string;
+    }
+  ) => {
+    setNodes(previous => upsertVideoRemixFinalNode(
+      previous,
+      remixNodeId,
+      output
+    ));
+    setSelectedNodeIds([output.nodeId]);
+  }, [setNodes, setSelectedNodeIds]);
+
   const handleUseCanvasVideoAsReference = React.useCallback(async () => {
     if (!canvasEditLock.guard()) return;
     const sourceNode = nodes.find(node => node.id === contextMenu.sourceNodeId);
@@ -2466,6 +2487,10 @@ export default function App() {
           workflowId={workflowId || undefined}
           canvasTheme={canvasTheme}
           onUpdateNode={updateNodeWithSync}
+          onFinalOutput={output => handleVideoRemixFinalOutput(
+            videoRemixWorkspaceNodeId,
+            output
+          )}
           onClose={() => setVideoRemixWorkspaceNodeId(null)}
         />
       )}

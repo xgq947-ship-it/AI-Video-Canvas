@@ -9,7 +9,7 @@ export interface CompositionConfig {
   fps: number;
 }
 
-/** 视频镜头：start/end 是「源素材」裁剪入点/出点（秒），按 order 顺序硬切拼接。 */
+/** 视频镜头：start/end 是「源素材」裁剪入点/出点（秒），按 order 顺序拼接。 */
 export interface Shot {
   id: string;
   name?: string;
@@ -18,6 +18,8 @@ export interface Shot {
   end: number;
   volume?: number;
   order?: number;
+  /** 当前镜头结束后进入下一镜头的转场。第一版支持硬切与淡出/淡入。 */
+  transition?: 'hard_cut' | 'fade';
 }
 
 export type AudioTrackType = 'dialogue' | 'sfx' | 'bgm';

@@ -76,6 +76,10 @@ test('validateManifestShape 捕获非法结构', () => {
     subtitles: [],
   };
   assert.equal(validateManifestShape(good).valid, true);
+  assert.equal(validateManifestShape({
+    ...good,
+    shots: [{ ...good.shots[0], transition: 'zoom' }],
+  }).valid, false);
 });
 
 test('collectAssetRefs 收集镜头与音轨素材', () => {
@@ -94,7 +98,7 @@ test('buildManifestFromNodes 从节点图组装清单', () => {
   const nodes = [
     { id: 'r', type: T.RENDER, title: '成片', parentIds: ['v1', 'v2', 'd1', 'bgm1', 'sub1'] },
     { id: 'v2', type: T.VIDEO, resultUrl: '/library/videos/s2.mp4', trimStart: 0, trimEnd: 5, order: 2, x: 200 },
-    { id: 'v1', type: T.VIDEO, resultUrl: '/library/videos/s1.mp4', trimStart: 0, trimEnd: 4, order: 1, x: 100 },
+    { id: 'v1', type: T.VIDEO, resultUrl: '/library/videos/s1.mp4', trimStart: 0, trimEnd: 4, order: 1, transition: 'fade', x: 100 },
     { id: 'd1', type: T.AUDIO, mediaUrl: '/library/audio/d.mp3', timelineStart: 1, durationSec: 3, speaker: '林默' },
     { id: 'bgm1', type: T.BGM, mediaUrl: '/library/audio/bgm.mp3', timelineStart: 0, timelineEnd: 9 },
     { id: 'sub1', type: T.SUBTITLE, subtitleText: '你好', timelineStart: 1, timelineEnd: 4 },
@@ -105,6 +109,7 @@ test('buildManifestFromNodes 从节点图组装清单', () => {
   assert.equal(m.shots.length, 2);
   assert.equal(m.shots[0].file, '/library/videos/s1.mp4'); // order=1 在前
   assert.equal(m.shots[0].order, 1);
+  assert.equal(m.shots[0].transition, 'fade');
   assert.equal(m.shots[1].order, 2);
 
   assert.equal(m.audioTracks.length, 2);

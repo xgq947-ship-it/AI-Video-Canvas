@@ -424,6 +424,47 @@ export interface TimelineShot {
   end: number;
   transition: 'hard_cut' | 'fade';
   videoUrl?: string;
+  sourceDuration?: number;
+  source?: 'generated' | 'replacement';
+  generatedInputHash?: string;
+}
+
+export interface VideoRemixSubtitle {
+  id: string;
+  shotId: string;
+  characterId?: string;
+  text: string;
+  start: number;
+  end: number;
+}
+
+export interface VideoRemixContinuityCut {
+  fromShotId: string;
+  toShotId: string;
+  score: number;
+  comparedFields: number;
+  warnings: string[];
+}
+
+export interface VideoRemixContinuityReport {
+  score: number;
+  checkedCuts: number;
+  warnings: string[];
+  cuts: VideoRemixContinuityCut[];
+  checkedAt: string;
+}
+
+export interface VideoRemixRenderJob {
+  jobId: string;
+  inputHash: string;
+  status: 'queued' | 'rendering' | 'success' | 'failed' | 'cancelled';
+  stage: string;
+  progress: number;
+  output?: string;
+  error?: string;
+  missing?: Array<{ kind: string; raw: string; reason: string }>;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface VideoRemixLocks {
@@ -496,9 +537,34 @@ export interface VideoRemixState {
   keyframes: KeyframeResult[];
   generatedVideos: GeneratedShotVideo[];
   timeline: TimelineShot[];
-  bgm: { mode: 'none' | 'original' | 'upload'; url?: string };
-  subtitles: { enabled: boolean; style: string };
-  output: { url: string; duration: number } | null;
+  timelineReview: {
+    prepared: boolean;
+    updatedAt?: string;
+  };
+  continuityReport: VideoRemixContinuityReport | null;
+  bgm: {
+    mode: 'none' | 'original' | 'upload';
+    url?: string;
+    name?: string;
+    volume?: number;
+    loop?: boolean;
+    fadeIn?: number;
+    fadeOut?: number;
+  };
+  subtitles: {
+    enabled: boolean;
+    style: 'default' | 'short-video';
+    items: VideoRemixSubtitle[];
+    sourceHash?: string;
+  };
+  renderJob: VideoRemixRenderJob | null;
+  output: {
+    url: string;
+    duration: number;
+    nodeId?: string;
+    manifestHash?: string;
+    renderedAt?: string;
+  } | null;
   locks: VideoRemixLocks;
   errors: Array<{ scope: string; id?: string; message: string; retryable: boolean; code?: string }>;
   createdAt: string;
@@ -884,4 +950,98 @@ export function recoverStaleVideoRemixVideos(
   state: unknown,
   now?: number,
   staleAfterMs?: number
+): VideoRemixState;
+export function videoRemixOutputNodeId(remixNodeId: string): string;
+export function checkVideoRemixContinuity(
+  state: unknown
+): VideoRemixContinuityReport;
+export function buildVideoRemixSubtitles(
+  state: unknown
+): VideoRemixSubtitle[];
+export function prepareVideoRemixTimeline(state: unknown): VideoRemixState;
+export function moveVideoRemixTimelineShot(
+  state: unknown,
+  shotId: string,
+  direction: -1 | 1
+): VideoRemixState;
+export function removeVideoRemixTimelineShot(
+  state: unknown,
+  shotId: string
+): VideoRemixState;
+export function updateVideoRemixTimelineShot(
+  state: unknown,
+  shotId: string,
+  updates: Partial<Pick<TimelineShot, 'start' | 'end' | 'transition'>>
+): VideoRemixState;
+export function replaceVideoRemixTimelineShot(
+  state: unknown,
+  shotId: string,
+  replacement: {
+    videoUrl: string;
+    sourceDuration: number;
+    name?: string;
+  }
+): VideoRemixState;
+export function restoreVideoRemixTimelineShot(
+  state: unknown,
+  shotId: string
+): VideoRemixState;
+export function setVideoRemixBgm(
+  state: unknown,
+  bgm: Partial<VideoRemixState['bgm']> & {
+    mode: VideoRemixState['bgm']['mode'];
+  }
+): VideoRemixState;
+export function setVideoRemixSubtitles(
+  state: unknown,
+  settings: Partial<Pick<
+    VideoRemixState['subtitles'],
+    'enabled' | 'style'
+  >>
+): VideoRemixState;
+export function buildVideoRemixManifest(
+  state: unknown,
+  options?: {
+    projectId?: string;
+    title?: string;
+  }
+): import('./manifest.js').ProjectManifest & {
+  inputHash: string;
+  durationSec: number;
+};
+export function beginVideoRemixRender(
+  state: unknown,
+  job: {
+    jobId: string;
+    inputHash: string;
+    status?: VideoRemixRenderJob['status'];
+    stage?: string;
+    progress?: number;
+    createdAt?: string;
+    updatedAt?: string;
+  }
+): VideoRemixState;
+export function updateVideoRemixRenderJob(
+  state: unknown,
+  job: Partial<VideoRemixRenderJob> & { jobId: string }
+): VideoRemixState;
+export function completeVideoRemixRender(
+  state: unknown,
+  result: {
+    jobId: string;
+    inputHash: string;
+    url: string;
+    duration: number;
+    nodeId?: string;
+  }
+): VideoRemixState;
+export function setVideoRemixRenderError(
+  state: unknown,
+  message: string,
+  options?: {
+    jobId?: string;
+    code?: string;
+    status?: 'failed' | 'cancelled';
+    missing?: Array<{ kind: string; raw: string; reason: string }>;
+  }
 ): VideoRemixState;

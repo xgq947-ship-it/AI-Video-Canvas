@@ -19,7 +19,7 @@ import {
 /**
  * 通用漫剧成片合成 —— 完全由 project-manifest 驱动，无任何单片硬编码。
  *
- * 画面：镜头按 order 顺序首尾硬切拼接，objectFit: cover（等比铺满不拉伸）。
+ * 画面：镜头按 order 顺序拼接，支持 hard_cut 与 fade，objectFit: cover（等比铺满不拉伸）。
  * 声音：dialogue / sfx / bgm 三类音轨按绝对时间轴摆放，支持淡入淡出、循环、
  *       以及 bgm 在对白期间自动闪避(ducking)。
  * 字幕：按绝对时间轴摆放，通用中文样式。
@@ -31,27 +31,89 @@ export type MangaProps = {
 };
 
 const DUCK_FACTOR = 0.4; // 对白期间 BGM 压低到 40%
+const FADE_DURATION_SEC = 0.28;
+
+const ShotVideo: React.FC<{
+  file: string;
+  trimBeforeFrames: number;
+  durationInFrames: number;
+  volume: number;
+  fadeIn: boolean;
+  fadeOut: boolean;
+}> = ({
+  file,
+  trimBeforeFrames,
+  durationInFrames,
+  volume,
+  fadeIn,
+  fadeOut,
+}) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const fadeFrames = Math.max(
+    1,
+    Math.min(Math.round(FADE_DURATION_SEC * fps), Math.floor(durationInFrames / 2))
+  );
+  let opacity = 1;
+  if (fadeIn) {
+    opacity *= interpolate(frame, [0, fadeFrames], [0, 1], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    });
+  }
+  if (fadeOut) {
+    opacity *= interpolate(
+      frame,
+      [Math.max(0, durationInFrames - fadeFrames), durationInFrames],
+      [1, 0],
+      {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+      }
+    );
+  }
+  return (
+    <OffthreadVideo
+      src={staticFile(normalizeAssetPath(file))}
+      trimBefore={trimBeforeFrames}
+      volume={volume > 0 ? volume : 0}
+      muted={volume <= 0}
+      style={{
+        width: "100%",
+        height: "100%",
+        objectFit: "cover",
+        opacity,
+      }}
+    />
+  );
+};
 
 const VideoTrack: React.FC<{ manifest: ProjectManifest }> = ({ manifest }) => {
   const { fps } = useVideoConfig();
   const secToFrames = (s: number) => Math.round(s * fps);
+  const layouts = layoutShots(manifest.shots);
   return (
     <>
-      {layoutShots(manifest.shots).map((L) => (
-        <Sequence
-          key={L.shot.id || L.index}
-          from={secToFrames(L.fromSec)}
-          durationInFrames={Math.max(1, secToFrames(L.durationSec))}
-        >
-          <OffthreadVideo
-            src={staticFile(normalizeAssetPath(L.shot.file))}
-            trimBefore={secToFrames(L.trimBeforeSec)}
-            volume={L.shot.volume && L.shot.volume > 0 ? L.shot.volume : 0}
-            muted={!L.shot.volume || L.shot.volume <= 0}
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-          />
-        </Sequence>
-      ))}
+      {layouts.map((L) => {
+        const durationInFrames = Math.max(1, secToFrames(L.durationSec));
+        const previous = L.index > 0 ? layouts[L.index - 1].shot : null;
+        return (
+          <Sequence
+            key={L.shot.id || L.index}
+            from={secToFrames(L.fromSec)}
+            durationInFrames={durationInFrames}
+          >
+            <ShotVideo
+              file={L.shot.file}
+              trimBeforeFrames={secToFrames(L.trimBeforeSec)}
+              durationInFrames={durationInFrames}
+              volume={L.shot.volume && L.shot.volume > 0 ? L.shot.volume : 0}
+              fadeIn={previous?.transition === "fade"}
+              fadeOut={L.shot.transition === "fade" && L.index < layouts.length - 1}
+            />
+          </Sequence>
+        );
+      })}
     </>
   );
 };
@@ -98,12 +160,18 @@ const AudioLayer: React.FC<{ track: AudioTrack; manifest: ProjectManifest; fps: 
   );
 };
 
-const SubtitleView: React.FC<{ text: string; durationInFrames: number }> = ({
+const SubtitleView: React.FC<{
+  text: string;
+  durationInFrames: number;
+  styleName?: string;
+}> = ({
   text,
   durationInFrames,
+  styleName,
 }) => {
   const frame = useCurrentFrame();
   const { height } = useVideoConfig();
+  const shortVideo = styleName === "short-video";
   const opacity = interpolate(
     frame,
     [0, 4, Math.max(4, durationInFrames - 4), durationInFrames],
@@ -115,7 +183,7 @@ const SubtitleView: React.FC<{ text: string; durationInFrames: number }> = ({
       style={{
         justifyContent: "flex-end",
         alignItems: "center",
-        paddingBottom: Math.round(height * 0.09),
+        paddingBottom: Math.round(height * (shortVideo ? 0.13 : 0.09)),
         pointerEvents: "none",
       }}
     >
@@ -123,8 +191,11 @@ const SubtitleView: React.FC<{ text: string; durationInFrames: number }> = ({
         style={{
           color: "#f5f5f5",
           fontFamily: '"PingFang SC", "Microsoft YaHei", sans-serif',
-          fontSize: Math.round(Math.max(30, Math.min(68, height * 0.038))),
-          fontWeight: 700,
+          fontSize: Math.round(Math.max(
+            shortVideo ? 36 : 30,
+            Math.min(shortVideo ? 82 : 68, height * (shortVideo ? 0.048 : 0.038))
+          )),
+          fontWeight: shortVideo ? 800 : 700,
           letterSpacing: 1,
           lineHeight: 1.28,
           WebkitTextStroke: `${Math.max(1.5, height * 0.0015)}px rgba(0,0,0,0.9)`,
@@ -170,7 +241,11 @@ export const MangaComposition: React.FC<MangaProps> = ({ manifest }) => {
         const dur = Math.max(1, secToFrames(sub.end) - from);
         return (
           <Sequence key={sub.id} from={from} durationInFrames={dur}>
-            <SubtitleView text={sub.text} durationInFrames={dur} />
+            <SubtitleView
+              text={sub.text}
+              durationInFrames={dur}
+              styleName={manifest.output?.subtitleStyle}
+            />
           </Sequence>
         );
       })}

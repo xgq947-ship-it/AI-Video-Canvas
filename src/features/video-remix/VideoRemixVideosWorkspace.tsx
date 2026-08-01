@@ -755,8 +755,8 @@ const VideoCard: React.FC<{
             <InfoBlock
               dark={dark}
               label="输入"
-              value={video.referenceImages.length > 0
-                ? `${video.referenceImages.length} 张多参考`
+              value={(video.referenceImages?.length || 0) > 0
+                ? `${video.referenceImages!.length} 张多参考`
                 : video.lastFrameBase64 ? 'Start + End' : 'Start'}
             />
             <InfoBlock

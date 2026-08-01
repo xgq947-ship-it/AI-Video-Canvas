@@ -75,6 +75,24 @@ const DEFAULT_VIDEO_REVIEW = Object.freeze({
   confirmed: false,
 });
 
+const DEFAULT_TIMELINE_REVIEW = Object.freeze({
+  prepared: false,
+});
+
+const DEFAULT_BGM = Object.freeze({
+  mode: 'none',
+  volume: 0.15,
+  loop: true,
+  fadeIn: 1,
+  fadeOut: 1,
+});
+
+const DEFAULT_SUBTITLES = Object.freeze({
+  enabled: false,
+  style: 'default',
+  items: Object.freeze([]),
+});
+
 export const VIDEO_REMIX_KEYFRAME_POSITIONS = Object.freeze({
   simple: Object.freeze(['start']),
   medium: Object.freeze(['start', 'end']),
@@ -300,8 +318,11 @@ export function createVideoRemixState(overrides = {}) {
     keyframes: [],
     generatedVideos: [],
     timeline: [],
-    bgm: { mode: 'none' },
-    subtitles: { enabled: false, style: 'default' },
+    timelineReview: { ...DEFAULT_TIMELINE_REVIEW },
+    continuityReport: null,
+    bgm: { ...DEFAULT_BGM },
+    subtitles: { ...DEFAULT_SUBTITLES, items: [] },
+    renderJob: null,
     output: null,
     locks: { ...HIGH_FIDELITY_LOCKS },
     errors: [],
@@ -336,9 +357,21 @@ export function createVideoRemixState(overrides = {}) {
     ...DEFAULT_VIDEO_REVIEW,
     ...(overrides.videoReview || {}),
   };
+  state.timelineReview = {
+    ...DEFAULT_TIMELINE_REVIEW,
+    ...(overrides.timelineReview || {}),
+  };
+  state.continuityReport = overrides.continuityReport || null;
   state.locks = { ...HIGH_FIDELITY_LOCKS, ...(overrides.locks || {}) };
-  state.bgm = { mode: 'none', ...(overrides.bgm || {}) };
-  state.subtitles = { enabled: false, style: 'default', ...(overrides.subtitles || {}) };
+  state.bgm = { ...DEFAULT_BGM, ...(overrides.bgm || {}) };
+  state.subtitles = {
+    ...DEFAULT_SUBTITLES,
+    ...(overrides.subtitles || {}),
+    items: Array.isArray(overrides.subtitles?.items)
+      ? overrides.subtitles.items
+      : [],
+  };
+  state.renderJob = overrides.renderJob || null;
   return state;
 }
 
@@ -471,6 +504,11 @@ export function completeVideoRemixPreprocessing(state, {
       end: shot.end,
       transition: shot.transition === 'fade' ? 'fade' : 'hard_cut',
     })),
+    timelineReview: { ...DEFAULT_TIMELINE_REVIEW },
+    continuityReport: null,
+    bgm: { ...DEFAULT_BGM },
+    subtitles: { ...DEFAULT_SUBTITLES, items: [] },
+    renderJob: null,
     output: null,
     errors: current.errors.filter(item => item?.scope !== 'preprocessing'),
     updatedAt: new Date().toISOString(),
@@ -640,6 +678,7 @@ export function applyVideoRemixGlobalAnalysis(state, result) {
       const { videoUrl, ...rest } = item;
       return rest;
     }),
+    renderJob: null,
     output: null,
     analysisRun: {
       ...DEFAULT_ANALYSIS_RUN,
@@ -766,6 +805,7 @@ export function applyVideoRemixShotAnalysis(state, analyzedShot) {
       const { videoUrl, ...rest } = item;
       return rest;
     }),
+    renderJob: null,
     output: null,
     analysisRun: {
       ...DEFAULT_ANALYSIS_RUN,
@@ -938,6 +978,7 @@ function withInvalidatedAssetDerivatives(current, updates) {
       const { videoUrl, ...rest } = item;
       return rest;
     }),
+    renderJob: null,
     output: null,
     updatedAt: new Date().toISOString(),
   };
@@ -1644,6 +1685,7 @@ function withInvalidatedPromptDerivatives(current, updates, targetModel) {
       const { videoUrl, ...rest } = item;
       return rest;
     }),
+    renderJob: null,
     output: null,
     updatedAt: new Date().toISOString(),
   };
@@ -2243,6 +2285,7 @@ function withInvalidatedKeyframeDerivatives(current, updates) {
       const { videoUrl, ...rest } = item;
       return rest;
     }),
+    renderJob: null,
     output: null,
     updatedAt: new Date().toISOString(),
   };
@@ -2442,6 +2485,7 @@ export function applyVideoRemixKeyframeResult(state, keyframeId, {
       const { videoUrl, ...rest } = item;
       return rest;
     }),
+    renderJob: null,
     output: null,
     updatedAt: now,
   };
@@ -2501,6 +2545,7 @@ export function setVideoRemixKeyframeError(state, keyframeId, message, {
       const { videoUrl, ...rest } = item;
       return rest;
     }),
+    renderJob: null,
     output: null,
     updatedAt: now,
   };
@@ -2943,6 +2988,7 @@ function withInvalidatedVideoDerivatives(current, updates) {
       updatedAt: new Date().toISOString(),
     },
     timeline: withoutTimelineVideoUrls(current.timeline),
+    renderJob: null,
     output: null,
     updatedAt: new Date().toISOString(),
   };
@@ -3196,6 +3242,7 @@ export function beginVideoRemixVideoCalibration(state, videoId) {
       item?.scope === 'video' && item?.id === id
     )),
     timeline: withoutTimelineVideoUrls(current.timeline),
+    renderJob: null,
     output: null,
     updatedAt: now,
   };
@@ -3262,6 +3309,7 @@ export function applyVideoRemixVideoResult(state, videoId, {
       item?.scope === 'video' && item?.id === id
     )),
     timeline: withoutTimelineVideoUrls(current.timeline),
+    renderJob: null,
     output: null,
     updatedAt: now,
   };
@@ -3319,6 +3367,7 @@ export function setVideoRemixVideoError(state, videoId, message, {
       },
     ],
     timeline: withoutTimelineVideoUrls(current.timeline),
+    renderJob: null,
     output: null,
     updatedAt: now,
   };
@@ -3498,4 +3547,755 @@ export function recoverStaleVideoRemixVideos(
     recovered = true;
   }
   return recovered ? finalizeVideoRemixVideoBatch(next) : current;
+}
+
+const VIDEO_REMIX_MIN_TIMELINE_DURATION = 0.08;
+
+const clampNumber = (value, minimum, maximum) => Math.min(
+  maximum,
+  Math.max(minimum, Number(value) || 0)
+);
+
+function orderedVideoRemixTimeline(state) {
+  return [...(state.timeline || [])].sort((left, right) => (
+    Number(left.order || 0) - Number(right.order || 0)
+  ));
+}
+
+function videoRemixTimelineDuration(timeline) {
+  return (timeline || []).reduce((total, item) => (
+    total + Math.max(0, Number(item.end) - Number(item.start))
+  ), 0);
+}
+
+function finalStateWithTimeline(current, timeline, updates = {}) {
+  const normalizedTimeline = (timeline || []).map((item, index) => ({
+    ...item,
+    order: index,
+  }));
+  const now = new Date().toISOString();
+  let next = {
+    ...current,
+    ...updates,
+    stage: current.videoReview?.confirmed ? 'videos_ready' : current.stage,
+    timeline: normalizedTimeline,
+    timelineReview: {
+      prepared: normalizedTimeline.length > 0,
+      updatedAt: now,
+    },
+    renderJob: null,
+    output: null,
+    errors: current.errors.filter(item => item?.scope !== 'render'),
+    updatedAt: now,
+  };
+  const subtitleItems = next.subtitles?.enabled
+    ? buildVideoRemixSubtitles(next)
+    : [];
+  next = {
+    ...next,
+    subtitles: {
+      ...DEFAULT_SUBTITLES,
+      ...(next.subtitles || {}),
+      items: subtitleItems,
+      sourceHash: promptValueHash({
+        timeline: normalizedTimeline,
+        dialogues: next.shots.map(shot => ({
+          shotId: shot.shotId,
+          dialogue: shot.audioBlueprint?.dialogue || [],
+        })),
+      }),
+    },
+  };
+  return {
+    ...next,
+    continuityReport: checkVideoRemixContinuity(next),
+  };
+}
+
+export function videoRemixOutputNodeId(remixNodeId) {
+  const safe = String(remixNodeId || '')
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 100);
+  return `video-remix-final-${safe || 'output'}`;
+}
+
+function normalizedContinuityValue(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+}
+
+function compareContinuityValue({
+  fromShotId,
+  toShotId,
+  label,
+  previous,
+  next,
+  result,
+}) {
+  const left = normalizedContinuityValue(previous);
+  const right = normalizedContinuityValue(next);
+  if (!left || !right) return;
+  result.comparedFields += 1;
+  if (left === right) {
+    result.matches += 1;
+    return;
+  }
+  result.warnings.push(
+    `${fromShotId} → ${toShotId}：${label}由“${String(previous)}”变为“${String(next)}”`
+  );
+}
+
+export function checkVideoRemixContinuity(state) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const shotsById = new Map(current.shots.map(shot => [shot.shotId, shot]));
+  const timeline = orderedVideoRemixTimeline(current);
+  const shotIds = timeline.length > 0
+    ? timeline.map(item => item.shotId)
+    : current.shots.map(shot => shot.shotId);
+  const cuts = [];
+  for (let index = 0; index < shotIds.length - 1; index += 1) {
+    const previousShot = shotsById.get(shotIds[index]);
+    const nextShot = shotsById.get(shotIds[index + 1]);
+    if (!previousShot || !nextShot) continue;
+    const previous = previousShot.endState;
+    const next = nextShot.startState;
+    const result = {
+      comparedFields: 0,
+      matches: 0,
+      warnings: [],
+    };
+    if (!previous || !next) {
+      result.warnings.push(
+        `${previousShot.shotId} → ${nextShot.shotId}：缺少结构化连续性状态，请人工查看尾帧与首帧`
+      );
+    } else {
+      for (const [key, label] of [
+        ['sceneId', '场景'],
+        ['sceneZone', '场景功能区'],
+        ['lighting', '光线'],
+        ['time', '时间'],
+      ]) {
+        compareContinuityValue({
+          fromShotId: previousShot.shotId,
+          toShotId: nextShot.shotId,
+          label,
+          previous: previous[key],
+          next: next[key],
+          result,
+        });
+      }
+      const characterIds = new Set([
+        ...Object.keys(previous.characterStates || {}),
+        ...Object.keys(next.characterStates || {}),
+      ]);
+      for (const characterId of characterIds) {
+        const left = previous.characterStates?.[characterId] || {};
+        const right = next.characterStates?.[characterId] || {};
+        for (const [key, label] of [
+          ['holding', '手持道具'],
+          ['position', '位置'],
+          ['direction', '朝向'],
+          ['emotion', '情绪'],
+          ['lookId', '服装造型'],
+        ]) {
+          compareContinuityValue({
+            fromShotId: previousShot.shotId,
+            toShotId: nextShot.shotId,
+            label: `${characterId} ${label}`,
+            previous: left[key],
+            next: right[key],
+            result,
+          });
+        }
+      }
+    }
+    const score = result.comparedFields > 0
+      ? Math.round((result.matches / result.comparedFields) * 1000) / 1000
+      : 0.5;
+    cuts.push({
+      fromShotId: previousShot.shotId,
+      toShotId: nextShot.shotId,
+      score,
+      comparedFields: result.comparedFields,
+      warnings: result.warnings,
+    });
+  }
+  const score = cuts.length > 0
+    ? Math.round(
+      (cuts.reduce((sum, cut) => sum + cut.score, 0) / cuts.length) * 1000
+    ) / 1000
+    : 1;
+  return {
+    score,
+    checkedCuts: cuts.length,
+    warnings: cuts.flatMap(cut => cut.warnings),
+    cuts,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+export function buildVideoRemixSubtitles(state) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const shotsById = new Map(current.shots.map(shot => [shot.shotId, shot]));
+  const output = [];
+  let cursor = 0;
+  for (const item of orderedVideoRemixTimeline(current)) {
+    const shot = shotsById.get(item.shotId);
+    const trimStart = Math.max(0, Number(item.start) || 0);
+    const trimEnd = Math.max(trimStart, Number(item.end) || trimStart);
+    if (shot) {
+      for (const [dialogueIndex, dialogue] of (
+        shot.audioBlueprint?.dialogue || []
+      ).entries()) {
+        const text = String(dialogue.text?.value || '').trim();
+        if (!text) continue;
+        const dialogueStart = Math.max(0, Number(dialogue.start) || 0);
+        const rawEnd = Number(dialogue.end);
+        const dialogueEnd = Number.isFinite(rawEnd)
+          ? Math.max(dialogueStart, rawEnd)
+          : Math.min(trimEnd, dialogueStart + 3);
+        const visibleStart = Math.max(trimStart, dialogueStart);
+        const visibleEnd = Math.min(trimEnd, dialogueEnd);
+        if (visibleEnd - visibleStart < VIDEO_REMIX_MIN_TIMELINE_DURATION) {
+          continue;
+        }
+        output.push({
+          id: `remix-subtitle-${item.shotId}-${dialogueIndex + 1}`,
+          shotId: item.shotId,
+          characterId: dialogue.characterId || undefined,
+          text,
+          start: roundShotTime(cursor + visibleStart - trimStart),
+          end: roundShotTime(cursor + visibleEnd - trimStart),
+        });
+      }
+    }
+    cursor += Math.max(0, trimEnd - trimStart);
+  }
+  return output.sort((left, right) => left.start - right.start);
+}
+
+export function prepareVideoRemixTimeline(state) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (!current.videoReview?.confirmed || current.shots.length === 0) {
+    return current;
+  }
+  const generatedByShot = new Map(
+    current.generatedVideos
+      .filter(video => video.status === 'confirmed' && video.url)
+      .map(video => [video.shotId, video])
+  );
+  if (current.shots.some(shot => !generatedByShot.has(shot.shotId))) {
+    return current;
+  }
+  const shotsById = new Map(current.shots.map(shot => [shot.shotId, shot]));
+  const prepared = Boolean(current.timelineReview?.prepared);
+  const base = prepared
+    ? orderedVideoRemixTimeline(current).filter(item => shotsById.has(item.shotId))
+    : current.shots.map((shot, order) => ({
+        shotId: shot.shotId,
+        order,
+        start: 0,
+        end: shot.duration,
+        transition: shot.transition === 'fade' ? 'fade' : 'hard_cut',
+        source: 'generated',
+      }));
+  if (base.length === 0) return current;
+  const timeline = base.map((item, order) => {
+    const shot = shotsById.get(item.shotId);
+    const generated = generatedByShot.get(item.shotId);
+    const preserveReplacement = item.source === 'replacement' && item.videoUrl;
+    const sourceDuration = Math.max(
+      VIDEO_REMIX_MIN_TIMELINE_DURATION,
+      Number(
+        preserveReplacement
+          ? item.sourceDuration
+          : generated.targetDuration || shot.duration
+      ) || shot.duration
+    );
+    const start = prepared
+      ? clampNumber(item.start, 0, Math.max(0, sourceDuration - VIDEO_REMIX_MIN_TIMELINE_DURATION))
+      : 0;
+    const requestedEnd = prepared
+      ? Number(item.end)
+      : sourceDuration;
+    const end = clampNumber(
+      requestedEnd,
+      start + VIDEO_REMIX_MIN_TIMELINE_DURATION,
+      sourceDuration
+    );
+    return {
+      ...item,
+      order,
+      start: roundShotTime(start),
+      end: roundShotTime(end),
+      transition: item.transition === 'fade' ? 'fade' : 'hard_cut',
+      videoUrl: preserveReplacement ? item.videoUrl : generated.url,
+      sourceDuration,
+      source: preserveReplacement ? 'replacement' : 'generated',
+      generatedInputHash: preserveReplacement
+        ? item.generatedInputHash
+        : generated.inputHash,
+    };
+  });
+  const nextSignature = promptValueHash(timeline);
+  const currentSignature = promptValueHash(orderedVideoRemixTimeline(current));
+  const subtitleSourceHash = promptValueHash({
+    timeline,
+    dialogues: current.shots.map(shot => ({
+      shotId: shot.shotId,
+      dialogue: shot.audioBlueprint?.dialogue || [],
+    })),
+  });
+  if (
+    prepared
+    && nextSignature === currentSignature
+    && current.continuityReport
+    && current.subtitles?.sourceHash === subtitleSourceHash
+  ) {
+    return current;
+  }
+  return finalStateWithTimeline(current, timeline);
+}
+
+export function moveVideoRemixTimelineShot(state, shotId, direction) {
+  const current = prepareVideoRemixTimeline(state);
+  const timeline = orderedVideoRemixTimeline(current);
+  const index = timeline.findIndex(item => item.shotId === String(shotId || ''));
+  const target = index + (Number(direction) < 0 ? -1 : 1);
+  if (index < 0 || target < 0 || target >= timeline.length) return current;
+  [timeline[index], timeline[target]] = [timeline[target], timeline[index]];
+  return finalStateWithTimeline(current, timeline);
+}
+
+export function removeVideoRemixTimelineShot(state, shotId) {
+  const current = prepareVideoRemixTimeline(state);
+  const timeline = orderedVideoRemixTimeline(current);
+  if (timeline.length <= 1) return current;
+  const next = timeline.filter(item => item.shotId !== String(shotId || ''));
+  return next.length === timeline.length
+    ? current
+    : finalStateWithTimeline(current, next);
+}
+
+export function updateVideoRemixTimelineShot(state, shotId, updates = {}) {
+  const current = prepareVideoRemixTimeline(state);
+  const id = String(shotId || '');
+  let changed = false;
+  const timeline = orderedVideoRemixTimeline(current).map(item => {
+    if (item.shotId !== id) return item;
+    const sourceDuration = Math.max(
+      VIDEO_REMIX_MIN_TIMELINE_DURATION,
+      Number(item.sourceDuration) || Number(item.end) || 0
+    );
+    const requestedStart = Object.hasOwn(updates, 'start')
+      ? Number(updates.start)
+      : Number(item.start);
+    const start = clampNumber(
+      requestedStart,
+      0,
+      Math.max(0, sourceDuration - VIDEO_REMIX_MIN_TIMELINE_DURATION)
+    );
+    const requestedEnd = Object.hasOwn(updates, 'end')
+      ? Number(updates.end)
+      : Number(item.end);
+    const end = clampNumber(
+      requestedEnd,
+      start + VIDEO_REMIX_MIN_TIMELINE_DURATION,
+      sourceDuration
+    );
+    const transition = updates.transition === 'fade'
+      ? 'fade'
+      : updates.transition === 'hard_cut'
+        ? 'hard_cut'
+        : item.transition;
+    const next = {
+      ...item,
+      start: roundShotTime(start),
+      end: roundShotTime(end),
+      transition,
+    };
+    changed = promptValueHash(next) !== promptValueHash(item);
+    return next;
+  });
+  return changed ? finalStateWithTimeline(current, timeline) : current;
+}
+
+export function replaceVideoRemixTimelineShot(state, shotId, replacement = {}) {
+  const current = prepareVideoRemixTimeline(state);
+  const id = String(shotId || '');
+  const videoUrl = String(replacement.videoUrl || '');
+  const sourceDuration = Number(replacement.sourceDuration);
+  if (!videoUrl || !(sourceDuration > 0)) return current;
+  let changed = false;
+  const timeline = orderedVideoRemixTimeline(current).map(item => {
+    if (item.shotId !== id) return item;
+    changed = true;
+    const currentDuration = Math.max(
+      VIDEO_REMIX_MIN_TIMELINE_DURATION,
+      Number(item.end) - Number(item.start)
+    );
+    return {
+      ...item,
+      videoUrl,
+      sourceDuration: roundShotTime(sourceDuration),
+      source: 'replacement',
+      start: 0,
+      end: roundShotTime(Math.min(sourceDuration, currentDuration)),
+    };
+  });
+  return changed ? finalStateWithTimeline(current, timeline) : current;
+}
+
+export function restoreVideoRemixTimelineShot(state, shotId) {
+  const current = prepareVideoRemixTimeline(state);
+  const id = String(shotId || '');
+  const generated = current.generatedVideos.find(video => (
+    video.shotId === id && video.status === 'confirmed' && video.url
+  ));
+  const shot = current.shots.find(item => item.shotId === id);
+  if (!generated || !shot) return current;
+  let changed = false;
+  const duration = Math.max(
+    VIDEO_REMIX_MIN_TIMELINE_DURATION,
+    Number(generated.targetDuration || shot.duration)
+  );
+  const timeline = orderedVideoRemixTimeline(current).map(item => {
+    if (item.shotId !== id) return item;
+    changed = (
+      item.videoUrl !== generated.url
+      || item.source !== 'generated'
+      || item.start !== 0
+      || item.end !== duration
+    );
+    return {
+      ...item,
+      videoUrl: generated.url,
+      sourceDuration: duration,
+      source: 'generated',
+      generatedInputHash: generated.inputHash,
+      start: 0,
+      end: duration,
+    };
+  });
+  return changed ? finalStateWithTimeline(current, timeline) : current;
+}
+
+export function setVideoRemixBgm(state, bgm = {}) {
+  const current = prepareVideoRemixTimeline(state);
+  const mode = ['original', 'upload'].includes(bgm.mode)
+    ? bgm.mode
+    : 'none';
+  const nextBgm = {
+    ...DEFAULT_BGM,
+    ...current.bgm,
+    ...bgm,
+    mode,
+    volume: clampNumber(
+      bgm.volume ?? current.bgm?.volume ?? DEFAULT_BGM.volume,
+      0,
+      1
+    ),
+    fadeIn: Math.max(0, Number(
+      bgm.fadeIn ?? current.bgm?.fadeIn ?? DEFAULT_BGM.fadeIn
+    ) || 0),
+    fadeOut: Math.max(0, Number(
+      bgm.fadeOut ?? current.bgm?.fadeOut ?? DEFAULT_BGM.fadeOut
+    ) || 0),
+    loop: bgm.loop ?? current.bgm?.loop ?? DEFAULT_BGM.loop,
+  };
+  if (mode === 'none') {
+    delete nextBgm.url;
+    delete nextBgm.name;
+  } else if (mode === 'original') {
+    if (bgm.volume == null && current.bgm?.mode !== 'original') {
+      nextBgm.volume = 1;
+    }
+    nextBgm.url = String(
+      current.source?.localUrl || current.source?.proxyUrl || ''
+    );
+    nextBgm.name = current.source?.title || current.source?.originalFilename || '原视频';
+    nextBgm.loop = false;
+  }
+  if (
+    mode === 'upload'
+    && !String(nextBgm.url || '')
+    && current.bgm?.mode === 'upload'
+  ) {
+    nextBgm.url = current.bgm.url;
+  }
+  if (mode === 'upload' && bgm.volume == null && current.bgm?.mode !== 'upload') {
+    nextBgm.volume = DEFAULT_BGM.volume;
+  }
+  if (mode === 'upload' && bgm.loop == null && current.bgm?.mode !== 'upload') {
+    nextBgm.loop = DEFAULT_BGM.loop;
+  }
+  return promptValueHash(nextBgm) === promptValueHash(current.bgm)
+    ? current
+    : finalStateWithTimeline(current, current.timeline, { bgm: nextBgm });
+}
+
+export function setVideoRemixSubtitles(state, settings = {}) {
+  const current = prepareVideoRemixTimeline(state);
+  const subtitles = {
+    ...DEFAULT_SUBTITLES,
+    ...current.subtitles,
+    enabled: settings.enabled ?? current.subtitles?.enabled ?? false,
+    style: settings.style === 'short-video'
+      ? 'short-video'
+      : settings.style === 'default'
+        ? 'default'
+        : current.subtitles?.style === 'short-video'
+          ? 'short-video'
+          : 'default',
+  };
+  if (
+    subtitles.enabled === current.subtitles?.enabled
+    && subtitles.style === current.subtitles?.style
+  ) {
+    return current;
+  }
+  return finalStateWithTimeline(current, current.timeline, { subtitles });
+}
+
+export function buildVideoRemixManifest(state, {
+  projectId = '',
+  title = 'Video Remix 成片',
+} = {}) {
+  const current = prepareVideoRemixTimeline(state);
+  if (!current.videoReview?.confirmed) {
+    throw new Error('请先确认全部镜头视频');
+  }
+  const timeline = orderedVideoRemixTimeline(current);
+  if (timeline.length === 0 || timeline.some(item => !item.videoUrl)) {
+    throw new Error('Timeline 中存在缺少视频的 Shot');
+  }
+  const durationSec = roundShotTime(videoRemixTimelineDuration(timeline));
+  if (!(durationSec > 0)) throw new Error('Timeline 时长无效');
+  const originalAudio = current.bgm?.mode === 'original';
+  const manifest = {
+    project: {
+      id: `${String(projectId || 'project')}:${current.remixId}`,
+      title: String(title || 'Video Remix 成片'),
+    },
+    composition: {
+      width: Math.max(2, Math.round(Number(current.source?.width) || (
+        current.source?.orientation === 'portrait' ? 1080 : 1920
+      ))),
+      height: Math.max(2, Math.round(Number(current.source?.height) || (
+        current.source?.orientation === 'portrait' ? 1920 : 1080
+      ))),
+      fps: Math.max(1, Math.min(60, Math.round(
+        Number(current.source?.fps) || 24
+      ))),
+    },
+    shots: timeline.map((item, index) => ({
+      id: item.shotId,
+      name: `Shot ${String(index + 1).padStart(2, '0')}`,
+      file: item.videoUrl,
+      start: Number(item.start),
+      end: Number(item.end),
+      volume: originalAudio ? 0 : 1,
+      order: index + 1,
+      transition: item.transition === 'fade' ? 'fade' : 'hard_cut',
+    })),
+    audioTracks: [],
+    subtitles: current.subtitles?.enabled
+      ? buildVideoRemixSubtitles(current).map(item => ({
+          id: item.id,
+          text: item.text,
+          start: item.start,
+          end: item.end,
+          speaker: item.characterId || '',
+        }))
+      : [],
+    output: {
+      endFadeToBlack: 0.3,
+      subtitleStyle: current.subtitles?.style === 'short-video'
+        ? 'short-video'
+        : 'default',
+    },
+  };
+  if (current.bgm?.mode === 'original') {
+    const originalUrl = String(
+      current.bgm.url
+      || current.source?.localUrl
+      || current.source?.proxyUrl
+      || ''
+    );
+    if (!originalUrl || current.source?.hasAudio === false) {
+      throw new Error('原视频没有可用音轨');
+    }
+    manifest.audioTracks.push({
+      id: 'video-remix-original-audio',
+      type: 'bgm',
+      file: originalUrl,
+      start: 0,
+      end: durationSec,
+      volume: clampNumber(current.bgm.volume ?? 1, 0, 1),
+      fadeIn: 0,
+      fadeOut: 0,
+      ducking: false,
+      loop: false,
+    });
+  } else if (current.bgm?.mode === 'upload') {
+    if (!current.bgm.url) throw new Error('请先上传 BGM');
+    manifest.audioTracks.push({
+      id: 'video-remix-uploaded-bgm',
+      type: 'bgm',
+      file: current.bgm.url,
+      start: 0,
+      end: durationSec,
+      volume: clampNumber(current.bgm.volume ?? DEFAULT_BGM.volume, 0, 1),
+      fadeIn: Math.max(0, Number(current.bgm.fadeIn) || 0),
+      fadeOut: Math.max(0, Number(current.bgm.fadeOut) || 0),
+      ducking: false,
+      loop: current.bgm.loop !== false,
+    });
+  }
+  const inputHash = promptValueHash(manifest);
+  manifest.output.fileName = `video-remix-${String(current.remixId)
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .slice(0, 64)}-${inputHash}.mp4`;
+  return {
+    ...manifest,
+    inputHash,
+    durationSec,
+  };
+}
+
+export function beginVideoRemixRender(state, job = {}) {
+  const current = prepareVideoRemixTimeline(state);
+  if (!job.jobId || !job.inputHash) return current;
+  const now = new Date().toISOString();
+  return {
+    ...current,
+    stage: 'rendering',
+    renderJob: {
+      jobId: String(job.jobId),
+      inputHash: String(job.inputHash),
+      status: job.status === 'rendering' ? 'rendering' : 'queued',
+      stage: String(job.stage || job.status || 'queued'),
+      progress: clampNumber(job.progress, 0, 1),
+      createdAt: job.createdAt || now,
+      updatedAt: job.updatedAt || now,
+    },
+    output: null,
+    errors: current.errors.filter(item => item?.scope !== 'render'),
+    updatedAt: now,
+  };
+}
+
+export function updateVideoRemixRenderJob(state, job = {}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (!current.renderJob || current.renderJob.jobId !== String(job.jobId || '')) {
+    return current;
+  }
+  const status = ['queued', 'rendering', 'success', 'failed', 'cancelled'].includes(
+    job.status
+  ) ? job.status : current.renderJob.status;
+  const now = new Date().toISOString();
+  return {
+    ...current,
+    stage: ['queued', 'rendering'].includes(status)
+      ? 'rendering'
+      : current.stage,
+    renderJob: {
+      ...current.renderJob,
+      ...job,
+      status,
+      stage: String(job.stage || current.renderJob.stage),
+      progress: clampNumber(
+        job.progress ?? current.renderJob.progress,
+        0,
+        1
+      ),
+      updatedAt: job.updatedAt || now,
+    },
+    updatedAt: now,
+  };
+}
+
+export function completeVideoRemixRender(state, {
+  jobId,
+  inputHash,
+  url,
+  duration,
+  nodeId,
+} = {}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (
+    !current.renderJob
+    || current.renderJob.jobId !== String(jobId || '')
+    || current.renderJob.inputHash !== String(inputHash || '')
+    || !url
+  ) {
+    return current;
+  }
+  const now = new Date().toISOString();
+  const outputUrl = `${String(url)}${String(url).includes('?') ? '&' : '?'}t=${Date.now()}`;
+  return {
+    ...current,
+    stage: 'completed',
+    renderJob: {
+      ...current.renderJob,
+      status: 'success',
+      stage: 'done',
+      progress: 1,
+      output: outputUrl,
+      error: undefined,
+      updatedAt: now,
+    },
+    output: {
+      url: outputUrl,
+      duration: Math.max(0, Number(duration) || 0),
+      nodeId: String(nodeId || videoRemixOutputNodeId(current.remixId)),
+      manifestHash: String(inputHash),
+      renderedAt: now,
+    },
+    errors: current.errors.filter(item => item?.scope !== 'render'),
+    updatedAt: now,
+  };
+}
+
+export function setVideoRemixRenderError(state, message, {
+  jobId,
+  code,
+  status = 'failed',
+  missing,
+} = {}) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  if (
+    jobId
+    && current.renderJob
+    && current.renderJob.jobId !== String(jobId)
+  ) {
+    return current;
+  }
+  const now = new Date().toISOString();
+  const errorMessage = String(message || '成片渲染失败');
+  return {
+    ...current,
+    stage: 'videos_ready',
+    renderJob: current.renderJob
+      ? {
+          ...current.renderJob,
+          status: status === 'cancelled' ? 'cancelled' : 'failed',
+          stage: status === 'cancelled' ? 'cancelled' : 'failed',
+          error: errorMessage,
+          ...(missing ? { missing } : {}),
+          updatedAt: now,
+        }
+      : null,
+    output: null,
+    errors: [
+      ...current.errors.filter(item => item?.scope !== 'render'),
+      {
+        scope: 'render',
+        message: errorMessage,
+        retryable: true,
+        ...(code ? { code: String(code) } : {}),
+      },
+    ],
+    updatedAt: now,
+  };
 }

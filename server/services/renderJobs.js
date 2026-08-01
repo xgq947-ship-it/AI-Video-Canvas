@@ -64,6 +64,7 @@ const sanitizeName = (s) =>
 const publicView = (job) => ({
   jobId: job.id,
   projectId: job.projectId,
+  inputHash: job.inputHash,
   status: job.status,
   stage: job.stage,
   progress: job.progress,
@@ -114,6 +115,9 @@ export const createJob = ({ manifest, libraryDir, rendersDir, outputUrlPrefix = 
   const job = {
     id,
     projectId,
+    inputHash: typeof manifest?.inputHash === 'string'
+      ? manifest.inputHash
+      : null,
     status: 'queued',
     stage: 'queued',
     progress: 0,

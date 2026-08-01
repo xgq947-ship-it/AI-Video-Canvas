@@ -5,7 +5,7 @@
  * 无任何 fs / 浏览器依赖，可被前端(TS)、Remotion 合成(TSX)、服务端(JS) 与测试共同引用。
  *
  * 时间约定（重要）：
- *  - shots[].start / shots[].end   —— 源素材的裁剪入点/出点（秒），镜头按 order 顺序首尾硬切拼接。
+ *  - shots[].start / shots[].end   —— 源素材的裁剪入点/出点（秒），镜头按 order 顺序首尾拼接。
  *  - audioTracks[].start / end     —— 成片时间轴上的绝对位置（秒）。
  *  - subtitles[].start / end       —— 成片时间轴上的绝对位置（秒）。
  * 所有时间统一用秒；Remotion 内部按 fps 折算为帧。
@@ -115,6 +115,9 @@ export const validateManifestShape = (manifest) => {
       const start = Number(s.start) || 0;
       const end = s.end != null ? Number(s.end) : start;
       if (end <= start) errors.push(`shots[${i}] 的 end 必须大于 start`);
+      if (s && s.transition != null && !['hard_cut', 'fade'].includes(s.transition)) {
+        errors.push(`shots[${i}].transition 非法(应为 hard_cut|fade)`);
+      }
     });
   }
   if (manifest.audioTracks != null && !Array.isArray(manifest.audioTracks)) {
@@ -232,6 +235,7 @@ export const buildManifestFromNodes = (renderNodeId, nodes, opts = {}) => {
         end: end > start ? end : start + 5,
         volume: num(n.shotVolume, 0),
         order: idx + 1,
+        transition: n.transition === 'fade' ? 'fade' : 'hard_cut',
       });
     });
 

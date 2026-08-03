@@ -96,6 +96,30 @@ test('同一图片仍被其他画布节点引用时保留原文件，同时为�
     assert.deepEqual(fixture.workflow.nodes.map(node => node.id), ['image-2']);
 });
 
+test('图片仍被独立复刻任务引用时保留项目文件', (t) => {
+    const fixture = createFixture(t);
+    fixture.workflow.videoRemixes = [{
+        id: 'remix-1',
+        state: {
+            assets: {
+                characters: [{ referenceImages: [fixture.resultUrl] }]
+            }
+        }
+    }];
+
+    const result = trashWorkflowNodes(
+        fixture.workflow,
+        [fixture.node],
+        [fixture.node.id],
+        fixture.projectRoot
+    );
+
+    assert.ok(result.entry);
+    assert.equal(fs.existsSync(fixture.imagePath), true);
+    assert.ok(getProjectTrashPreviewPath(fixture.projectRoot, result.entry.id));
+    assert.deepEqual(fixture.workflow.nodes, []);
+});
+
 test('删除项目图片时先清除选中态，提示词控制面板不会残留在画布上', () => {
     const block = appSource.slice(
         appSource.indexOf('const deleteNodesWithTrash'),

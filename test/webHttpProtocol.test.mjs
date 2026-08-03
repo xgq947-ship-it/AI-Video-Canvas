@@ -23,6 +23,7 @@ import {
     detectRefusal,
     extractConversation,
     extractGeminiBootstrap,
+    extractLatestCandidateText,
     extractGeneratedMedia,
     extractStreamPayloads,
     extractText,
@@ -66,7 +67,16 @@ import {
     toFlowImageAspectRatio,
     validateFlowImageDimensions
 } from '../server/services/webhttp/flow/protocol.js';
-import { shouldRetryFlowUpsampleError } from '../server/services/webhttp/flow/provider.js';
+import {
+    shouldFallbackFlowUpsampleToOriginal,
+    shouldRetryFlowUpsampleError
+} from '../server/services/webhttp/flow/provider.js';
+import {
+    describeGeminiStreamFailure,
+    extractGeminiTextForTurn,
+    hasUsableGeminiTextPayload,
+    shouldRecoverGeminiTextFailure
+} from '../server/services/webhttp/gemini/provider.js';
 
 import { crc32Hex, parseApplyUploadResponse, signImageXRequest } from '../server/services/webhttp/jimeng/imagex.js';
 import { WebProviderError, classifyHttpFailure, redactSecrets } from '../server/services/webhttp/errors.js';
@@ -107,6 +117,62 @@ test('Gemini bootstrap 缺字段时报出具体缺了哪个', () => {
             return true;
         }
     );
+});
+
+test('Gemini 页面请求超时不会再显示没有诊断价值的 HTTP 0', () => {
+    assert.equal(
+        describeGeminiStreamFailure({ status: 0, statusText: 'signal is aborted without reason' }, 600),
+        'Gemini Web 请求等待超过 10 分钟，服务尚未返回结果，请重试当前任务'
+    );
+    assert.equal(
+        describeGeminiStreamFailure({ status: 0, statusText: 'Failed to fetch' }, 600),
+        'Gemini Web 网络请求中断（Failed to fetch），请检查网络后重试'
+    );
+    assert.equal(
+        describeGeminiStreamFailure({ status: 503, statusText: 'Service Unavailable' }, 600),
+        'Gemini Web 服务暂时繁忙（HTTP 503），正在尝试从 Gemini 会话恢复结果'
+    );
+});
+
+test('Gemini 外层 503 时仍接受带 candidate 的完整文本响应', () => {
+    const payloads = [[
+        'c_81a9e9a61590b3fb',
+        ['r_238139396e725795'],
+        ['rc_6569e39b1c2d2c6a', ['{"shotId":"shot_001","storyBeat":"已完成分析"}']],
+    ]];
+    assert.equal(hasUsableGeminiTextPayload(payloads), true);
+    assert.equal(hasUsableGeminiTextPayload([['Service Unavailable']]), false);
+});
+
+test('Gemini 同会话纠错必须读取当前轮回答，不能被更长的旧 JSON 覆盖', () => {
+    const previousCandidateId = 'rc_previous000001';
+    const payloads = [[
+        [previousCandidateId, ['{"shotId":"shot_001","invalid":"这是一条更长但未通过校验的旧回答，不能再次返回"}']],
+        ['rc_corrected000002', ['{"shotId":"shot_001"}']],
+    ]];
+    assert.match(extractText(payloads), /invalid/);
+    assert.equal(
+        extractGeminiTextForTurn(payloads, { previousCandidateId }),
+        '{"shotId":"shot_001"}'
+    );
+    assert.equal(hasUsableGeminiTextPayload([
+        [[previousCandidateId, ['旧回答仍在会话历史里']]],
+    ], { previousCandidateId }), false);
+});
+
+test('Gemini 分析只对可恢复的传输层与网关失败回捞会话', () => {
+    assert.equal(shouldRecoverGeminiTextFailure(new WebProviderError('503', {
+        provider: 'gemini-web',
+        code: 'GENERATION_FAILED',
+        submitted: false,
+        details: { status: 503 },
+    })), true);
+    assert.equal(shouldRecoverGeminiTextFailure(new WebProviderError('登录失效', {
+        provider: 'gemini-web',
+        code: 'AUTH_EXPIRED',
+        submitted: false,
+        details: { status: 401 },
+    })), false);
 });
 
 test('新会话发送空 conversation tuple，不需要点 New chat', () => {
@@ -264,6 +330,18 @@ test('文本抽取跳过 id / URL / 资源路径', () => {
     const payloads = [['c_abc123def456', 'https://lh3.googleusercontent.com/x', '/contrib_service/ttl_1d/y',
         '这是模型给出的完整回答内容。']];
     assert.equal(extractText(payloads), '这是模型给出的完整回答内容。');
+});
+
+test('会话回捞选择已知旧 candidate 之后的最新回答', () => {
+    const payloads = [[
+        ['rc_ready00000001', ['READY']],
+        ['rc_old0000000002', ['{"shotId":"shot_001","storyBeat":"旧的不完整结果"}']],
+        ['rc_new0000000003', ['{"shotId":"shot_001","storyBeat":"最新完整结果"}']],
+    ]];
+    assert.equal(
+        extractLatestCandidateText(payloads, { excludeCandidateIds: ['rc_old0000000002'] }),
+        '{"shotId":"shot_001","storyBeat":"最新完整结果"}'
+    );
 });
 
 test('比例通过提示词生效（协议未确认独立字段）', () => {
@@ -750,7 +828,13 @@ test('Flow 分辨率兼容旧 Auto，实际像素按对应原图比例校验', (
 
     assert.equal(shouldRetryFlowUpsampleError({ code: 'RECAPTCHA_REQUIRED' }, 1), true);
     assert.equal(shouldRetryFlowUpsampleError({ code: 'RECAPTCHA_REQUIRED' }, 2), false);
+    assert.equal(shouldRetryFlowUpsampleError({ code: 'AUTH_EXPIRED' }, 1), true);
+    assert.equal(shouldRetryFlowUpsampleError({ code: 'AUTH_EXPIRED' }, 2), false);
     assert.equal(shouldRetryFlowUpsampleError({ code: 'BRIDGE_UNAVAILABLE' }, 1), false);
+    assert.equal(shouldFallbackFlowUpsampleToOriginal({ code: 'AUTH_EXPIRED' }), true);
+    assert.equal(shouldFallbackFlowUpsampleToOriginal({ code: 'BRIDGE_UNAVAILABLE' }), true);
+    assert.equal(shouldFallbackFlowUpsampleToOriginal({ code: 'OPERATION_CANCELLED' }), false);
+    assert.equal(shouldFallbackFlowUpsampleToOriginal({ cancelled: true }), false);
 });
 
 test('Flow 视频按文本 / 首帧 / 多参考图切换真实 endpoint 与模型 key', () => {

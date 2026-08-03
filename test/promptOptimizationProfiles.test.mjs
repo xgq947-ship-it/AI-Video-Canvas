@@ -10,10 +10,20 @@ import {
     resolveVideoRemixPromptProfileForModel
 } from '../shared/promptOptimizationProfiles.js';
 
-test('图片提示词优化配置固定包含三种角色身份图', () => {
+test('图片提示词优化配置包含人物、场景、道具各三种一致性设定图', () => {
   assert.deepEqual(
     IMAGE_PROMPT_OPTIMIZATION_PROFILES.map(profile => profile.id),
-    ['image-identity-front', 'image-identity-angles', 'image-identity-board'],
+    [
+      'image-identity-front',
+      'image-identity-angles',
+      'image-identity-board',
+      'image-scene-establishing',
+      'image-scene-layout',
+      'image-scene-material-lighting',
+      'image-prop-front',
+      'image-prop-angles',
+      'image-prop-details',
+    ],
   );
 });
 

@@ -54,12 +54,36 @@ const activeRenderStatus = (status?: string) => (
   status === 'queued' || status === 'rendering'
 );
 
+const RENDER_STAGE_LABELS: Record<string, string> = {
+  queued: '等待渲染',
+  preparing: '准备渲染环境',
+  bundling: '打包渲染资源',
+  composing: '准备视频合成',
+  rendering: '正在渲染视频',
+  mastering: '正在处理声音',
+  done: '渲染完成',
+  completed: '渲染完成',
+  cancelled: '渲染已取消',
+  failed: '渲染失败',
+};
+
 const formatDuration = (seconds: number) => {
   const total = Math.max(0, Number(seconds) || 0);
   const minutes = Math.floor(total / 60);
   const remainder = total - minutes * 60;
   return `${String(minutes).padStart(2, '0')}:${remainder.toFixed(2).padStart(5, '0')}`;
 };
+
+const outputAspectRatio = (
+  state: VideoRemixState,
+  composition: { width: number; height: number }
+) => state.videoReview?.aspectRatio || (
+  composition.width === composition.height
+    ? '1:1'
+    : composition.width < composition.height
+      ? '9:16'
+      : '16:9'
+);
 
 const probeVideoDuration = (url: string): Promise<number> => new Promise(
   (resolve, reject) => {
@@ -103,6 +127,16 @@ export const VideoRemixFinalWorkspace: React.FC<{
     fps: number;
     aspectRatio: string;
   }) => void;
+  onSendFinalToCanvas?: (output: {
+    nodeId: string;
+    url: string;
+    duration: number;
+    width: number;
+    height: number;
+    fps: number;
+    aspectRatio: string;
+  }) => void;
+  simpleMode?: boolean;
   dark: boolean;
 }> = ({
   node,
@@ -111,6 +145,8 @@ export const VideoRemixFinalWorkspace: React.FC<{
   onUpdateNode,
   onSelectVideos,
   onFinalOutput,
+  onSendFinalToCanvas,
+  simpleMode = false,
   dark,
 }) => {
   const [projectAssets, setProjectAssets] = React.useState<VideoRemixProjectAsset[]>([]);
@@ -137,7 +173,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
   }) => {
     const manifest = buildVideoRemixManifest(workingRef.current, {
       projectId: workflowId,
-      title: node.title || 'Video Remix 成片',
+      title: node.title || '视频复刻成片',
     });
     const outputNodeId = videoRemixOutputNodeId(node.id);
     const completed = completeVideoRemixRender(
@@ -152,11 +188,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
     );
     if (!completed.output) return;
     persist(completed);
-    const ratio = manifest.composition.width === manifest.composition.height
-      ? '1:1'
-      : manifest.composition.width < manifest.composition.height
-        ? '9:16'
-        : '16:9';
+    const ratio = outputAspectRatio(workingRef.current, manifest.composition);
     onFinalOutput({
       nodeId: outputNodeId,
       url: completed.output.url,
@@ -213,7 +245,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
             if (workflowId) {
               const manifest = buildVideoRemixManifest(workingRef.current, {
                 projectId: workflowId,
-                title: node.title || 'Video Remix 成片',
+                title: node.title || '视频复刻成片',
               });
               const assets = await listVideoRemixProjectAssets(workflowId);
               const recovered = assets.find(asset => (
@@ -246,7 +278,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
         if (latest.inputHash && latest.inputHash !== job.inputHash) {
           persist(setVideoRemixRenderError(
             workingRef.current,
-            '发现同项目的旧渲染任务，已拒绝把旧成片写入当前 Timeline',
+            '发现同项目的旧渲染任务，已拒绝把旧成片写入当前时间线',
             {
               jobId: job.jobId,
               code: 'STALE_RENDER_JOB',
@@ -311,7 +343,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
           <p className={`mt-2 text-xs leading-5 ${
             dark ? 'text-neutral-500' : 'text-neutral-400'
           }`}>
-            成片只使用已完成时长校准并由用户确认的 Shot 视频。
+            成片只使用已完成时长校准并由用户确认的镜头视频。
           </p>
           <button
             type="button"
@@ -335,10 +367,31 @@ export const VideoRemixFinalWorkspace: React.FC<{
   const videoAssets = projectAssets.filter(asset => asset.type === 'video');
   const continuity = state.continuityReport;
   const renderProgress = Math.round((state.renderJob?.progress || 0) * 100);
+  const sendFinalToCanvas = () => {
+    if (!state.output?.url || !onSendFinalToCanvas) return;
+    try {
+      const manifest = buildVideoRemixManifest(state, {
+        projectId: workflowId,
+        title: node.title || '视频复刻成片',
+      });
+      const aspectRatio = outputAspectRatio(state, manifest.composition);
+      onSendFinalToCanvas({
+        nodeId: state.output.nodeId || videoRemixOutputNodeId(node.id),
+        url: state.output.url,
+        duration: state.output.duration || manifest.durationSec,
+        width: manifest.composition.width,
+        height: manifest.composition.height,
+        fps: manifest.composition.fps,
+        aspectRatio,
+      });
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : '成片发送到画布失败');
+    }
+  };
 
   const startRender = async () => {
     if (!workflowId || renderBusy) {
-      if (!workflowId) setLocalError('请先把当前画布保存为项目');
+      if (!workflowId) setLocalError('请先创建或打开项目');
       return;
     }
     setLocalError('');
@@ -347,7 +400,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
       persist(prepared);
       const manifest = buildVideoRemixManifest(prepared, {
         projectId: workflowId,
-        title: node.title || 'Video Remix 成片',
+        title: node.title || '视频复刻成片',
       });
       const validation = await validateVideoRemixManifest(manifest);
       if (!validation.valid) {
@@ -359,7 +412,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
       }
       const job = await startVideoRemixRender({ workflowId, manifest });
       if (job.inputHash && job.inputHash !== manifest.inputHash) {
-        throw new Error('该项目已有不同 Timeline 的渲染任务，请等待或取消后重试');
+        throw new Error('该项目已有不同时间线的渲染任务，请等待或取消后重试');
       }
       persist(beginVideoRemixRender(prepared, {
         ...job,
@@ -406,7 +459,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
         name: file.name || result.filename,
       }));
     } catch (error) {
-      setLocalError(error instanceof Error ? error.message : 'BGM 上传失败');
+      setLocalError(error instanceof Error ? error.message : '背景音乐上传失败');
     } finally {
       setUploadingBgm(false);
       if (bgmInputRef.current) bgmInputRef.current.value = '';
@@ -434,26 +487,37 @@ export const VideoRemixFinalWorkspace: React.FC<{
 
   return (
     <div className="mt-7 space-y-5">
+      {simpleMode && (
+        <section className={sectionClass(dark)}>
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <CheckCircle2 size={16} className="text-emerald-400" />
+            已自动准备成片
+          </div>
+          <p className={`mt-2 text-[11px] leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-500'}`}>
+            已按原视频镜头顺序、原时长与硬切方式排好时间线。直接在下方开始合成即可；音乐、字幕和剪辑微调可切换到高级模式处理。
+          </p>
+        </section>
+      )}
       <section className={`rounded-[26px] border p-5 ${
-        dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
+        simpleMode ? 'hidden' : dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
       }`}>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-sm font-medium">
               <Scissors size={16} className="text-cyan-400" />
-              轻量 Timeline
+              轻量时间线
             </div>
             <p className={`mt-2 text-[11px] leading-5 ${
               dark ? 'text-neutral-500' : 'text-neutral-500'
             }`}>
-              默认严格复用原片 Shot 顺序。可替换、删除、微调切点和选择硬切 / 淡变，
-              不会展开成复杂 NLE。
+              默认严格复用原片镜头顺序。可替换、删除、微调切点和选择硬切 / 淡变，
+              不会展开成复杂剪辑器。
             </p>
           </div>
           <div className={`rounded-xl px-3 py-2 text-[11px] ${
             dark ? 'bg-white/6 text-neutral-300' : 'bg-neutral-100 text-neutral-600'
           }`}>
-            {timeline.length} Shot · {formatDuration(duration)}
+            {timeline.length} 个镜头 · {formatDuration(duration)}
           </div>
         </div>
 
@@ -496,7 +560,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
 
                 <div className="grid content-start gap-3 sm:grid-cols-2">
                   <label className="sm:col-span-2">
-                    <span className={labelClass(dark)}>Shot 替换</span>
+                    <span className={labelClass(dark)}>镜头替换</span>
                     <select
                       value={item.source === 'replacement' ? item.videoUrl : '__generated__'}
                       disabled={renderBusy || assetsLoading}
@@ -553,7 +617,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
                     />
                   </label>
                   <label className="sm:col-span-2">
-                    <span className={labelClass(dark)}>转场到下一 Shot</span>
+                    <span className={labelClass(dark)}>转场到下一镜头</span>
                     <select
                       value={item.transition}
                       disabled={renderBusy || index === timeline.length - 1}
@@ -568,15 +632,15 @@ export const VideoRemixFinalWorkspace: React.FC<{
                       ))}
                       className={fieldClass(dark)}
                     >
-                      <option value="hard_cut">Hard Cut · 硬切</option>
-                      <option value="fade">Fade · 淡出 / 淡入</option>
+                      <option value="hard_cut">硬切</option>
+                      <option value="fade">淡出 / 淡入</option>
                     </select>
                   </label>
                 </div>
 
                 <div className="flex gap-1 lg:flex-col">
                   <IconButton
-                    label="上移 Shot"
+                    label="上移镜头"
                     disabled={renderBusy || index === 0}
                     dark={dark}
                     onClick={() => persist(moveVideoRemixTimelineShot(
@@ -588,7 +652,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
                     <ArrowUp size={13} />
                   </IconButton>
                   <IconButton
-                    label="下移 Shot"
+                    label="下移镜头"
                     disabled={renderBusy || index === timeline.length - 1}
                     dark={dark}
                     onClick={() => persist(moveVideoRemixTimelineShot(
@@ -611,7 +675,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
                     <RotateCcw size={13} />
                   </IconButton>
                   <IconButton
-                    label="删除 Shot"
+                    label="删除镜头"
                     disabled={renderBusy || timeline.length <= 1}
                     dark={dark}
                     danger
@@ -629,11 +693,11 @@ export const VideoRemixFinalWorkspace: React.FC<{
         </div>
       </section>
 
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className={`${simpleMode ? 'hidden' : 'grid'} gap-5 lg:grid-cols-2`}>
         <section className={sectionClass(dark)}>
           <div className="flex items-center gap-2 text-sm font-medium">
             <Music size={16} className="text-violet-400" />
-            BGM
+            背景音乐
           </div>
           <div className="mt-4 grid gap-2 sm:grid-cols-3">
             <ChoiceButton
@@ -710,8 +774,8 @@ export const VideoRemixFinalWorkspace: React.FC<{
               <p className={`mt-2 text-[9px] leading-4 ${
                 dark ? 'text-neutral-600' : 'text-neutral-400'
               }`}>
-                原视频模式使用完整原音轨并静音生成 Shot，避免对白叠音；上传模式保留
-                Shot 原生对白 / 环境声并以低音量循环 BGM。
+                原视频模式使用完整原音轨并静音生成镜头，避免对白叠音；上传模式保留
+                镜头原生对白 / 环境声并以低音量循环背景音乐。
               </p>
             </div>
           )}
@@ -742,7 +806,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
           <p className={`mt-3 text-[10px] leading-5 ${
             dark ? 'text-neutral-500' : 'text-neutral-500'
           }`}>
-            自动字幕来自原视频分析形成的 Dialogue Blueprint，并随 Timeline 排序和切点
+            自动字幕来自原视频分析形成的对白蓝图，并随时间线排序和切点
             自动重算；不会复用旧视频里的烧录字幕。
           </p>
           {state.subtitles.enabled && (
@@ -783,7 +847,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
                   </div>
                 )) : (
                   <div className="text-[10px] text-neutral-500">
-                    Dialogue Blueprint 中没有可用对白。
+                    对白蓝图中没有可用对白。
                   </div>
                 )}
               </div>
@@ -792,7 +856,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
         </section>
       </div>
 
-      <section className={sectionClass(dark)}>
+      <section className={simpleMode ? 'hidden' : sectionClass(dark)}>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-sm font-medium">
@@ -802,7 +866,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
             <p className={`mt-2 text-[10px] leading-5 ${
               dark ? 'text-neutral-500' : 'text-neutral-500'
             }`}>
-              比较相邻 Shot 的 End State / Start State：人物位置、朝向、情绪、手持道具、
+              比较相邻镜头的结束状态与起始状态：人物位置、朝向、情绪、手持道具、
               服装、场景、光线和时间。
             </p>
           </div>
@@ -847,8 +911,8 @@ export const VideoRemixFinalWorkspace: React.FC<{
             <p className={`mt-2 text-[10px] leading-5 ${
               dark ? 'text-neutral-500' : 'text-neutral-500'
             }`}>
-              复用现有 Manifest / Remotion Renderer，输出 H.264 + AAC MP4 并做响度母带。
-              渲染不会调用任何 AI Provider。
+              复用现有渲染清单与 Remotion 渲染器，输出 H.264 + AAC 格式的 MP4 并处理响度。
+              渲染不会调用任何 AI 平台。
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -885,6 +949,16 @@ export const VideoRemixFinalWorkspace: React.FC<{
                 在文件夹中显示
               </button>
             )}
+            {state.output?.url && onSendFinalToCanvas && (
+              <button
+                type="button"
+                onClick={sendFinalToCanvas}
+                className={primaryButtonClass(dark)}
+              >
+                <Film size={13} />
+                发送到 AI 画布
+              </button>
+            )}
           </div>
         </div>
 
@@ -895,7 +969,9 @@ export const VideoRemixFinalWorkspace: React.FC<{
             <div className="flex items-center justify-between text-[10px]">
               <span className="flex items-center gap-2">
                 <Loader2 size={12} className="animate-spin text-cyan-400" />
-                {state.renderJob?.stage || 'rendering'}
+                {RENDER_STAGE_LABELS[state.renderJob?.stage || 'rendering']
+                  || state.renderJob?.stage
+                  || '正在渲染视频'}
               </span>
               <span>{renderProgress}%</span>
             </div>
@@ -932,7 +1008,7 @@ export const VideoRemixFinalWorkspace: React.FC<{
               </div>
               <div className="mt-2">时长：{formatDuration(state.output.duration)}</div>
               <div className="break-all">文件：{state.output.url}</div>
-              <div className="mt-2">画布只新增一个 Final Video Node，不会展开内部 Shot。</div>
+              <div className="mt-2">成片已保存在项目中；只有点击“发送到 AI 画布”才会新增一个普通视频节点。</div>
             </div>
           </div>
         )}

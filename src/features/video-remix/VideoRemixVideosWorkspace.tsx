@@ -26,15 +26,19 @@ import {
   finalizeVideoRemixVideoBatch,
   getVideoRemixVideoReadiness,
   prepareVideoRemixVideos,
+  prepareVideoRemixSimplePrompts,
   recoverStaleVideoRemixVideos,
   setVideoRemixVideoError,
   updateVideoRemixVideoPrompt,
+  VIDEO_REMIX_VIDEO_OUTPUT_COUNTS,
   type GeneratedShotVideo,
 } from '../../../shared/videoRemix.js';
 import {
   getVideoGenerationProvider,
   getVideoProviderCapabilities,
+  listVideoGenerationProviders,
 } from '../../../shared/generationProviders.js';
+import { useGenerationModelRegistry } from '../../hooks/useGenerationModelRegistry';
 import { NodeData } from '../../types';
 import {
   calibrateVideoRemixGeneratedShot,
@@ -57,7 +61,7 @@ const STATUS_LABELS: Record<GeneratedShotVideo['status'], string> = {
   generating: '生成中',
   calibrating: '校准时长',
   completed: '待确认',
-  confirmed: '已确认',
+  confirmed: '已选用',
   failed: '可重试',
 };
 
@@ -89,6 +93,8 @@ export const VideoRemixVideosWorkspace: React.FC<{
   onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
   onSelectKeyframes: () => void;
   onSelectShots: () => void;
+  simpleMode?: boolean;
+  onConfirmed?: () => void;
   dark: boolean;
 }> = ({
   node,
@@ -97,6 +103,8 @@ export const VideoRemixVideosWorkspace: React.FC<{
   onUpdateNode,
   onSelectKeyframes,
   onSelectShots,
+  simpleMode = false,
+  onConfirmed,
   dark,
 }) => {
   const [batchBusy, setBatchBusy] = React.useState(false);
@@ -107,6 +115,7 @@ export const VideoRemixVideosWorkspace: React.FC<{
   const runningRef = React.useRef(false);
   const workingRef = React.useRef(state);
   const recoveryInFlightRef = React.useRef(new Set<string>());
+  const { revision: modelRegistryRevision } = useGenerationModelRegistry();
 
   const persist = React.useCallback((next: VideoRemixState) => {
     workingRef.current = next;
@@ -120,7 +129,19 @@ export const VideoRemixVideosWorkspace: React.FC<{
   const videoModel = state.promptReview?.targetModel || '';
   const provider = getVideoGenerationProvider(videoModel);
   const capabilities = getVideoProviderCapabilities(videoModel);
-  const aspectRatio = desiredAspectRatio(state);
+  const availableModels = React.useMemo(
+    () => listVideoGenerationProviders().filter(model => (
+      model.supportsTextToVideo || model.supportsImageToVideo
+    )),
+    [modelRegistryRevision]
+  );
+  const preferredAspectRatio = state.videoReview?.aspectRatio || '';
+  const sourceAspectRatio = desiredAspectRatio(state);
+  const aspectRatio = provider?.supportedAspectRatios.includes(preferredAspectRatio)
+    ? preferredAspectRatio
+    : provider?.supportedAspectRatios.includes(sourceAspectRatio)
+      ? sourceAspectRatio
+      : provider?.supportedAspectRatios[0] || sourceAspectRatio;
   const resolution = provider?.resolutions.includes(
     state.videoReview?.resolution || ''
   )
@@ -130,6 +151,11 @@ export const VideoRemixVideosWorkspace: React.FC<{
     capabilities?.audioGeneration
     && state.videoReview?.generateAudio !== false
   );
+  const outputCount = VIDEO_REMIX_VIDEO_OUTPUT_COUNTS.includes(
+    Number(state.videoReview?.outputCount) as 1 | 2 | 3 | 4
+  )
+    ? Number(state.videoReview?.outputCount)
+    : 1;
   const readiness = getVideoRemixVideoReadiness(state);
   const running = batchBusy || activeIds.length > 0;
 
@@ -152,12 +178,61 @@ export const VideoRemixVideosWorkspace: React.FC<{
       aspectRatio,
       resolution,
       generateAudio,
+      outputCount,
     })
-  ), [aspectRatio, generateAudio, resolution, videoModel]);
+  ), [aspectRatio, generateAudio, outputCount, resolution, videoModel]);
+
+  const updateVideoSettings = React.useCallback((updates: {
+    aspectRatio?: string;
+    resolution?: string;
+    generateAudio?: boolean;
+    outputCount?: number;
+  }) => {
+    const current = workingRef.current;
+    persist(prepareVideoRemixVideos(current, {
+      videoModel,
+      aspectRatio: updates.aspectRatio ?? aspectRatio,
+      resolution: updates.resolution ?? resolution,
+      generateAudio: updates.generateAudio ?? generateAudio,
+      outputCount: updates.outputCount ?? outputCount,
+    }));
+    setLocalError('');
+  }, [aspectRatio, generateAudio, outputCount, persist, resolution, videoModel]);
+
+  const selectSimpleVideoModel = React.useCallback((nextModel: string) => {
+    if (!simpleMode || !nextModel || nextModel === videoModel) return;
+    const nextProvider = getVideoGenerationProvider(nextModel);
+    const nextCapabilities = getVideoProviderCapabilities(nextModel);
+    if (!nextProvider || !nextCapabilities) return;
+    const current = workingRef.current;
+    const storedRatio = current.videoReview?.aspectRatio || '';
+    const originalRatio = desiredAspectRatio(current);
+    const nextRatio = nextProvider.supportedAspectRatios.includes(storedRatio)
+      ? storedRatio
+      : nextProvider.supportedAspectRatios.includes(originalRatio)
+        ? originalRatio
+        : nextProvider.supportedAspectRatios[0] || originalRatio;
+    const storedResolution = current.videoReview?.resolution || '';
+    const nextResolution = nextProvider.resolutions.includes(storedResolution)
+      ? storedResolution
+      : nextProvider.defaultResolution || nextProvider.resolutions[0] || '自动';
+    const nextOutputCount = Number(current.videoReview?.outputCount || 1);
+    let next = prepareVideoRemixSimplePrompts(current, nextModel);
+    next = prepareVideoRemixVideos(next, {
+      videoModel: nextModel,
+      aspectRatio: nextRatio,
+      resolution: nextResolution,
+      generateAudio: nextCapabilities.audioGeneration
+        && current.videoReview?.generateAudio !== false,
+      outputCount: nextOutputCount,
+    });
+    persist(next);
+    setLocalError('');
+  }, [persist, simpleMode, videoModel]);
 
   React.useEffect(() => {
     if (
-      !state.keyframeReview?.confirmed
+      !state.promptReview?.confirmed
       || !provider
       || !provider.supportedAspectRatios.includes(aspectRatio)
       || runningRef.current
@@ -181,7 +256,7 @@ export const VideoRemixVideosWorkspace: React.FC<{
     video = working.generatedVideos.find(item => item.id === videoId);
     if (!video?.rawUrl) return;
     try {
-      if (!workflowId) throw new Error('请先把当前画布保存为项目');
+      if (!workflowId) throw new Error('请先创建或打开项目');
       const result = await calibrateVideoRemixGeneratedShot({
         workflowId,
         remixId: working.remixId,
@@ -298,10 +373,6 @@ export const VideoRemixVideosWorkspace: React.FC<{
       setLocalError(video.planError);
       return;
     }
-    if (!video.startFrameUrl) {
-      setLocalError('当前 Shot 缺少已确认的 Start Frame');
-      return;
-    }
     const nextAttempt = Number(video.attempt || 0) + 1;
     const generationNodeId = `${node.id}_${video.id}_${video.inputHash}_${nextAttempt}`;
     working = beginVideoRemixVideoGeneration(working, videoId, {
@@ -313,7 +384,7 @@ export const VideoRemixVideosWorkspace: React.FC<{
     setActiveIds(current => [...new Set([...current, videoId])]);
     setLocalError('');
     try {
-      if (!workflowId) throw new Error('请先把当前画布保存为项目');
+      if (!workflowId) throw new Error('请先创建或打开项目');
       const rawUrl = await generateVideoRemixShot({
         workflowId,
         nodeId: generationNodeId,
@@ -404,7 +475,11 @@ export const VideoRemixVideosWorkspace: React.FC<{
       ));
     } finally {
       working = finalizeVideoRemixVideoBatch(workingRef.current);
+      if (simpleMode && outputCount === 1) {
+        working = confirmVideoRemixVideos(working);
+      }
       persist(working);
+      if (working.videoReview?.confirmed) onConfirmed?.();
       runningRef.current = false;
       setBatchBusy(false);
     }
@@ -414,22 +489,10 @@ export const VideoRemixVideosWorkspace: React.FC<{
     return (
       <GateCard
         dark={dark}
-        title="先确认全部 Video Prompt"
-        description="视频生成会使用已优化的动作、运镜、节奏、对白与环境声 Prompt。"
+        title="先准备全部视频提示词"
+        description="视频生成会使用已经整理好的动作、运镜、节奏、对白与环境声提示词。"
         action="前往镜头页"
         onAction={onSelectShots}
-      />
-    );
-  }
-
-  if (!state.keyframeReview?.confirmed) {
-    return (
-      <GateCard
-        dark={dark}
-        title="先确认全部关键帧"
-        description="只有用户确认过的 Start/Middle/End Frame 才能进入视频 Provider。"
-        action="前往关键帧页"
-        onAction={onSelectKeyframes}
       />
     );
   }
@@ -443,7 +506,7 @@ export const VideoRemixVideosWorkspace: React.FC<{
       <GateCard
         dark={dark}
         title="当前视频模型不支持原片画幅"
-        description={`原片画幅为 ${aspectRatio}。请回到镜头页选择支持该画幅的目标视频模型并重新确认 Prompt。`}
+        description={`原片画幅为 ${aspectRatio}。请回到镜头页选择支持该画幅的目标视频模型并重新确认提示词。`}
         action="前往镜头页"
         onAction={onSelectShots}
       />
@@ -485,7 +548,10 @@ export const VideoRemixVideosWorkspace: React.FC<{
               dark ? 'text-neutral-500' : 'text-neutral-500'
             }`}>
               {provider.name} · {aspectRatio} · 并发上限 {VIDEO_CONCURRENCY}。
-              生成后先用内置 FFmpeg 校准回原 Shot 时长，再等待人工确认。
+              场景和道具没有参考图时会直接使用中文提示词；关键帧也是可选项。生成后会自动校准回原镜头时长。
+              {simpleMode && outputCount === 1
+                ? '全部成功后自动进入成片合成。'
+                : '每个镜头需要选定一个候选方案后再合成。'}
             </p>
           </div>
           <div className={`rounded-xl px-3 py-2 text-[11px] ${
@@ -497,48 +563,77 @@ export const VideoRemixVideosWorkspace: React.FC<{
           </div>
         </div>
 
-        <div className={`mt-5 grid gap-3 rounded-2xl border p-4 lg:grid-cols-[1.4fr_1fr_1fr] ${
+        <div className={`mt-5 rounded-2xl border p-4 ${
           dark ? 'border-white/8 bg-black/20' : 'border-neutral-200 bg-neutral-50'
         }`}>
-          <div>
-            <div className={labelClass(dark)}>Provider 能力</div>
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              <CapabilityTag dark={dark} active={capabilities.startFrame} label="首帧" />
-              <CapabilityTag dark={dark} active={capabilities.endFrame} label="尾帧" />
-              <CapabilityTag dark={dark} active={capabilities.multiReference} label="多参考" />
-              <CapabilityTag dark={dark} active={capabilities.characterReference} label="人物参考" />
-              <CapabilityTag dark={dark} active={capabilities.audioGeneration} label="原生声音" />
-              <CapabilityTag dark={dark} active label={`最长 ${capabilities.maxDuration}s`} />
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <div className="text-xs font-medium">生成参数</div>
+              <p className={`mt-1 text-[10px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+                每个镜头 {outputCount} 个候选，共 {state.shots.length * outputCount} 个视频生成任务；平台会按实际任务分别计费。
+              </p>
             </div>
-            <button
-              type="button"
-              disabled={running}
-              onClick={onSelectShots}
-              className={`mt-3 text-[10px] underline-offset-2 hover:underline ${
-                dark ? 'text-cyan-300' : 'text-cyan-700'
-              }`}
-            >
-              在镜头页更换并重新确认目标模型
-            </button>
+            <span className={`rounded-lg px-2.5 py-1 text-[9px] ${
+              dark ? 'bg-white/6 text-neutral-400' : 'bg-white text-neutral-500'
+            }`}>
+              原片画幅 {sourceAspectRatio}
+            </span>
           </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <label className="block sm:col-span-2 xl:col-span-1">
+            <span className={labelClass(dark)}>视频模型</span>
+            <select
+              aria-label="视频模型"
+              value={videoModel}
+              disabled={running || !simpleMode}
+              onChange={event => selectSimpleVideoModel(event.target.value)}
+              className={selectClass(dark)}
+            >
+              {availableModels.map(model => (
+                <option key={model.id} value={model.id}>{model.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className={labelClass(dark)}>画幅</span>
+            <select
+              aria-label="视频画幅"
+              value={aspectRatio}
+              disabled={running}
+              onChange={event => updateVideoSettings({ aspectRatio: event.target.value })}
+              className={selectClass(dark)}
+            >
+              {provider.supportedAspectRatios.map(option => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </label>
           <label className="block">
             <span className={labelClass(dark)}>分辨率</span>
             <select
+              aria-label="视频分辨率"
               value={resolution}
               disabled={running}
-              onChange={event => persist(prepareVideoRemixVideos(
-                workingRef.current,
-                {
-                  videoModel,
-                  aspectRatio,
-                  resolution: event.target.value,
-                  generateAudio,
-                }
-              ))}
+              onChange={event => updateVideoSettings({ resolution: event.target.value })}
               className={selectClass(dark)}
             >
               {provider.resolutions.map(option => (
                 <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className={labelClass(dark)}>每个镜头生成数量</span>
+            <select
+              aria-label="每个镜头生成数量"
+              value={outputCount}
+              disabled={running}
+              onChange={event => updateVideoSettings({ outputCount: Number(event.target.value) })}
+              className={selectClass(dark)}
+            >
+              {VIDEO_REMIX_VIDEO_OUTPUT_COUNTS.map(option => (
+                <option key={option} value={option}>{option} 个候选</option>
               ))}
             </select>
           </label>
@@ -547,15 +642,7 @@ export const VideoRemixVideosWorkspace: React.FC<{
             <button
               type="button"
               disabled={running || !capabilities.audioGeneration}
-              onClick={() => persist(prepareVideoRemixVideos(
-                workingRef.current,
-                {
-                  videoModel,
-                  aspectRatio,
-                  resolution,
-                  generateAudio: !generateAudio,
-                }
-              ))}
+              onClick={() => updateVideoSettings({ generateAudio: !generateAudio })}
               className={`mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-xl text-xs disabled:opacity-40 ${
                 generateAudio
                   ? dark ? 'bg-cyan-400/12 text-cyan-300' : 'bg-cyan-50 text-cyan-700'
@@ -566,6 +653,38 @@ export const VideoRemixVideosWorkspace: React.FC<{
               {capabilities.audioGeneration
                 ? generateAudio ? '生成对白 / 环境声' : '关闭模型声音'
                 : '该模型不生成声音'}
+            </button>
+          </div>
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-1.5">
+            <CapabilityTag dark={dark} active={capabilities.startFrame} label="首帧" />
+            <CapabilityTag dark={dark} active={capabilities.endFrame} label="尾帧" />
+            <CapabilityTag dark={dark} active={capabilities.multiReference} label="多参考" />
+            <CapabilityTag dark={dark} active={capabilities.characterReference} label="人物参考" />
+            <CapabilityTag dark={dark} active={capabilities.audioGeneration} label="原生声音" />
+            <CapabilityTag dark={dark} active label={`最长 ${capabilities.maxDuration}s`} />
+            {!simpleMode && (
+              <button
+                type="button"
+                disabled={running}
+                onClick={onSelectShots}
+                className={`ml-2 text-[10px] underline-offset-2 hover:underline ${
+                  dark ? 'text-cyan-300' : 'text-cyan-700'
+                }`}
+              >
+                在镜头页更换目标模型
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={running}
+              onClick={onSelectKeyframes}
+              className={`ml-2 text-[10px] underline-offset-2 hover:underline ${
+                dark ? 'text-neutral-500' : 'text-neutral-500'
+              }`}
+            >
+              可选：生成首帧 / 尾帧增强构图控制
             </button>
           </div>
         </div>
@@ -580,7 +699,9 @@ export const VideoRemixVideosWorkspace: React.FC<{
             {batchBusy
               ? <Loader2 size={13} className="animate-spin" />
               : <Sparkles size={13} />}
-            {batchBusy ? '队列运行中…' : '生成全部未完成视频'}
+            {batchBusy
+              ? '队列运行中…'
+              : `生成全部未完成视频${generateable > 0 ? ` (${generateable})` : ''}`}
           </button>
           <button
             type="button"
@@ -594,11 +715,19 @@ export const VideoRemixVideosWorkspace: React.FC<{
           <button
             type="button"
             disabled={running || readiness.total === 0 || readiness.completed !== readiness.total}
-            onClick={() => persist(confirmVideoRemixVideos(workingRef.current))}
+            onClick={() => {
+              const next = confirmVideoRemixVideos(workingRef.current);
+              persist(next);
+              if (next.videoReview?.confirmed) onConfirmed?.();
+            }}
             className={secondaryButtonClass(dark, state.videoReview?.confirmed)}
           >
             <ShieldCheck size={13} />
-            {state.videoReview?.confirmed ? '镜头视频已全部确认' : '确认全部镜头视频'}
+            {state.videoReview?.confirmed
+              ? '每个镜头均已选定'
+              : outputCount > 1
+                ? '自动选择每镜头首个可用候选'
+                : '确认全部镜头视频'}
           </button>
         </div>
 
@@ -613,7 +742,7 @@ export const VideoRemixVideosWorkspace: React.FC<{
                 ? `${localError ? '；' : ''}${blockedFailures} 个生成任务提交状态不确定，请先核对平台历史或项目素材。`
                 : ''}
               {readiness.unsupported > 0
-                ? `${localError || blockedFailures > 0 ? '；' : ''}${readiness.unsupported} 个 Shot 超出该模型可安全恢复的时长。`
+                ? `${localError || blockedFailures > 0 ? '；' : ''}${readiness.unsupported} 个镜头超出该模型可安全恢复的时长。`
                 : ''}
             </span>
           </div>
@@ -622,40 +751,57 @@ export const VideoRemixVideosWorkspace: React.FC<{
 
       <div className="space-y-4">
         {state.shots.map((shot, index) => {
-          const video = state.generatedVideos.find(
+          const candidates = state.generatedVideos.filter(
             item => item.shotId === shot.shotId
-          );
-          if (!video) return null;
+          ).sort((left, right) => (
+            Number(left.variantIndex || 1) - Number(right.variantIndex || 1)
+          ));
+          if (candidates.length === 0) return null;
           return (
-            <VideoCard
-              key={video.id}
-              index={index}
-              shot={shot}
-              video={video}
-              active={activeIds.includes(video.id)}
-              editing={editingId === video.id}
-              running={running}
-              dark={dark}
-              rawPrompt={state.prompts[shot.shotId]?.rawPrompt || ''}
-              resolvedPrompt={state.prompts[shot.shotId]?.resolvedPrompt || ''}
-              optimizedPrompt={state.prompts[shot.shotId]?.optimizedPrompt || ''}
-              onToggleEdit={() => setEditingId(current => (
-                current === video.id ? '' : video.id
+            <section key={shot.shotId} className="space-y-3">
+              {candidates.length > 1 && (
+                <div className="flex items-center justify-between px-1">
+                  <div className="text-xs font-medium">
+                    镜头 {String(index + 1).padStart(2, '0')} · {candidates.length} 个候选
+                  </div>
+                  <span className={`text-[10px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+                    生成完成后选用其中一个
+                  </span>
+                </div>
+              )}
+              {candidates.map(video => (
+                <VideoCard
+                  key={video.id}
+                  index={index}
+                  candidateCount={candidates.length}
+                  shot={shot}
+                  video={video}
+                  active={activeIds.includes(video.id)}
+                  editing={editingId === video.id}
+                  running={running}
+                  dark={dark}
+                  rawPrompt={state.prompts[shot.shotId]?.rawPrompt || ''}
+                  resolvedPrompt={state.prompts[shot.shotId]?.resolvedPrompt || ''}
+                  optimizedPrompt={state.prompts[shot.shotId]?.optimizedPrompt || ''}
+                  onToggleEdit={() => setEditingId(current => (
+                    current === video.id ? '' : video.id
+                  ))}
+                  onSavePrompt={value => {
+                    persist(updateVideoRemixVideoPrompt(
+                      workingRef.current,
+                      video.id,
+                      value
+                    ));
+                    setEditingId('');
+                  }}
+                  onGenerate={force => void runSingle(video.id, force)}
+                  onConfirm={() => persist(confirmVideoRemixVideo(
+                    workingRef.current,
+                    video.id
+                  ))}
+                />
               ))}
-              onSavePrompt={value => {
-                persist(updateVideoRemixVideoPrompt(
-                  workingRef.current,
-                  video.id,
-                  value
-                ));
-                setEditingId('');
-              }}
-              onGenerate={force => void runSingle(video.id, force)}
-              onConfirm={() => persist(confirmVideoRemixVideo(
-                workingRef.current,
-                video.id
-              ))}
-            />
+            </section>
           );
         })}
       </div>
@@ -665,6 +811,7 @@ export const VideoRemixVideosWorkspace: React.FC<{
 
 const VideoCard: React.FC<{
   index: number;
+  candidateCount: number;
   shot: VideoRemixState['shots'][number];
   video: GeneratedShotVideo;
   active: boolean;
@@ -680,6 +827,7 @@ const VideoCard: React.FC<{
   onConfirm: () => void;
 }> = ({
   index,
+  candidateCount,
   shot,
   video,
   active,
@@ -708,7 +856,10 @@ const VideoCard: React.FC<{
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-sm font-medium">
-            Shot {String(index + 1).padStart(2, '0')}
+            镜头 {String(index + 1).padStart(2, '0')}
+            {candidateCount > 1
+              ? ` · 候选 ${video.variantIndex || 1}/${candidateCount}`
+              : ''}
           </div>
           <div className={`mt-1 text-[10px] ${
             dark ? 'text-neutral-500' : 'text-neutral-400'
@@ -734,9 +885,13 @@ const VideoCard: React.FC<{
       <div className="mt-4 grid gap-4 lg:grid-cols-[260px_1fr]">
         <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
           <MediaFigure
-            label="确认首帧"
+            label={video.startFrameUrl
+              ? '可选起始关键帧'
+              : (video.referenceImages?.length || 0) > 0
+                ? '首张资产参考图'
+                : '纯提示词生成'}
             type="image"
-            url={video.startFrameUrl}
+            url={video.startFrameUrl || video.referenceImages?.[0]}
             dark={dark}
           />
           <MediaFigure
@@ -756,8 +911,12 @@ const VideoCard: React.FC<{
               dark={dark}
               label="输入"
               value={(video.referenceImages?.length || 0) > 0
-                ? `${video.referenceImages!.length} 张多参考`
-                : video.lastFrameBase64 ? 'Start + End' : 'Start'}
+                ? `${video.referenceImages!.length} 张资产 / 关键帧参考`
+                : video.lastFrameBase64
+                  ? '起始帧 + 结束帧'
+                  : video.imageBase64
+                    ? '单张起始帧'
+                    : '纯提示词（无首尾帧）'}
             />
             <InfoBlock
               dark={dark}
@@ -795,18 +954,18 @@ const VideoCard: React.FC<{
               dark ? 'bg-white/5 text-neutral-400' : 'bg-neutral-50 text-neutral-500'
             }`}
           >
-            <span>查看提示词 · Raw / Resolved / Optimized / 提交版本</span>
+            <span>查看提示词 · 原始模板 / 已解析 / 已优化 / 提交版本</span>
             {editing ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
           </button>
 
           {editing && (
             <div className="mt-3 space-y-2">
-              <PromptDebug label="Raw" value={rawPrompt} dark={dark} />
-              <PromptDebug label="Resolved" value={resolvedPrompt} dark={dark} />
-              <PromptDebug label="Optimized" value={optimizedPrompt} dark={dark} />
+              <PromptDebug label="原始模板" value={rawPrompt} dark={dark} />
+              <PromptDebug label="已解析提示词" value={resolvedPrompt} dark={dark} />
+              <PromptDebug label="已优化提示词" value={optimizedPrompt} dark={dark} />
               <label className="block">
                 <span className={labelClass(dark)}>
-                  实际提交 Prompt · {video.promptSource === 'user' ? '已手动编辑' : 'Pipeline'}
+                  实际提交提示词 · {video.promptSource === 'user' ? '已手动编辑' : '自动生成'}
                 </span>
                 <textarea
                   value={draft}
@@ -858,7 +1017,7 @@ const VideoCard: React.FC<{
               className={secondaryButtonClass(dark, video.status === 'confirmed')}
             >
               <Check size={12} />
-              {video.status === 'confirmed' ? '已确认' : '确认镜头'}
+              {video.status === 'confirmed' ? '已选用' : '选用这个候选'}
             </button>
           </div>
         </div>

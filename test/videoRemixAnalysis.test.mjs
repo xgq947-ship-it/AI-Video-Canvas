@@ -9,6 +9,7 @@ import {
 } from '../shared/videoRemix.js';
 import {
   GeminiVideoAnalyzer,
+  VIDEO_ANALYSIS_TIMEOUT_SECONDS,
 } from '../server/services/videoRemix/geminiVideoAnalyzer.js';
 import {
   normalizeShotVideoAnalysis,
@@ -141,6 +142,28 @@ test('结构化解析拒绝 Markdown 或 JSON 前后的自由文本', () => {
   assert.deepEqual(parseStrictStructuredJson('{"ok":true}'), { ok: true });
 });
 
+test('逐镜连续性兼容 Gemini 的字符串状态与 status 别名', () => {
+  const shot = buildVideoRemixShots({ duration: 1 })[0];
+  const global = globalFixture([shot.shotId]);
+  const rawShot = shotFixture(shot.shotId);
+  rawShot.startState.characterStates.CHAR_01 = '位于画面右侧，准备入镜';
+  rawShot.endState.characterStates.CHAR_01 = {
+    position: '画面中央',
+    status: '双手叉腰微笑',
+  };
+  const result = normalizeShotVideoAnalysis(rawShot, {
+    shot,
+    globalAnalysis: global,
+  });
+
+  assert.deepEqual(result.startState.characterStates.CHAR_01, {
+    position: '位于画面右侧，准备入镜',
+  });
+  assert.deepEqual(result.endState.characterStates.CHAR_01, {
+    position: '画面中央；双手叉腰微笑',
+  });
+});
+
 test('Gemini 结构校验失败后沿用会话纠错，不重复上传完整视频', async () => {
   const calls = [];
   const valid = globalFixture(['shot_001']);
@@ -177,7 +200,9 @@ test('Gemini 结构校验失败后沿用会话纠错，不重复上传完整视�
   assert.deepEqual(result.characters[0].referenceImages, []);
   assert.equal(calls.length, 2);
   assert.equal(calls[0].files.length, 1);
+  assert.equal(calls[0].timeoutSeconds, VIDEO_ANALYSIS_TIMEOUT_SECONDS.fast);
   assert.equal(calls[1].files.length, 0);
+  assert.equal(calls[1].timeoutSeconds, VIDEO_ANALYSIS_TIMEOUT_SECONDS.fast);
   assert.equal(calls[1].conversation.conversationId, 'c_analysis');
   assert.match(calls[1].prompt, /校验错误/);
 });

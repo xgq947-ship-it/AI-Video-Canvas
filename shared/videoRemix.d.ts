@@ -1,4 +1,10 @@
+import type {
+  VideoRemixAssetConsistencyPack,
+  VideoRemixAssetKind,
+} from './videoRemixAssetPrompts.js';
+
 export const VIDEO_REMIX_SCHEMA_VERSION: 1;
+export const VIDEO_REMIX_VIDEO_OUTPUT_COUNTS: readonly [1, 2, 3, 4];
 
 export type VideoRemixStage =
   | 'source'
@@ -95,6 +101,8 @@ export interface VideoRemixAssetReplacement {
   libraryCharacterId?: string;
   libraryLookId?: string;
   generatedPrompt?: string;
+  masterPrompt?: string;
+  anchorBlock?: string;
   updatedAt: string;
 }
 
@@ -108,6 +116,9 @@ export interface CharacterAsset {
   appearsInShots: string[];
   source: AssetSource;
   replacement?: VideoRemixAssetReplacement;
+  masterPrompt?: string;
+  anchorBlock?: string;
+  consistencyPack?: VideoRemixAssetConsistencyPack;
 }
 
 export interface SceneZone {
@@ -126,6 +137,9 @@ export interface SceneAsset {
   appearsInShots: string[];
   source: AssetSource;
   replacement?: VideoRemixAssetReplacement;
+  masterPrompt?: string;
+  anchorBlock?: string;
+  consistencyPack?: VideoRemixAssetConsistencyPack;
 }
 
 export interface PropAsset {
@@ -138,6 +152,9 @@ export interface PropAsset {
   source: AssetSource;
   replacement?: VideoRemixAssetReplacement;
   removed?: boolean;
+  masterPrompt?: string;
+  anchorBlock?: string;
+  consistencyPack?: VideoRemixAssetConsistencyPack;
 }
 
 export interface FrameSubject {
@@ -362,6 +379,7 @@ export interface KeyframeResult {
 export interface GeneratedShotVideo {
   id: string;
   shotId: string;
+  variantIndex?: number;
   generatedPrompt: string;
   prompt: string;
   promptSource: 'pipeline' | 'user';
@@ -483,6 +501,7 @@ export interface VideoRemixState {
   schemaVersion: 1;
   remixId: string;
   mode: 'high_fidelity';
+  workspaceMode: 'simple' | 'advanced';
   stage: VideoRemixStage;
   source: ReferenceVideo | null;
   analysisRun: {
@@ -511,6 +530,7 @@ export interface VideoRemixState {
     imageModel?: string;
     aspectRatio?: string;
     resolution?: string;
+    strategy?: 'single' | 'adaptive';
   };
   videoReview: {
     confirmed: boolean;
@@ -520,6 +540,7 @@ export interface VideoRemixState {
     aspectRatio?: string;
     resolution?: string;
     generateAudio?: boolean;
+    outputCount?: number;
   };
   story: {
     summary: string;
@@ -572,6 +593,8 @@ export interface VideoRemixState {
 }
 
 export const VIDEO_REMIX_STAGES: readonly VideoRemixStage[];
+export const VIDEO_REMIX_STAGE_LABELS: Readonly<Record<VideoRemixStage, string>>;
+export const VIDEO_REMIX_MOTION_LABELS: Readonly<Record<MotionComplexity, string>>;
 export const SHOT_ANALYSIS_FRAME_POSITIONS: readonly ShotAnalysisFramePosition[];
 export const VIDEO_REMIX_KEYFRAME_POSITIONS: Readonly<{
   simple: readonly ['start'];
@@ -586,6 +609,10 @@ export const HIGH_FIDELITY_LOCKS: Readonly<VideoRemixLocks>;
 
 export function createVideoRemixState(
   overrides?: Partial<VideoRemixState> & { remixId?: string }
+): VideoRemixState;
+export function setVideoRemixWorkspaceMode(
+  state: unknown,
+  workspaceMode?: 'simple' | 'advanced'
 ): VideoRemixState;
 export function isVideoRemixState(value: unknown): value is VideoRemixState;
 export function workspaceTabForStage(stage: VideoRemixStage): VideoRemixWorkspaceTab;
@@ -684,6 +711,66 @@ export function replaceVideoRemixAsset(
   assetId: string,
   replacement: VideoRemixAssetReplacement | null
 ): VideoRemixState;
+export function getVideoRemixAssetConsistencyPack(
+  state: unknown,
+  kind: VideoRemixAssetKind,
+  assetId: string
+): VideoRemixAssetConsistencyPack | null;
+export function getVideoRemixAssetConsistencyReadiness(state: unknown): {
+  total: number;
+  primaryConfirmed: number;
+  confirmed: number;
+  ready: number;
+  entries: Array<{
+    kind: VideoRemixAssetKind;
+    assetId: string;
+    primaryConfirmed: boolean;
+    confirmed: boolean;
+    ready: boolean;
+  }>;
+};
+export function getVideoRemixMinimumAssetReadiness(state: unknown): {
+  characterAssets: number;
+  preparedCharacters: number;
+  preparedCharacterIds: string[];
+  requiredCharacters: number;
+  ready: boolean;
+};
+export function prepareVideoRemixAssetConsistencyPack(
+  state: unknown,
+  kind: VideoRemixAssetKind,
+  assetId: string
+): VideoRemixState;
+export function beginVideoRemixAssetConsistencyGeneration(
+  state: unknown,
+  kind: VideoRemixAssetKind,
+  assetId: string,
+  profileId: string
+): VideoRemixState;
+export function applyVideoRemixAssetConsistencyResult(
+  state: unknown,
+  kind: VideoRemixAssetKind,
+  assetId: string,
+  profileId: string,
+  result: { url: string; source?: 'generated' | 'existing' | 'upload' }
+): VideoRemixState;
+export function setVideoRemixAssetConsistencyError(
+  state: unknown,
+  kind: VideoRemixAssetKind,
+  assetId: string,
+  profileId: string,
+  message: string
+): VideoRemixState;
+export function confirmVideoRemixAssetPrimaryReference(
+  state: unknown,
+  kind: VideoRemixAssetKind,
+  assetId: string
+): VideoRemixState;
+export function confirmVideoRemixAssetConsistencyPack(
+  state: unknown,
+  kind: VideoRemixAssetKind,
+  assetId: string
+): VideoRemixState;
 export function replaceVideoRemixCharacterLook(
   state: unknown,
   characterId: string,
@@ -778,6 +865,10 @@ export function getVideoRemixPromptReadiness(state: unknown): {
   confirmed: boolean;
 };
 export function confirmVideoRemixPrompts(state: unknown): VideoRemixState;
+export function prepareVideoRemixSimplePrompts(
+  state: unknown,
+  targetModel?: string
+): VideoRemixState;
 export function keyframePositionsForComplexity(
   complexity?: MotionComplexity
 ): Array<'start' | 'middle' | 'end'>;
@@ -796,12 +887,24 @@ export function getVideoRemixKeyframeReferenceImages(
   shotId: string,
   position?: 'start' | 'middle' | 'end'
 ): string[];
+export function getVideoRemixShotReferencePlan(
+  state: unknown,
+  shotId: string
+): {
+  scenario: 'general' | 'product_closeup' | 'character_prop_interaction' | 'character_closeup' | 'character_full_body' | 'wide_scene';
+  references: Array<{
+    url: string;
+    label: string;
+    role: 'character' | 'look' | 'scene' | 'prop';
+  }>;
+};
 export function prepareVideoRemixKeyframes(
   state: unknown,
   options?: {
     imageModel?: string;
     aspectRatio?: string;
     resolution?: string;
+    strategy?: 'single' | 'adaptive';
   }
 ): VideoRemixState;
 export function beginVideoRemixKeyframeGeneration(
@@ -883,6 +986,7 @@ export function prepareVideoRemixVideos(
     aspectRatio?: string;
     resolution?: string;
     generateAudio?: boolean;
+    outputCount?: number;
   }
 ): VideoRemixState;
 export function beginVideoRemixVideoGeneration(
@@ -933,6 +1037,8 @@ export function updateVideoRemixVideoPrompt(
 ): VideoRemixState;
 export function getVideoRemixVideoReadiness(state: unknown): {
   total: number;
+  candidateTotal: number;
+  completedCandidates: number;
   completed: number;
   confirmed: number;
   pending: number;

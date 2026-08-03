@@ -44,10 +44,8 @@ export const isValidNodeConnection = (parentType, childType) => {
     );
   }
 
-  // Video Remix 是一条子工作流容器：接收一个参考视频，并把最终结果
-  // 作为普通 Video 节点继续连接到画布主流程。
-  if (childType === NODE.VIDEO_REMIX) return parentType === NODE.VIDEO;
-  if (parentType === NODE.VIDEO_REMIX) return childType === NODE.VIDEO;
+  // Video Remix 已提升为项目级工作区；旧节点只用于加载迁移，不能再参与画布连线。
+  if (childType === NODE.VIDEO_REMIX || parentType === NODE.VIDEO_REMIX) return false;
 
   // 配音节点还可连向 VIDEO，作为 Seedance 2.0 的人物音色参考。
   // SFX / BGM / 字幕仍只能连向 RENDER。
@@ -74,7 +72,7 @@ export const isValidNodeConnection = (parentType, childType) => {
   }
 
   if (parentType === NODE.VIDEO) {
-    return childType === NODE.VIDEO || childType === NODE.VIDEO_EDITOR || childType === NODE.VIDEO_REMIX;
+    return childType === NODE.VIDEO || childType === NODE.VIDEO_EDITOR;
   }
   if (parentType === NODE.IMAGE) return childType === NODE.IMAGE || childType === NODE.VIDEO || childType === NODE.IMAGE_EDITOR;
   if (parentType === NODE.IMAGE_EDITOR) return childType === NODE.IMAGE || childType === NODE.VIDEO || childType === NODE.IMAGE_EDITOR;

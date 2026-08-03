@@ -387,6 +387,25 @@ export function extractText(payloads) {
     return best.trim();
 }
 
+/**
+ * Conversation lookup responses may contain several completed turns. The
+ * normal StreamGenerate extractor intentionally chooses the longest progressive
+ * candidate, but recovery needs the newest candidate after a known prior turn.
+ */
+export function extractLatestCandidateText(payloads, { excludeCandidateIds = [] } = {}) {
+    const excluded = new Set((excludeCandidateIds || []).filter(Boolean));
+    let latest = '';
+    walkNodes(payloads, node => {
+        if (!Array.isArray(node) || node.length < 2) return;
+        if (typeof node[0] !== 'string' || !node[0].startsWith('rc_') || excluded.has(node[0])) return;
+        const body = node[1];
+        if (!Array.isArray(body)) return;
+        const text = body.find(looksLikeProse);
+        if (text) latest = text;
+    });
+    return latest.trim();
+}
+
 const IMAGE_MIME = /^image\/(png|jpe?g|webp)$/i;
 const VIDEO_MIME = /^video\/(mp4|webm)$/i;
 const MEDIA_HOST = /^https?:\/\/(lh3\.googleusercontent\.com|[a-z0-9.-]*usercontent\.google\.com)\//i;

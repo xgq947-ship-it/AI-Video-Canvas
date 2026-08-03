@@ -16,6 +16,7 @@ import { createAutoSaveScheduler } from '../utils/autoSaveScheduler.js';
 interface UseAutoSaveOptions {
     isDirty: boolean;
     nodes: NodeData[];
+    persistableItemCount?: number;
     onSave: () => Promise<void>;
     interval?: number; // In milliseconds, default 60s
 }
@@ -23,15 +24,16 @@ interface UseAutoSaveOptions {
 export const useAutoSave = ({
     isDirty,
     nodes,
+    persistableItemCount = nodes.length,
     onSave,
     interval = 60000
 }: UseAutoSaveOptions) => {
     const lastSaveTimeRef = useRef<number>(Date.now());
-    const stateRef = useRef({ isDirty, nodes, onSave });
+    const stateRef = useRef({ isDirty, nodes, persistableItemCount, onSave });
 
     // 每次 render 后刷新快照；定时器读的是 ref，所以不需要重建。
     useEffect(() => {
-        stateRef.current = { isDirty, nodes, onSave };
+        stateRef.current = { isDirty, nodes, persistableItemCount, onSave };
     });
 
     useEffect(() => {
@@ -39,7 +41,7 @@ export const useAutoSave = ({
             intervalMs: interval,
             getState: () => ({
                 isDirty: stateRef.current.isDirty,
-                nodeCount: stateRef.current.nodes.length,
+                nodeCount: stateRef.current.persistableItemCount,
                 save: stateRef.current.onSave
             }),
             onSaved: () => {

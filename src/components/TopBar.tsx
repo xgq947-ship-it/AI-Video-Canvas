@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, CircleHelp, Globe2, KeyRound, Loader2, Plus, RefreshCw, Save, Settings, Trash2 } from 'lucide-react';
+import { ChevronDown, CircleHelp, Film, Globe2, KeyRound, LayoutDashboard, Loader2, Plus, RefreshCw, Save, Settings, Trash2 } from 'lucide-react';
 import { NodeData } from '../types';
 import { ApiKeySettingsModal } from './modals/ApiKeySettingsModal';
 import { StartupSetupGuideModal } from './modals/StartupSetupGuideModal';
@@ -33,6 +33,8 @@ interface TopBarProps {
     onToggleTheme: () => void;
     showBrand?: boolean;
     sidebarOffset?: number;
+    activeWorkspace?: 'canvas' | 'video-remix';
+    onWorkspaceChange?: (workspace: 'canvas' | 'video-remix') => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -53,7 +55,9 @@ export const TopBar: React.FC<TopBarProps> = ({
     canvasTheme,
     onToggleTheme,
     showBrand = true,
-    sidebarOffset = 0
+    sidebarOffset = 0,
+    activeWorkspace = 'canvas',
+    onWorkspaceChange,
 }) => {
     const [showNewConfirm, setShowNewConfirm] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
@@ -160,16 +164,21 @@ export const TopBar: React.FC<TopBarProps> = ({
     return (
         <>
             <div
-                className="fixed top-0 left-0 h-14 flex items-center justify-between px-6 z-50 pointer-events-none transition-all duration-300"
+                className={`fixed top-0 left-0 z-50 flex h-14 items-center justify-between border-b px-4 pointer-events-none backdrop-blur-xl transition-all duration-300 ${
+                    canvasTheme === 'dark'
+                        ? 'border-white/[0.07] bg-[#0d0e0f]/90 shadow-[0_8px_30px_rgba(0,0,0,0.2)]'
+                        : 'border-neutral-200/90 bg-white/90 shadow-[0_8px_24px_rgba(15,23,42,0.06)]'
+                }`}
                 style={{
                     left: sidebarOffset,
                     width: `calc(100% - ${sidebarOffset}px)`
                 }}
             >
-                {/* Left: Logo & Title */}
-                {showBrand ? <div className="flex items-center gap-3 pointer-events-auto">
-                    <img src="/TwitCanva-logo.png" alt="Evan Logo" className="w-8 h-8 rounded-lg object-contain bg-black/20" />
-                    {isEditingTitle ? (
+                {/* Left: project identity and app-level workspaces */}
+                <div className="flex items-center gap-3 pointer-events-auto">
+                    {showBrand && <>
+                      <img src="/TwitCanva-logo.png" alt="Evan Logo" className="w-8 h-8 rounded-lg object-contain bg-black/20" />
+                      {isEditingTitle ? (
                         <input
                             ref={canvasTitleInputRef as React.RefObject<HTMLInputElement | null>}
                             type="text"
@@ -179,7 +188,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                             onKeyDown={handleTitleKeyDown}
                             className="font-semibold text-neutral-300 bg-transparent border-b border-blue-500 outline-none min-w-[100px]"
                         />
-                    ) : (
+                      ) : (
                         <span
                             className={`font-semibold cursor-pointer transition-colors ${canvasTheme === 'dark' ? 'text-neutral-300 hover:text-white' : 'text-neutral-900 hover:text-neutral-600'}`}
                             onDoubleClick={handleTitleDoubleClick}
@@ -187,8 +196,43 @@ export const TopBar: React.FC<TopBarProps> = ({
                         >
                             {canvasTitle}
                         </span>
+                      )}
+                    </>}
+                    {onWorkspaceChange && (
+                      <nav className={`flex items-center rounded-xl border p-1 ${
+                        canvasTheme === 'dark'
+                          ? 'border-white/10 bg-black/30 shadow-inner'
+                          : 'border-neutral-200 bg-neutral-100/90'
+                      }`} aria-label="功能工作区">
+                        <button
+                          type="button"
+                          onClick={() => onWorkspaceChange('canvas')}
+                          aria-current={activeWorkspace === 'canvas' ? 'page' : undefined}
+                          className={`flex h-8 items-center gap-2 rounded-lg px-3.5 text-xs font-medium transition-all ${
+                            activeWorkspace === 'canvas'
+                              ? canvasTheme === 'dark' ? 'bg-white text-neutral-950 shadow-sm' : 'bg-neutral-900 text-white shadow-sm'
+                              : canvasTheme === 'dark' ? 'text-neutral-400 hover:bg-white/5 hover:text-white' : 'text-neutral-500 hover:bg-white hover:text-neutral-900'
+                          }`}
+                        >
+                          <LayoutDashboard size={14} />
+                          AI 画布
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onWorkspaceChange('video-remix')}
+                          aria-current={activeWorkspace === 'video-remix' ? 'page' : undefined}
+                          className={`flex h-8 items-center gap-2 rounded-lg px-3.5 text-xs font-medium transition-all ${
+                            activeWorkspace === 'video-remix'
+                              ? 'bg-cyan-400 text-neutral-950 shadow-sm'
+                              : canvasTheme === 'dark' ? 'text-neutral-400 hover:bg-white/5 hover:text-white' : 'text-neutral-500 hover:bg-white hover:text-neutral-900'
+                          }`}
+                        >
+                          <Film size={14} />
+                          短视频复刻
+                        </button>
+                      </nav>
                     )}
-                </div> : <div />}
+                </div>
 
                 {/* Right: Actions */}
                 <div className="flex items-center gap-3 pointer-events-auto">
@@ -221,7 +265,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                         title="先保存，再从项目文件重新加载当前画布"
                     >
                         <RefreshCw size={16} className={isRefreshing ? 'animate-spin' : ''} />
-                        刷新画布
+                        {activeWorkspace === 'video-remix' ? '刷新项目' : '刷新画布'}
                     </button>
                     <button
                         onClick={handleNewClick}
@@ -334,7 +378,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                     <div className="bg-[#1a1a1a] border border-neutral-700 rounded-2xl p-6 w-[400px] shadow-2xl">
                         <h3 className="text-lg font-semibold text-white mb-2">当前内容尚未保存</h3>
                         <p className="text-neutral-400 text-sm mb-6">
-                            新建项目会清空当前画布，是否先保存？
+                            新建项目会清空当前项目内容，是否先保存？
                         </p>
                         <div className="flex gap-3 justify-end">
                             <button

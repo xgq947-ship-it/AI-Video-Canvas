@@ -287,7 +287,7 @@ export async function calibrateVideoRemixShot({
     await runner(context.ffmpegPath || FFMPEG_PATH, args, {
       spawnImpl: context.spawnImpl || spawn,
       timeoutMs: 10 * 60_000,
-      label: `Shot ${safeShotId} 时长校准`,
+      label: `镜头 ${safeShotId} 时长校准`,
     });
     await fsp.rename(temporaryPath, outputPath);
   } catch (error) {

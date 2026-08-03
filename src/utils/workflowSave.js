@@ -35,3 +35,23 @@ export function mergeServerNormalizedNodes(currentNodes, submittedNodes, normali
     return nextNode;
   });
 }
+
+/**
+ * The server may rewrite nested Remix media URLs while organizing a project.
+ * Only accept that normalized record when the client has not edited it since
+ * the submitted snapshot was captured.
+ */
+export function mergeServerNormalizedVideoRemixes(
+  currentProjects,
+  submittedProjects,
+  normalizedProjects
+) {
+  const submittedById = new Map((submittedProjects || []).map(project => [project.id, project]));
+  const normalizedById = new Map((normalizedProjects || []).map(project => [project.id, project]));
+  return (currentProjects || []).map(current => {
+    const submitted = submittedById.get(current.id);
+    const normalized = normalizedById.get(current.id);
+    if (!submitted || !normalized) return current;
+    return current.updatedAt === submitted.updatedAt ? normalized : current;
+  });
+}

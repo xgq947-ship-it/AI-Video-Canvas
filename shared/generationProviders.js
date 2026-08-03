@@ -8,7 +8,7 @@
 export const IMAGE_GENERATION_PROVIDERS = Object.freeze([
   {
     id: 'codex-imagegen',
-    name: 'Codex 生图',
+    name: 'Codex CLI · ChatGPT 生图',
     provider: 'codex',
     browserProvider: null,
     supportsImageToImage: true,
@@ -215,6 +215,11 @@ export function resetDiscoveredModelRegistry() {
 /** 节点下拉只展示有明确协议路由的模型；发现数据只叠加 capability。 */
 export function listImageGenerationProviders() {
   return IMAGE_GENERATION_PROVIDERS.map(withOverlay);
+}
+
+/** Video Remix 一致性设定图允许所有支持参考图的图片通道，包括 Codex CLI。 */
+export function listVideoRemixConsistencyImageProviders() {
+  return listImageGenerationProviders().filter(model => model.supportsImageToImage);
 }
 
 export function listVideoGenerationProviders() {

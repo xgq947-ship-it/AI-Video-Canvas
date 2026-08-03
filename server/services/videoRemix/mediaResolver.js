@@ -190,7 +190,7 @@ export class DyXhsDownloaderProvider {
       });
     }
     if (data.type !== 'video') {
-      throw new MediaResolverError('当前链接解析为图集，Video Remix 第一版只支持视频', {
+      throw new MediaResolverError('当前链接解析为图集，视频复刻目前只支持视频', {
         code: 'UNSUPPORTED_MEDIA_TYPE',
         status: 415,
       });

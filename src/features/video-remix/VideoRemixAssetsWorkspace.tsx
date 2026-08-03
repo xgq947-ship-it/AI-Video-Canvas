@@ -2,6 +2,7 @@ import React from 'react';
 import {
   AlertCircle,
   Check,
+  Copy,
   Edit3,
   Images,
   Library,
@@ -9,6 +10,7 @@ import {
   Package,
   Plus,
   RotateCcw,
+  ShieldCheck,
   Sparkles,
   Trash2,
   Upload,
@@ -18,19 +20,28 @@ import {
 
 import {
   addVideoRemixCharacterLook,
+  applyVideoRemixAssetConsistencyResult,
+  beginVideoRemixAssetConsistencyGeneration,
   confirmVideoRemixAssets,
+  confirmVideoRemixAssetConsistencyPack,
+  confirmVideoRemixAssetPrimaryReference,
   createVideoRemixState,
+  getVideoRemixAssetConsistencyPack,
+  getVideoRemixAssetConsistencyReadiness,
+  getVideoRemixMinimumAssetReadiness,
+  prepareVideoRemixAssetConsistencyPack,
   replaceVideoRemixAsset,
   replaceVideoRemixCharacterLook,
   resolveVideoRemixAsset,
   resolveVideoRemixCharacterLook,
   setVideoRemixPropRemoved,
+  setVideoRemixAssetConsistencyError,
   setVideoRemixShotCharacterLook,
   type AssetSource,
   type SceneZone,
   type VideoRemixAssetReplacement,
 } from '../../../shared/videoRemix.js';
-import { listImageGenerationProviders } from '../../../shared/generationProviders.js';
+import { listVideoRemixConsistencyImageProviders } from '../../../shared/generationProviders.js';
 import { AssetLibraryPanel, type LibraryAsset } from '../../components/AssetLibraryPanel';
 import { generateImage } from '../../services/generationService';
 import { NodeData } from '../../types';
@@ -47,6 +58,11 @@ type AssetTarget = {
   assetId: string;
   lookId?: string;
 };
+type ConsistencyUploadTarget = {
+  kind: AssetKind;
+  assetId: string;
+  profileId: string;
+};
 
 interface TargetSnapshot {
   name: string;
@@ -58,12 +74,14 @@ interface TargetSnapshot {
   zones: SceneZone[];
   category: 'hero' | 'interactive' | 'background';
   referenceImages: string[];
+  masterPrompt: string;
+  anchorBlock: string;
   source: AssetSource;
   replacement?: VideoRemixAssetReplacement;
 }
 
 const SOURCE_LABEL: Record<AssetSource, string> = {
-  analysis: '沿用反推',
+  analysis: 'AI 剧情方案',
   generated: 'AI 生成',
   upload: '本地上传',
   library: '素材库',
@@ -75,9 +93,24 @@ const KIND_LABEL: Record<AssetKind, string> = {
   props: '道具',
 };
 
-const IMAGE_MODELS = listImageGenerationProviders().filter(
-  model => model.id !== 'codex-imagegen'
-);
+const PROP_CATEGORY_LABEL = {
+  hero: '核心商品',
+  interactive: '交互道具',
+  background: '背景元素',
+} as const;
+
+const IMAGE_MODELS = listVideoRemixConsistencyImageProviders();
+const DEFAULT_IMAGE_MODEL_ID = IMAGE_MODELS.find(
+  model => model.id === 'google-flow-nano-banana-pro'
+)?.id || IMAGE_MODELS[0]?.id || '';
+
+function chosenReferenceImages(
+  source: AssetSource | undefined,
+  referenceImages: string[] | undefined
+) {
+  if (source === 'analysis') return [];
+  return (referenceImages || []).filter(Boolean);
+}
 
 function snapshotForTarget(
   state: VideoRemixState,
@@ -97,7 +130,9 @@ function snapshotForTarget(
       voiceDescription: {},
       zones: [],
       category: 'interactive',
-      referenceImages: current.referenceImages || [],
+      referenceImages: chosenReferenceImages(current.source, current.referenceImages),
+      masterPrompt: '',
+      anchorBlock: '',
       source: current.source || 'analysis',
       replacement: base.replacement,
     };
@@ -121,7 +156,9 @@ function snapshotForTarget(
       ),
       zones: [],
       category: 'interactive',
-      referenceImages: current.referenceImages || [],
+      referenceImages: chosenReferenceImages(current.source, current.referenceImages),
+      masterPrompt: current.masterPrompt || '',
+      anchorBlock: current.anchorBlock || '',
       source: current.source,
       replacement: base.replacement,
     };
@@ -139,7 +176,9 @@ function snapshotForTarget(
       voiceDescription: {},
       zones: current.zones || [],
       category: 'interactive',
-      referenceImages: current.referenceImages || [],
+      referenceImages: chosenReferenceImages(current.source, current.referenceImages),
+      masterPrompt: current.masterPrompt || '',
+      anchorBlock: current.anchorBlock || '',
       source: current.source,
       replacement: base.replacement,
     };
@@ -156,7 +195,9 @@ function snapshotForTarget(
     voiceDescription: {},
     zones: [],
     category: current.category,
-    referenceImages: current.referenceImages || [],
+    referenceImages: chosenReferenceImages(current.source, current.referenceImages),
+    masterPrompt: current.masterPrompt || '',
+    anchorBlock: current.anchorBlock || '',
     source: current.source,
     replacement: base.replacement,
   };
@@ -171,7 +212,7 @@ function replacementFromSnapshot(
   const referenceImages = overrides.referenceImages === undefined
     ? snapshot.referenceImages
     : overrides.referenceImages;
-  const common = {
+  const common: VideoRemixAssetReplacement = {
     ...(snapshot.replacement || {}),
     ...overrides,
     source,
@@ -185,6 +226,18 @@ function replacementFromSnapshot(
       description: overrides.description ?? snapshot.description,
     };
   }
+  const semanticOverride = overrides.name !== undefined
+    || overrides.description !== undefined
+    || overrides.identity !== undefined
+    || overrides.visualDescription !== undefined
+    || overrides.zones !== undefined
+    || overrides.category !== undefined;
+  common.masterPrompt = Object.hasOwn(overrides, 'masterPrompt')
+    ? overrides.masterPrompt
+    : semanticOverride ? undefined : snapshot.masterPrompt;
+  common.anchorBlock = Object.hasOwn(overrides, 'anchorBlock')
+    ? overrides.anchorBlock
+    : semanticOverride ? undefined : snapshot.anchorBlock;
   if (target.kind === 'characters') {
     return {
       ...common,
@@ -207,27 +260,14 @@ function replacementFromSnapshot(
   };
 }
 
-function originalPreviewFor(
-  state: VideoRemixState,
-  target: AssetTarget
-) {
-  if (target.kind === 'characters' && target.lookId) {
-    return state.assets.characters
-      .find(item => item.id === target.assetId)
-      ?.looks.find(item => item.id === target.lookId)
-      ?.referenceImages?.[0];
-  }
-  return state.assets[target.kind]
-    .find(item => item.id === target.assetId)
-    ?.referenceImages?.[0];
-}
-
 export const VideoRemixAssetsWorkspace: React.FC<{
   node: NodeData;
   state: VideoRemixState;
   workflowId?: string;
   onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
   onSelectAnalysis: () => void;
+  simpleMode?: boolean;
+  onConfirmed?: () => void;
   dark: boolean;
 }> = ({
   node,
@@ -235,19 +275,33 @@ export const VideoRemixAssetsWorkspace: React.FC<{
   workflowId,
   onUpdateNode,
   onSelectAnalysis,
+  simpleMode = false,
+  onConfirmed,
   dark,
 }) => {
   const [activeKind, setActiveKind] = React.useState<AssetKind>('characters');
   const [pickerTarget, setPickerTarget] = React.useState<AssetTarget | null>(null);
   const [editorTarget, setEditorTarget] = React.useState<AssetTarget | null>(null);
   const [uploadTarget, setUploadTarget] = React.useState<AssetTarget | null>(null);
+  const [consistencyUploadTarget, setConsistencyUploadTarget] = React.useState<ConsistencyUploadTarget | null>(null);
   const [busy, setBusy] = React.useState('');
   const [error, setError] = React.useState('');
+  const [copied, setCopied] = React.useState('');
+  const [consistencyModelId, setConsistencyModelId] = React.useState(
+    DEFAULT_IMAGE_MODEL_ID
+  );
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const consistencyFileInputRef = React.useRef<HTMLInputElement>(null);
+  const workingRef = React.useRef(state);
 
   const persist = React.useCallback((next: VideoRemixState) => {
+    workingRef.current = next;
     onUpdateNode(node.id, { videoRemix: next });
   }, [node.id, onUpdateNode]);
+
+  React.useEffect(() => {
+    if (!busy) workingRef.current = state;
+  }, [busy, state]);
 
   const applyReplacement = React.useCallback((
     target: AssetTarget,
@@ -255,14 +309,29 @@ export const VideoRemixAssetsWorkspace: React.FC<{
   ) => {
     const next = target.kind === 'characters' && target.lookId
       ? replaceVideoRemixCharacterLook(
-        state,
+        workingRef.current,
         target.assetId,
         target.lookId,
         replacement
       )
-      : replaceVideoRemixAsset(state, target.kind, target.assetId, replacement);
+      : replaceVideoRemixAsset(
+        workingRef.current,
+        target.kind,
+        target.assetId,
+        replacement
+      );
     persist(next);
-  }, [persist, state]);
+  }, [persist]);
+
+  const copyText = React.useCallback(async (key: string, value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(key);
+      window.setTimeout(() => setCopied(current => current === key ? '' : current), 1600);
+    } catch {
+      setError('复制失败，请手动选择提示词复制');
+    }
+  }, []);
 
   const requireProject = () => {
     if (!workflowId) throw new Error('请先保存当前项目，再添加资产参考图');
@@ -299,6 +368,53 @@ export const VideoRemixAssetsWorkspace: React.FC<{
     } finally {
       setBusy('');
       setUploadTarget(null);
+    }
+  };
+
+  const startConsistencyUpload = (target: ConsistencyUploadTarget) => {
+    setConsistencyUploadTarget(target);
+    setError('');
+    consistencyFileInputRef.current?.click();
+  };
+
+  const handleConsistencyUpload = async (file?: File) => {
+    const target = consistencyUploadTarget;
+    if (!file || !target || busy) return;
+    const pack = getVideoRemixAssetConsistencyPack(
+      workingRef.current,
+      target.kind,
+      target.assetId
+    );
+    const item = pack?.items.find(candidate => candidate.profileId === target.profileId);
+    if (!pack || !item) return;
+    const missingDependency = item.dependsOn.find(dependency => (
+      !pack.items.find(candidate => candidate.profileId === dependency)?.url
+    ));
+    if ((item.dependsOn.length > 0 && !pack.primaryConfirmed) || missingDependency) {
+      setError('请先确认并准备好前序参考图，再上传此设定图');
+      setConsistencyUploadTarget(null);
+      return;
+    }
+    setBusy(`consistency-upload:${target.assetId}:${target.profileId}`);
+    setError('');
+    try {
+      const url = await uploadVideoRemixAssetImage({
+        workflowId: requireProject(),
+        file,
+        prompt: item.prompt,
+      });
+      persist(applyVideoRemixAssetConsistencyResult(
+        workingRef.current,
+        target.kind,
+        target.assetId,
+        target.profileId,
+        { url, source: 'upload' }
+      ));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '一致性参考图上传失败');
+    } finally {
+      setBusy('');
+      setConsistencyUploadTarget(null);
     }
   };
 
@@ -373,9 +489,18 @@ export const VideoRemixAssetsWorkspace: React.FC<{
   ) => {
     const snapshot = snapshotForTarget(state, target);
     if (!snapshot) return;
+    const semanticChanged = values.name !== snapshot.name
+      || values.description !== snapshot.description
+      || values.identity !== snapshot.identity
+      || values.visualDescription !== snapshot.visualDescription
+      || JSON.stringify(values.zones) !== JSON.stringify(snapshot.zones)
+      || values.category !== snapshot.category;
+    const promptOverrides = semanticChanged && values.masterPrompt === snapshot.masterPrompt
+      ? { ...values, masterPrompt: undefined, anchorBlock: undefined }
+      : values;
     applyReplacement(
       target,
-      replacementFromSnapshot(target, snapshot, snapshot.source, values)
+      replacementFromSnapshot(target, snapshot, snapshot.source, promptOverrides)
     );
     setEditorTarget(null);
   };
@@ -389,6 +514,15 @@ export const VideoRemixAssetsWorkspace: React.FC<{
     if (busy) return;
     const snapshot = snapshotForTarget(state, target);
     if (!snapshot) return;
+    const semanticChanged = values.name !== snapshot.name
+      || values.description !== snapshot.description
+      || values.identity !== snapshot.identity
+      || values.visualDescription !== snapshot.visualDescription
+      || JSON.stringify(values.zones) !== JSON.stringify(snapshot.zones)
+      || values.category !== snapshot.category;
+    const promptOverrides = semanticChanged && values.masterPrompt === snapshot.masterPrompt
+      ? { ...values, masterPrompt: undefined, anchorBlock: undefined }
+      : values;
     setBusy(`generate:${target.assetId}:${target.lookId || ''}`);
     setError('');
     try {
@@ -404,9 +538,15 @@ export const VideoRemixAssetsWorkspace: React.FC<{
           ? '1:1'
           : selectedModel?.supportedAspectRatios[0] || preferredAspectRatio;
       const characterReferences = target.lookId
-        ? resolveVideoRemixAsset(
-          state.assets.characters.find(item => item.id === target.assetId)!
-        ).referenceImages.slice(0, selectedModel?.maxReferenceImages || 1)
+        ? (() => {
+            const character = resolveVideoRemixAsset(
+              state.assets.characters.find(item => item.id === target.assetId)!
+            );
+            return chosenReferenceImages(
+              character.source,
+              character.referenceImages
+            ).slice(0, selectedModel?.maxReferenceImages || 1);
+          })()
         : [];
       const imageUrl = await generateImage({
         workflowId: requireProject(),
@@ -420,7 +560,7 @@ export const VideoRemixAssetsWorkspace: React.FC<{
       applyReplacement(
         target,
         replacementFromSnapshot(target, snapshot, 'generated', {
-          ...values,
+          ...promptOverrides,
           referenceImages: [imageUrl],
           generatedPrompt: prompt,
         })
@@ -431,6 +571,138 @@ export const VideoRemixAssetsWorkspace: React.FC<{
     } finally {
       setBusy('');
     }
+  };
+
+  const generateConsistencyItemInternal = React.useCallback(async (
+    kind: AssetKind,
+    assetId: string,
+    profileId: string
+  ) => {
+    let working = prepareVideoRemixAssetConsistencyPack(
+      workingRef.current,
+      kind,
+      assetId
+    );
+    let pack = getVideoRemixAssetConsistencyPack(working, kind, assetId);
+    const item = pack?.items.find(candidate => candidate.profileId === profileId);
+    const model = IMAGE_MODELS.find(candidate => candidate.id === consistencyModelId);
+    if (!pack || !item) throw new Error('找不到该资产的一致性参考图任务');
+    if (!model) throw new Error('请选择可用的图片模型');
+    if (item.dependsOn.length > 0 && !pack.primaryConfirmed) {
+      throw new Error('请先确认主参考图，再生成其余角度');
+    }
+    const missingDependency = item.dependsOn.find(dependency => (
+      !pack!.items.find(candidate => candidate.profileId === dependency)?.url
+    ));
+    if (missingDependency) throw new Error('前序参考图尚未生成，请按顺序继续');
+    const aspectRatio = model.supportedAspectRatios.includes(item.aspectRatio)
+      ? item.aspectRatio
+      : model.supportedAspectRatios.includes('1:1')
+        ? '1:1'
+        : model.supportedAspectRatios[0] || item.aspectRatio;
+    const itemIndex = pack.items.findIndex(candidate => candidate.profileId === profileId);
+    const references = pack.items
+      .slice(0, Math.max(1, itemIndex + 1))
+      .map(candidate => candidate.url)
+      .filter((url): url is string => Boolean(url))
+      .slice(0, model.maxReferenceImages);
+    working = beginVideoRemixAssetConsistencyGeneration(
+      working,
+      kind,
+      assetId,
+      profileId
+    );
+    persist(working);
+    try {
+      const url = await generateImage({
+        workflowId: requireProject(),
+        nodeId: `${node.id}_${kind}_${assetId}_${profileId}`,
+        prompt: item.prompt,
+        aspectRatio,
+        resolution: model.defaultResolution || model.resolutions[0] || '自动',
+        imageModel: model.id,
+        ...(references.length > 0 ? { imageBase64: references } : {}),
+      });
+      working = applyVideoRemixAssetConsistencyResult(
+        workingRef.current,
+        kind,
+        assetId,
+        profileId,
+        { url }
+      );
+      persist(working);
+      return true;
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : '一致性参考图生成失败';
+      persist(setVideoRemixAssetConsistencyError(
+        workingRef.current,
+        kind,
+        assetId,
+        profileId,
+        message
+      ));
+      throw caught;
+    }
+  }, [consistencyModelId, node.id, persist, workflowId]);
+
+  const generateConsistencyItem = async (
+    kind: AssetKind,
+    assetId: string,
+    profileId: string
+  ) => {
+    if (busy) return;
+    setBusy(`consistency:${assetId}:${profileId}`);
+    setError('');
+    try {
+      await generateConsistencyItemInternal(kind, assetId, profileId);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '一致性参考图生成失败');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const generateConsistencyDependents = async (kind: AssetKind, assetId: string) => {
+    if (busy) return;
+    const pack = getVideoRemixAssetConsistencyPack(workingRef.current, kind, assetId);
+    if (!pack?.primaryConfirmed) {
+      setError('请先确认主参考图，再生成其余两张设定图');
+      return;
+    }
+    setBusy(`consistency-batch:${assetId}`);
+    setError('');
+    try {
+      for (const item of pack.items.slice(1)) {
+        const latest = getVideoRemixAssetConsistencyPack(
+          workingRef.current,
+          kind,
+          assetId
+        );
+        const latestItem = latest?.items.find(candidate => candidate.profileId === item.profileId);
+        if (latestItem?.url && ['ready', 'confirmed'].includes(latestItem.status)) continue;
+        await generateConsistencyItemInternal(kind, assetId, item.profileId);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '一致性参考图批量生成失败');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const confirmPrimary = (kind: AssetKind, assetId: string) => {
+    persist(confirmVideoRemixAssetPrimaryReference(
+      workingRef.current,
+      kind,
+      assetId
+    ));
+  };
+
+  const confirmPack = (kind: AssetKind, assetId: string) => {
+    persist(confirmVideoRemixAssetConsistencyPack(
+      workingRef.current,
+      kind,
+      assetId
+    ));
   };
 
   const addLook = (characterId: string) => {
@@ -448,11 +720,15 @@ export const VideoRemixAssetsWorkspace: React.FC<{
 
   const allShotsReady = state.shots.length > 0
     && state.shots.every(shot => shot.analysisStatus === 'ready');
-  const hasAssets = Boolean(state.story) && (
-    state.assets.characters.length
-    + state.assets.scenes.length
-    + state.assets.props.length > 0
-  );
+  const hasAssets = Boolean(state.story);
+  const consistencyReadiness = getVideoRemixAssetConsistencyReadiness(state);
+  const minimumAssetReadiness = getVideoRemixMinimumAssetReadiness(state);
+
+  const confirmAssetsAndContinue = () => {
+    const next = confirmVideoRemixAssets(workingRef.current);
+    persist(next);
+    if (next.assetReview?.confirmed) onConfirmed?.();
+  };
 
   if (!hasAssets) {
     return (
@@ -501,30 +777,82 @@ export const VideoRemixAssetsWorkspace: React.FC<{
           event.target.value = '';
         }}
       />
+      <input
+        ref={consistencyFileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif,image/avif"
+        className="hidden"
+        onChange={event => {
+          void handleConsistencyUpload(event.target.files?.[0]);
+          event.target.value = '';
+        }}
+      />
 
       <section className={`rounded-[26px] border p-5 ${
         dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
       }`}>
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <div className="text-sm font-medium">资产替换</div>
+            <div className="text-sm font-medium">AI 已整理剧情所需资产</div>
             <div className={`mt-1 text-[11px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-              稳定 ID 不变；当前资产会自动作用于所有引用 Shot。人物造型可逐 Shot 单独选择。
+              先看中文需求和提示词，再选择 AI 生成、上传自己的图片或从素材库替换；这里不再使用分镜截图冒充资产图。
             </div>
           </div>
-          <button
-            type="button"
-            disabled={!allShotsReady || Boolean(busy)}
-            onClick={() => persist(confirmVideoRemixAssets(state))}
-            className={`flex h-10 items-center gap-2 rounded-xl px-4 text-xs font-medium disabled:opacity-40 ${
-              state.assetReview?.confirmed
-                ? dark ? 'bg-emerald-400/12 text-emerald-300' : 'bg-emerald-50 text-emerald-700'
-                : dark ? 'bg-cyan-400 text-neutral-950' : 'bg-cyan-600 text-white'
-            }`}
-          >
-            <Check size={14} />
-            {state.assetReview?.confirmed ? '资产已确认' : '确认资产并进入下一阶段'}
-          </button>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <label className={`text-[10px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+              一致性图片模型
+              <select
+                value={consistencyModelId}
+                disabled={Boolean(busy)}
+                onChange={event => setConsistencyModelId(event.target.value)}
+                className={`ml-2 rounded-lg border px-2.5 py-2 text-[10px] outline-none ${
+                  dark ? 'border-white/8 bg-[#171819] text-neutral-200' : 'border-neutral-200 bg-white text-neutral-700'
+                }`}
+              >
+                {IMAGE_MODELS.map(model => (
+                  <option key={model.id} value={model.id}>{model.name}</option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              disabled={
+                !allShotsReady
+                || Boolean(busy)
+                || !minimumAssetReadiness.ready
+              }
+              onClick={confirmAssetsAndContinue}
+              title={!minimumAssetReadiness.ready
+                ? '最少为一名人物生成或上传一张主参考图'
+                : undefined}
+              className={`flex h-10 items-center gap-2 rounded-xl px-4 text-xs font-medium disabled:opacity-40 ${
+                state.assetReview?.confirmed
+                  ? dark ? 'bg-emerald-400/12 text-emerald-300' : 'bg-emerald-50 text-emerald-700'
+                  : dark ? 'bg-cyan-400 text-neutral-950' : 'bg-cyan-600 text-white'
+              }`}
+            >
+              <Check size={14} />
+              {state.assetReview?.confirmed
+                ? '已可生成视频'
+                : minimumAssetReadiness.characterAssets > 0
+                  ? '使用当前人物直接生成视频'
+                  : '按提示词直接生成视频'}
+            </button>
+          </div>
+        </div>
+
+        <div className={`mt-4 rounded-xl px-3 py-2.5 text-[11px] ${
+          minimumAssetReadiness.ready
+            ? dark ? 'bg-emerald-400/8 text-emerald-300' : 'bg-emerald-50 text-emerald-700'
+            : dark ? 'bg-white/[0.035] text-neutral-400' : 'bg-neutral-50 text-neutral-600'
+        }`}>
+          {minimumAssetReadiness.characterAssets > 0
+            ? `人物主参考已准备 ${minimumAssetReadiness.preparedCharacters}/${minimumAssetReadiness.characterAssets}`
+            : '原片没有人物，可直接使用中文提示词生成'}
+          {' · 场景、道具、多角度设定图和关键帧均为可选增强，不会阻止视频生成'}
+          {consistencyReadiness.confirmed > 0
+            ? ` · 已锁定 ${consistencyReadiness.confirmed} 个三图参考包`
+            : ''}
         </div>
 
         <div className={`mt-5 flex w-fit rounded-xl p-1 ${
@@ -565,9 +893,26 @@ export const VideoRemixAssetsWorkspace: React.FC<{
         {activeAssets.map(asset => {
           const target: AssetTarget = { kind: activeKind, assetId: asset.id };
           const snapshot = snapshotForTarget(state, target)!;
-          const originalPreview = originalPreviewFor(state, target);
-          const currentPreview = snapshot.referenceImages[0] || originalPreview;
           const isRemoved = activeKind === 'props' && 'removed' in asset && asset.removed;
+          const consistencyPack = getVideoRemixAssetConsistencyPack(
+            state,
+            activeKind,
+            asset.id
+          );
+          const primaryReference = consistencyPack?.items.find(
+            item => item.profileId === consistencyPack.primaryProfileId
+          );
+          const selectedPreview = primaryReference?.url || snapshot.referenceImages[0];
+          const requirement = activeKind === 'characters'
+            ? snapshot.identity
+            : activeKind === 'scenes'
+              ? snapshot.visualDescription
+              : snapshot.description;
+          const promptText = consistencyPack?.masterPrompt
+            || snapshot.masterPrompt
+            || requirement;
+          const anchorText = consistencyPack?.anchorBlock || snapshot.anchorBlock;
+          const promptCopyKey = `asset-master:${asset.id}`;
           return (
             <article key={asset.id} className={`rounded-[26px] border p-5 ${
               dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
@@ -591,7 +936,7 @@ export const VideoRemixAssetsWorkspace: React.FC<{
                   </div>
                   <h3 className="mt-3 text-lg font-semibold">{snapshot.name}</h3>
                   <div className={`mt-1 text-[11px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-                    出现于 {(asset.appearsInShots || []).length} 个 Shot
+                    出现于 {(asset.appearsInShots || []).length} 个镜头
                   </div>
                 </div>
                 <AssetActions
@@ -605,19 +950,22 @@ export const VideoRemixAssetsWorkspace: React.FC<{
                 />
               </div>
 
-              <div className="mt-5 grid gap-5 lg:grid-cols-[300px_1fr]">
-                <div className="grid grid-cols-2 gap-3">
-                  <AssetPreview label="原截图" url={originalPreview} dark={dark} />
-                  <AssetPreview label="当前资产" url={currentPreview} dark={dark} />
-                </div>
-                <div>
-                  <p className={`text-xs leading-6 ${dark ? 'text-neutral-300' : 'text-neutral-700'}`}>
-                    {activeKind === 'characters'
-                      ? snapshot.identity
-                      : activeKind === 'scenes'
-                        ? snapshot.visualDescription
-                        : snapshot.description}
+              <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+                <section className={`rounded-2xl border p-4 ${
+                  dark ? 'border-white/8 bg-black/20' : 'border-neutral-200 bg-neutral-50'
+                }`}>
+                  <div className="flex items-center gap-2 text-xs font-medium">
+                    <Sparkles size={14} className="text-cyan-400" />
+                    AI 对剧情的{KIND_LABEL[activeKind]}要求
+                  </div>
+                  <p className={`mt-3 text-xs leading-6 ${dark ? 'text-neutral-300' : 'text-neutral-700'}`}>
+                    {requirement || 'AI 尚未提供具体描述，可点击“编辑方案”补充。'}
                   </p>
+                  {activeKind === 'characters' && Object.keys(snapshot.voiceDescription).length > 0 && (
+                    <p className={`mt-3 text-[11px] leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-500'}`}>
+                      声音建议：{Object.values(snapshot.voiceDescription).filter(Boolean).join('；')}
+                    </p>
+                  )}
                   {activeKind === 'scenes' && snapshot.audioDescription && (
                     <p className={`mt-3 text-[11px] leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-500'}`}>
                       环境声：{snapshot.audioDescription}
@@ -639,7 +987,7 @@ export const VideoRemixAssetsWorkspace: React.FC<{
                       <span className={`rounded-full px-3 py-1 text-[10px] ${
                         dark ? 'bg-white/6 text-neutral-400' : 'bg-neutral-100 text-neutral-600'
                       }`}>
-                        {snapshot.category}
+                        {PROP_CATEGORY_LABEL[snapshot.category]}
                       </span>
                       <button
                         type="button"
@@ -654,8 +1002,89 @@ export const VideoRemixAssetsWorkspace: React.FC<{
                       </button>
                     </div>
                   )}
-                </div>
+
+                  <div className={`mt-4 rounded-xl border p-3 ${
+                    dark ? 'border-cyan-400/15 bg-cyan-400/[0.025]' : 'border-cyan-100 bg-white'
+                  }`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className={`text-[10px] font-medium ${dark ? 'text-cyan-200' : 'text-cyan-800'}`}>
+                        可直接使用的中文生成提示词
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void copyText(promptCopyKey, promptText)}
+                        className={`flex shrink-0 items-center gap-1 text-[9px] ${
+                          dark ? 'text-cyan-300' : 'text-cyan-700'
+                        }`}
+                      >
+                        {copied === promptCopyKey ? <Check size={10} /> : <Copy size={10} />}
+                        {copied === promptCopyKey ? '已复制' : '复制提示词'}
+                      </button>
+                    </div>
+                    <pre className={`mt-2 max-h-52 overflow-y-auto whitespace-pre-wrap font-sans text-[10px] leading-5 ${
+                      dark ? 'text-neutral-300' : 'text-neutral-700'
+                    }`}>{promptText}</pre>
+                    {anchorText && (
+                      <details className={`mt-3 border-t pt-3 ${
+                        dark ? 'border-white/8' : 'border-neutral-100'
+                      }`}>
+                        <summary className={`cursor-pointer text-[9px] ${
+                          dark ? 'text-neutral-500' : 'text-neutral-500'
+                        }`}>
+                          查看跨镜头不变形锚点
+                        </summary>
+                        <pre className={`mt-2 whitespace-pre-wrap font-sans text-[10px] leading-5 ${
+                          dark ? 'text-neutral-400' : 'text-neutral-600'
+                        }`}>{anchorText}</pre>
+                      </details>
+                    )}
+                  </div>
+                </section>
+
+                {selectedPreview ? (
+                  <AssetPreview label="已选主参考图" url={selectedPreview} dark={dark} />
+                ) : (
+                  <div className={`flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed px-6 text-center ${
+                    dark ? 'border-white/10 bg-black/20' : 'border-neutral-200 bg-neutral-50'
+                  }`}>
+                    <Images size={22} className={dark ? 'text-neutral-600' : 'text-neutral-400'} />
+                    <div className="mt-3 text-xs font-medium">尚未选择资产图片</div>
+                    <p className={`mt-2 text-[10px] leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-500'}`}>
+                      这是 AI 的文字方案，不是视频截图。可在下方直接 AI 生成主图，或上传自己的替换图片。
+                    </p>
+                  </div>
+                )}
               </div>
+
+              {!isRemoved && consistencyPack && (
+                <ConsistencyPackPanel
+                  assetId={asset.id}
+                  kind={activeKind}
+                  pack={consistencyPack}
+                  dark={dark}
+                  busy={busy}
+                  copied={copied}
+                  onCopy={(key, value) => void copyText(key, value)}
+                  onGenerate={profileId => void generateConsistencyItem(
+                    activeKind,
+                    asset.id,
+                    profileId
+                  )}
+                  onUpload={profileId => startConsistencyUpload({
+                    kind: activeKind,
+                    assetId: asset.id,
+                    profileId,
+                  })}
+                  onGenerateDependents={() => void generateConsistencyDependents(
+                    activeKind,
+                    asset.id
+                  )}
+                  onConfirmPrimary={() => confirmPrimary(activeKind, asset.id)}
+                  onConfirmPack={() => confirmPack(activeKind, asset.id)}
+                  minimumRequired={simpleMode && activeKind === 'characters'}
+                  optional={simpleMode && activeKind !== 'characters'}
+                />
+              )}
 
               {activeKind === 'characters' && (
                 <CharacterLooks
@@ -730,9 +1159,9 @@ const AssetActions: React.FC<{
 }> = ({ busy, canReset, dark, onEdit, onLibrary, onUpload, onReset }) => (
   <div className="flex flex-wrap gap-2">
     {[
-      [onEdit, <Edit3 size={12} />, '编辑 / AI'],
-      [onLibrary, <Library size={12} />, '素材库'],
-      [onUpload, <Upload size={12} />, '上传'],
+      [onEdit, <Edit3 size={12} />, '编辑方案'],
+      [onLibrary, <Library size={12} />, '从素材库选择'],
+      [onUpload, <Upload size={12} />, '上传替换图'],
     ].map(([handler, icon, label]) => (
       <button
         key={String(label)}
@@ -757,7 +1186,7 @@ const AssetActions: React.FC<{
         }`}
       >
         <RotateCcw size={12} />
-        沿用反推
+        恢复 AI 方案
       </button>
     )}
   </div>
@@ -789,6 +1218,246 @@ const AssetPreview: React.FC<{
     </figcaption>
   </figure>
 );
+
+type ConsistencyPack = NonNullable<ReturnType<typeof getVideoRemixAssetConsistencyPack>>;
+
+const CONSISTENCY_STATUS_LABEL: Record<ConsistencyPack['items'][number]['status'], string> = {
+  pending: '待生成',
+  generating: '生成中',
+  ready: '待确认',
+  confirmed: '已锁定',
+  failed: '生成失败',
+};
+
+const ConsistencyPackPanel: React.FC<{
+  assetId: string;
+  kind: AssetKind;
+  pack: ConsistencyPack;
+  dark: boolean;
+  busy: string;
+  copied: string;
+  onCopy: (key: string, value: string) => void;
+  onGenerate: (profileId: string) => void;
+  onUpload: (profileId: string) => void;
+  onGenerateDependents: () => void;
+  onConfirmPrimary: () => void;
+  onConfirmPack: () => void;
+  minimumRequired?: boolean;
+  optional?: boolean;
+}> = ({
+  assetId,
+  kind,
+  pack,
+  dark,
+  busy,
+  copied,
+  onCopy,
+  onGenerate,
+  onUpload,
+  onGenerateDependents,
+  onConfirmPrimary,
+  onConfirmPack,
+  minimumRequired = false,
+  optional = false,
+}) => {
+  const primary = pack.items.find(item => item.profileId === pack.primaryProfileId);
+  const dependentItems = pack.items.filter(item => item.profileId !== pack.primaryProfileId);
+  const allReady = pack.items.every(item => (
+    item.url && ['ready', 'confirmed'].includes(item.status)
+  ));
+  const missingDependents = dependentItems.filter(item => !item.url).length;
+  const visibleItems = pack.primaryConfirmed || pack.confirmed
+    ? pack.items
+    : primary ? [primary] : [];
+  const running = Boolean(busy);
+  return (
+    <section className={`mt-5 rounded-2xl border p-4 ${
+      pack.confirmed
+        ? dark ? 'border-emerald-400/20 bg-emerald-400/[0.035]' : 'border-emerald-200 bg-emerald-50/40'
+        : dark ? 'border-cyan-400/15 bg-black/20' : 'border-cyan-100 bg-cyan-50/35'
+    }`}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 text-xs font-medium">
+            <ShieldCheck size={14} className={pack.confirmed ? 'text-emerald-400' : 'text-cyan-400'} />
+            {pack.confirmed
+              ? '资产一致性已锁定'
+              : pack.primaryConfirmed
+                ? '可选增强：补齐一致性图片'
+                : optional
+                  ? '可选：生成或上传参考图'
+                  : minimumRequired
+                    ? '最低要求：生成或上传人物主参考图'
+                    : '生成或上传主参考图'}
+            <span className={`rounded-full px-2 py-0.5 text-[9px] ${
+              pack.confirmed
+                ? dark ? 'bg-emerald-400/10 text-emerald-300' : 'bg-emerald-100 text-emerald-700'
+                : dark ? 'bg-white/6 text-neutral-400' : 'bg-white text-neutral-500'
+            }`}>
+              {pack.confirmed ? '已锁定' : `${pack.items.filter(item => item.url).length}/3 张`}
+            </span>
+          </div>
+          <p className={`mt-1 text-[10px] leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-500'}`}>
+            {!pack.primaryConfirmed
+              ? `${optional ? '可以跳过，视频会直接使用上方中文提示词。' : '直接按 AI 方案生成，也可以上传自己的图片。'}主图准备好后即可进入视频生成；其余两张只用于进一步提升跨镜头一致性。`
+              : kind === 'characters'
+                ? '人物主身份照已准备，可直接生成视频；面部多角度和全身设定板属于推荐增强。'
+                : kind === 'scenes'
+                  ? '主场景图已准备；多机位布局和材质灯光图属于可选增强。'
+                  : '主结构图已准备；多角度结构和细节尺度图属于可选增强。'}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {primary?.url && !pack.primaryConfirmed && (
+            <button
+              type="button"
+              disabled={running}
+              onClick={onConfirmPrimary}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-[10px] font-medium disabled:opacity-40 ${
+                dark ? 'bg-cyan-400 text-neutral-950' : 'bg-cyan-600 text-white'
+              }`}
+            >
+              <Check size={12} />
+              {minimumRequired || optional ? '需要更多角度：确认主图' : '确认主参考图'}
+            </button>
+          )}
+          {pack.primaryConfirmed && missingDependents > 0 && (
+            <button
+              type="button"
+              disabled={running}
+              onClick={onGenerateDependents}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-[10px] font-medium disabled:opacity-40 ${
+                dark ? 'bg-cyan-400 text-neutral-950' : 'bg-cyan-600 text-white'
+              }`}
+            >
+              {busy === `consistency-batch:${assetId}`
+                ? <Loader2 size={12} className="animate-spin" />
+                : <Sparkles size={12} />}
+              一键生成剩余 {missingDependents} 张
+            </button>
+          )}
+          {allReady && pack.primaryConfirmed && !pack.confirmed && (
+            <button
+              type="button"
+              disabled={running}
+              onClick={onConfirmPack}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-[10px] font-medium disabled:opacity-40 ${
+                dark ? 'bg-emerald-400 text-neutral-950' : 'bg-emerald-600 text-white'
+              }`}
+            >
+              <ShieldCheck size={12} />
+              锁定三图参考包
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-3">
+        {visibleItems.map(item => {
+          const index = pack.items.findIndex(candidate => candidate.profileId === item.profileId);
+          const key = `prompt:${assetId}:${item.profileId}`;
+          const itemBusy = busy === `consistency:${assetId}:${item.profileId}`;
+          const dependencyBlocked = (
+            index > 0 && !pack.primaryConfirmed
+          ) || item.dependsOn.some(dependency => (
+            !pack.items.find(candidate => candidate.profileId === dependency)?.url
+          ));
+          return (
+            <article key={item.profileId} className={`overflow-hidden rounded-xl border ${
+              dark ? 'border-white/8 bg-white/[0.025]' : 'border-neutral-200 bg-white'
+            }`}>
+              <div className={`relative flex aspect-[4/3] items-center justify-center overflow-hidden ${
+                dark ? 'bg-black/35' : 'bg-neutral-100'
+              }`}>
+                {item.url ? (
+                  <img src={item.url} alt={item.label} className="h-full w-full object-contain" />
+                ) : itemBusy ? (
+                  <div className="text-center text-[10px] text-cyan-400">
+                    <Loader2 size={20} className="mx-auto animate-spin" />
+                    <div className="mt-2">正在生成</div>
+                  </div>
+                ) : (
+                  <div className={`px-4 text-center text-[10px] leading-5 ${dark ? 'text-neutral-600' : 'text-neutral-400'}`}>
+                    {dependencyBlocked ? '确认主参考图后生成' : '尚未生成'}
+                  </div>
+                )}
+                <span className={`absolute left-2 top-2 rounded-full px-2 py-1 text-[8px] ${
+                  item.status === 'confirmed'
+                    ? 'bg-emerald-500/85 text-white'
+                    : item.status === 'failed'
+                      ? 'bg-red-500/85 text-white'
+                      : 'bg-black/65 text-white'
+                }`}>
+                  {index + 1} · {item.status === 'ready' && (minimumRequired || optional)
+                    ? '可直接使用'
+                    : CONSISTENCY_STATUS_LABEL[item.status]}
+                </span>
+              </div>
+              <div className="p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="text-[11px] font-medium">{item.label}</div>
+                    <div className={`mt-1 text-[9px] ${dark ? 'text-neutral-600' : 'text-neutral-400'}`}>
+                      {item.aspectRatio} · {index === 0 ? '主参考图' : '依赖前序参考图'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onCopy(key, item.prompt)}
+                    className={`shrink-0 rounded-lg p-1.5 ${dark ? 'bg-white/6 text-neutral-400' : 'bg-neutral-100 text-neutral-500'}`}
+                    title="复制对应提示词"
+                  >
+                    {copied === key ? <Check size={11} /> : <Copy size={11} />}
+                  </button>
+                </div>
+                <details
+                  open={index === 0 && !item.url}
+                  className={`mt-3 rounded-lg border px-2.5 py-2 ${
+                    dark ? 'border-white/8 bg-black/20' : 'border-neutral-100 bg-neutral-50'
+                  }`}
+                >
+                  <summary className={`cursor-pointer text-[9px] ${
+                    dark ? 'text-neutral-400' : 'text-neutral-600'
+                  }`}>
+                    查看这张图的对应提示词
+                  </summary>
+                  <pre className={`mt-2 max-h-36 overflow-y-auto whitespace-pre-wrap font-sans text-[9px] leading-4 ${
+                    dark ? 'text-neutral-400' : 'text-neutral-600'
+                  }`}>{item.prompt}</pre>
+                </details>
+                {item.error && <div className="mt-2 text-[9px] leading-4 text-red-400">{item.error}</div>}
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={running || dependencyBlocked}
+                    onClick={() => onGenerate(item.profileId)}
+                    className={`flex h-8 items-center justify-center gap-1 rounded-lg text-[9px] disabled:opacity-35 ${
+                      dark ? 'bg-white/7 text-neutral-300' : 'bg-neutral-100 text-neutral-600'
+                    }`}
+                  >
+                    {itemBusy ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+                    {item.url ? '重新生成' : index === 0 ? 'AI 生成主图' : 'AI 生成'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={running || dependencyBlocked}
+                    onClick={() => onUpload(item.profileId)}
+                    className={`flex h-8 items-center justify-center gap-1 rounded-lg text-[9px] disabled:opacity-35 ${
+                      dark ? 'bg-white/7 text-neutral-300' : 'bg-neutral-100 text-neutral-600'
+                    }`}
+                  >
+                    <Upload size={11} />
+                    {index === 0 ? '上传自己的图' : '上传图片'}
+                  </button>
+                </div>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+};
 
 const CharacterLooks: React.FC<{
   state: VideoRemixState;
@@ -823,9 +1492,9 @@ const CharacterLooks: React.FC<{
     }`}>
       <div className="flex items-center justify-between">
         <div>
-          <div className="text-xs font-medium">Character Looks</div>
+          <div className="text-xs font-medium">人物造型</div>
           <div className={`mt-1 text-[10px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-            Identity 与服装造型分离；下方选择只影响对应 Shot。
+            人物身份与服装造型分离；下方选择只影响对应镜头。
           </div>
         </div>
         <button
@@ -843,25 +1512,35 @@ const CharacterLooks: React.FC<{
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         {character.looks.map(baseLook => {
           const look = resolveVideoRemixCharacterLook(baseLook);
+          const lookImages = chosenReferenceImages(look.source, look.referenceImages);
           return (
             <div key={look.id} className={`rounded-xl border p-3 ${
               dark ? 'border-white/8 bg-white/[0.025]' : 'border-neutral-200 bg-white'
-            }`}>
+              }`}>
               <div className="flex gap-3">
-                <div className={`h-16 w-12 shrink-0 overflow-hidden rounded-lg ${
-                  dark ? 'bg-black/40' : 'bg-neutral-100'
-                }`}>
-                  {look.referenceImages?.[0] && (
+                {lookImages[0] && (
+                  <div className={`h-16 w-12 shrink-0 overflow-hidden rounded-lg ${
+                    dark ? 'bg-black/40' : 'bg-neutral-100'
+                  }`}>
                     <img
-                      src={look.referenceImages[0]}
+                      src={lookImages[0]}
                       alt={look.name}
                       className="h-full w-full object-cover"
                     />
-                  )}
-                </div>
+                  </div>
+                )}
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-xs font-medium">{look.name}</span>
+                    <span className="truncate text-xs font-medium">
+                      {look.name}
+                      {look.source === 'analysis' && (
+                        <span className={`ml-2 text-[8px] font-normal ${
+                          dark ? 'text-cyan-400/70' : 'text-cyan-700'
+                        }`}>
+                          AI 造型要求
+                        </span>
+                      )}
+                    </span>
                     <span className={`text-[9px] ${dark ? 'text-neutral-600' : 'text-neutral-400'}`}>
                       {look.id}
                     </span>
@@ -902,7 +1581,7 @@ const CharacterLooks: React.FC<{
                 dark ? 'border-white/8 bg-white/[0.02]' : 'border-neutral-200 bg-white'
               }`}>
                 <span className={`block text-[9px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-                  {shot.shotId} · 单镜头造型
+                  镜头 {shot.shotId} · 单镜头造型
                 </span>
                 <select
                   value={selectedLookId}
@@ -956,7 +1635,9 @@ const AssetEditorModal: React.FC<{
   const [voiceDescription, setVoiceDescription] = React.useState(snapshot.voiceDescription);
   const [zones, setZones] = React.useState(snapshot.zones.map(zone => ({ ...zone })));
   const [category, setCategory] = React.useState(snapshot.category);
-  const [modelId, setModelId] = React.useState(IMAGE_MODELS[0]?.id || 'gemini-web-image');
+  const [masterPrompt, setMasterPrompt] = React.useState(snapshot.masterPrompt);
+  const [anchorBlock, setAnchorBlock] = React.useState(snapshot.anchorBlock);
+  const [modelId, setModelId] = React.useState(DEFAULT_IMAGE_MODEL_ID || 'gemini-web-image');
   const [prompt, setPrompt] = React.useState(() => {
     const detail = target.lookId
       ? snapshot.description
@@ -966,7 +1647,7 @@ const AssetEditorModal: React.FC<{
           ? snapshot.visualDescription
           : snapshot.description;
     return [
-      `为短视频 Video Remix 创建${target.lookId ? '人物造型' : KIND_LABEL[target.kind]}参考图。`,
+      `为短视频复刻创建${target.lookId ? '人物造型' : KIND_LABEL[target.kind]}参考图。`,
       `名称：${snapshot.name}。`,
       detail,
       target.kind === 'characters' ? '干净背景，身份特征清晰，适合作为跨镜头一致性参考。' : '',
@@ -983,6 +1664,8 @@ const AssetEditorModal: React.FC<{
     voiceDescription,
     zones,
     category,
+    masterPrompt,
+    anchorBlock,
   };
 
   return (
@@ -998,7 +1681,7 @@ const AssetEditorModal: React.FC<{
               编辑{target.lookId ? '人物造型' : KIND_LABEL[target.kind]}
             </div>
             <div className={`mt-1 text-[10px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-              文本会进入后续 Prompt；AI 生成会消耗所选平台额度。
+              文本会进入后续提示词；AI 生成会消耗所选平台额度。
             </div>
           </div>
           <button
@@ -1025,7 +1708,7 @@ const AssetEditorModal: React.FC<{
           {!target.lookId && target.kind === 'characters' && (
             <>
               <EditorField
-                label="Character Identity（不要绑定服装）"
+                label="人物身份（不要绑定服装）"
                 value={identity}
                 onChange={setIdentity}
                 dark={dark}
@@ -1072,7 +1755,7 @@ const AssetEditorModal: React.FC<{
               />
               <div>
                 <div className={`text-[10px] font-medium ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-                  Scene Zones
+                  场景功能区
                 </div>
                 <div className="mt-2 space-y-2">
                   {zones.map((zone, index) => (
@@ -1111,11 +1794,38 @@ const AssetEditorModal: React.FC<{
                   dark ? 'border-white/8 bg-black/25 text-neutral-200' : 'border-neutral-200 bg-white text-neutral-700'
                 }`}
               >
-                <option value="hero">hero · 核心商品</option>
-                <option value="interactive">interactive · 交互道具</option>
-                <option value="background">background · 背景元素</option>
+                <option value="hero">核心商品</option>
+                <option value="interactive">交互道具</option>
+                <option value="background">背景元素</option>
               </select>
             </label>
+          )}
+
+          {!target.lookId && (
+            <div className={`rounded-2xl border p-4 ${
+              dark ? 'border-white/8 bg-black/20' : 'border-neutral-200 bg-neutral-50'
+            }`}>
+              <div className="text-xs font-medium">跨镜头一致性文字锁定</div>
+              <div className={`mt-1 text-[10px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
+                默认由分析结果自动生成；只有需要精确修正身份或产品结构时再编辑。
+              </div>
+              <div className="mt-3 space-y-3">
+                <EditorField
+                  label="中文资产主提示词"
+                  value={masterPrompt}
+                  onChange={setMasterPrompt}
+                  dark={dark}
+                  rows={5}
+                />
+                <EditorField
+                  label="冻结锚点（每个镜头逐字复用）"
+                  value={anchorBlock}
+                  onChange={setAnchorBlock}
+                  dark={dark}
+                  rows={4}
+                />
+              </div>
+            </div>
           )}
 
           <div className={`rounded-2xl border p-4 ${
@@ -1127,7 +1837,7 @@ const AssetEditorModal: React.FC<{
             </div>
             <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_220px]">
               <EditorField
-                label="生成 Prompt"
+                label="生成提示词"
                 value={prompt}
                 onChange={setPrompt}
                 dark={dark}

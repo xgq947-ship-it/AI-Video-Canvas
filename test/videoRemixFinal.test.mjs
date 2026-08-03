@@ -324,6 +324,24 @@ test('Video Remix Manifest 复用 Remotion，并实现无/原视频/上传 BGM',
   assert.equal(uploaded.audioTracks[0].loop, true);
 });
 
+test('成片画布使用用户选择的视频画幅与分辨率', () => {
+  const state = createVideoRemixState({
+    ...finalFixture(),
+    videoReview: {
+      ...finalFixture().videoReview,
+      confirmed: true,
+      aspectRatio: '9:16',
+      resolution: '720P',
+    },
+  });
+  const manifest = buildVideoRemixManifest(state);
+  assert.deepEqual(manifest.composition, {
+    width: 720,
+    height: 1280,
+    fps: 25,
+  });
+});
+
 test('Remotion 任务只接受当前 job/inputHash，失败可安全重试', () => {
   const prepared = prepareVideoRemixTimeline(finalFixture());
   const manifest = buildVideoRemixManifest(prepared);

@@ -8,7 +8,6 @@
 import { useCallback, useState } from 'react';
 import { NodeData, NodeType, NodeStatus, Viewport } from '../types';
 import { DEFAULT_NODE_WIDTH, paneToCanvas } from '@/shared/canvasCoords.js';
-import { createVideoRemixState } from '@/shared/videoRemix.js';
 
 export const useNodeManagement = () => {
     // ============================================================================
@@ -37,6 +36,8 @@ export const useNodeManagement = () => {
         parentId: string | undefined,
         viewport: Viewport
     ) => {
+        // 视频复刻已经提升为项目级工作区，不能再创建画布容器节点。
+        if (type === NodeType.VIDEO_REMIX) return '';
         // x/y 是面板坐标（相对画布容器，已扣除侧边栏），由 contextMenu.canvasX/canvasY 提供
         const { x: canvasX, y: canvasY } = paneToCanvas(x, y, viewport);
         // 新建节点居中于点击处：横向用卡片真实宽度（365，此前硬编码 340 导致偏 12.5px）；
@@ -72,11 +73,6 @@ export const useNodeManagement = () => {
             newNode.productSceneVideoAspectRatio = '9:16';
             newNode.productSceneVideoDuration = 10;
             newNode.productSceneVideoGenerateAudio = true;
-        }
-
-        if (type === NodeType.VIDEO_REMIX) {
-            newNode.title = 'Video Remix';
-            newNode.videoRemix = createVideoRemixState({ remixId: newNode.id });
         }
 
         setNodes(prev => [...prev, newNode]);
@@ -141,6 +137,11 @@ export const useNodeManagement = () => {
             return;
         }
 
+        if (type === NodeType.VIDEO_REMIX) {
+            onCloseMenu();
+            return;
+        }
+
         if (contextMenu.type === 'node-connector' && contextMenu.sourceNodeId) {
             const sourceNode = nodes.find(n => n.id === contextMenu.sourceNodeId);
             if (sourceNode) {
@@ -199,11 +200,6 @@ export const useNodeManagement = () => {
                     newNode.productSceneVideoAspectRatio = '9:16';
                     newNode.productSceneVideoDuration = 10;
                     newNode.productSceneVideoGenerateAudio = true;
-                }
-
-                if (type === NodeType.VIDEO_REMIX) {
-                    newNode.title = 'Video Remix';
-                    newNode.videoRemix = createVideoRemixState({ remixId: newNode.id });
                 }
 
                 setNodes(prev => [...prev, newNode]);

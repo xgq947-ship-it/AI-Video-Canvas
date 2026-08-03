@@ -59,3 +59,64 @@ export function upsertVideoRemixFinalNode(nodes, remixNodeId, output) {
     },
   ];
 }
+
+/**
+ * Explicitly sends a project-level Remix output to the canvas. Unlike the
+ * legacy container-node path this result is a regular, unconnected Video node:
+ * the standalone Remix workspace remains the source of truth.
+ */
+export function upsertVideoRemixProjectFinalNode(
+  nodes,
+  remixProject,
+  output,
+  position = { x: 0, y: 0 }
+) {
+  const list = Array.isArray(nodes) ? nodes : [];
+  if (!remixProject?.id || !output?.nodeId || !output?.url) return list;
+  const existingId = remixProject.finalCanvasNodeId || output.nodeId;
+  const existing = list.find(node => node?.id === existingId);
+  const values = {
+    type: 'Video',
+    title: '视频复刻成片',
+    displayName: `${remixProject.title || '短视频复刻'} · 成片`,
+    prompt: '短视频复刻最终成片',
+    status: 'success',
+    resultUrl: output.url,
+    videoDuration: Number(output.duration) || 0,
+    videoModel: 'video-remix-final',
+    generateAudio: true,
+    aspectRatio: output.aspectRatio || '16:9',
+    resultAspectRatio: `${Number(output.width) || 1920}/${Number(output.height) || 1080}`,
+    resolution: `${Number(output.width) || 1920}×${Number(output.height) || 1080}`,
+    parentIds: [],
+    errorMessage: undefined,
+  };
+  if (existing) {
+    return list.map(node => node.id === existingId
+      ? {
+          ...node,
+          ...values,
+          id: existingId,
+          x: node.x,
+          y: node.y,
+          displayName: node.displayName || values.displayName,
+          parentIds: Array.isArray(node.parentIds)
+            ? node.parentIds.filter(parentId => parentId !== remixProject.id)
+            : [],
+        }
+      : node);
+  }
+  return [
+    ...list,
+    {
+      // When the user deleted a previously-sent canvas node, keep reusing its
+      // stable project link instead of creating a second ID that the task does
+      // not remember.
+      id: existingId,
+      x: Number(position.x) || 0,
+      y: Number(position.y) || 0,
+      model: 'video-remix-final',
+      ...values,
+    },
+  ];
+}

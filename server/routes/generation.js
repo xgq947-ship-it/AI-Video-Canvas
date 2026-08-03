@@ -10,7 +10,11 @@ import fs from 'fs';
 import path from 'path';
 import { generateGeminiImage, generateVeoVideo } from '../services/gemini.js';
 import { generateSeedanceVideo } from '../services/seedance.js';
-import { generateGoogleFlowWorkflowVideo, isGoogleFlowWorkflowModelId } from '../services/googleFlowWorkflow.js';
+import {
+    generateGoogleFlowWorkflowVideo,
+    isGoogleFlowWorkflowModelId,
+    resolveGoogleFlowWorkflowVideoInputs
+} from '../services/googleFlowWorkflow.js';
 import { generateJimengWorkflowVideo, isJimengWorkflowModelId, resolveJimengModelLabel } from '../services/jimengVideoWorkflow.js';
 import { generateGoogleFlowWorkflowImage, isGoogleFlowImageWorkflowModel } from '../services/googleFlowImageWorkflow.js';
 import { generateJimengWorkflowImage, isJimengImageWorkflowModel } from '../services/jimengImageWorkflow.js';
@@ -310,6 +314,7 @@ router.post('/generate-image', async (req, res) => {
                     : saved.id;
             const providerMetadata = image.metadata || {};
             const requestedResolution = providerMetadata.requestedResolution || requestedImageResolution;
+            const deliveredResolution = providerMetadata.deliveredResolution || requestedResolution;
             const metadata = {
                 id: metadataId,
                 filename: saved.filename,
@@ -317,7 +322,7 @@ router.post('/generate-image', async (req, res) => {
                 model: imageModel || 'gemini-pro',
                 aspectRatio: aspectRatio || '1:1',
                 ...(requestedResolution ? {
-                    resolution: requestedResolution,
+                    resolution: deliveredResolution,
                     requestedResolution
                 } : {}),
                 ...(Number.isInteger(providerMetadata.actualWidth) ? {
@@ -334,6 +339,9 @@ router.post('/generate-image', async (req, res) => {
                 } : {}),
                 ...(providerMetadata.downloadProtocol ? {
                     flowDownloadProtocol: providerMetadata.downloadProtocol
+                } : {}),
+                ...(providerMetadata.resolutionFallbackReason ? {
+                    resolutionFallbackReason: providerMetadata.resolutionFallbackReason
                 } : {}),
                 batchIndex: index,
                 batchCount: generatedImages.length,
@@ -432,19 +440,19 @@ router.post('/generate-video', async (req, res) => {
             videoExtension = workflowResult.extension;
             workflowRunId = workflowResult.runId;
         } else if (isGoogleFlowWorkflowModel) {
-            // 连 2 张以上图片 → Ingredients 多参考图模式；否则用单张首帧。
-            const referenceImageInputs = explicitReferences;
-            const useIngredients = referenceImageInputs.length >= 2;
-            if (!useIngredients) {
-                if (rawLastFrameBase64) {
-                    return res.status(400).json({ error: 'Google Flow workflow 单图模式暂不支持尾帧；请只连一张首帧，或连 2 张以上走多参考图' });
-                }
-            }
+            // Remix 会给人物/场景/道具参考图附资产标签。带资产标签的单图也必须走
+            // Ingredients，不能把人物正面照误当成视频首帧；普通画布的无标签单图仍是首帧。
+            const flowInputs = resolveGoogleFlowWorkflowVideoInputs({
+                firstFrameInput: rawImageBase64,
+                referenceImageInputs: explicitReferences,
+                referenceImageLabels: rawReferenceImageLabels,
+                lastFrameInput: rawLastFrameBase64
+            });
             const workflowResult = await generateGoogleFlowWorkflowVideo({
                 prompt,
-                // 无图 = 文生视频；1 张 = 首帧；2 张及以上 = References。
-                firstFrameInput: useIngredients ? null : (rawImageBase64 || referenceImageInputs[0] || null),
-                referenceImageInputs: useIngredients ? referenceImageInputs : [],
+                // 无图 = 文生视频；无标签单图 = 首帧；资产标签单图或多图 = Ingredients。
+                firstFrameInput: flowInputs.firstFrameInput,
+                referenceImageInputs: flowInputs.referenceImageInputs,
                 aspectRatio: aspectRatio || '16:9',
                 duration: duration || videoProvider?.supportedDurations?.[0] || 4,
                 modelId: videoModel,

@@ -595,6 +595,10 @@ export function renameWorkflowAssetDirs(workflow, newTitle, { imagesDir, videosD
                 node.videoRemix = rewriteVideoRemixProjectUrls(node.videoRemix, rewrite);
             }
         }
+        workflow.videoRemixes = (workflow.videoRemixes || []).map(project => ({
+            ...project,
+            state: rewriteVideoRemixProjectUrls(project.state, rewrite),
+        }));
         if (typeof workflow.coverUrl === 'string') workflow.coverUrl = rewrite(workflow.coverUrl);
         return {
             changed: true,
@@ -715,6 +719,10 @@ export function organizeWorkflowAssets(workflow, { imagesDir, videosDir, audioDi
                 node.imageVersions = node.imageVersions.map(version => ({ ...version, url: relocate(version.url) }));
             }
         }
+        workflow.videoRemixes = (workflow.videoRemixes || []).map(project => ({
+            ...project,
+            state: rewriteVideoRemixProjectUrls(project.state, relocate),
+        }));
         if (typeof workflow.coverUrl === 'string') workflow.coverUrl = relocate(workflow.coverUrl);
         return { changed };
     }
@@ -754,6 +762,10 @@ export function organizeWorkflowAssets(workflow, { imagesDir, videosDir, audioDi
             }
         }
     }
+    workflow.videoRemixes = (workflow.videoRemixes || []).map(project => ({
+        ...project,
+        state: rewriteVideoRemixProjectUrls(project.state, relocate),
+    }));
     if (typeof workflow.coverUrl === 'string') {
         workflow.coverUrl = relocate(workflow.coverUrl);
     }

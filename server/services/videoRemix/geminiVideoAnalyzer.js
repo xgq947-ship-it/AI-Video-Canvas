@@ -8,6 +8,11 @@ import {
   parseStrictStructuredJson,
 } from './videoAnalysisSchemas.js';
 
+export const VIDEO_ANALYSIS_TIMEOUT_SECONDS = Object.freeze({
+  fast: 10 * 60,
+  deep: 15 * 60,
+});
+
 function correctionPrompt(error, contract) {
   const issues = Array.isArray(error?.issues) && error.issues.length > 0
     ? error.issues.slice(0, 12)
@@ -65,6 +70,7 @@ export class GeminiVideoAnalyzer extends VideoAnalyzerProvider {
         prompt: nextPrompt,
         files: attempt === 1 ? files : [],
         conversation,
+        timeoutSeconds: VIDEO_ANALYSIS_TIMEOUT_SECONDS[mode] || VIDEO_ANALYSIS_TIMEOUT_SECONDS.fast,
         workflowId,
         nodeId,
         signal,
@@ -120,9 +126,14 @@ export class GeminiVideoAnalyzer extends VideoAnalyzerProvider {
     const prompt = [
       '你是短视频结构化分析器。附件是完整参考视频的低码率分析代理，只分析真实可见/可听内容，不推测画外设定。',
       modeInstruction(mode),
-      '一次建立全局故事、Character Identity（身份与 Look 分离）、Scene Identity/Zone、重要 Prop，以及每个 Shot 的动作复杂度。',
+      '一次建立全局故事、人物身份（身份与造型分离）、场景身份与区域、重要道具，以及每个镜头的动作复杂度。',
+      '除固定 ASCII ID 外，所有给用户阅读的字段必须使用自然、清晰的简体中文，包括人物/造型/场景/区域/道具名称、描述、声音、故事和风格；不得输出整句英文。',
+      '资产分析的目标不是识别或照搬原视频中的真人/影视角色，也不是截取分镜画面。请根据剧情功能给出可重新生成的“选角与美术需求”：人物 name 使用功能性中文角色名（如“冷静的主驾驶”），identity 说明年龄段、气质、脸型五官、发型、体型和辨识点；不得使用演员、明星或影视角色真名。',
+      '场景 name 使用功能性中文名称，visualDescription 说明空间结构、区域关系、固定构件、材质、色彩、时间与光线；道具 name 使用功能性中文名称，description 说明剧情用途、外形结构、比例、材质、颜色和不可变细节。描述必须足够支持用户直接 AI 生成或改为自己的上传资产。',
+      '每个人物、场景、道具都必须输出中文 masterPrompt 和 anchorBlock。masterPrompt 用于生成跨镜头一致性参考图：人物写固定五官、骨骼、发型、身体比例与造型；场景写空间拓扑、功能区、固定构件、材质、色彩和光线；道具写轮廓、长宽厚比例、组件与开孔数量、材质、颜色、标志位置和真实尺度。',
+      'anchorBlock 必须是可以逐字复制进每个镜头提示词的中文冻结段落，使用正面陈述，明确哪些身份、空间或结构特征在机位和动作变化时仍保持一致。不得只写“保持一致”这类空泛句子。',
       'ID 只能使用 ASCII 字母、数字、下划线或连字符；人物按 CHAR_01，造型按 LOOK_01，场景按 SCENE_01，区域按 ZONE_01，道具按 PROP_01。',
-      'appearsInShots 与 shotComplexities 只能引用给定 Shot ID；shotComplexities 必须恰好覆盖每个 Shot 一次。',
+      'appearsInShots 与 shotComplexities 只能引用给定镜头 ID；shotComplexities 必须恰好覆盖每个镜头一次。',
       '复杂度规则：simple=静态/说话/产品特写/简单回头；medium=走路/坐下/拿取/转身；complex=舞蹈/打斗/复杂手部/多人高速互动/高速运镜。',
       `视频元数据：${JSON.stringify({
         duration: source.duration,
@@ -132,7 +143,7 @@ export class GeminiVideoAnalyzer extends VideoAnalyzerProvider {
         hasAudio: source.hasAudio,
         orientation: source.orientation,
       })}`,
-      `本地算法确定的 Shot 时间线：${JSON.stringify(shotTimeline)}`,
+      `本地算法确定的镜头时间线：${JSON.stringify(shotTimeline)}`,
       '只返回一个纯 JSON 对象；禁止 Markdown、代码围栏、注释和 JSON 前后说明。',
       '必须严格符合：',
       GLOBAL_ANALYSIS_OUTPUT_CONTRACT,
@@ -179,20 +190,20 @@ export class GeminiVideoAnalyzer extends VideoAnalyzerProvider {
       })),
     };
     const inputDescription = inputKind === 'video'
-      ? '附件是这个 complex Shot 的完整小视频。'
+      ? '附件是这个复杂镜头的完整小视频。'
       : inputKind === 'three_frames'
-        ? '附件依次是 Start、Middle、End 三帧。'
-        : '附件依次是 Start、25%、50%、75%、End 五帧。';
+        ? '附件依次是起始、中间、结束三帧。'
+        : '附件依次是起始、25%、50%、75%、结束五帧。';
     const prompt = [
-      `你是短视频逐镜结构化分析器。当前 Shot ID 是 ${shot.shotId}，时长 ${shot.duration.toFixed(3)} 秒。`,
+      `你是短视频逐镜结构化分析器。当前镜头 ID 是 ${shot.shotId}，时长 ${shot.duration.toFixed(3)} 秒。`,
       inputDescription,
       modeInstruction(mode),
-      '所有动作、运镜、对白、音效和 timing 的 start/end 都使用当前 Shot 内从 0 开始的相对秒数，不得超过 Shot 时长。',
+      '所有动作、运镜、对白、音效和 timing 的 start/end 都使用当前镜头内从 0 开始的相对秒数，不得超过镜头时长。',
       'characters/scene/props 只能引用全片阶段已经建立的资产 ID。没有人物、场景或道具时使用空数组或空 scene 对象，不得发明新 ID。',
       'frameBlueprint 坐标 x/y 使用 0..1 归一化画面坐标。动作要拆成可执行的时间片，明确手部、姿态、表情、道具交互与移动方向。',
       `全片故事：${JSON.stringify(globalAnalysis.story)}`,
       `允许引用的资产：${JSON.stringify(assetCatalog)}`,
-      `本地 Shot 边界与复杂度：${JSON.stringify({
+      `本地镜头边界与复杂度：${JSON.stringify({
         shotId: shot.shotId,
         start: shot.start,
         end: shot.end,
@@ -220,7 +231,7 @@ export class GeminiVideoAnalyzer extends VideoAnalyzerProvider {
 
 export function createVideoAnalyzerProvider(providerId = 'gemini', options) {
   if (providerId === 'gemini') return new GeminiVideoAnalyzer(options);
-  const error = new Error(`不支持的视频分析 Provider：${providerId}`);
+  const error = new Error(`不支持的视频分析服务：${providerId}`);
   error.code = 'UNSUPPORTED_VIDEO_ANALYZER';
   error.status = 400;
   throw error;

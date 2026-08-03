@@ -196,7 +196,7 @@ function validateShotTimeline(shots, source) {
       || Math.abs(start - previousEnd) > 0.02
       || end > Number(source?.duration) + 0.05
     ) {
-      throw new VideoRemixAnalysisError(`Shot ${index + 1} 时间边界无效`, {
+      throw new VideoRemixAnalysisError(`镜头 ${index + 1} 时间边界无效`, {
         code: 'INVALID_SHOT_TIMELINE',
         status: 400,
       });
@@ -465,7 +465,7 @@ export async function analyzeVideoRemixShot({
   const normalizedShots = validateShotTimeline(shots, source);
   const shot = normalizedShots.find(item => item.shotId === String(shotId || ''));
   if (!shot) {
-    throw new VideoRemixAnalysisError('要分析的 Shot 不存在', {
+    throw new VideoRemixAnalysisError('要分析的镜头不存在', {
       code: 'SHOT_NOT_FOUND',
       status: 404,
     });

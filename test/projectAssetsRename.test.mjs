@@ -234,6 +234,25 @@ test('renaming a modern project renames the single root folder and rewrites imag
         id: 'modern-project',
         title: '旧项目',
         projectDirName: '旧项目',
+        videoRemixes: [{
+            id: 'remix-root',
+            state: {
+                source: {
+                    localUrl: '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/video-remix/remix_root/source/original.mp4',
+                    previewUrl: 'http://localhost:3001/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/video-remix/remix_root/source/original.mp4?t=1'
+                },
+                assets: {
+                    props: [{
+                        referenceImages: [
+                            '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/images/product-reference.png'
+                        ]
+                    }]
+                },
+                output: {
+                    url: '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/video-remix/remix_root/final/final.mp4'
+                }
+            }
+        }],
         nodes: [{
             resultUrl: '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/images/face.png',
             mediaUrl: '/library/projects/%E6%97%A7%E9%A1%B9%E7%9B%AE/audio/voice.mp3',
@@ -313,4 +332,61 @@ test('renaming a modern project renames the single root folder and rewrites imag
         workflow.nodes[1].videoRemix.source.sourceUrl,
         '/library/projects/%E6%96%B0%E9%A1%B9%E7%9B%AE/videos/original-canvas.mp4'
     );
+    assert.equal(
+        workflow.videoRemixes[0].state.source.localUrl,
+        '/library/projects/%E6%96%B0%E9%A1%B9%E7%9B%AE/video-remix/remix_root/source/original.mp4'
+    );
+    assert.equal(
+        workflow.videoRemixes[0].state.source.previewUrl,
+        'http://localhost:3001/library/projects/%E6%96%B0%E9%A1%B9%E7%9B%AE/video-remix/remix_root/source/original.mp4?t=1'
+    );
+    assert.equal(
+        workflow.videoRemixes[0].state.assets.props[0].referenceImages[0],
+        '/library/projects/%E6%96%B0%E9%A1%B9%E7%9B%AE/images/product-reference.png'
+    );
+    assert.equal(
+        workflow.videoRemixes[0].state.output.url,
+        '/library/projects/%E6%96%B0%E9%A1%B9%E7%9B%AE/video-remix/remix_root/final/final.mp4'
+    );
+});
+
+test('project organizer relocates media referenced only by a project-level remix task', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'twitcanva-remix-root-assets-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const dirs = {
+        libraryDir: root,
+        projectsDir: path.join(root, 'projects'),
+        imagesDir: path.join(root, 'images'),
+        videosDir: path.join(root, 'videos'),
+        audioDir: path.join(root, 'audio')
+    };
+    for (const dir of Object.values(dirs).filter(value => value !== root)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dirs.imagesDir, 'identity.png'), 'identity');
+    fs.writeFileSync(path.join(dirs.videosDir, 'reference.mp4'), 'reference');
+    const workflow = {
+        id: 'root-remix-project',
+        title: '独立复刻',
+        nodes: [],
+        videoRemixes: [{
+            id: 'remix-1',
+            state: {
+                source: { localUrl: '/library/videos/reference.mp4' },
+                assets: { characters: [{ referenceImages: ['/library/images/identity.png'] }] }
+            }
+        }]
+    };
+
+    const result = organizeWorkflowAssets(workflow, dirs);
+
+    assert.equal(result.changed, true);
+    assert.equal(
+        workflow.videoRemixes[0].state.source.localUrl,
+        '/library/projects/%E7%8B%AC%E7%AB%8B%E5%A4%8D%E5%88%BB/videos/reference.mp4'
+    );
+    assert.equal(
+        workflow.videoRemixes[0].state.assets.characters[0].referenceImages[0],
+        '/library/projects/%E7%8B%AC%E7%AB%8B%E5%A4%8D%E5%88%BB/images/identity.png'
+    );
+    assert.equal(fs.readFileSync(path.join(dirs.projectsDir, '独立复刻', 'images', 'identity.png'), 'utf8'), 'identity');
+    assert.equal(fs.readFileSync(path.join(dirs.projectsDir, '独立复刻', 'videos', 'reference.mp4'), 'utf8'), 'reference');
 });

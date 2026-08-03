@@ -55,10 +55,10 @@ test('产品短视频节点接收两张图片与短视频文本，输出可继�
   assert.equal(isValidNodeConnection(NODE.PRODUCT_SCENE_REPLACE, NODE.VIDEO), true);
 });
 
-test('Video Remix 只接收参考视频，并以普通视频节点承接最终结果', () => {
-  assert.equal(isValidNodeConnection(NODE.VIDEO, NODE.VIDEO_REMIX), true);
+test('项目级视频复刻不再参与任何画布连线', () => {
+  assert.equal(isValidNodeConnection(NODE.VIDEO, NODE.VIDEO_REMIX), false);
   assert.equal(isValidNodeConnection(NODE.IMAGE, NODE.VIDEO_REMIX), false);
   assert.equal(isValidNodeConnection(NODE.TEXT, NODE.VIDEO_REMIX), false);
-  assert.equal(isValidNodeConnection(NODE.VIDEO_REMIX, NODE.VIDEO), true);
+  assert.equal(isValidNodeConnection(NODE.VIDEO_REMIX, NODE.VIDEO), false);
   assert.equal(isValidNodeConnection(NODE.VIDEO_REMIX, NODE.IMAGE), false);
 });

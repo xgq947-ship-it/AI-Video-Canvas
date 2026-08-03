@@ -24,6 +24,7 @@ import {
   recoverStaleVideoRemixKeyframes,
   setVideoRemixKeyframeError,
   updateVideoRemixKeyframePrompt,
+  VIDEO_REMIX_MOTION_LABELS,
   type KeyframeResult,
 } from '../../../shared/videoRemix.js';
 import {
@@ -44,9 +45,9 @@ const DEFAULT_IMAGE_MODEL = IMAGE_MODELS.find(
 const KEYFRAME_CONCURRENCY = 2;
 
 const POSITION_LABELS: Record<KeyframeResult['position'], string> = {
-  start: 'Start',
-  middle: 'Middle',
-  end: 'End',
+  start: '起始',
+  middle: '中间',
+  end: '结束',
 };
 
 const STATUS_LABELS: Record<KeyframeResult['status'], string> = {
@@ -96,6 +97,8 @@ export const VideoRemixKeyframesWorkspace: React.FC<{
   workflowId?: string;
   onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
   onSelectShots: () => void;
+  simpleMode?: boolean;
+  onConfirmed?: () => void;
   dark: boolean;
 }> = ({
   node,
@@ -103,6 +106,8 @@ export const VideoRemixKeyframesWorkspace: React.FC<{
   workflowId,
   onUpdateNode,
   onSelectShots,
+  simpleMode = false,
+  onConfirmed,
   dark,
 }) => {
   const [batchBusy, setBatchBusy] = React.useState(false);
@@ -155,8 +160,9 @@ export const VideoRemixKeyframesWorkspace: React.FC<{
       imageModel: model.id,
       aspectRatio: ratio,
       resolution: quality,
+      strategy: simpleMode ? 'single' : 'adaptive',
     });
-  }, [aspectRatio, resolution, selectedModel]);
+  }, [aspectRatio, resolution, selectedModel, simpleMode]);
 
   React.useEffect(() => {
     if (!state.promptReview?.confirmed || !selectedModel || runningRef.current) {
@@ -183,7 +189,7 @@ export const VideoRemixKeyframesWorkspace: React.FC<{
     setActiveIds(current => [...new Set([...current, keyframeId])]);
     setLocalError('');
     try {
-      if (!workflowId) throw new Error('请先把当前画布保存为项目');
+      if (!workflowId) throw new Error('请先创建或打开项目');
       const provider = IMAGE_MODELS.find(model => model.id === keyframe!.imageModel);
       const maxReferences = provider?.maxReferenceImages || 1;
       const url = await generateVideoRemixKeyframe({
@@ -268,6 +274,7 @@ export const VideoRemixKeyframesWorkspace: React.FC<{
       imageModel: model.id,
       aspectRatio: ratio,
       resolution: quality,
+      strategy: simpleMode ? 'single' : 'adaptive',
     });
     persist(next);
     setLocalError('');
@@ -277,8 +284,8 @@ export const VideoRemixKeyframesWorkspace: React.FC<{
     return (
       <GateCard
         dark={dark}
-        title="先确认全部 Prompt"
-        description="关键帧会消费图片生成额度。请先在镜头页确认 Video Prompt 与独立 Image Prompt，避免错误资产继续传递。"
+        title="先确认全部提示词"
+        description="关键帧会消费图片生成额度。请先确认视频提示词与独立关键帧提示词，避免错误资产继续传递。"
         action="前往镜头页"
         onAction={onSelectShots}
       />
@@ -290,7 +297,7 @@ export const VideoRemixKeyframesWorkspace: React.FC<{
       <GateCard
         dark={dark}
         title="没有可用的图片生成模型"
-        description="当前模型注册表中没有支持参考图生成的 Provider。"
+        description="当前模型列表中没有支持参考图生成的服务。"
         action="返回镜头页"
         onAction={onSelectShots}
       />
@@ -316,6 +323,12 @@ export const VideoRemixKeyframesWorkspace: React.FC<{
     item => item.status === 'failed' && item.retryBlocked
   ).length;
 
+  const confirmAll = () => {
+    const next = confirmVideoRemixKeyframes(workingRef.current);
+    persist(next);
+    if (next.keyframeReview?.confirmed) onConfirmed?.();
+  };
+
   return (
     <div className="mt-7 space-y-5">
       <section className={`rounded-[26px] border p-5 ${
@@ -330,8 +343,9 @@ export const VideoRemixKeyframesWorkspace: React.FC<{
             <p className={`mt-2 max-w-2xl text-[11px] leading-5 ${
               dark ? 'text-neutral-500' : 'text-neutral-500'
             }`}>
-              simple 生成 Start；medium 生成 Start + End；complex 生成
-              Start + Middle + End。队列并发上限 {KEYFRAME_CONCURRENCY}，单帧失败不影响其他任务。
+              {simpleMode
+                ? `每个镜头只生成一张起始关键帧，统一检查一次人物、场景和道具是否正确。队列并发上限 ${KEYFRAME_CONCURRENCY}。`
+                : `简单镜头生成起始帧；中等镜头生成起始帧和结束帧；复杂镜头生成起始帧、中间帧和结束帧。队列并发上限 ${KEYFRAME_CONCURRENCY}，单帧失败不影响其他任务。`}
             </p>
           </div>
           <div className={`rounded-xl px-3 py-2 text-[11px] ${
@@ -343,6 +357,24 @@ export const VideoRemixKeyframesWorkspace: React.FC<{
           </div>
         </div>
 
+        {simpleMode ? (
+          <details className={`mt-4 rounded-2xl border px-4 py-3 text-[10px] ${
+            dark ? 'border-white/8 bg-black/20 text-neutral-400' : 'border-neutral-200 bg-neutral-50 text-neutral-600'
+          }`}>
+            <summary className="cursor-pointer">生成设置（已自动选择：{selectedModel.name} · {aspectRatio} · {resolution}）</summary>
+            <div className="mt-3 grid gap-3 xl:grid-cols-3">
+              <KeyframeModelSettings
+                dark={dark}
+                running={running}
+                selectedModel={selectedModel}
+                preferredRatio={preferredRatio}
+                aspectRatio={aspectRatio}
+                resolution={resolution}
+                onUpdate={updateConfig}
+              />
+            </div>
+          </details>
+        ) : (
         <div className={`mt-5 grid gap-3 rounded-2xl border p-4 xl:grid-cols-3 ${
           dark ? 'border-white/8 bg-black/20' : 'border-neutral-200 bg-neutral-50'
         }`}>
@@ -414,6 +446,7 @@ export const VideoRemixKeyframesWorkspace: React.FC<{
             </select>
           </label>
         </div>
+        )}
 
         <div className="mt-4 flex flex-wrap gap-2">
           <button
@@ -437,7 +470,7 @@ export const VideoRemixKeyframesWorkspace: React.FC<{
           <button
             type="button"
             disabled={running || readiness.total === 0 || readiness.ready !== readiness.total}
-            onClick={() => persist(confirmVideoRemixKeyframes(workingRef.current))}
+            onClick={confirmAll}
             className={secondaryButtonClass(dark, state.keyframeReview?.confirmed)}
           >
             <ShieldCheck size={13} />
@@ -473,12 +506,12 @@ export const VideoRemixKeyframesWorkspace: React.FC<{
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <div className="text-sm font-medium">
-                    Shot {String(shotIndex + 1).padStart(2, '0')}
+                    镜头 {String(shotIndex + 1).padStart(2, '0')}
                   </div>
                   <div className={`mt-1 text-[10px] ${
                     dark ? 'text-neutral-500' : 'text-neutral-400'
                   }`}>
-                    {shot.shotId} · {shot.motionComplexity} · {Number(shot.duration).toFixed(2)}s
+                    {shot.shotId} · {VIDEO_REMIX_MOTION_LABELS[shot.motionComplexity]} · {Number(shot.duration).toFixed(2)} 秒
                   </div>
                 </div>
                 <span className={`rounded-full px-3 py-1 text-[10px] ${
@@ -566,7 +599,7 @@ const KeyframeCard: React.FC<{
       <div className="flex items-center justify-between gap-3 px-4 py-3">
         <div>
           <div className="text-xs font-medium">
-            {POSITION_LABELS[frame.position]} Frame
+            {POSITION_LABELS[frame.position]}帧
           </div>
           <div className={`mt-1 text-[9px] ${
             dark ? 'text-neutral-600' : 'text-neutral-400'
@@ -620,7 +653,7 @@ const KeyframeCard: React.FC<{
             dark ? 'bg-white/5 text-neutral-400' : 'bg-white text-neutral-500'
           }`}
         >
-          <span>关键帧 Prompt · {frame.promptSource === 'user' ? '已手动编辑' : 'Pipeline'}</span>
+          <span>关键帧提示词 · {frame.promptSource === 'user' ? '已手动编辑' : '自动生成'}</span>
           {editing ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
         </button>
         {editing && (
@@ -713,6 +746,67 @@ const FrameFigure: React.FC<{
       {label}
     </figcaption>
   </figure>
+);
+
+const KeyframeModelSettings: React.FC<{
+  dark: boolean;
+  running: boolean;
+  selectedModel: ImageGenerationProvider;
+  preferredRatio: string;
+  aspectRatio: string;
+  resolution: string;
+  onUpdate: (model: ImageGenerationProvider, ratio: string, resolution: string) => void;
+}> = ({
+  dark,
+  running,
+  selectedModel,
+  preferredRatio,
+  aspectRatio,
+  resolution,
+  onUpdate,
+}) => (
+  <>
+    <label className="block">
+      <span className={`text-[10px] font-medium ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>图片模型</span>
+      <select
+        value={selectedModel.id}
+        disabled={running}
+        onChange={event => {
+          const model = IMAGE_MODELS.find(item => item.id === event.target.value);
+          if (model) onUpdate(
+            model,
+            modelAspectRatio(model, preferredRatio),
+            modelResolution(model)
+          );
+        }}
+        className={selectClass(dark)}
+      >
+        {IMAGE_MODELS.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+      </select>
+    </label>
+    <label className="block">
+      <span className={`text-[10px] font-medium ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>画幅</span>
+      <select
+        value={aspectRatio}
+        disabled={running}
+        onChange={event => onUpdate(selectedModel, event.target.value, resolution)}
+        className={selectClass(dark)}
+      >
+        {selectedModel.supportedAspectRatios.map(option => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </label>
+    <label className="block">
+      <span className={`text-[10px] font-medium ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>分辨率</span>
+      <select
+        value={resolution}
+        disabled={running}
+        onChange={event => onUpdate(selectedModel, aspectRatio, event.target.value)}
+        className={selectClass(dark)}
+      >
+        {selectedModel.resolutions.map(option => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </label>
+  </>
 );
 
 const GateCard: React.FC<{

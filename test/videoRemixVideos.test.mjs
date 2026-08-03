@@ -9,6 +9,7 @@ import {
   applyVideoRemixVideoResult,
   beginVideoRemixVideoCalibration,
   beginVideoRemixVideoGeneration,
+  confirmVideoRemixVideo,
   confirmVideoRemixVideos,
   createVideoRemixShot,
   createVideoRemixState,
@@ -134,11 +135,11 @@ function videoFixture({
           name: '日常装',
           description: '白色衬衫',
           referenceImages: ['/library/look.png'],
-          source: 'analysis',
+          source: 'library',
         }],
         referenceImages: ['/library/character.png'],
         appearsInShots: shots.map(shot => shot.shotId),
-        source: 'analysis',
+        source: 'library',
       }],
       scenes: [{
         id: 'SCENE_01',
@@ -151,7 +152,7 @@ function videoFixture({
         }],
         referenceImages: ['/library/scene.png'],
         appearsInShots: shots.map(shot => shot.shotId),
-        source: 'analysis',
+        source: 'library',
       }],
       props: [{
         id: 'PROP_01',
@@ -160,7 +161,7 @@ function videoFixture({
         description: '白色陶瓷杯',
         referenceImages: ['/library/prop.png'],
         appearsInShots: shots.map(shot => shot.shotId),
-        source: 'analysis',
+        source: 'library',
       }],
     },
     assetReview: { confirmed: true },
@@ -278,6 +279,162 @@ test('模型能力自动选择 Start/End 或 Start + 当前资产多参考', () 
   assert.equal(seedance.imageBase64, '/library/shot_001-start.png');
   assert.equal(seedance.lastFrameBase64, '/library/shot_001-end.png');
   assert.deepEqual(seedance.referenceImages, []);
+});
+
+test('没有关键帧也能用单个人物参考图直接建立并启动视频任务', () => {
+  const state = videoFixture();
+  state.keyframes = [];
+  state.keyframeReview = { confirmed: false };
+  state.assets.characters[0].looks[0] = {
+    ...state.assets.characters[0].looks[0],
+    source: 'analysis',
+    referenceImages: [],
+  };
+  state.assets.scenes[0] = {
+    ...state.assets.scenes[0],
+    source: 'analysis',
+    referenceImages: [],
+  };
+  state.assets.props[0] = {
+    ...state.assets.props[0],
+    source: 'analysis',
+    referenceImages: [],
+  };
+
+  const prepared = prepareVideoRemixVideos(state, {
+    videoModel: 'google-flow-omni-flash',
+    aspectRatio: '16:9',
+    resolution: '自动',
+    generateAudio: true,
+  });
+  const [video] = prepared.generatedVideos;
+  assert.ok(video);
+  assert.equal(video.startFrameUrl, '');
+  assert.equal(video.endFrameUrl, '');
+  assert.deepEqual(video.referenceImages, ['/library/character.png']);
+  assert.deepEqual(video.referenceImageLabels, ['CHAR_01']);
+
+  const generating = beginVideoRemixVideoGeneration(prepared, video.id, {
+    generationNodeId: 'node_text_or_reference_video',
+  });
+  assert.equal(generating.stage, 'videos_generating');
+  assert.equal(generating.generatedVideos[0].status, 'generating');
+});
+
+test('无人物无资产图时可以直接建立文生视频任务', () => {
+  const state = videoFixture();
+  state.keyframes = [];
+  state.keyframeReview = { confirmed: false };
+  state.assets.characters = [];
+  state.assets.scenes = [];
+  state.assets.props = [];
+  state.shots[0].characters = [];
+  state.shots[0].scene = undefined;
+  state.shots[0].props = [];
+
+  const prepared = prepareVideoRemixVideos(state, {
+    videoModel: 'google-flow-omni-flash',
+    aspectRatio: '16:9',
+    resolution: '自动',
+    generateAudio: true,
+  });
+  const [video] = prepared.generatedVideos;
+  assert.ok(video);
+  assert.deepEqual(video.referenceImages, []);
+  assert.equal(video.imageBase64, undefined);
+
+  const generating = beginVideoRemixVideoGeneration(prepared, video.id, {
+    generationNodeId: 'node_text_video',
+  });
+  assert.equal(generating.generatedVideos[0].status, 'generating');
+});
+
+test('每个镜头可生成 1-4 个候选，并且每个镜头只选用一个进入成片', () => {
+  let state = prepareVideoRemixVideos(videoFixture(), {
+    videoModel: 'google-flow-omni-flash',
+    aspectRatio: '16:9',
+    resolution: '自动',
+    generateAudio: true,
+    outputCount: 3,
+  });
+  assert.equal(state.videoReview.outputCount, 3);
+  assert.equal(state.generatedVideos.length, 3);
+  assert.deepEqual(
+    state.generatedVideos.map(video => video.variantIndex),
+    [1, 2, 3]
+  );
+  assert.equal(new Set(state.generatedVideos.map(video => video.id)).size, 3);
+
+  const [first, second] = state.generatedVideos;
+  state = applyVideoRemixVideoResult(state, first.id, {
+    url: '/library/candidate-1.mp4',
+    inputHash: first.inputHash,
+  });
+  state = applyVideoRemixVideoResult(state, second.id, {
+    url: '/library/candidate-2.mp4',
+    inputHash: second.inputHash,
+  });
+  state = confirmVideoRemixVideo(state, second.id);
+  assert.equal(state.videoReview.confirmed, true);
+  assert.equal(state.generatedVideos[1].status, 'confirmed');
+
+  state = confirmVideoRemixVideo(state, first.id);
+  assert.equal(state.generatedVideos[0].status, 'confirmed');
+  assert.equal(state.generatedVideos[1].status, 'completed');
+  assert.equal(getVideoRemixVideoReadiness(state).confirmed, 1);
+});
+
+test('候选数量越界会限制到 1-4，批量确认按每镜头第一个可用候选选择', () => {
+  let state = prepareVideoRemixVideos(videoFixture({ shotCount: 2 }), {
+    videoModel: 'google-flow-omni-flash',
+    aspectRatio: '16:9',
+    resolution: '自动',
+    generateAudio: true,
+    outputCount: 99,
+  });
+  assert.equal(state.videoReview.outputCount, 4);
+  assert.equal(state.generatedVideos.length, 8);
+
+  for (const shot of state.shots) {
+    const candidate = state.generatedVideos.find(video => (
+      video.shotId === shot.shotId && video.variantIndex === 2
+    ));
+    state = applyVideoRemixVideoResult(state, candidate.id, {
+      url: `/library/${shot.shotId}-candidate-2.mp4`,
+      inputHash: candidate.inputHash,
+    });
+  }
+  state = confirmVideoRemixVideos(state);
+  assert.equal(state.videoReview.confirmed, true);
+  assert.equal(
+    state.generatedVideos.filter(video => video.status === 'confirmed').length,
+    2
+  );
+  assert.ok(state.generatedVideos
+    .filter(video => video.status === 'confirmed')
+    .every(video => video.variantIndex === 2));
+});
+
+test('旧项目的单候选视频不会因新增候选数量字段而失效', () => {
+  const options = {
+    videoModel: 'google-flow-omni-flash',
+    aspectRatio: '16:9',
+    resolution: '自动',
+    generateAudio: true,
+  };
+  let state = prepareVideoRemixVideos(videoFixture(), options);
+  const video = state.generatedVideos[0];
+  state = applyVideoRemixVideoResult(state, video.id, {
+    url: '/library/legacy-video.mp4',
+    inputHash: video.inputHash,
+  });
+  delete state.generatedVideos[0].variantIndex;
+  delete state.videoReview.outputCount;
+
+  const prepared = prepareVideoRemixVideos(state, options);
+  assert.equal(prepared, state);
+  assert.equal(prepared.generatedVideos[0].url, '/library/legacy-video.mp4');
+  assert.equal(prepared.generatedVideos[0].status, 'completed');
 });
 
 test('视频计划缓存相同输入，分辨率与声音变化只失效视频层', () => {

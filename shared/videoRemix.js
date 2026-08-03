@@ -10,6 +10,13 @@ import {
   getVideoGenerationProvider,
   getVideoProviderCapabilities,
 } from './generationProviders.js';
+import {
+  buildVideoRemixAssetAnchorBlock,
+  buildVideoRemixAssetConsistencyDefinition,
+  buildVideoRemixAssetMasterPrompt,
+  getVideoRemixConsistencyReferenceImages,
+  mergeVideoRemixAssetConsistencyPack,
+} from './videoRemixAssetPrompts.js';
 
 export const VIDEO_REMIX_SCHEMA_VERSION = 1;
 
@@ -40,6 +47,29 @@ export const VIDEO_REMIX_WORKSPACE_TABS = Object.freeze([
   { id: 'final', label: '成片' },
 ]);
 
+export const VIDEO_REMIX_STAGE_LABELS = Object.freeze({
+  source: '等待导入参考视频',
+  preprocessing: '正在自动拆分镜头',
+  shots_ready: '镜头已拆分',
+  analyzing: '正在分析视频',
+  analysis_partial: '部分镜头待重试',
+  analysis_ready: '视频分析已完成',
+  assets_ready: '资产已确认',
+  keyframes_generating: '正在生成关键帧',
+  keyframes_ready: '关键帧待确认',
+  videos_generating: '正在生成镜头视频',
+  videos_ready: '镜头视频待确认',
+  rendering: '正在合成成片',
+  completed: '成片已完成',
+  error: '需要处理问题',
+});
+
+export const VIDEO_REMIX_MOTION_LABELS = Object.freeze({
+  simple: '简单',
+  medium: '中等',
+  complex: '复杂',
+});
+
 export const HIGH_FIDELITY_LOCKS = Object.freeze({
   story: true,
   motion: true,
@@ -69,11 +99,15 @@ const DEFAULT_PROMPT_REVIEW = Object.freeze({
 
 const DEFAULT_KEYFRAME_REVIEW = Object.freeze({
   confirmed: false,
+  strategy: 'adaptive',
 });
 
 const DEFAULT_VIDEO_REVIEW = Object.freeze({
   confirmed: false,
+  outputCount: 1,
 });
+
+export const VIDEO_REMIX_VIDEO_OUTPUT_COUNTS = Object.freeze([1, 2, 3, 4]);
 
 const DEFAULT_TIMELINE_REVIEW = Object.freeze({
   prepared: false,
@@ -300,6 +334,7 @@ export function createVideoRemixState(overrides = {}) {
     schemaVersion: VIDEO_REMIX_SCHEMA_VERSION,
     remixId: String(overrides.remixId || createRemixId()),
     mode: 'high_fidelity',
+    workspaceMode: 'simple',
     stage: 'source',
     source: null,
     analysisRun: { ...DEFAULT_ANALYSIS_RUN },
@@ -337,6 +372,7 @@ export function createVideoRemixState(overrides = {}) {
     props: [],
     ...(overrides.assets || {}),
   };
+  state.workspaceMode = overrides.workspaceMode === 'advanced' ? 'advanced' : 'simple';
   state.analysisRun = {
     ...DEFAULT_ANALYSIS_RUN,
     ...(overrides.analysisRun || {}),
@@ -375,6 +411,17 @@ export function createVideoRemixState(overrides = {}) {
   return state;
 }
 
+export function setVideoRemixWorkspaceMode(state, workspaceMode = 'simple') {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const nextMode = workspaceMode === 'advanced' ? 'advanced' : 'simple';
+  if (current.workspaceMode === nextMode) return current;
+  return {
+    ...current,
+    workspaceMode: nextMode,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 export function isVideoRemixState(value) {
   return Boolean(
     value
@@ -398,13 +445,17 @@ export function summarizeVideoRemixState(state) {
   const safe = isVideoRemixState(state) ? state : createVideoRemixState();
   const shots = safe.shots.length;
   const confirmedKeyframes = safe.keyframes.filter(item => item?.status === 'confirmed').length;
-  const requiredKeyframes = safe.shots.reduce(
-    (total, shot) => total + keyframePositionsForComplexity(shot?.motionComplexity).length,
-    0
-  );
-  const completedVideos = safe.generatedVideos.filter(item => (
-    ['completed', 'confirmed'].includes(item?.status)
-  )).length;
+  const requiredKeyframes = safe.keyframeReview?.strategy === 'single'
+    ? safe.shots.length
+    : safe.shots.reduce(
+      (total, shot) => total + keyframePositionsForComplexity(shot?.motionComplexity).length,
+      0
+    );
+  const completedVideos = new Set(
+    safe.generatedVideos
+      .filter(item => ['completed', 'confirmed'].includes(item?.status))
+      .map(item => item.shotId)
+  ).size;
   return {
     shots,
     characters: safe.assets.characters.length,
@@ -554,6 +605,27 @@ export function beginVideoRemixAnalysis(state, mode = 'fast') {
   };
 }
 
+function withVideoRemixAssetPromptDefaults(kind, asset, previous) {
+  const next = {
+    ...asset,
+    ...(previous?.consistencyPack
+      ? { consistencyPack: previous.consistencyPack }
+      : {}),
+  };
+  const masterPrompt = String(next.masterPrompt || '').trim()
+    || buildVideoRemixAssetMasterPrompt(kind, next);
+  const anchorBlock = String(next.anchorBlock || '').trim()
+    || buildVideoRemixAssetAnchorBlock(kind, {
+      ...next,
+      masterPrompt,
+    });
+  return {
+    ...next,
+    masterPrompt,
+    anchorBlock,
+  };
+}
+
 export function applyVideoRemixGlobalAnalysis(state, result) {
   const current = isVideoRemixState(state) ? state : createVideoRemixState();
   if (!result?.story || !Array.isArray(result?.shotComplexities)) return current;
@@ -573,20 +645,6 @@ export function applyVideoRemixGlobalAnalysis(state, result) {
     };
   });
   const completedShots = shots.filter(shot => shot.analysisStatus === 'ready').length;
-  const referenceFramesFor = (appearsInShots, maximum = 4) => {
-    const expected = new Set((appearsInShots || []).map(String));
-    const references = [];
-    for (const shot of shots) {
-      if (!expected.has(shot.shotId)) continue;
-      const frames = Array.isArray(shot.analysisFrames) ? shot.analysisFrames : [];
-      for (const position of ['middle', 'quarter', 'three_quarter', 'start', 'end']) {
-        const url = frames.find(frame => frame.position === position)?.url;
-        if (url && !references.includes(url)) references.push(url);
-        if (references.length >= maximum) return references;
-      }
-    }
-    return references;
-  };
   const previousCharacters = new Map(
     (current.assets?.characters || []).map(asset => [asset.id, asset])
   );
@@ -598,15 +656,14 @@ export function applyVideoRemixGlobalAnalysis(state, result) {
   );
   const characters = (Array.isArray(result.characters) ? result.characters : []).map(asset => {
     const previous = previousCharacters.get(asset.id);
-    const extractedReferences = referenceFramesFor(asset.appearsInShots);
     const looks = (asset.looks || []).map(look => {
       const previousLook = previous?.looks?.find(item => item.id === look.id);
       return {
         ...look,
         source: look.source || 'analysis',
-        referenceImages: look.referenceImages?.length
-          ? look.referenceImages
-          : extractedReferences,
+        // 分镜分析帧只能说明构图与剧情，不能充当人物造型资产图。
+        // 资产图片必须来自用户上传、素材库或一次真实的 AI 生成。
+        referenceImages: [],
         ...(previousLook?.replacement ? { replacement: previousLook.replacement } : {}),
       };
     });
@@ -618,38 +675,32 @@ export function applyVideoRemixGlobalAnalysis(state, result) {
         looks.push(previousLook);
       }
     }
-    return {
+    return withVideoRemixAssetPromptDefaults('characters', {
       ...asset,
       source: asset.source || 'analysis',
-      referenceImages: asset.referenceImages?.length
-        ? asset.referenceImages
-        : extractedReferences,
+      referenceImages: [],
       looks,
       ...(previous?.replacement ? { replacement: previous.replacement } : {}),
-    };
+    }, previous);
   });
   const scenes = (Array.isArray(result.scenes) ? result.scenes : []).map(asset => {
     const previous = previousScenes.get(asset.id);
-    return {
+    return withVideoRemixAssetPromptDefaults('scenes', {
       ...asset,
       source: asset.source || 'analysis',
-      referenceImages: asset.referenceImages?.length
-        ? asset.referenceImages
-        : referenceFramesFor(asset.appearsInShots),
+      referenceImages: [],
       ...(previous?.replacement ? { replacement: previous.replacement } : {}),
-    };
+    }, previous);
   });
   const props = (Array.isArray(result.props) ? result.props : []).map(asset => {
     const previous = previousProps.get(asset.id);
-    return {
+    return withVideoRemixAssetPromptDefaults('props', {
       ...asset,
       source: asset.source || 'analysis',
-      referenceImages: asset.referenceImages?.length
-        ? asset.referenceImages
-        : referenceFramesFor(asset.appearsInShots),
+      referenceImages: [],
       ...(previous?.replacement ? { replacement: previous.replacement } : {}),
       ...(previous?.removed ? { removed: true } : {}),
-    };
+    }, previous);
   });
   return {
     ...current,
@@ -830,7 +881,7 @@ export function setVideoRemixShotAnalysisError(state, shotId, message, {
   const safeShotId = String(shotId || '');
   const shots = current.shots.map(shot => (
     shot.shotId === safeShotId
-      ? { ...shot, analysisStatus: 'failed', analysisError: String(message || 'Shot 分析失败') }
+      ? { ...shot, analysisStatus: 'failed', analysisError: String(message || '镜头分析失败') }
       : shot
   ));
   const completedShots = shots.filter(shot => shot.analysisStatus === 'ready').length;
@@ -853,7 +904,7 @@ export function setVideoRemixShotAnalysisError(state, shotId, message, {
       {
         scope: 'analysis',
         id: safeShotId,
-        message: String(message || 'Shot 分析失败'),
+        message: String(message || '镜头分析失败'),
         retryable: Boolean(retryable),
         ...(code ? { code: String(code) } : {}),
       },
@@ -992,12 +1043,32 @@ export function replaceVideoRemixAsset(state, kind, assetId, replacement) {
   const nextAssets = current.assets[kind].map(asset => {
     if (asset.id !== id) return asset;
     found = true;
-    const normalized = normalizeAssetReplacement(replacement);
+    let normalized = normalizeAssetReplacement(replacement);
     if (!normalized) {
-      const { replacement: ignored, ...base } = asset;
+      const {
+        replacement: ignored,
+        consistencyPack: ignoredPack,
+        ...base
+      } = asset;
       return base;
     }
-    return { ...asset, replacement: normalized };
+    const resolvedReplacement = {
+      ...asset,
+      ...normalized,
+      masterPrompt: String(normalized.masterPrompt || '').trim(),
+      anchorBlock: String(normalized.anchorBlock || '').trim(),
+    };
+    const masterPrompt = buildVideoRemixAssetMasterPrompt(kind, resolvedReplacement);
+    normalized = {
+      ...normalized,
+      masterPrompt,
+      anchorBlock: buildVideoRemixAssetAnchorBlock(kind, {
+        ...resolvedReplacement,
+        masterPrompt,
+      }),
+    };
+    const { consistencyPack: ignoredPack, ...base } = asset;
+    return { ...base, replacement: normalized };
   });
   if (!found) return current;
   return withInvalidatedAssetDerivatives(current, {
@@ -1006,6 +1077,343 @@ export function replaceVideoRemixAsset(state, kind, assetId, replacement) {
       [kind]: nextAssets,
     },
   });
+}
+
+function findVideoRemixAsset(current, kind, assetId) {
+  if (!['characters', 'scenes', 'props'].includes(kind)) return null;
+  return current.assets[kind].find(asset => asset.id === String(assetId || '')) || null;
+}
+
+function updateVideoRemixAssetRecord(current, kind, assetId, updater) {
+  if (!['characters', 'scenes', 'props'].includes(kind)) return null;
+  let found = false;
+  const collection = current.assets[kind].map(asset => {
+    if (asset.id !== String(assetId || '')) return asset;
+    found = true;
+    return updater(asset);
+  });
+  if (!found) return null;
+  return {
+    ...current.assets,
+    [kind]: collection,
+  };
+}
+
+export function getVideoRemixAssetConsistencyPack(state, kind, assetId) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const base = findVideoRemixAsset(current, kind, assetId);
+  if (!base) return null;
+  const resolved = resolveVideoRemixAsset(base);
+  const definition = buildVideoRemixAssetConsistencyDefinition(kind, resolved);
+  const hasChosenVisual = ['generated', 'upload', 'library'].includes(resolved?.source);
+  const storedPrimary = base.consistencyPack?.items?.find(item => (
+    (item.profileId || item.id) === base.consistencyPack?.primaryProfileId
+  ));
+  // 兼容旧项目：此前由分析截图自动播种的主图标记为 existing。
+  // 一旦识别到这种主图，就清空整包，避免后续角度图继续继承错误对象。
+  const storedPack = !hasChosenVisual && storedPrimary?.source === 'existing'
+    ? {
+        ...base.consistencyPack,
+        primaryConfirmed: false,
+        confirmed: false,
+        status: 'draft',
+        items: base.consistencyPack.items.map(item => ({
+          ...item,
+          url: undefined,
+          source: undefined,
+          status: 'pending',
+          error: undefined,
+          generatedAt: undefined,
+        })),
+      }
+    : base.consistencyPack;
+  return mergeVideoRemixAssetConsistencyPack(
+    definition,
+    storedPack,
+    hasChosenVisual ? resolved.referenceImages : []
+  );
+}
+
+export function getVideoRemixAssetConsistencyReadiness(state) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const entries = [];
+  for (const kind of ['characters', 'scenes', 'props']) {
+    for (const asset of current.assets[kind] || []) {
+      if (kind === 'props' && asset.removed) continue;
+      const pack = getVideoRemixAssetConsistencyPack(current, kind, asset.id);
+      entries.push({
+        kind,
+        assetId: asset.id,
+        primaryConfirmed: Boolean(pack?.primaryConfirmed),
+        confirmed: Boolean(pack?.confirmed),
+        ready: Boolean(pack?.items?.length && pack.items.every(item => (
+          item.url && ['ready', 'confirmed'].includes(item.status)
+        ))),
+      });
+    }
+  }
+  return {
+    total: entries.length,
+    primaryConfirmed: entries.filter(item => item.primaryConfirmed).length,
+    confirmed: entries.filter(item => item.confirmed).length,
+    ready: entries.filter(item => item.ready).length,
+    entries,
+  };
+}
+
+/**
+ * 简单模式的最小资产门槛。
+ *
+ * 有人物的视频只要求至少一名人物拥有一张真正由用户选择、上传或生成的参考图；
+ * 多角度人物图、场景图和道具图都属于可选增强。没有人物的产品/风景视频可以完全
+ * 依赖结构化中文提示词进入文生视频，不能被一个并不存在的人物资产卡住。
+ */
+export function getVideoRemixMinimumAssetReadiness(state) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const preparedCharacterIds = current.assets.characters
+    .filter(asset => getVideoRemixConsistencyReferenceImages(
+      resolveVideoRemixAsset(asset)
+    ).length > 0)
+    .map(asset => asset.id);
+  const requiredCharacters = current.assets.characters.length > 0 ? 1 : 0;
+  return {
+    characterAssets: current.assets.characters.length,
+    preparedCharacters: preparedCharacterIds.length,
+    preparedCharacterIds,
+    requiredCharacters,
+    ready: preparedCharacterIds.length >= requiredCharacters,
+  };
+}
+
+export function prepareVideoRemixAssetConsistencyPack(state, kind, assetId) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const pack = getVideoRemixAssetConsistencyPack(current, kind, assetId);
+  if (!pack) return current;
+  const assets = updateVideoRemixAssetRecord(
+    current,
+    kind,
+    assetId,
+    asset => ({
+      ...asset,
+      masterPrompt: asset.masterPrompt || pack.masterPrompt,
+      anchorBlock: asset.anchorBlock || pack.anchorBlock,
+      consistencyPack: {
+        ...pack,
+        updatedAt: new Date().toISOString(),
+      },
+    })
+  );
+  if (!assets) return current;
+  return {
+    ...current,
+    assets,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function beginVideoRemixAssetConsistencyGeneration(
+  state,
+  kind,
+  assetId,
+  profileId
+) {
+  const prepared = prepareVideoRemixAssetConsistencyPack(state, kind, assetId);
+  const pack = getVideoRemixAssetConsistencyPack(prepared, kind, assetId);
+  if (!pack?.items.some(item => item.profileId === String(profileId || ''))) {
+    return prepared;
+  }
+  const now = new Date().toISOString();
+  const items = pack.items.map(item => (
+    item.profileId === String(profileId)
+      ? {
+        ...item,
+        status: 'generating',
+        error: undefined,
+        updatedAt: now,
+      }
+      : item
+  ));
+  const assets = updateVideoRemixAssetRecord(
+    prepared,
+    kind,
+    assetId,
+    asset => ({
+      ...asset,
+      consistencyPack: {
+        ...pack,
+        status: 'generating',
+        items,
+        updatedAt: now,
+      },
+    })
+  );
+  return assets ? { ...prepared, assets, updatedAt: now } : prepared;
+}
+
+export function applyVideoRemixAssetConsistencyResult(
+  state,
+  kind,
+  assetId,
+  profileId,
+  { url, source = 'generated' } = {}
+) {
+  const prepared = prepareVideoRemixAssetConsistencyPack(state, kind, assetId);
+  const pack = getVideoRemixAssetConsistencyPack(prepared, kind, assetId);
+  const safeUrl = String(url || '').trim();
+  if (!pack || !safeUrl) return prepared;
+  const now = new Date().toISOString();
+  let found = false;
+  const safeProfileId = String(profileId || '');
+  const items = pack.items.map(item => {
+    if (item.dependsOn?.includes(safeProfileId)) {
+      return {
+        ...item,
+        url: undefined,
+        source: undefined,
+        status: 'pending',
+        error: undefined,
+        generatedAt: undefined,
+        updatedAt: now,
+      };
+    }
+    if (item.profileId !== safeProfileId) return item;
+    found = true;
+    return {
+      ...item,
+      url: safeUrl,
+      source: ['existing', 'upload'].includes(source) ? source : 'generated',
+      status: 'ready',
+      error: undefined,
+      generatedAt: now,
+      updatedAt: now,
+    };
+  });
+  if (!found) return prepared;
+  const allReady = items.every(item => item.url && ['ready', 'confirmed'].includes(item.status));
+  const assets = updateVideoRemixAssetRecord(
+    prepared,
+    kind,
+    assetId,
+    asset => ({
+      ...asset,
+      consistencyPack: {
+        ...pack,
+        primaryConfirmed: safeProfileId === pack.primaryProfileId
+          ? false
+          : pack.primaryConfirmed,
+        confirmed: false,
+        status: allReady ? 'ready' : 'partial',
+        items,
+        updatedAt: now,
+      },
+    })
+  );
+  if (!assets) return prepared;
+  return withInvalidatedAssetDerivatives(prepared, { assets });
+}
+
+export function setVideoRemixAssetConsistencyError(
+  state,
+  kind,
+  assetId,
+  profileId,
+  message
+) {
+  const prepared = prepareVideoRemixAssetConsistencyPack(state, kind, assetId);
+  const pack = getVideoRemixAssetConsistencyPack(prepared, kind, assetId);
+  if (!pack) return prepared;
+  const now = new Date().toISOString();
+  let found = false;
+  const items = pack.items.map(item => {
+    if (item.profileId !== String(profileId || '')) return item;
+    found = true;
+    return {
+      ...item,
+      status: 'failed',
+      error: String(message || '一致性参考图生成失败'),
+      updatedAt: now,
+    };
+  });
+  if (!found) return prepared;
+  const assets = updateVideoRemixAssetRecord(
+    prepared,
+    kind,
+    assetId,
+    asset => ({
+      ...asset,
+      consistencyPack: {
+        ...pack,
+        status: 'partial',
+        confirmed: false,
+        items,
+        updatedAt: now,
+      },
+    })
+  );
+  return assets ? { ...prepared, assets, updatedAt: now } : prepared;
+}
+
+export function confirmVideoRemixAssetPrimaryReference(state, kind, assetId) {
+  const prepared = prepareVideoRemixAssetConsistencyPack(state, kind, assetId);
+  const pack = getVideoRemixAssetConsistencyPack(prepared, kind, assetId);
+  const primary = pack?.items.find(item => item.profileId === pack.primaryProfileId);
+  if (!pack || !primary?.url || !['ready', 'confirmed'].includes(primary.status)) {
+    return prepared;
+  }
+  const now = new Date().toISOString();
+  const assets = updateVideoRemixAssetRecord(
+    prepared,
+    kind,
+    assetId,
+    asset => ({
+      ...asset,
+      consistencyPack: {
+        ...pack,
+        primaryConfirmed: true,
+        items: pack.items.map(item => (
+          item.profileId === pack.primaryProfileId
+            ? { ...item, status: 'confirmed', updatedAt: now }
+            : item
+        )),
+        updatedAt: now,
+      },
+    })
+  );
+  return assets ? { ...prepared, assets, updatedAt: now } : prepared;
+}
+
+export function confirmVideoRemixAssetConsistencyPack(state, kind, assetId) {
+  const prepared = prepareVideoRemixAssetConsistencyPack(state, kind, assetId);
+  const pack = getVideoRemixAssetConsistencyPack(prepared, kind, assetId);
+  if (
+    !pack
+    || !pack.primaryConfirmed
+    || pack.items.some(item => !item.url || !['ready', 'confirmed'].includes(item.status))
+  ) {
+    return prepared;
+  }
+  const now = new Date().toISOString();
+  const assets = updateVideoRemixAssetRecord(
+    prepared,
+    kind,
+    assetId,
+    asset => ({
+      ...asset,
+      consistencyPack: {
+        ...pack,
+        confirmed: true,
+        status: 'ready',
+        items: pack.items.map(item => ({
+          ...item,
+          status: 'confirmed',
+          updatedAt: now,
+        })),
+        confirmedAt: now,
+        updatedAt: now,
+      },
+    })
+  );
+  return assets ? { ...prepared, assets, updatedAt: now } : prepared;
 }
 
 export function replaceVideoRemixCharacterLook(
@@ -1028,7 +1436,8 @@ export function replaceVideoRemixCharacterLook(
       }
       return { ...look, replacement: normalized };
     });
-    return found ? { ...character, looks } : character;
+    if (!found) return character;
+    return { ...character, looks };
   });
   if (!found) return current;
   return withInvalidatedAssetDerivatives(current, {
@@ -1125,17 +1534,30 @@ export function setVideoRemixPropRemoved(state, propId, removed = true) {
 
 export function confirmVideoRemixAssets(state) {
   const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  // 已确认资产可能已经进入视频或成片阶段。重复点击“继续生成”只负责导航，
+  // 不能把阶段倒退到 assets_ready，也不能覆盖下游任务状态。
+  if (current.assetReview?.confirmed) return current;
+  const minimumAssets = getVideoRemixMinimumAssetReadiness(current);
   if (
     !current.story
     || current.shots.length === 0
     || current.shots.some(shot => shot.analysisStatus !== 'ready')
+    || !minimumAssets.ready
   ) {
     return current;
   }
   const now = new Date().toISOString();
+  const downstreamStage = new Set([
+    'keyframes_generating',
+    'keyframes_ready',
+    'videos_generating',
+    'videos_ready',
+    'rendering',
+    'completed',
+  ]).has(current.stage);
   return {
     ...current,
-    stage: 'assets_ready',
+    stage: downstreamStage ? current.stage : 'assets_ready',
     assetReview: {
       confirmed: true,
       confirmedAt: now,
@@ -1218,6 +1640,27 @@ export function validateVideoRemixPromptTemplate(sourceTemplate, candidateTempla
   };
 }
 
+function frozenVideoRemixAnchorLines(template) {
+  const lines = String(template || '').split('\n');
+  const start = lines.findIndex(line => line.trim() === '【资产一致性锚点】');
+  if (start < 0) return [];
+  const anchors = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^【[^】]+】/.test(line.trim())) break;
+    if (line.trim()) anchors.push(line.trim());
+  }
+  return anchors;
+}
+
+function assertVideoRemixAnchorsPreserved(sourceTemplate, candidateTemplate, label) {
+  const missing = frozenVideoRemixAnchorLines(sourceTemplate).filter(
+    line => !String(candidateTemplate || '').includes(line)
+  );
+  if (missing.length > 0) {
+    throw new Error(`${label}改写了资产一致性锚点，请重试`);
+  }
+}
+
 function placeholder(assetId) {
   return `{{${String(assetId || '')}}}`;
 }
@@ -1260,12 +1703,50 @@ const HAND_LABELS = Object.freeze({
   both: '双手',
 });
 
+function resolvedVideoRemixAnchor(kind, asset) {
+  if (!asset) return '';
+  return String(asset.anchorBlock || '').trim()
+    || buildVideoRemixAssetAnchorBlock(kind, {
+      ...asset,
+      masterPrompt: String(asset.masterPrompt || '').trim()
+        || buildVideoRemixAssetMasterPrompt(kind, asset),
+    });
+}
+
+function videoRemixShotAssetAnchorPlaceholders(current, shot) {
+  const anchors = [];
+  const append = assetId => {
+    const value = placeholder(assetId);
+    if (assetId && !anchors.includes(value)) anchors.push(value);
+  };
+  for (const item of shot.characters || []) {
+    const resolved = resolveVideoRemixShotCharacter(
+      current,
+      shot.shotId,
+      item.characterId
+    );
+    if (resolved?.character) append(item.characterId);
+  }
+  if (shot.scene?.sceneId) {
+    const scene = resolveVideoRemixAsset(
+      current.assets.scenes.find(item => item.id === shot.scene.sceneId)
+    );
+    if (scene) append(shot.scene.sceneId);
+  }
+  for (const item of shot.props || []) {
+    const base = current.assets.props.find(prop => prop.id === item.propId);
+    if (!base || base.removed) continue;
+    append(item.propId);
+  }
+  return anchors;
+}
+
 export function buildVideoRemixRawPrompt(state, shotId) {
   const current = isVideoRemixState(state) ? state : createVideoRemixState();
   const shot = current.shots.find(item => item.shotId === String(shotId || ''));
   if (!shot) return '';
   const lines = [
-    `【时长】持续约 ${Number(shot.duration || 0).toFixed(2)} 秒，保持原 Shot 时长与单镜头结构。`,
+    `【时长】持续约 ${Number(shot.duration || 0).toFixed(2)} 秒，保持原镜头时长与单镜头结构。`,
   ];
   const storyBeat = editableText(shot.storyBeat);
   if (storyBeat) lines.push(`【剧情】${storyBeat}`);
@@ -1354,6 +1835,10 @@ export function buildVideoRemixRawPrompt(state, shotId) {
   if (audioLines.length > 0) lines.push(`【声音】\n${audioLines.join('\n')}`);
 
   if (current.story?.style) lines.push(`【视觉风格】${current.story.style}`);
+  const assetAnchors = videoRemixShotAssetAnchorPlaceholders(current, shot);
+  if (assetAnchors.length > 0) {
+    lines.push(`【资产一致性锚点】\n${assetAnchors.join('\n')}`);
+  }
   lines.push('【锁定】保持原剧情、人物数量、动作顺序、构图、运镜、镜头边界和时长；只替换已经确认的资产外观。');
   return lines.join('\n');
 }
@@ -1362,7 +1847,7 @@ export function buildVideoRemixImagePrompt(state, shotId) {
   const current = isVideoRemixState(state) ? state : createVideoRemixState();
   const shot = current.shots.find(item => item.shotId === String(shotId || ''));
   if (!shot) return '';
-  const lines = ['【任务】生成该 Shot 的静态关键帧，不描述完整时间动作路径。'];
+  const lines = ['【任务】生成该镜头的静态关键帧，不描述完整时间动作路径。'];
   if (shot.scene?.sceneId) {
     lines.push(`【场景】${placeholder(shot.scene.sceneId)}${shot.scene.sceneZone ? `，画面位于功能区 ${shot.scene.sceneZone}` : ''}`);
   }
@@ -1385,6 +1870,10 @@ export function buildVideoRemixImagePrompt(state, shotId) {
   const lighting = shot.startState?.lighting;
   if (lighting) lines.push(`【灯光】${lighting}`);
   if (current.story?.style) lines.push(`【视觉风格】${current.story.style}`);
+  const assetAnchors = videoRemixShotAssetAnchorPlaceholders(current, shot);
+  if (assetAnchors.length > 0) {
+    lines.push(`【资产一致性锚点】\n${assetAnchors.join('\n')}`);
+  }
   lines.push('【锁定】人物数量、位置、朝向、景别、机位、透视、场景功能区和关键道具位置与原参考帧一致。');
   return lines.join('\n');
 }
@@ -1398,6 +1887,7 @@ function referencePrefix(asset, targetModel, imagePrompt) {
   if (
     !imagePrompt
     && taggedReferenceModel(targetModel)
+    && asset.source !== 'analysis'
     && Array.isArray(asset.referenceImages)
     && asset.referenceImages.length > 0
   ) {
@@ -1413,13 +1903,14 @@ function characterPromptDescription(current, shot, assetId, targetModel, imagePr
   const referenceAsset = {
     ...character,
     referenceImages: [
-      ...(character.referenceImages || []),
-      ...(look?.referenceImages || []),
+      ...getVideoRemixConsistencyReferenceImages(character),
+      ...(look?.source === 'analysis' ? [] : look?.referenceImages || []),
     ],
   };
   const details = [
     `资产 ${character.id}`,
-    character.identity,
+    character.masterPrompt || character.identity,
+    resolvedVideoRemixAnchor('characters', character),
     look ? `造型 ${look.name}：${look.description}` : '',
   ].filter(Boolean).map(compactPromptText);
   return `${referencePrefix(referenceAsset, targetModel, imagePrompt)}（${details.join('；')}）`;
@@ -1432,7 +1923,8 @@ function scenePromptDescription(current, shot, assetId, targetModel, imagePrompt
   const zone = scene.zones?.find(item => item.id === shot.scene?.sceneZone);
   const details = [
     `资产 ${scene.id}`,
-    scene.visualDescription,
+    scene.masterPrompt || scene.visualDescription,
+    resolvedVideoRemixAnchor('scenes', scene),
     zone ? `功能区 ${zone.name}：${zone.description}` : '',
     scene.audioDescription ? `环境声 ${scene.audioDescription}` : '',
   ].filter(Boolean).map(compactPromptText);
@@ -1446,7 +1938,8 @@ function propPromptDescription(current, assetId, targetModel, imagePrompt) {
   const prop = resolveVideoRemixAsset(base);
   const details = [
     `资产 ${prop.id}`,
-    prop.description,
+    prop.masterPrompt || prop.description,
+    resolvedVideoRemixAnchor('props', prop),
     `类型 ${PROP_CATEGORY_LABELS[prop.category] || prop.category}`,
   ].filter(Boolean).map(compactPromptText);
   return `${referencePrefix(prop, targetModel, imagePrompt)}（${details.join('；')}）`;
@@ -1850,8 +2343,13 @@ export function applyVideoRemixPromptOptimization(state, shotId, {
         validation.missing.length ? `缺少 ${validation.missing.join(', ')}` : '',
         validation.unknown.length ? `新增未知 ${validation.unknown.join(', ')}` : '',
       ].filter(Boolean).join('；');
-      throw new Error(`视频 Prompt 优化结果破坏了资产占位符：${detail}`);
+      throw new Error(`视频提示词优化结果破坏了资产占位符：${detail}`);
     }
+    assertVideoRemixAnchorsPreserved(
+      prompt.rawPrompt,
+      optimizedTemplate,
+      '视频提示词优化结果'
+    );
     next.optimizedTemplate = String(optimizedTemplate || '').trim();
     next.optimizedPrompt = resolveVideoRemixPromptTemplate(
       current,
@@ -1872,8 +2370,13 @@ export function applyVideoRemixPromptOptimization(state, shotId, {
         validation.missing.length ? `缺少 ${validation.missing.join(', ')}` : '',
         validation.unknown.length ? `新增未知 ${validation.unknown.join(', ')}` : '',
       ].filter(Boolean).join('；');
-      throw new Error(`关键帧 Prompt 优化结果破坏了资产占位符：${detail}`);
+      throw new Error(`关键帧提示词优化结果破坏了资产占位符：${detail}`);
     }
+    assertVideoRemixAnchorsPreserved(
+      prompt.rawImagePrompt,
+      imagePromptTemplate,
+      '关键帧提示词优化结果'
+    );
     next.imagePromptTemplate = String(imagePromptTemplate || '').trim();
     next.imagePrompt = resolveVideoRemixPromptTemplate(
       current,
@@ -1924,7 +2427,7 @@ export function setVideoRemixPromptOptimizationError(
       [safeShotId]: {
         ...prompt,
         optimizationStatus: 'failed',
-        optimizationError: String(message || 'Prompt 优化失败'),
+        optimizationError: String(message || '提示词优化失败'),
         updatedAt: new Date().toISOString(),
       },
     },
@@ -1940,7 +2443,7 @@ export function setVideoRemixPromptOptimizationError(
       {
         scope: 'prompt',
         id: safeShotId,
-        message: String(message || 'Prompt 优化失败'),
+        message: String(message || '提示词优化失败'),
         retryable: Boolean(retryable),
       },
     ],
@@ -2011,6 +2514,28 @@ export function confirmVideoRemixPrompts(state) {
   };
 }
 
+/**
+ * 简单模式直接使用已经结构化的中文模板，不再要求用户理解或逐层操作
+ * Analysis / Raw / Resolved / Optimized 四层提示词。
+ */
+export function prepareVideoRemixSimplePrompts(state, targetModel = '') {
+  let working = buildAllVideoRemixPrompts(state, targetModel, {
+    resetVideoOptimization: true,
+    resetImageOptimization: true,
+  });
+  for (const shot of working.shots) {
+    const prompt = working.prompts?.[shot.shotId];
+    if (!prompt) continue;
+    working = applyVideoRemixPromptOptimization(working, shot.shotId, {
+      optimizedTemplate: prompt.rawPrompt,
+      imagePromptTemplate: prompt.rawImagePrompt,
+      videoProfileId: 'video-remix-automatic',
+      imageProfileId: 'image-remix-keyframe-automatic',
+    });
+  }
+  return confirmVideoRemixPrompts(working);
+}
+
 export function keyframePositionsForComplexity(complexity = 'medium') {
   return [...(
     VIDEO_REMIX_KEYFRAME_POSITIONS[complexity]
@@ -2019,9 +2544,9 @@ export function keyframePositionsForComplexity(complexity = 'medium') {
 }
 
 const KEYFRAME_POSITION_LABELS = Object.freeze({
-  start: 'Start',
-  middle: 'Middle',
-  end: 'End',
+  start: '起始',
+  middle: '中间',
+  end: '结束',
 });
 
 function keyframeTargetSecond(shot, position) {
@@ -2134,7 +2659,7 @@ export function buildVideoRemixKeyframePrompt(state, shotId, position = 'start')
     && Number(phase.end) >= targetSecond - 0.001
   ));
   const supplement = [
-    `【关键时刻】${KEYFRAME_POSITION_LABELS[safePosition]} Frame，Shot 内约 ${targetSecond.toFixed(2)} 秒的单一静态瞬间。`,
+    `【关键时刻】${KEYFRAME_POSITION_LABELS[safePosition]}帧，镜头内约 ${targetSecond.toFixed(2)} 秒的单一静态瞬间。`,
     timingPhase ? `【当前节奏】${timingPhase.phase}` : '',
     stateLines.length > 0 ? `【当前状态】\n${stateLines.join('\n')}` : '',
     '【帧约束】只呈现这一时刻的可见姿势、接触关系与构图，不画动作轨迹、分镜拼图、字幕或时间标记。',
@@ -2154,6 +2679,154 @@ function appendUniqueImages(target, values) {
   }
 }
 
+function videoRemixShotFramingText(shot) {
+  return [
+    editableText(shot?.frameBlueprint?.shotSize),
+    editableText(shot?.cameraBlueprint?.shotSize),
+    editableText(shot?.storyBeat),
+    ...(shot?.props || []).map(item => item.role || ''),
+  ].join(' ').toLowerCase();
+}
+
+function classifyVideoRemixReferenceScenario(current, shot) {
+  const framing = videoRemixShotFramingText(shot);
+  const visibleProps = (shot?.props || []).filter(item => {
+    const prop = current.assets.props.find(candidate => candidate.id === item.propId);
+    return prop && !prop.removed;
+  });
+  const hasCharacters = (shot?.characters || []).length > 0;
+  const hasProps = visibleProps.length > 0;
+  const hasInteraction = (shot?.motionBlueprint?.propInteractions || []).some(item => (
+    visibleProps.some(prop => prop.propId === item.prop)
+  ));
+  const closeUp = /(特写|近景|微距|细节|close\s*-?up|closeup|detail|macro)/i.test(framing);
+  const fullBody = /(全身|全景人物|full\s*body|full-length)/i.test(framing);
+  const wide = /(远景|大全景|全景|建立镜头|wide|establishing|long\s*shot)/i.test(framing);
+  const heroProp = visibleProps.some(item => (
+    current.assets.props.find(prop => prop.id === item.propId)?.category === 'hero'
+  ));
+  if (hasProps && (heroProp || !hasCharacters) && closeUp) return 'product_closeup';
+  if (hasCharacters && hasProps && hasInteraction) return 'character_prop_interaction';
+  if (hasCharacters && closeUp) return 'character_closeup';
+  if (hasCharacters && fullBody) return 'character_full_body';
+  if (wide) return 'wide_scene';
+  return 'general';
+}
+
+function profilePreferences(kind, scenario) {
+  if (kind === 'characters') {
+    return scenario === 'character_full_body' || scenario === 'character_prop_interaction'
+      ? ['image-identity-board', 'image-identity-front', 'image-identity-angles']
+      : ['image-identity-front', 'image-identity-angles', 'image-identity-board'];
+  }
+  if (kind === 'scenes') {
+    return scenario === 'character_closeup' || scenario === 'product_closeup'
+      ? ['image-scene-material-lighting', 'image-scene-establishing', 'image-scene-layout']
+      : ['image-scene-establishing', 'image-scene-layout', 'image-scene-material-lighting'];
+  }
+  return ['image-prop-front', 'image-prop-angles', 'image-prop-details'];
+}
+
+function referenceEntriesForAsset(kind, asset, scenario, role) {
+  if (!asset) return [];
+  const urls = getVideoRemixConsistencyReferenceImages(
+    asset,
+    profilePreferences(kind, scenario)
+  );
+  return urls.map(url => ({
+    url,
+    label: asset.id,
+    role,
+  }));
+}
+
+function appendUniqueReferenceEntries(target, values) {
+  for (const value of values || []) {
+    if (!value?.url || target.some(item => item.url === value.url)) continue;
+    target.push(value);
+  }
+}
+
+function interleaveFirst(groups) {
+  const output = [];
+  const remaining = groups.map(group => [...group]);
+  for (const group of remaining) {
+    if (group.length > 0) output.push(group.shift());
+  }
+  for (const group of remaining) output.push(...group);
+  return output.filter(Boolean);
+}
+
+export function getVideoRemixShotReferencePlan(state, shotId) {
+  const current = isVideoRemixState(state) ? state : createVideoRemixState();
+  const shot = current.shots.find(item => item.shotId === String(shotId || ''));
+  if (!shot) return { scenario: 'general', references: [] };
+  const scenario = classifyVideoRemixReferenceScenario(current, shot);
+  const characterGroups = [];
+  for (const shotCharacter of shot.characters || []) {
+    const resolved = resolveVideoRemixShotCharacter(
+      current,
+      shot.shotId,
+      shotCharacter.characterId
+    );
+    if (!resolved) continue;
+    const group = referenceEntriesForAsset(
+      'characters',
+      resolved.character,
+      scenario,
+      'character'
+    );
+    const lookImages = resolved.look?.source === 'analysis'
+      ? []
+      : resolved.look?.referenceImages || [];
+    appendUniqueReferenceEntries(group, lookImages.map(url => ({
+      url,
+      label: resolved.look.id,
+      role: 'look',
+    })));
+    characterGroups.push(group);
+  }
+  const characters = interleaveFirst(characterGroups);
+  const sceneBase = shot.scene?.sceneId
+    ? current.assets.scenes.find(item => item.id === shot.scene.sceneId)
+    : null;
+  const scene = referenceEntriesForAsset(
+    'scenes',
+    sceneBase ? resolveVideoRemixAsset(sceneBase) : null,
+    scenario,
+    'scene'
+  );
+  const propGroups = [];
+  for (const shotProp of shot.props || []) {
+    const base = current.assets.props.find(item => item.id === shotProp.propId);
+    if (!base || base.removed) continue;
+    propGroups.push(referenceEntriesForAsset(
+      'props',
+      resolveVideoRemixAsset(base),
+      scenario,
+      'prop'
+    ));
+  }
+  const props = interleaveFirst(propGroups);
+  let ordered;
+  if (scenario === 'product_closeup') {
+    ordered = [...props, ...characters, ...scene];
+  } else if (scenario === 'character_closeup') {
+    ordered = [...characters, ...scene, ...props];
+  } else if (scenario === 'character_prop_interaction') {
+    ordered = interleaveFirst([characters, props, scene]);
+  } else if (scenario === 'character_full_body') {
+    ordered = interleaveFirst([characters, scene, props]);
+  } else if (scenario === 'wide_scene') {
+    ordered = [...scene, ...characters, ...props];
+  } else {
+    ordered = [...characters, ...scene, ...props];
+  }
+  const references = [];
+  appendUniqueReferenceEntries(references, ordered);
+  return { scenario, references };
+}
+
 export function getVideoRemixKeyframeReferenceImages(
   state,
   shotId,
@@ -2162,58 +2835,51 @@ export function getVideoRemixKeyframeReferenceImages(
   const current = isVideoRemixState(state) ? state : createVideoRemixState();
   const shot = current.shots.find(item => item.shotId === String(shotId || ''));
   if (!shot) return [];
-  const priority = [];
-  const regular = [];
-  for (const shotCharacter of shot.characters || []) {
-    const base = current.assets.characters.find(
-      item => item.id === shotCharacter.characterId
-    );
-    const resolved = resolveVideoRemixShotCharacter(
-      current,
-      shot.shotId,
-      shotCharacter.characterId
-    );
-    if (!base || !resolved) continue;
-    const activeLook = base.looks?.find(
-      look => look.id === (
-        shotCharacter.lookOverride?.lookId
-        || shotCharacter.lookId
-      )
-    );
-    if (base.replacement) {
-      appendUniqueImages(priority, resolved.character.referenceImages);
-      appendUniqueImages(
-        activeLook?.replacement ? priority : regular,
-        resolved.look?.referenceImages
-      );
-    } else if (activeLook?.replacement) {
-      appendUniqueImages(priority, resolved.look?.referenceImages);
-      appendUniqueImages(regular, resolved.character.referenceImages);
-    } else {
-      appendUniqueImages(regular, resolved.look?.referenceImages);
-      appendUniqueImages(regular, resolved.character.referenceImages);
-    }
-  }
-  if (shot.scene?.sceneId) {
-    const base = current.assets.scenes.find(item => item.id === shot.scene.sceneId);
-    const resolved = resolveVideoRemixAsset(base);
-    appendUniqueImages(base?.replacement ? priority : regular, resolved?.referenceImages);
-  }
-  for (const shotProp of shot.props || []) {
-    const base = current.assets.props.find(item => item.id === shotProp.propId);
-    if (!base || base.removed) continue;
-    const resolved = resolveVideoRemixAsset(base);
-    appendUniqueImages(base.replacement ? priority : regular, resolved?.referenceImages);
-  }
+  const planned = getVideoRemixShotReferencePlan(current, shot.shotId);
   const sourceFrame = getVideoRemixKeyframeSourceFrame(
     current,
     shot.shotId,
     position
   );
+  const priorityUrls = new Set();
+  const appendPriority = asset => {
+    if (!asset || (!asset.replacement && !asset.consistencyPack?.confirmed)) return;
+    for (const url of getVideoRemixConsistencyReferenceImages(
+      resolveVideoRemixAsset(asset)
+    )) {
+      priorityUrls.add(url);
+    }
+  };
+  for (const shotCharacter of shot.characters || []) {
+    const character = current.assets.characters.find(
+      item => item.id === shotCharacter.characterId
+    );
+    appendPriority(character);
+    const lookId = shotCharacter.lookOverride?.locked
+      ? shotCharacter.lookOverride.lookId
+      : shotCharacter.lookId;
+    appendPriority(character?.looks?.find(look => look.id === lookId));
+  }
+  if (shot.scene?.sceneId) {
+    appendPriority(current.assets.scenes.find(item => item.id === shot.scene.sceneId));
+  }
+  for (const shotProp of shot.props || []) {
+    appendPriority(current.assets.props.find(item => item.id === shotProp.propId));
+  }
   const references = [];
-  appendUniqueImages(references, priority);
+  appendUniqueImages(
+    references,
+    planned.references
+      .filter(item => priorityUrls.has(item.url))
+      .map(item => item.url)
+  );
   appendUniqueImages(references, sourceFrame?.url ? [sourceFrame.url] : []);
-  appendUniqueImages(references, regular);
+  appendUniqueImages(
+    references,
+    planned.references
+      .filter(item => !priorityUrls.has(item.url))
+      .map(item => item.url)
+  );
   return references;
 }
 
@@ -2277,6 +2943,9 @@ function withInvalidatedKeyframeDerivatives(current, updates) {
         || current.keyframeReview?.resolution
         || ''
       ),
+      strategy: updates.keyframeReview?.strategy
+        || current.keyframeReview?.strategy
+        || 'adaptive',
       updatedAt: new Date().toISOString(),
     },
     videoReview: { ...DEFAULT_VIDEO_REVIEW },
@@ -2295,6 +2964,7 @@ export function prepareVideoRemixKeyframes(state, {
   imageModel = '',
   aspectRatio = '',
   resolution = '',
+  strategy = 'adaptive',
 } = {}) {
   const current = isVideoRemixState(state) ? state : createVideoRemixState();
   if (!current.promptReview?.confirmed) return current;
@@ -2318,8 +2988,11 @@ export function prepareVideoRemixKeyframes(state, {
     (current.keyframes || []).map(item => [item.id, item])
   );
   const now = new Date().toISOString();
+  const normalizedStrategy = strategy === 'single' ? 'single' : 'adaptive';
   const keyframes = current.shots.flatMap(shot => (
-    keyframePositionsForComplexity(shot.motionComplexity).map(position => {
+    (normalizedStrategy === 'single'
+      ? ['start']
+      : keyframePositionsForComplexity(shot.motionComplexity)).map(position => {
       const id = keyframeStableId(shot.shotId, position);
       const previous = previousById.get(id);
       const generatedPrompt = buildVideoRemixKeyframePrompt(
@@ -2380,8 +3053,10 @@ export function prepareVideoRemixKeyframes(state, {
     })
   ));
   if (keyframes.length === 0) return current;
-  const changed = keyframePlanSignature(keyframes)
-    !== keyframePlanSignature(current.keyframes);
+  const changed = (
+    keyframePlanSignature(keyframes) !== keyframePlanSignature(current.keyframes)
+    || current.keyframeReview?.strategy !== normalizedStrategy
+  );
   if (!changed) return current;
   return withInvalidatedKeyframeDerivatives(current, {
     keyframes,
@@ -2390,6 +3065,7 @@ export function prepareVideoRemixKeyframes(state, {
       imageModel: model,
       aspectRatio: ratio,
       resolution: quality,
+      strategy: normalizedStrategy,
     },
   });
 }
@@ -2733,7 +3409,7 @@ export function planVideoRemixShotDuration(videoModel, targetDuration) {
     return {
       supported: false,
       targetDuration: target,
-      reason: provider ? 'Shot 时长无效' : '视频模型不存在',
+      reason: provider ? '镜头时长无效' : '视频模型不存在',
     };
   }
   const durations = [...new Set(
@@ -2785,7 +3461,7 @@ export function planVideoRemixShotDuration(videoModel, targetDuration) {
     requestDuration: longest,
     sourceDuration: longest,
     targetDuration: target,
-    reason: `${provider.name} 最长生成 ${longest}s，无法在不低于 0.85x 的情况下恢复 ${target.toFixed(2)}s Shot`,
+    reason: `${provider.name} 最长生成 ${longest} 秒，无法在不低于 0.85x 的情况下恢复 ${target.toFixed(2)} 秒镜头`,
   };
 }
 
@@ -2806,50 +3482,13 @@ function appendVideoReference(target, value, label, role) {
 
 function currentVideoRemixAssetReferences(current, shot) {
   const references = [];
-  for (const shotCharacter of shot.characters || []) {
-    const resolved = resolveVideoRemixShotCharacter(
-      current,
-      shot.shotId,
-      shotCharacter.characterId
-    );
-    if (!resolved) continue;
+  const plan = getVideoRemixShotReferencePlan(current, shot.shotId);
+  for (const planned of plan.references) {
     appendVideoReference(
       references,
-      resolved.character.referenceImages,
-      resolved.character.id,
-      'character'
-    );
-    if (resolved.look) {
-      appendVideoReference(
-        references,
-        resolved.look.referenceImages,
-        resolved.look.id,
-        'look'
-      );
-    }
-  }
-  if (shot.scene?.sceneId) {
-    const scene = resolveVideoRemixAsset(
-      current.assets.scenes.find(item => item.id === shot.scene.sceneId)
-    );
-    if (scene) {
-      appendVideoReference(
-        references,
-        scene.referenceImages,
-        scene.id,
-        'scene'
-      );
-    }
-  }
-  for (const shotProp of shot.props || []) {
-    const base = current.assets.props.find(item => item.id === shotProp.propId);
-    if (!base || base.removed) continue;
-    const prop = resolveVideoRemixAsset(base);
-    appendVideoReference(
-      references,
-      prop?.referenceImages,
-      prop?.id || shotProp.propId,
-      'prop'
+      planned.url,
+      planned.label,
+      planned.role
     );
   }
   return references;
@@ -2914,11 +3553,12 @@ export function getVideoRemixShotVideoInputs(state, shotId, videoModel) {
   };
 }
 
-function videoStableId(shotId) {
+function videoStableId(shotId, variantIndex = 1) {
   const readable = String(shotId || '')
     .replace(/[^A-Za-z0-9_-]+/g, '_')
     .slice(0, 48);
-  return `video_${readable}_${promptValueHash(String(shotId || ''))}`;
+  const base = `video_${readable}_${promptValueHash(String(shotId || ''))}`;
+  return Number(variantIndex) > 1 ? `${base}_v${variantIndex}` : base;
 }
 
 function videoInputHash(record, prompt = record.prompt) {
@@ -2985,6 +3625,14 @@ function withInvalidatedVideoDerivatives(current, updates) {
         updates.videoReview?.generateAudio
         ?? current.videoReview?.generateAudio
       ),
+      outputCount: Math.max(1, Math.min(
+        VIDEO_REMIX_VIDEO_OUTPUT_COUNTS.at(-1),
+        Number(
+          updates.videoReview?.outputCount
+          || current.videoReview?.outputCount
+          || 1
+        ) || 1
+      )),
       updatedAt: new Date().toISOString(),
     },
     timeline: withoutTimelineVideoUrls(current.timeline),
@@ -2999,14 +3647,10 @@ export function prepareVideoRemixVideos(state, {
   aspectRatio = '',
   resolution = '',
   generateAudio,
+  outputCount,
 } = {}) {
   const current = isVideoRemixState(state) ? state : createVideoRemixState();
-  if (
-    !current.promptReview?.confirmed
-    || !current.keyframeReview?.confirmed
-  ) {
-    return current;
-  }
+  if (!current.promptReview?.confirmed) return current;
   const model = String(
     videoModel
     || current.videoReview?.videoModel
@@ -3032,12 +3676,18 @@ export function prepareVideoRemixVideos(state, {
       : provider.defaultResolution || provider.resolutions[0] || '自动';
   const withAudio = capabilities.audioGeneration
     && (generateAudio ?? current.videoReview?.generateAudio ?? true) !== false;
+  const variantsPerShot = Math.max(1, Math.min(
+    VIDEO_REMIX_VIDEO_OUTPUT_COUNTS.at(-1),
+    Number(outputCount || current.videoReview?.outputCount || 1) || 1
+  ));
   const previousById = new Map(
     (current.generatedVideos || []).map(item => [item.id, item])
   );
   const now = new Date().toISOString();
-  const generatedVideos = current.shots.map(shot => {
-    const id = videoStableId(shot.shotId);
+  const generatedVideos = current.shots.flatMap(shot => (
+    Array.from({ length: variantsPerShot }, (_, variantOffset) => {
+    const variantIndex = variantOffset + 1;
+    const id = videoStableId(shot.shotId, variantIndex);
     const previous = previousById.get(id);
     const promptState = current.prompts?.[shot.shotId];
     const generatedPrompt = String(promptState?.optimizedPrompt || '');
@@ -3055,6 +3705,7 @@ export function prepareVideoRemixVideos(state, {
     const draft = {
       id,
       shotId: shot.shotId,
+      variantIndex,
       generatedPrompt,
       prompt,
       promptSource: preserveUserPrompt ? 'user' : 'pipeline',
@@ -3096,7 +3747,8 @@ export function prepareVideoRemixVideos(state, {
       createdAt: previous?.createdAt || now,
       updatedAt: now,
     };
-  });
+    })
+  ));
   if (generatedVideos.length === 0) return current;
   if (
     videoPlanSignature(generatedVideos)
@@ -3112,6 +3764,7 @@ export function prepareVideoRemixVideos(state, {
       aspectRatio: ratio,
       resolution: quality,
       generateAudio: withAudio,
+      outputCount: variantsPerShot,
     },
   });
 }
@@ -3130,7 +3783,17 @@ export function beginVideoRemixVideoGeneration(state, videoId, {
   const current = isVideoRemixState(state) ? state : createVideoRemixState();
   const id = String(videoId || '');
   const existing = current.generatedVideos.find(item => item.id === id);
-  if (!existing || existing.planError || !existing.startFrameUrl) return current;
+  const provider = getVideoGenerationProvider(existing?.videoModel);
+  const hasVisualInput = Boolean(
+    existing?.startFrameUrl
+    || existing?.imageBase64
+    || existing?.referenceImages?.length
+  );
+  if (
+    !existing
+    || existing.planError
+    || (!hasVisualInput && !provider?.supportsTextToVideo)
+  ) return current;
   const now = new Date().toISOString();
   const generatedVideos = current.generatedVideos.map(item => item.id === id
     ? {
@@ -3431,10 +4094,17 @@ export function getVideoRemixVideoReadiness(state) {
   const count = statuses => current.generatedVideos.filter(item => (
     statuses.includes(item.status)
   )).length;
+  const shotCount = statuses => new Set(
+    current.generatedVideos
+      .filter(item => statuses.includes(item.status) && item.url)
+      .map(item => item.shotId)
+  ).size;
   return {
     total: current.shots.length,
-    completed: count(['completed', 'confirmed']),
-    confirmed: count(['confirmed']),
+    candidateTotal: current.generatedVideos.length,
+    completedCandidates: count(['completed', 'confirmed']),
+    completed: shotCount(['completed', 'confirmed']),
+    confirmed: shotCount(['confirmed']),
     pending: count(['pending']),
     generating: count(['generating', 'calibrating']),
     failed: count(['failed']),
@@ -3451,12 +4121,22 @@ export function confirmVideoRemixVideo(state, videoId) {
     return current;
   }
   const now = new Date().toISOString();
-  const generatedVideos = current.generatedVideos.map(item => item.id === id
-    ? { ...item, status: 'confirmed', confirmedAt: now, updatedAt: now }
-    : item);
-  const allConfirmed = generatedVideos.length > 0
-    && generatedVideos.length === current.shots.length
-    && generatedVideos.every(item => item.status === 'confirmed' && item.url);
+  const generatedVideos = current.generatedVideos.map(item => {
+    if (item.id === id) {
+      return { ...item, status: 'confirmed', confirmedAt: now, updatedAt: now };
+    }
+    if (item.shotId === existing.shotId && item.status === 'confirmed') {
+      const { confirmedAt, ...candidate } = item;
+      return { ...candidate, status: 'completed', updatedAt: now };
+    }
+    return item;
+  });
+  const allConfirmed = current.shots.length > 0
+    && current.shots.every(shot => generatedVideos.some(item => (
+      item.shotId === shot.shotId
+      && item.status === 'confirmed'
+      && item.url
+    )));
   return {
     ...current,
     stage: 'videos_ready',
@@ -3476,25 +4156,42 @@ export function confirmVideoRemixVideo(state, videoId) {
 
 export function confirmVideoRemixVideos(state) {
   const current = isVideoRemixState(state) ? state : createVideoRemixState();
-  if (
-    current.generatedVideos.length === 0
-    || current.generatedVideos.length !== current.shots.length
-    || current.generatedVideos.some(item => (
-      !item.url || !['completed', 'confirmed'].includes(item.status)
-    ))
-  ) {
+  if (current.generatedVideos.length === 0 || current.shots.length === 0) {
     return current;
+  }
+  const selectedByShot = new Map();
+  for (const shot of current.shots) {
+    const candidates = current.generatedVideos.filter(item => (
+      item.shotId === shot.shotId
+      && item.url
+      && ['completed', 'confirmed'].includes(item.status)
+    ));
+    const selected = candidates.find(item => item.status === 'confirmed')
+      || candidates.sort((left, right) => (
+        Number(left.variantIndex || 1) - Number(right.variantIndex || 1)
+      ))[0];
+    if (!selected) return current;
+    selectedByShot.set(shot.shotId, selected.id);
   }
   const now = new Date().toISOString();
   return {
     ...current,
     stage: 'videos_ready',
-    generatedVideos: current.generatedVideos.map(item => ({
-      ...item,
-      status: 'confirmed',
-      confirmedAt: item.confirmedAt || now,
-      updatedAt: now,
-    })),
+    generatedVideos: current.generatedVideos.map(item => {
+      if (selectedByShot.get(item.shotId) === item.id) {
+        return {
+          ...item,
+          status: 'confirmed',
+          confirmedAt: item.confirmedAt || now,
+          updatedAt: now,
+        };
+      }
+      if (item.status === 'confirmed') {
+        const { confirmedAt, ...candidate } = item;
+        return { ...candidate, status: 'completed', updatedAt: now };
+      }
+      return item;
+    }),
     videoReview: {
       ...current.videoReview,
       confirmed: true,
@@ -4057,9 +4754,46 @@ export function setVideoRemixSubtitles(state, settings = {}) {
   return finalStateWithTimeline(current, current.timeline, { subtitles });
 }
 
+function evenDimension(value) {
+  const rounded = Math.max(2, Math.round(Number(value) || 0));
+  return rounded % 2 === 0 ? rounded : rounded + 1;
+}
+
+function videoRemixComposition(state) {
+  const sourceWidth = Math.max(2, Math.round(Number(state.source?.width) || (
+    state.source?.orientation === 'portrait' ? 1080 : 1920
+  )));
+  const sourceHeight = Math.max(2, Math.round(Number(state.source?.height) || (
+    state.source?.orientation === 'portrait' ? 1920 : 1080
+  )));
+  const ratioLabel = String(state.videoReview?.aspectRatio || '').trim();
+  const match = ratioLabel.match(/^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/);
+  const ratio = match ? Number(match[1]) / Number(match[2]) : sourceWidth / sourceHeight;
+  if (!Number.isFinite(ratio) || ratio <= 0) {
+    return { width: sourceWidth, height: sourceHeight };
+  }
+  const resolution = String(state.videoReview?.resolution || '').toLowerCase();
+  const explicitShortEdge = resolution.includes('4k')
+    ? 2160
+    : resolution.includes('1080')
+      ? 1080
+      : resolution.includes('720')
+        ? 720
+        : resolution.includes('512')
+          ? 512
+          : 0;
+  if (!explicitShortEdge && Math.abs(ratio - sourceWidth / sourceHeight) < 0.001) {
+    return { width: sourceWidth, height: sourceHeight };
+  }
+  const shortEdge = explicitShortEdge || Math.min(sourceWidth, sourceHeight) || 1080;
+  return ratio >= 1
+    ? { width: evenDimension(shortEdge * ratio), height: evenDimension(shortEdge) }
+    : { width: evenDimension(shortEdge), height: evenDimension(shortEdge / ratio) };
+}
+
 export function buildVideoRemixManifest(state, {
   projectId = '',
-  title = 'Video Remix 成片',
+  title = '视频复刻成片',
 } = {}) {
   const current = prepareVideoRemixTimeline(state);
   if (!current.videoReview?.confirmed) {
@@ -4067,30 +4801,27 @@ export function buildVideoRemixManifest(state, {
   }
   const timeline = orderedVideoRemixTimeline(current);
   if (timeline.length === 0 || timeline.some(item => !item.videoUrl)) {
-    throw new Error('Timeline 中存在缺少视频的 Shot');
+    throw new Error('时间线中存在缺少视频的镜头');
   }
   const durationSec = roundShotTime(videoRemixTimelineDuration(timeline));
-  if (!(durationSec > 0)) throw new Error('Timeline 时长无效');
+  if (!(durationSec > 0)) throw new Error('时间线时长无效');
   const originalAudio = current.bgm?.mode === 'original';
+  const composition = videoRemixComposition(current);
   const manifest = {
     project: {
       id: `${String(projectId || 'project')}:${current.remixId}`,
-      title: String(title || 'Video Remix 成片'),
+      title: String(title || '视频复刻成片'),
     },
     composition: {
-      width: Math.max(2, Math.round(Number(current.source?.width) || (
-        current.source?.orientation === 'portrait' ? 1080 : 1920
-      ))),
-      height: Math.max(2, Math.round(Number(current.source?.height) || (
-        current.source?.orientation === 'portrait' ? 1920 : 1080
-      ))),
+      width: composition.width,
+      height: composition.height,
       fps: Math.max(1, Math.min(60, Math.round(
         Number(current.source?.fps) || 24
       ))),
     },
     shots: timeline.map((item, index) => ({
       id: item.shotId,
-      name: `Shot ${String(index + 1).padStart(2, '0')}`,
+      name: `镜头 ${String(index + 1).padStart(2, '0')}`,
       file: item.videoUrl,
       start: Number(item.start),
       end: Number(item.end),
@@ -4138,7 +4869,7 @@ export function buildVideoRemixManifest(state, {
       loop: false,
     });
   } else if (current.bgm?.mode === 'upload') {
-    if (!current.bgm.url) throw new Error('请先上传 BGM');
+    if (!current.bgm.url) throw new Error('请先上传背景音乐');
     manifest.audioTracks.push({
       id: 'video-remix-uploaded-bgm',
       type: 'bgm',

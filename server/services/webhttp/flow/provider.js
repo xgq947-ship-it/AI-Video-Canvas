@@ -55,7 +55,12 @@ const UPSAMPLE_BATCH_GAP_MS = Math.max(
 );
 
 export function shouldRetryFlowUpsampleError(error, attempt) {
-    return attempt === 1 && error?.code === 'RECAPTCHA_REQUIRED';
+    return attempt === 1
+        && ['RECAPTCHA_REQUIRED', 'AUTH_EXPIRED'].includes(error?.code);
+}
+
+export function shouldFallbackFlowUpsampleToOriginal(error) {
+    return !error?.cancelled && error?.code !== 'OPERATION_CANCELLED';
 }
 
 /**
@@ -232,6 +237,42 @@ async function verifyFlowImageBytes(buffer, item, requestedResolution) {
     };
 }
 
+async function downloadFlowOriginalImage(item, {
+    requestedResolution,
+    generationAuth,
+    fallbackReason
+}) {
+    const downloaded = await downloadResultMedia(buildFlowMediaUrl(item.mediaId), {
+        providerName: fallbackReason
+            ? `${PROVIDER_NAME} 文生图 ${requestedResolution} 回退原始 1K`
+            : `${PROVIDER_NAME} 文生图 1K`,
+        expectedType: 'image',
+        cookieHeader: generationAuth.labsCookie,
+        recoveryHint: '请先到 Flow 项目历史中下载本次原图，不要直接重新生成。'
+    });
+    const verified = await verifyFlowImageBytes(downloaded.buffer, item, '1K');
+    return {
+        ...downloaded,
+        extension: verified.extension,
+        contentType: verified.contentType,
+        metadata: {
+            ...item,
+            sourceMediaId: item.mediaId,
+            finalMediaId: item.mediaId,
+            requestedResolution,
+            deliveredResolution: '1K',
+            actualWidth: verified.actualWidth,
+            actualHeight: verified.actualHeight,
+            downloadProtocol: fallbackReason
+                ? 'media.getMediaUrlRedirect.fallback-from-upsampling'
+                : 'media.getMediaUrlRedirect',
+            ...(fallbackReason ? {
+                resolutionFallbackReason: String(fallbackReason)
+            } : {})
+        }
+    };
+}
+
 async function downloadFlowImage(item, {
     requestedResolution,
     generationAuth,
@@ -246,27 +287,10 @@ async function downloadFlowImage(item, {
     }
 
     if (requestedResolution === '1K') {
-        const downloaded = await downloadResultMedia(buildFlowMediaUrl(item.mediaId), {
-            providerName: `${PROVIDER_NAME} 文生图 1K`,
-            expectedType: 'image',
-            cookieHeader: generationAuth.labsCookie,
-            recoveryHint: '请先到 Flow 项目历史中下载本次 1K 原图，不要直接重新生成。'
+        return downloadFlowOriginalImage(item, {
+            requestedResolution,
+            generationAuth
         });
-        const verified = await verifyFlowImageBytes(downloaded.buffer, item, requestedResolution);
-        return {
-            ...downloaded,
-            extension: verified.extension,
-            contentType: verified.contentType,
-            metadata: {
-                ...item,
-                sourceMediaId: item.mediaId,
-                finalMediaId: item.mediaId,
-                requestedResolution,
-                actualWidth: verified.actualWidth,
-                actualHeight: verified.actualHeight,
-                downloadProtocol: 'media.getMediaUrlRedirect'
-            }
-        };
     }
 
     // The generation reCAPTCHA token was consumed by batchGenerateImages.
@@ -297,7 +321,8 @@ async function downloadFlowImage(item, {
             // start, while the paid image generation already completed. Retry
             // only this download step with a fresh token after a cooldown.
             // Transport/unknown failures are never retried because they may
-            // already have created the 2K media.
+            // already have created the 2K media; in that case retain the
+            // successful original result instead of re-running generation.
             if (shouldRetryFlowUpsampleError(error, attempt)) {
                 console.warn(
                     `[Flow HTTP] ${requestedResolution} 高清 token 被拒绝，`
@@ -305,6 +330,17 @@ async function downloadFlowImage(item, {
                 );
                 await sleep(UPSAMPLE_RECAPTCHA_RETRY_DELAY_MS, signal);
                 continue;
+            }
+            if (shouldFallbackFlowUpsampleToOriginal(error)) {
+                console.warn(
+                    `[Flow HTTP] ${requestedResolution} 高清步骤失败（${error?.code || 'UNKNOWN'}），`
+                    + '保留已生成内容并安全回退原始 1K；不会重新生图'
+                );
+                return downloadFlowOriginalImage(item, {
+                    requestedResolution,
+                    generationAuth,
+                    fallbackReason: error?.code || 'UNKNOWN'
+                });
             }
             throw error;
         }

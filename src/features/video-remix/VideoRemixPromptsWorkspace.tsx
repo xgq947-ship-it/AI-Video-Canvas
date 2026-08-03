@@ -21,6 +21,7 @@ import {
   getVideoRemixPromptReadiness,
   setVideoRemixPromptOptimizationError,
   updateVideoRemixPromptLayer,
+  VIDEO_REMIX_MOTION_LABELS,
   type ShotPromptState,
 } from '../../../shared/videoRemix.js';
 import {
@@ -178,7 +179,7 @@ export const VideoRemixPromptsWorkspace: React.FC<{
       }
       return working;
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : 'Prompt 优化失败';
+      const message = caught instanceof Error ? caught.message : '提示词优化失败';
       setLocalError(message);
       working = setVideoRemixPromptOptimizationError(
         working,
@@ -228,9 +229,9 @@ export const VideoRemixPromptsWorkspace: React.FC<{
       }`}>
         <div className="mx-auto max-w-md py-8 text-center">
           <FileText size={28} className="mx-auto text-cyan-400" />
-          <div className="mt-4 text-sm font-medium">确认资产后生成 Prompt</div>
+          <div className="mt-4 text-sm font-medium">确认资产后生成提示词</div>
           <p className={`mt-2 text-xs leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-            Raw Prompt 使用稳定资产占位符；确认人物、场景和道具后再解析，可避免把错误资产传入后续生成。
+            原始提示词使用稳定的资产占位符；确认人物、场景和道具后再解析，可避免把错误资产传入后续生成。
           </p>
           <button
             type="button"
@@ -254,12 +255,12 @@ export const VideoRemixPromptsWorkspace: React.FC<{
         <div>
           <div className="flex items-center gap-2 text-sm font-medium">
             <FileText size={16} className="text-cyan-400" />
-            四层 Prompt Pipeline
+            四层提示词流程
           </div>
           <p className={`mt-2 max-w-2xl text-[11px] leading-5 ${
             dark ? 'text-neutral-500' : 'text-neutral-500'
           }`}>
-            Analysis → Raw 占位符模板 → Resolved 当前资产 → Optimized 模型提示词。
+            分析蓝图 → 原始占位符模板 → 当前资产解析 → 模型优化成品。
             优化模板保留资产占位符，后续换资产可在本地自动刷新，不会重复调用优化模型。
           </p>
         </div>
@@ -331,7 +332,7 @@ export const VideoRemixPromptsWorkspace: React.FC<{
             }`}
           >
             {batchBusy ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-            {batchBusy ? '批量优化中…' : '批量优化未完成 Shot'}
+            {batchBusy ? '批量优化中…' : '批量优化未完成镜头'}
           </button>
           <button
             type="button"
@@ -344,7 +345,7 @@ export const VideoRemixPromptsWorkspace: React.FC<{
             }`}
           >
             <Check size={13} />
-            {state.promptReview?.confirmed ? 'Prompt 已确认' : '确认全部 Prompt'}
+            {state.promptReview?.confirmed ? '提示词已确认' : '确认全部提示词'}
           </button>
         </div>
       </div>
@@ -408,7 +409,7 @@ export const VideoRemixPromptsWorkspace: React.FC<{
             }`}>
               <div className="text-center">
                 <FileText size={23} className="mx-auto" />
-                <div className="mt-3 text-xs">点击“构建 / 刷新”创建四层 Prompt</div>
+                <div className="mt-3 text-xs">点击“构建 / 刷新”创建四层提示词</div>
               </div>
             </div>
           ) : (
@@ -419,7 +420,10 @@ export const VideoRemixPromptsWorkspace: React.FC<{
                   <div className={`mt-1 text-[10px] ${
                     dark ? 'text-neutral-500' : 'text-neutral-400'
                   }`}>
-                    {Number(selectedShot.duration).toFixed(2)}s · {selectedShot.motionComplexity}
+                    {Number(selectedShot.duration).toFixed(2)}s · {
+                      VIDEO_REMIX_MOTION_LABELS[selectedShot.motionComplexity]
+                        || selectedShot.motionComplexity
+                    }
                     {selectedPrompt.optimizedSource === 'optimizer' && selectedPrompt.videoProfileId
                       ? ` · ${selectedPrompt.videoProfileId}`
                       : ''}
@@ -448,7 +452,7 @@ export const VideoRemixPromptsWorkspace: React.FC<{
               />
               <PromptLayerEditor
                 key={`${selectedShotId}:raw:${selectedPrompt.promptHash}`}
-                layer="Layer 2 · Raw Prompt"
+                layer="第 2 层 · 原始提示词模板"
                 hint="保存稳定资产占位符；编辑后会重新解析并使视频优化结果失效"
                 value={selectedPrompt.rawPrompt}
                 editable
@@ -458,8 +462,8 @@ export const VideoRemixPromptsWorkspace: React.FC<{
               />
               <PromptLayerEditor
                 key={`${selectedShotId}:resolved:${selectedPrompt.promptHash}`}
-                layer="Layer 3 · Resolved Prompt"
-                hint="由 Raw 与当前资产自动解析；素材替换时本地刷新"
+                layer="第 3 层 · 当前资产解析提示词"
+                hint="由原始模板与当前资产自动解析；素材替换时本地刷新"
                 value={selectedPrompt.resolvedPrompt}
                 editable={false}
                 disabled
@@ -467,10 +471,10 @@ export const VideoRemixPromptsWorkspace: React.FC<{
               />
               <PromptLayerEditor
                 key={`${selectedShotId}:optimized:${selectedPrompt.promptHash}`}
-                layer="Layer 4 · Optimized Video Prompt"
+                layer="第 4 层 · 视频优化提示词"
                 hint={selectedPrompt.optimizedSource === 'optimizer'
                   ? '来自现有视频提示词优化 Skill；可手动微调'
-                  : '尚未通过优化后端，可手动填写后与关键帧 Prompt 一起确认'}
+                  : '尚未通过优化后端，可手动填写后与关键帧提示词一起确认'}
                 value={selectedPrompt.optimizedPrompt}
                 editable
                 disabled={running}
@@ -479,7 +483,7 @@ export const VideoRemixPromptsWorkspace: React.FC<{
               />
               <PromptLayerEditor
                 key={`${selectedShotId}:image:${selectedPrompt.promptHash}`}
-                layer="Keyframe · Image Prompt"
+                layer="关键帧 · 图片提示词"
                 hint={selectedPrompt.imagePromptSource === 'optimizer'
                   ? '独立静态关键帧优化结果，不复用完整视频动作路径'
                   : '当前为本地静态草稿；优化或手动确认后才算就绪'}
@@ -506,7 +510,7 @@ const AnalysisLayer: React.FC<{
     dark ? 'border-white/8 bg-black/20' : 'border-neutral-200 bg-neutral-50'
   }`}>
     <div className="flex items-center justify-between gap-3">
-      <div className="text-xs font-medium">Layer 1 · Analysis</div>
+      <div className="text-xs font-medium">第 1 层 · 分析蓝图</div>
       <span className={`rounded-full px-2.5 py-1 text-[9px] ${
         dark ? 'bg-white/6 text-neutral-500' : 'bg-white text-neutral-500'
       }`}>

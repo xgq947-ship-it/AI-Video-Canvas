@@ -228,8 +228,8 @@ test('关键帧计划保存位置 Prompt、原参考帧与当前资产参考图'
     state.keyframes.map(item => item.sourceFrameUrl),
     ['/library/start.png', '/library/middle.png', '/library/end.png']
   );
-  assert.match(state.keyframes[0].prompt, /Start Frame/);
-  assert.match(state.keyframes[1].prompt, /Middle Frame/);
+  assert.match(state.keyframes[0].prompt, /起始帧/);
+  assert.match(state.keyframes[1].prompt, /中间帧/);
   assert.match(state.keyframes[1].prompt, /拿起杯子/);
   assert.match(state.keyframes[2].prompt, /手持 咖啡杯/);
   assert.equal(state.keyframes[0].referenceImages[0], '/library/new-character.png');
@@ -242,13 +242,22 @@ test('关键帧计划保存位置 Prompt、原参考帧与当前资产参考图'
     keyframeOptions
   );
   assert.deepEqual(
-    state.keyframes[0].referenceImages.slice(0, 3),
+    state.keyframes[0].referenceImages.slice(0, 2),
     [
       '/library/new-look.png',
       '/library/start.png',
-      '/library/character.png',
     ]
   );
+});
+
+test('简单工作流无论动作复杂度都只准备一张起始关键帧', () => {
+  const state = prepareVideoRemixKeyframes(
+    keyframeFixture('complex'),
+    { ...keyframeOptions, strategy: 'single' }
+  );
+  assert.deepEqual(state.keyframes.map(item => item.position), ['start']);
+  assert.equal(state.keyframeReview.strategy, 'single');
+  assert.match(state.keyframes[0].prompt, /起始帧/);
 });
 
 test('相同输入复用关键帧缓存，切换图片模型会安全失效', () => {

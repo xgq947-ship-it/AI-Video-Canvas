@@ -82,6 +82,10 @@ import {
 import { browserSessionState } from './services/browserSessionState.js';
 import { assertBrowserWorkflowIdle, enqueueBrowserWorkflow } from './services/googleFlowWorkflowQueue.js';
 import { resolveImageToBase64 } from './utils/imageHelpers.js';
+import {
+    ensureVideoRemixWorkspaceMigrationBackup,
+    writeJsonAtomicSync
+} from './utils/workflowVideoRemixMigration.js';
 import { MASSAGE_EQUIPMENT_NAMES } from '../shared/massageEquipmentCategories.js';
 import { RUNTIME_PATHS } from './runtime/paths.js';
 import { FFMPEG_PATH } from './runtime/mediaTools.js';
@@ -1074,13 +1078,15 @@ app.post('/api/workflows', async (req, res) => {
 
 
         const filePath = path.join(WORKFLOWS_DIR, `${workflow.id}.json`);
+        let existingData = null;
 
         // Preserve existing coverUrl and project directory identity — neither is
         // sent by the client, so without this they'd be lost/regenerated on every save
         // (assetsDirName in particular must stay frozen once assigned; see projectAssets.js).
         if (fs.existsSync(filePath)) {
             try {
-                const existingData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+                existingData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+                workflow.createdAt = existingData.createdAt || workflow.createdAt;
                 if (existingData.title !== workflow.title && findWorkflowByTitle(workflow.title, workflow.id)) {
                     return res.status(409).json({ error: '项目名称已存在，请换一个名称' });
                 }
@@ -1109,6 +1115,10 @@ app.post('/api/workflows', async (req, res) => {
             }
         }
 
+        if (existingData) {
+            ensureVideoRemixWorkspaceMigrationBackup(existingData, workflow, filePath);
+        }
+
         // Sanitize nodes: convert any base64 data to file URLs before saving
         let sanitizedCount = 0;
         if (workflow.nodes) {
@@ -1128,7 +1138,7 @@ app.post('/api/workflows', async (req, res) => {
             audioDir: AUDIO_DIR
         });
 
-        fs.writeFileSync(filePath, JSON.stringify(workflow, null, 2));
+        writeJsonAtomicSync(filePath, workflow);
         writeProjectManifest(workflow);
 
         // Only send nodes back when something actually changed (base64 sanitized
@@ -1138,7 +1148,10 @@ app.post('/api/workflows', async (req, res) => {
             success: true,
             id: workflow.id,
             projectDirName: workflow.projectDirName,
-            ...(sanitizedCount > 0 || assetsOrganized ? { nodes: workflow.nodes } : {})
+            ...(sanitizedCount > 0 || assetsOrganized ? {
+                nodes: workflow.nodes,
+                videoRemixes: workflow.videoRemixes || []
+            } : {})
         });
     } catch (error) {
         console.error("Save workflow error:", error);
@@ -1183,6 +1196,7 @@ app.get('/api/public-workflows', async (req, res) => {
                     title: workflow.title || 'Untitled Workflow',
                     description,
                     nodeCount: workflow.nodes?.length || 0,
+                    remixCount: workflow.videoRemixes?.length || 0,
                     coverUrl: workflow.coverUrl || null
                 };
             } catch (parseError) {
@@ -1234,6 +1248,7 @@ app.get('/api/workflows', async (req, res) => {
                 createdAt: workflow.createdAt,
                 updatedAt: workflow.updatedAt,
                 nodeCount: workflow.nodes?.length || 0,
+                remixCount: workflow.videoRemixes?.length || 0,
                 coverUrl: workflow.coverUrl,
                 // 工作流选择卡片使用真实节点生成画布缩略图，只返回预览所需字段。
                 previewNodes: (workflow.nodes || []).map(node => ({
@@ -1268,7 +1283,7 @@ app.get('/api/workflows/:id', async (req, res) => {
         const { changed } = organizeWorkflowAssets(workflow, projectAssetDirs());
         if (changed) {
             workflow.updatedAt = new Date().toISOString();
-            fs.writeFileSync(filePath, JSON.stringify(workflow, null, 2));
+            writeJsonAtomicSync(filePath, workflow);
             writeProjectManifest(workflow);
         }
         res.json(workflow);
@@ -1514,6 +1529,7 @@ app.put('/api/workflows/:id/title', async (req, res) => {
             projectDirName: workflowData.projectDirName || null,
             projectPath: workflowData.projectPath || null,
             nodes: workflowData.nodes || [],
+            videoRemixes: workflowData.videoRemixes || [],
             coverUrl: workflowData.coverUrl || null
         });
     } catch (error) {

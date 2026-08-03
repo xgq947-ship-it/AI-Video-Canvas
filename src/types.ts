@@ -205,7 +205,7 @@ export interface NodeData {
   productSceneBatchVersion?: number;
   productSceneLayoutRowStep?: number;
 
-  // Video Remix 子工作流容器。完整状态随项目节点一起持久化。
+  // 仅兼容旧项目与项目级工作台适配器；新状态持久化在 workflow.videoRemixes[]。
   videoRemix?: VideoRemixState;
 
   // ==========================================================================

@@ -38,6 +38,44 @@ export function resolveGoogleFlowModelLabel(modelId) {
     return GOOGLE_FLOW_WORKFLOW_MODELS[modelId] || GOOGLE_FLOW_WORKFLOW_MODELS[GOOGLE_FLOW_WORKFLOW_MODEL_ID];
 }
 
+/**
+ * Flow 的单图既可能是起始帧，也可能是 Remix 的人物/产品资产参考。
+ * 后者由 referenceImageLabels 明确标注，哪怕只有一张也必须走 Ingredients，
+ * 否则人物正面照会被误当成视频首帧，镜头会从证件照构图开始。
+ */
+export function resolveGoogleFlowWorkflowVideoInputs({
+    firstFrameInput,
+    referenceImageInputs = [],
+    referenceImageLabels = [],
+    lastFrameInput
+} = {}) {
+    const references = (Array.isArray(referenceImageInputs) ? referenceImageInputs : [])
+        .map((input, index) => ({
+            input,
+            label: Array.isArray(referenceImageLabels) ? referenceImageLabels[index] : undefined
+        }))
+        .filter(item => Boolean(item.input));
+    const hasLabeledAsset = references.some(item => (
+        item.label && item.label !== 'START_FRAME'
+    ));
+    const useIngredients = references.length >= 2 || hasLabeledAsset;
+    if (!useIngredients && lastFrameInput) {
+        const error = new Error('Google Flow 单图模式暂不支持尾帧；请移除尾帧，或使用 Ingredients 资产参考模式');
+        error.code = 'INVALID_INPUT';
+        error.retryable = false;
+        throw error;
+    }
+    return {
+        mode: useIngredients ? 'reference-images' : (firstFrameInput || references[0]?.input) ? 'start-image' : 'text',
+        firstFrameInput: useIngredients
+            ? null
+            : firstFrameInput || references[0]?.input || null,
+        referenceImageInputs: useIngredients
+            ? references.map(item => item.input)
+            : [],
+    };
+}
+
 export function resolveLocalLibraryImage(input, libraryDir) {
     if (!input || typeof input !== 'string') return null;
     let candidate = input;

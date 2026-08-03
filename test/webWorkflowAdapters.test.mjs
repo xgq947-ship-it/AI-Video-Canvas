@@ -27,7 +27,8 @@ import {
     GOOGLE_FLOW_SUPPORTED_DURATIONS,
     GOOGLE_FLOW_WORKFLOW_MODELS,
     isGoogleFlowWorkflowModelId,
-    resolveGoogleFlowModelLabel
+    resolveGoogleFlowModelLabel,
+    resolveGoogleFlowWorkflowVideoInputs
 } from '../server/services/googleFlowWorkflow.js';
 
 import {
@@ -108,6 +109,34 @@ test('Flow 四个视频档位都属于网页 HTTP 模型', () => {
     ]) {
         assert.equal(isBrowserWorkflowVideoModel(modelId), true, `${modelId} 未登记运行时能力`);
     }
+});
+
+test('Flow 单张资产参考走 Ingredients，普通无标签单图仍走首帧', () => {
+    assert.deepEqual(resolveGoogleFlowWorkflowVideoInputs({
+        referenceImageInputs: ['/character.png'],
+        referenceImageLabels: ['CHAR_01']
+    }), {
+        mode: 'reference-images',
+        firstFrameInput: null,
+        referenceImageInputs: ['/character.png']
+    });
+    assert.deepEqual(resolveGoogleFlowWorkflowVideoInputs({
+        referenceImageInputs: ['/start.png'],
+        referenceImageLabels: ['START_FRAME']
+    }), {
+        mode: 'start-image',
+        firstFrameInput: '/start.png',
+        referenceImageInputs: []
+    });
+    assert.deepEqual(resolveGoogleFlowWorkflowVideoInputs({}), {
+        mode: 'text',
+        firstFrameInput: null,
+        referenceImageInputs: []
+    });
+    assert.throws(() => resolveGoogleFlowWorkflowVideoInputs({
+        referenceImageInputs: ['/start.png'],
+        lastFrameInput: '/end.png'
+    }), error => error.code === 'INVALID_INPUT' && error.retryable === false);
 });
 
 test('即梦图片只接入 5.0 Pro 与 5.0 Lite', () => {

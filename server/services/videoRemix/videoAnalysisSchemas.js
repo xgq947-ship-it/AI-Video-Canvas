@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+import {
+  buildVideoRemixAssetAnchorBlock,
+  buildVideoRemixAssetMasterPrompt,
+} from '../../../shared/videoRemixAssetPrompts.js';
+
 const text = (maximum = 4000) => z.string().trim().min(1).max(maximum);
 const optionalText = (maximum = 1000) => z.string().trim().max(maximum).optional();
 const identifier = z.string().trim().min(1).max(80).regex(/^[A-Za-z0-9_-]+$/);
@@ -19,6 +24,8 @@ const characterSchema = z.object({
   id: identifier,
   name: text(120),
   identity: text(1200),
+  masterPrompt: text(2400).optional(),
+  anchorBlock: text(3200).optional(),
   looks: z.array(z.object({
     id: identifier,
     name: text(120),
@@ -32,6 +39,8 @@ const sceneSchema = z.object({
   id: identifier,
   name: text(160),
   visualDescription: text(1200),
+  masterPrompt: text(2400).optional(),
+  anchorBlock: text(3200).optional(),
   audioDescription: optionalText(800),
   zones: z.array(z.object({
     id: identifier,
@@ -46,6 +55,8 @@ const propSchema = z.object({
   name: text(160),
   category: z.enum(['hero', 'interactive', 'background']),
   description: text(1000),
+  masterPrompt: text(2400).optional(),
+  anchorBlock: text(3200).optional(),
   appearsInShots: z.array(identifier).max(500),
 }).strict();
 
@@ -78,14 +89,36 @@ const timedActionSchema = z.object({
   category: z.enum(['body', 'pose', 'hand', 'facial', 'object']).optional(),
 }).strict();
 
-const continuitySchema = z.object({
-  characterStates: z.record(z.object({
+function normalizeCharacterContinuityStateInput(value) {
+  if (typeof value === 'string' && value.trim()) {
+    return { position: value.trim() };
+  }
+  if (!value || Array.isArray(value) || typeof value !== 'object') return value;
+  if (!Object.hasOwn(value, 'status')) return value;
+  const { status, ...normalized } = value;
+  if (typeof status !== 'string' || !status.trim()) return value;
+  const cleanStatus = status.trim();
+  return {
+    ...normalized,
+    position: typeof normalized.position === 'string' && normalized.position.trim()
+      ? `${normalized.position.trim()}；${cleanStatus}`
+      : cleanStatus,
+  };
+}
+
+const characterContinuityStateSchema = z.preprocess(
+  normalizeCharacterContinuityStateInput,
+  z.object({
     holding: optionalText(200),
     position: optionalText(300),
     direction: optionalText(200),
     emotion: optionalText(200),
     lookId: identifier.optional(),
-  }).strict()),
+  }).strict()
+);
+
+const continuitySchema = z.object({
+  characterStates: z.record(characterContinuityStateSchema),
   sceneId: identifier.optional(),
   sceneZone: identifier.optional(),
   lighting: optionalText(300),
@@ -265,7 +298,7 @@ export function normalizeGlobalVideoAnalysis(raw, expectedShotIds) {
   for (const scene of parsed.scenes) assertUniqueIds(scene.zones, `${scene.id}.zones`, issues);
   const classifications = new Map();
   for (const item of parsed.shotComplexities) {
-    if (!expected.has(item.shotId)) issues.push(`shotComplexities 引用了未知 Shot：${item.shotId}`);
+    if (!expected.has(item.shotId)) issues.push(`shotComplexities 引用了未知镜头：${item.shotId}`);
     if (classifications.has(item.shotId)) issues.push(`shotComplexities 重复：${item.shotId}`);
     classifications.set(item.shotId, item);
   }
@@ -275,7 +308,7 @@ export function normalizeGlobalVideoAnalysis(raw, expectedShotIds) {
   for (const collection of [parsed.characters, parsed.scenes, parsed.props]) {
     for (const asset of collection) {
       for (const shotId of asset.appearsInShots) {
-        if (!expected.has(shotId)) issues.push(`${asset.id}.appearsInShots 引用了未知 Shot：${shotId}`);
+        if (!expected.has(shotId)) issues.push(`${asset.id}.appearsInShots 引用了未知镜头：${shotId}`);
       }
     }
   }
@@ -285,26 +318,62 @@ export function normalizeGlobalVideoAnalysis(raw, expectedShotIds) {
 
   return {
     story: parsed.story,
-    characters: parsed.characters.map(character => ({
-      ...character,
-      looks: character.looks.map(look => ({
-        ...look,
+    characters: parsed.characters.map(character => {
+      const normalized = {
+        ...character,
+        looks: character.looks.map(look => ({
+          ...look,
+          referenceImages: [],
+          source: 'analysis',
+        })),
         referenceImages: [],
         source: 'analysis',
-      })),
-      referenceImages: [],
-      source: 'analysis',
-    })),
-    scenes: parsed.scenes.map(scene => ({
-      ...scene,
-      referenceImages: [],
-      source: 'analysis',
-    })),
-    props: parsed.props.map(prop => ({
-      ...prop,
-      referenceImages: [],
-      source: 'analysis',
-    })),
+      };
+      const masterPrompt = character.masterPrompt
+        || buildVideoRemixAssetMasterPrompt('characters', normalized);
+      return {
+        ...normalized,
+        masterPrompt,
+        anchorBlock: character.anchorBlock || buildVideoRemixAssetAnchorBlock(
+          'characters',
+          { ...normalized, masterPrompt }
+        ),
+      };
+    }),
+    scenes: parsed.scenes.map(scene => {
+      const normalized = {
+        ...scene,
+        referenceImages: [],
+        source: 'analysis',
+      };
+      const masterPrompt = scene.masterPrompt
+        || buildVideoRemixAssetMasterPrompt('scenes', normalized);
+      return {
+        ...normalized,
+        masterPrompt,
+        anchorBlock: scene.anchorBlock || buildVideoRemixAssetAnchorBlock(
+          'scenes',
+          { ...normalized, masterPrompt }
+        ),
+      };
+    }),
+    props: parsed.props.map(prop => {
+      const normalized = {
+        ...prop,
+        referenceImages: [],
+        source: 'analysis',
+      };
+      const masterPrompt = prop.masterPrompt
+        || buildVideoRemixAssetMasterPrompt('props', normalized);
+      return {
+        ...normalized,
+        masterPrompt,
+        anchorBlock: prop.anchorBlock || buildVideoRemixAssetAnchorBlock(
+          'props',
+          { ...normalized, masterPrompt }
+        ),
+      };
+    }),
     style: parsed.style,
     shotComplexities: parsed.shotComplexities,
   };
@@ -391,8 +460,8 @@ export function mergeLockedAnalysisFields(previous, incoming) {
 
 function validateTimedRange(item, duration, pathLabel, issues, optional = false) {
   if (optional && item.start === undefined && item.end === undefined) return;
-  if (item.start !== undefined && item.start > duration) issues.push(`${pathLabel}.start 超出 Shot 时长`);
-  if (item.end !== undefined && item.end > duration) issues.push(`${pathLabel}.end 超出 Shot 时长`);
+  if (item.start !== undefined && item.start > duration) issues.push(`${pathLabel}.start 超出镜头时长`);
+  if (item.end !== undefined && item.end > duration) issues.push(`${pathLabel}.end 超出镜头时长`);
   if (item.start !== undefined && item.end !== undefined && item.end < item.start) {
     issues.push(`${pathLabel}.end 早于 start`);
   }
@@ -544,9 +613,9 @@ export function normalizeShotVideoAnalysis(raw, {
 
 export const GLOBAL_ANALYSIS_OUTPUT_CONTRACT = `{
   "story":{"summary":"string","genre":"string","structure":["string"]},
-  "characters":[{"id":"CHAR_01","name":"string","identity":"string","looks":[{"id":"LOOK_01","name":"string","description":"string"}],"voiceDescription":{"language":"string","gender":"string","ageFeel":"string","tone":"string","pitch":"string","speakingStyle":"string"},"appearsInShots":["shot_001"]}],
-  "scenes":[{"id":"SCENE_01","name":"string","visualDescription":"string","audioDescription":"string","zones":[{"id":"ZONE_01","name":"string","description":"string"}],"appearsInShots":["shot_001"]}],
-  "props":[{"id":"PROP_01","name":"string","category":"hero|interactive|background","description":"string","appearsInShots":["shot_001"]}],
+  "characters":[{"id":"CHAR_01","name":"中文功能性角色名，不得用演员或影视角色真名","identity":"简体中文选角与外貌需求","masterPrompt":"完整中文人物身份主提示词","anchorBlock":"可逐字复用的中文人物身份锁定块","looks":[{"id":"LOOK_01","name":"中文造型名","description":"简体中文造型需求"}],"voiceDescription":{"language":"简体中文","gender":"简体中文","ageFeel":"简体中文","tone":"简体中文","pitch":"简体中文","speakingStyle":"简体中文"},"appearsInShots":["shot_001"]}],
+  "scenes":[{"id":"SCENE_01","name":"中文功能性场景名","visualDescription":"简体中文空间与美术需求","masterPrompt":"完整中文场景空间主提示词","anchorBlock":"可逐字复用的中文场景空间锁定块","audioDescription":"简体中文环境声说明","zones":[{"id":"ZONE_01","name":"中文区域名","description":"简体中文区域说明"}],"appearsInShots":["shot_001"]}],
+  "props":[{"id":"PROP_01","name":"中文功能性道具名","category":"hero|interactive|background","description":"简体中文用途与结构需求","masterPrompt":"完整中文道具结构主提示词","anchorBlock":"可逐字复用的中文道具结构锁定块","appearsInShots":["shot_001"]}],
   "style":"string",
   "shotComplexities":[{"shotId":"shot_001","motionComplexity":"simple|medium|complex","confidence":0.0}]
 }`;
@@ -563,7 +632,7 @@ export const SHOT_ANALYSIS_OUTPUT_CONTRACT = `{
   "timingBlueprint":{"phases":[{"phase":"string","start":0,"end":1}]},
   "audioBlueprint":{"dialogue":[{"characterId":"CHAR_01","text":{"value":"string","confidence":0.0},"emotion":"string","start":0,"end":1}],"environment":{"value":"string","confidence":0.0},"soundEvents":[{"start":0,"end":1,"description":"string"}]},
   "motionComplexity":"simple|medium|complex",
-  "startState":{"characterStates":{},"sceneId":"SCENE_01","sceneZone":"ZONE_01","lighting":"string","time":"string"},
-  "endState":{"characterStates":{},"sceneId":"SCENE_01","sceneZone":"ZONE_01","lighting":"string","time":"string"},
+  "startState":{"characterStates":{"CHAR_01":{"holding":"PROP_01","position":"string","direction":"string","emotion":"string","lookId":"LOOK_01"}},"sceneId":"SCENE_01","sceneZone":"ZONE_01","lighting":"string","time":"string"},
+  "endState":{"characterStates":{"CHAR_01":{"holding":"PROP_01","position":"string","direction":"string","emotion":"string","lookId":"LOOK_01"}},"sceneId":"SCENE_01","sceneZone":"ZONE_01","lighting":"string","time":"string"},
   "transition":"hard_cut|fade|flash|zoom|match_motion|other"
 }`;

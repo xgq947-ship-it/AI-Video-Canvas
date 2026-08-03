@@ -317,14 +317,16 @@ async function executeJob(job, context) {
       job.resultNodeIds[index] = nodeId;
       let resultUrl = result.resultUrl;
       const providerMetadata = result.metadata || {};
+      const requestedResolution = providerMetadata.requestedResolution || job.imageResolution;
+      const deliveredResolution = providerMetadata.deliveredResolution || requestedResolution;
       if (!resultUrl) {
         const saved = saveBufferToFile(result.buffer, imageTarget.targetDir, 'img', result.extension || 'png');
         resultUrl = `${imageTarget.urlPrefix}/${saved.filename}`;
         atomicWriteJson(path.join(imageTarget.targetDir, `${nodeId}.json`), {
           id: nodeId, filename: saved.filename, prompt: job.prompt, model: job.imageModel,
           aspectRatio: job.aspectRatio,
-          resolution: providerMetadata.requestedResolution || job.imageResolution,
-          requestedResolution: providerMetadata.requestedResolution || job.imageResolution,
+          resolution: deliveredResolution,
+          requestedResolution,
           ...(Number.isInteger(providerMetadata.actualWidth)
             ? { actualWidth: providerMetadata.actualWidth }
             : {}),
@@ -340,6 +342,9 @@ async function executeJob(job, context) {
           ...(providerMetadata.downloadProtocol
             ? { flowDownloadProtocol: providerMetadata.downloadProtocol }
             : {}),
+          ...(providerMetadata.resolutionFallbackReason
+            ? { resolutionFallbackReason: providerMetadata.resolutionFallbackReason }
+            : {}),
           createdAt: new Date().toISOString(), type: 'images',
           sourceJobId: job.id,
           batchIndex: index,
@@ -351,7 +356,8 @@ async function executeJob(job, context) {
         nodeId,
         resultUrl,
         status: 'success',
-        requestedResolution: providerMetadata.requestedResolution || job.imageResolution,
+        requestedResolution,
+        ...(deliveredResolution ? { deliveredResolution } : {}),
         ...(Number.isInteger(providerMetadata.actualWidth)
           ? { actualWidth: providerMetadata.actualWidth }
           : {}),

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { upsertVideoRemixFinalNode } from '../src/utils/videoRemixFinalNode.js';
+import {
+  upsertVideoRemixFinalNode,
+  upsertVideoRemixProjectFinalNode,
+} from '../src/utils/videoRemixFinalNode.js';
 
 const remix = {
   id: 'remix-1',
@@ -49,4 +52,57 @@ test('重复渲染更新同一个节点，并保留用户移动和重命名', ()
   assert.equal(result.x, 900);
   assert.equal(result.y, 700);
   assert.equal(result.displayName, '我的最终版');
+});
+
+test('独立复刻任务只有用户发送时才创建无容器依赖的普通视频节点', () => {
+  const project = {
+    id: 'remix-project-1',
+    title: '产品广告',
+  };
+  let nodes = upsertVideoRemixProjectFinalNode([], project, firstOutput, {
+    x: 320,
+    y: 180,
+  });
+  assert.equal(nodes.length, 1);
+  assert.equal(nodes[0].type, 'Video');
+  assert.deepEqual(nodes[0].parentIds, []);
+  assert.equal(nodes[0].x, 320);
+  assert.equal(nodes[0].y, 180);
+
+  nodes = upsertVideoRemixProjectFinalNode(nodes, {
+    ...project,
+    finalCanvasNodeId: firstOutput.nodeId,
+  }, {
+    ...firstOutput,
+    url: '/library/projects/Test/videos/final-standalone-v2.mp4',
+  }, { x: 0, y: 0 });
+  assert.equal(nodes.length, 1);
+  assert.equal(nodes[0].resultUrl, '/library/projects/Test/videos/final-standalone-v2.mp4');
+  assert.equal(nodes[0].x, 320);
+});
+
+test('用户删除已发送成片后再次发送仍复用任务记录的稳定节点 ID', () => {
+  const project = {
+    id: 'remix-project-1',
+    title: '稳定输出',
+    finalCanvasNodeId: 'remembered-final-node',
+  };
+  const output = {
+    nodeId: 'new-render-output-id',
+    url: '/library/projects/demo/video-remix/final.mp4',
+    duration: 8,
+    width: 1080,
+    height: 1920,
+    fps: 30,
+    aspectRatio: '9:16',
+  };
+
+  const recreated = upsertVideoRemixProjectFinalNode([], project, output, { x: 15, y: 25 });
+  const repeated = upsertVideoRemixProjectFinalNode(recreated, project, output, { x: 500, y: 500 });
+
+  assert.equal(recreated.length, 1);
+  assert.equal(recreated[0].id, 'remembered-final-node');
+  assert.equal(repeated.length, 1);
+  assert.equal(repeated[0].id, 'remembered-final-node');
+  assert.deepEqual({ x: repeated[0].x, y: repeated[0].y }, { x: 15, y: 25 });
 });

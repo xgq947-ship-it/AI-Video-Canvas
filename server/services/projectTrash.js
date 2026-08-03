@@ -115,6 +115,25 @@ function collectAllProjectImageReferences(node, projectDirName) {
     return [...unique.values()];
 }
 
+function collectVideoRemixImageReferences(videoRemixes, projectDirName) {
+    const unique = new Map();
+    const visit = value => {
+        if (typeof value === 'string') {
+            const parsed = parseProjectImageUrl(value, projectDirName);
+            if (parsed) unique.set(parsed.key, parsed);
+            return;
+        }
+        if (Array.isArray(value)) {
+            value.forEach(visit);
+            return;
+        }
+        if (!value || typeof value !== 'object') return;
+        Object.values(value).forEach(visit);
+    };
+    visit(videoRemixes);
+    return [...unique.values()];
+}
+
 function sidecarPath(filePath) {
     const extension = path.extname(filePath);
     return extension ? filePath.slice(0, -extension.length) + '.json' : `${filePath}.json`;
@@ -206,6 +225,12 @@ export function trashWorkflowNodes(workflow, currentNodes, nodeIds, projectRoot,
         for (const file of collectAllProjectImageReferences(node, workflow.projectDirName)) {
             activeFileKeys.add(file.key);
         }
+    }
+    for (const file of collectVideoRemixImageReferences(
+        workflow.videoRemixes,
+        workflow.projectDirName
+    )) {
+        activeFileKeys.add(file.key);
     }
     const coverReference = parseProjectImageUrl(workflow.coverUrl, workflow.projectDirName);
     if (coverReference) activeFileKeys.add(coverReference.key);

@@ -155,7 +155,7 @@ async function assertFileInside(filePath, expectedDirectory, message) {
     ? directoryRealPath
     : `${directoryRealPath}${path.sep}`;
   if (fileRealPath === directoryRealPath || !fileRealPath.startsWith(prefix)) {
-    throw new ShotPreprocessingError('参考视频路径超出当前 Remix 项目', {
+    throw new ShotPreprocessingError('参考视频路径超出当前视频复刻项目', {
       code: 'UNSAFE_REFERENCE_VIDEO_PATH',
       status: 400,
     });

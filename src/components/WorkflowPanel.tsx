@@ -11,6 +11,7 @@ import { LazyImage } from './LazyImage';
 import { NodeData, NodeStatus, NodeType } from '../types';
 import { getNodeHeight, getNodeWidth } from './canvas/ConnectionsLayer';
 import { calculateConnectionPath } from '../utils/connectionHelpers';
+import type { VideoRemixProject } from '../../shared/videoRemixProjects.js';
 
 type WorkflowPreviewNode = Pick<
     NodeData,
@@ -23,6 +24,7 @@ interface WorkflowSummary {
     createdAt: string;
     updatedAt: string;
     nodeCount: number;
+    remixCount?: number;
     coverUrl?: string;
     description?: string;
     previewNodes?: WorkflowPreviewNode[];
@@ -39,7 +41,12 @@ interface WorkflowPanelProps {
     isOpen: boolean;
     onClose: () => void;
     onLoadWorkflow: (workflowId: string) => void;
-    onRenameWorkflow?: (workflowId: string, title: string, nodes: NodeData[]) => void;
+    onRenameWorkflow?: (
+        workflowId: string,
+        title: string,
+        nodes: NodeData[],
+        videoRemixes: VideoRemixProject[]
+    ) => void;
     currentWorkflowId?: string;
     panelY?: number;
     panelLeft?: number;
@@ -268,7 +275,12 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
                 coverUrl: result.coverUrl ?? w.coverUrl,
                 previewNodes: Array.isArray(result.nodes) ? result.nodes : w.previewNodes
             } : w)));
-            onRenameWorkflow?.(id, result.title || title, Array.isArray(result.nodes) ? result.nodes : []);
+            onRenameWorkflow?.(
+                id,
+                result.title || title,
+                Array.isArray(result.nodes) ? result.nodes : [],
+                Array.isArray(result.videoRemixes) ? result.videoRemixes : []
+            );
         } catch (error) {
             console.error('Failed to rename workflow:', error);
             window.alert(error instanceof Error ? error.message : '项目重命名失败');
@@ -510,7 +522,7 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
                                                 </h3>
                                             )}
                                             <p className={`text-xs mt-0.5 ${isDark ? 'text-neutral-500' : 'text-neutral-600'}`}>
-                                                {workflow.nodeCount} 个节点
+                                                {workflow.nodeCount} 个节点{workflow.remixCount ? ` · ${workflow.remixCount} 个复刻任务` : ''}
                                             </p>
                                         </div>
                                     </div>

@@ -174,7 +174,7 @@ test('全片与逐 Shot 分析可以增量落状态，单镜头失败不清空�
   assert.equal(state.errors.at(-1).id, state.shots[1].shotId);
 });
 
-test('全片资产自动引用原 Shot 分析帧，重新分析保留用户替换与新增造型', () => {
+test('全片资产不引用 Shot 分析帧，重新分析保留用户替换与新增造型', () => {
   const shots = buildVideoRemixShots({ duration: 1 }).map(shot => ({
     ...shot,
     analysisFrames: [{
@@ -214,12 +214,8 @@ test('全片资产自动引用原 Shot 分析帧，重新分析保留用户替�
     shots,
   }), global);
 
-  assert.deepEqual(state.assets.characters[0].referenceImages, [
-    '/library/projects/test/frame-middle.jpg',
-  ]);
-  assert.deepEqual(state.assets.characters[0].looks[0].referenceImages, [
-    '/library/projects/test/frame-middle.jpg',
-  ]);
+  assert.deepEqual(state.assets.characters[0].referenceImages, []);
+  assert.deepEqual(state.assets.characters[0].looks[0].referenceImages, []);
 
   state = replaceVideoRemixAsset(state, 'characters', 'CHAR_01', {
     source: 'upload',
@@ -473,8 +469,9 @@ test('Video Remix 摘要只统计已确认关键帧和已完成镜头视频', ()
       { id: 'kf_2', status: 'ready' },
     ],
     generatedVideos: [
-      { id: 'video_1', status: 'completed' },
-      { id: 'video_2', status: 'failed' },
+      { id: 'video_1', shotId: 'shot_1', status: 'completed' },
+      { id: 'video_1_variant_2', shotId: 'shot_1', status: 'completed' },
+      { id: 'video_2', shotId: 'shot_2', status: 'failed' },
     ],
   });
 
@@ -542,4 +539,26 @@ test('替换失败不会让已有 Remix 丢失原来的工作阶段', () => {
   assert.equal(next.stage, 'keyframes_ready');
   assert.equal(next.source.id, 'existing');
   assert.equal(next.errors[0].message, '新链接下载失败');
+});
+
+test('重复确认资产不会把视频阶段倒退回 assets_ready', () => {
+  const state = createVideoRemixState({
+    remixId: 'remix_confirmed_assets',
+    stage: 'videos_ready',
+    assetReview: { confirmed: true },
+    generatedVideos: [{ id: 'video_1', status: 'completed' }],
+  });
+
+  assert.equal(confirmVideoRemixAssets(state), state);
+  assert.equal(state.stage, 'videos_ready');
+
+  const recovered = confirmVideoRemixAssets(createVideoRemixState({
+    remixId: 'remix_recovered_asset_gate',
+    stage: 'videos_ready',
+    story: { summary: '无人物产品镜头', structure: [] },
+    shots: [{ shotId: 'shot_1', analysisStatus: 'ready' }],
+    assetReview: { confirmed: false },
+  }));
+  assert.equal(recovered.assetReview.confirmed, true);
+  assert.equal(recovered.stage, 'videos_ready');
 });

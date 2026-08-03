@@ -106,10 +106,10 @@ export const VideoRemixNode: React.FC<VideoRemixNodeProps> = ({
             </div>
             <div>
               <div className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-neutral-900'}`}>
-                {data.title || 'Video Remix'}
+                {data.title || '视频复刻'}
               </div>
               <div className={`mt-0.5 text-[11px] ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-                高复刻模式 · 阶段式生成
+                {state.workspaceMode === 'advanced' ? '高级模式 · 完整控制' : '简单模式 · 三步生成'}
               </div>
             </div>
           </div>

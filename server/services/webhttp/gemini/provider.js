@@ -29,6 +29,7 @@ import {
     extractConversation,
     extractGeneratedMedia,
     extractGeminiBootstrap,
+    extractLatestCandidateText,
     extractStreamPayloads,
     extractText,
     detectRefusal,
@@ -49,6 +50,11 @@ let cachedSession = null;
 let cachedSessionAt = 0;
 let requestIdSeed = null;
 const SESSION_TTL_MS = 3 * 60_000;
+const DEFAULT_TEXT_TASK_TIMEOUT_SECONDS = 180;
+const MAX_TEXT_TASK_TIMEOUT_SECONDS = 20 * 60;
+const TEXT_RECOVERY_POLL_INTERVAL_MS = 5_000;
+const TEXT_RECOVERY_SESSION_REFRESH_MS = 90_000;
+const TEXT_RECOVERY_PRIMER = '接下来我会发送一个结构化媒体分析任务。请只回复 READY，不要添加其他内容。';
 
 export function clearGeminiSessionCache() {
     cachedSession = null;
@@ -166,13 +172,68 @@ export async function uploadGeminiMediaFiles(files, { session, signal } = {}) {
     return assets;
 }
 
+export function describeGeminiStreamFailure(response, timeoutSeconds) {
+    const statusText = String(response?.statusText || '').trim();
+    const timedOut = Number(response?.status) === 0
+        && /abort|timeout|timed\s*out|time\s*out/i.test(statusText);
+    if (timedOut) {
+        return `${PROVIDER_NAME} 请求等待超过 ${Math.ceil(timeoutSeconds / 60)} 分钟，服务尚未返回结果，请重试当前任务`;
+    }
+    if (Number(response?.status) === 0) {
+        return `${PROVIDER_NAME} 网络请求中断${statusText ? `（${statusText}）` : ''}，请检查网络后重试`;
+    }
+    if ([502, 503, 504].includes(Number(response?.status))) {
+        return `${PROVIDER_NAME} 服务暂时繁忙（HTTP ${response.status}），正在尝试从 Gemini 会话恢复结果`;
+    }
+    return `${PROVIDER_NAME} 请求失败：HTTP ${response?.status}`;
+}
+
+export function extractGeminiTextForTurn(payloads, {
+    previousCandidateId,
+    recoveredText,
+} = {}) {
+    const recovered = String(recoveredText || '').trim();
+    if (recovered) return recovered;
+    const latest = extractLatestCandidateText(payloads, {
+        excludeCandidateIds: [previousCandidateId],
+    });
+    return latest || extractText(payloads);
+}
+
+export function hasUsableGeminiTextPayload(payloads, { previousCandidateId } = {}) {
+    if (!Array.isArray(payloads) || payloads.length === 0) return false;
+    const latest = extractLatestCandidateText(payloads, {
+        excludeCandidateIds: [previousCandidateId],
+    });
+    if (previousCandidateId) return Boolean(latest);
+    const conversation = extractConversation(payloads);
+    return Boolean(conversation.candidateId && (latest || extractText(payloads)));
+}
+
+export function shouldRecoverGeminiTextFailure(error) {
+    const status = Number(error?.details?.status);
+    return error instanceof WebProviderError
+        && error.submitted === false
+        && ([0, 502, 503, 504].includes(status) || error.code === 'BRIDGE_UNAVAILABLE');
+}
+
 /**
  * One StreamGenerate round trip.
  *
  * `submitted` is the caller's call: a text question costs nothing, an image or
  * video generation spends quota the moment the request lands.
  */
-async function streamGenerate({ session, prompt, assets, conversation, mode, submitted, signal, timeoutSeconds }) {
+async function streamGenerate({
+    session,
+    prompt,
+    assets,
+    conversation,
+    mode,
+    submitted,
+    signal,
+    timeoutSeconds,
+    acceptTextOnHttpFailure = false,
+}) {
     requestIdSeed = nextRequestId(requestIdSeed);
     const payload = buildStreamPayload({ prompt, assets, conversation, mode });
     const spec = buildRequestSpec({
@@ -185,16 +246,35 @@ async function streamGenerate({ session, prompt, assets, conversation, mode, sub
 
     // submitted 透传：生图/生视频请求的传输层失败结果未知，必须按已提交处理。
     const response = await webFetch(PROVIDER, spec, { signal, timeoutSeconds, submitted });
+    const payloads = extractStreamPayloads(response.text);
     if (!response.ok) {
+        // Gemini 偶尔会在长回答完成时把外层请求标成 502/503，但响应体里已经有
+        // 完整的 wrb.fr candidate。先信任可严格解析的业务结果，不能只看 HTTP 状态。
+        if (acceptTextOnHttpFailure && hasUsableGeminiTextPayload(payloads, {
+            previousCandidateId: conversation?.candidateId,
+        })) {
+            console.warn(`[Gemini Web HTTP] 外层返回 HTTP ${response.status}，但响应体包含完整文本结果，继续处理`);
+            return payloads;
+        }
         // A 401/403 here means the bootstrap went stale between read and use.
-        clearGeminiSessionCache();
+        if (response.status === 401 || response.status === 403) clearGeminiSessionCache();
+        const statusText = String(response.statusText || '').trim();
         throw new WebProviderError(
-            `${PROVIDER_NAME} 请求失败：HTTP ${response.status}`,
-            { provider: PROVIDER, code: classifyHttpFailure(response.status, response.text), submitted }
+            describeGeminiStreamFailure(response, timeoutSeconds),
+            {
+                provider: PROVIDER,
+                code: classifyHttpFailure(response.status, response.text),
+                submitted,
+                details: {
+                    status: response.status,
+                    statusText,
+                    networkError: response.networkError,
+                    timeoutSeconds,
+                },
+            }
         );
     }
 
-    const payloads = extractStreamPayloads(response.text);
     if (payloads.length === 0) {
         throw new WebProviderError(
             `${PROVIDER_NAME} 返回的响应无法解析（协议可能已变化）`,
@@ -202,6 +282,79 @@ async function streamGenerate({ session, prompt, assets, conversation, mode, sub
         );
     }
     return payloads;
+}
+
+async function createRecoverableTextConversation({ session, signal }) {
+    const payloads = await streamGenerate({
+        session,
+        prompt: TEXT_RECOVERY_PRIMER,
+        assets: [],
+        conversation: {},
+        mode: null,
+        submitted: false,
+        signal,
+        timeoutSeconds: 120,
+        acceptTextOnHttpFailure: true,
+    });
+    const conversation = extractConversation(payloads);
+    if (!conversation.conversationId) {
+        throw new WebProviderError(`${PROVIDER_NAME} 未能建立可恢复的分析会话，请重试`, {
+            provider: PROVIDER,
+            code: 'PROTOCOL_CHANGED',
+            submitted: false,
+        });
+    }
+    return conversation;
+}
+
+async function recoverGeminiTextConversation({
+    session,
+    conversation,
+    signal,
+    timeoutSeconds,
+}) {
+    if (!conversation?.conversationId) return null;
+    const deadline = Date.now() + Math.max(15, Number(timeoutSeconds) || 120) * 1000;
+    let activeSession = session;
+    let refreshedAt = Date.now();
+    while (Date.now() < deadline) {
+        if (Date.now() - refreshedAt >= TEXT_RECOVERY_SESSION_REFRESH_MS) {
+            activeSession = await getGeminiSession({ signal, forceRefresh: true });
+            refreshedAt = Date.now();
+        }
+        requestIdSeed = nextRequestId(requestIdSeed);
+        const spec = buildBatchRpcRequest({
+            bl: activeSession.bl,
+            fSid: activeSession.fSid,
+            reqId: requestIdSeed,
+            at: activeSession.at,
+            rpcId: GEMINI_VIDEO_POLL_RPC,
+            args: buildVideoPollArgs(conversation.conversationId),
+            sourcePath: `/app/${conversation.conversationId.replace(/^c_/, '')}`,
+        });
+        try {
+            const response = await webFetch(PROVIDER, buildRequestSpec(spec), {
+                signal,
+                timeoutSeconds: 120,
+                submitted: false,
+            });
+            if (response.ok) {
+                const payloads = extractStreamPayloads(response.text);
+                const text = extractLatestCandidateText(payloads, {
+                    excludeCandidateIds: [conversation.candidateId],
+                });
+                const clean = text.trim();
+                const completeJson = clean.startsWith('{') && clean.endsWith('}');
+                if (completeJson) {
+                    return { payloads, session: activeSession, text: clean };
+                }
+            }
+        } catch (error) {
+            console.warn(`[Gemini Web HTTP] 分析结果回捞暂未成功：${error.message}`);
+        }
+        await sleep(TEXT_RECOVERY_POLL_INTERVAL_MS, signal);
+    }
+    return null;
 }
 
 /**
@@ -231,10 +384,13 @@ export async function runGeminiTextTaskHttp({
         mode: null,
         submitted: false,
         signal,
-        timeoutSeconds: 180
+        timeoutSeconds: 180,
+        acceptTextOnHttpFailure: true,
     });
 
-    const text = extractText(payloads);
+    const text = extractGeminiTextForTurn(payloads, {
+        previousCandidateId: conversation?.candidateId,
+    });
     if (!text) {
         throw new WebProviderError(`${PROVIDER_NAME} 没有返回文本回答`, {
             provider: PROVIDER, code: 'GENERATION_FAILED', submitted: false
@@ -244,27 +400,95 @@ export async function runGeminiTextTaskHttp({
 }
 
 /** 音视频理解任务；与图片识图共用真实 StreamGenerate 协议，但附件由调用方提供。 */
-export async function runGeminiMediaTextTaskHttp({ prompt, files = [], conversation, signal }) {
+export async function runGeminiMediaTextTaskHttp({
+    prompt,
+    files = [],
+    conversation,
+    signal,
+    timeoutSeconds = DEFAULT_TEXT_TASK_TIMEOUT_SECONDS,
+    recoverRemoteResult = false,
+    recoveryTimeoutSeconds = 180,
+}) {
     const cleanPrompt = requireNonEmptyPrompt(prompt, PROVIDER_NAME);
+    const normalizedTimeoutSeconds = Number.isFinite(Number(timeoutSeconds))
+        ? Math.min(MAX_TEXT_TASK_TIMEOUT_SECONDS, Math.max(30, Math.round(Number(timeoutSeconds))))
+        : DEFAULT_TEXT_TASK_TIMEOUT_SECONDS;
     const session = await getGeminiSession({ signal });
+    let activeConversation = conversation || {};
+    if (recoverRemoteResult && !activeConversation.conversationId) {
+        try {
+            activeConversation = await createRecoverableTextConversation({ session, signal });
+        } catch (error) {
+            // The primer only gives a future gateway-timeout request a known
+            // conversation id. It must never become a harder dependency than
+            // the actual analysis request itself. Authentication/protocol
+            // failures still surface; transient bridge/gateway failures safely
+            // degrade to the normal one-shot analysis path.
+            if (!shouldRecoverGeminiTextFailure(error)) throw error;
+            console.warn(`[Gemini Web HTTP] 建立结果回捞会话失败，降级为直接分析：${error.message}`);
+            activeConversation = {};
+        }
+    }
     const assets = await uploadGeminiMediaFiles(files, { session, signal });
-    const payloads = await streamGenerate({
-        session,
-        prompt: cleanPrompt,
-        assets,
-        conversation,
-        mode: null,
-        submitted: false,
-        signal,
-        timeoutSeconds: 180
+    let payloads;
+    let recovered = false;
+    let recoveredText = '';
+    try {
+        payloads = await streamGenerate({
+            session,
+            prompt: cleanPrompt,
+            assets,
+            conversation: activeConversation,
+            mode: null,
+            submitted: false,
+            signal,
+            timeoutSeconds: normalizedTimeoutSeconds,
+            acceptTextOnHttpFailure: true,
+        });
+    } catch (error) {
+        if (!recoverRemoteResult || !shouldRecoverGeminiTextFailure(error)) throw error;
+        const recovery = await recoverGeminiTextConversation({
+            session,
+            conversation: activeConversation,
+            signal,
+            timeoutSeconds: recoveryTimeoutSeconds,
+        });
+        if (!recovery) {
+            throw new WebProviderError(
+                `${PROVIDER_NAME} 已返回远端会话，但暂时无法同步分析结果，请稍后重试当前镜头`,
+                {
+                    provider: PROVIDER,
+                    code: 'POLL_TIMEOUT',
+                    submitted: false,
+                    retryable: true,
+                    details: {
+                        conversationId: activeConversation.conversationId,
+                        originalStatus: error?.details?.status,
+                    },
+                    cause: error,
+                }
+            );
+        }
+        payloads = recovery.payloads;
+        recoveredText = recovery.text;
+        recovered = true;
+    }
+    // 会话查询会同时返回 READY、旧的纠错回答和最新回答。恢复路径必须使用上面
+    // 明确选出的最新 candidate，不能再次用“最长文本”规则回退到旧回答。
+    const text = extractGeminiTextForTurn(payloads, {
+        previousCandidateId: activeConversation.candidateId,
+        recoveredText,
     });
-    const text = extractText(payloads);
     if (!text) {
         throw new WebProviderError(`${PROVIDER_NAME} 没有返回媒体识别结果`, {
             provider: PROVIDER, code: 'GENERATION_FAILED', submitted: false
         });
     }
-    return { text, conversation: extractConversation(payloads), channel: 'http' };
+    return {
+        text,
+        conversation: { ...activeConversation, ...extractConversation(payloads) },
+        channel: recovered ? 'http-recovered' : 'http',
+    };
 }
 
 async function downloadGeminiMedia(items, { session, expectedType, signal }) {

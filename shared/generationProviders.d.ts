@@ -40,6 +40,7 @@ export interface DiscoveredModelRegistry {
 export function applyDiscoveredModelRegistry(registry: DiscoveredModelRegistry | null | undefined): void;
 export function resetDiscoveredModelRegistry(): void;
 export function listImageGenerationProviders(): ImageGenerationProvider[];
+export function listVideoRemixConsistencyImageProviders(): ImageGenerationProvider[];
 export function listVideoGenerationProviders(): VideoGenerationProvider[];
 export function getImageGenerationProvider(id?: string): ImageGenerationProvider | null;
 export function getVideoGenerationProvider(id?: string): VideoGenerationProvider | null;

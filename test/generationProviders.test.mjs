@@ -9,6 +9,7 @@ import {
   getImageGenerationProvider,
   getVideoGenerationProvider,
   listImageGenerationProviders,
+  listVideoRemixConsistencyImageProviders,
   listVideoGenerationProviders,
   normalizeImageAspectRatio,
   normalizeImageResolution,
@@ -36,6 +37,16 @@ test('图片与视频模型注册表使用唯一 ID，并包含 Gemini Web capab
   assert.equal(video.supportsMultipleReferenceImages, false);
   assert.equal(video.supportsNativeAudio, true);
   assert.equal(video.supportsExtend, true);
+});
+
+test('Video Remix 一致性图片模型包含 Codex CLI 生图', () => {
+  const providers = listVideoRemixConsistencyImageProviders();
+  const codex = providers.find(item => item.id === 'codex-imagegen');
+
+  assert.ok(codex);
+  assert.equal(codex.name, 'Codex CLI · ChatGPT 生图');
+  assert.equal(codex.supportsImageToImage, true);
+  assert.equal(codex.maxReferenceImages, 14);
 });
 
 test('Flow 能力表覆盖文本、首帧、多参考图，且只展示可路由模型', () => {

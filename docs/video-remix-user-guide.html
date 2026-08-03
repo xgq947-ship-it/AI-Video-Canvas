@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Evan 视频复刻三步简单模式使用教程">
+  <title>Evan 视频复刻使用教程</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080a0d;
+      --panel: rgba(18, 21, 26, .88);
+      --panel-2: #15191f;
+      --line: rgba(255, 255, 255, .09);
+      --text: #f6f7f9;
+      --muted: #9aa3af;
+      --faint: #697381;
+      --cyan: #5de1e6;
+      --cyan-ink: #061112;
+      --green: #7ce8ac;
+      --amber: #ffd077;
+      --red: #ff9292;
+      --shadow: 0 24px 70px rgba(0, 0, 0, .3);
+      --radius: 24px;
+    }
+
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f4f6f8;
+      --panel: rgba(255, 255, 255, .92);
+      --panel-2: #f7f8fa;
+      --line: rgba(20, 27, 38, .1);
+      --text: #161b22;
+      --muted: #566170;
+      --faint: #85909d;
+      --cyan: #087f86;
+      --cyan-ink: #fff;
+      --green: #16794a;
+      --amber: #9a5d00;
+      --red: #b92f36;
+      --shadow: 0 20px 60px rgba(35, 43, 54, .1);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 14% -10%, rgba(48, 201, 210, .12), transparent 34rem),
+        radial-gradient(circle at 88% 16%, rgba(104, 82, 238, .1), transparent 32rem),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "PingFang SC",
+        "Microsoft YaHei", sans-serif;
+      line-height: 1.68;
+    }
+
+    button, select { font: inherit; }
+    a { color: inherit; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--bg) 82%, transparent);
+      backdrop-filter: blur(18px);
+    }
+    .topbar-inner, .page { width: min(1160px, calc(100% - 36px)); margin: 0 auto; }
+    .topbar-inner { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+    .brand { display: flex; align-items: center; gap: 11px; text-decoration: none; }
+    .brand-mark {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border-radius: 11px;
+      background: var(--cyan);
+      color: var(--cyan-ink);
+      font-size: 11px;
+      font-weight: 900;
+    }
+    .brand strong, .brand small { display: block; }
+    .brand strong { font-size: 13px; }
+    .brand small { color: var(--faint); font-size: 9px; letter-spacing: .08em; }
+    .tools { display: flex; gap: 8px; }
+    .tool-button, .copy-button {
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: var(--panel);
+      color: var(--muted);
+      cursor: pointer;
+      padding: 8px 12px;
+      font-size: 11px;
+    }
+    .tool-button:hover, .copy-button:hover { border-color: color-mix(in srgb, var(--cyan) 55%, var(--line)); color: var(--text); }
+
+    .hero { padding: 76px 0 42px; }
+    .eyebrow { color: var(--cyan); font-size: 10px; font-weight: 800; letter-spacing: .16em; }
+    h1 { margin: 15px 0 16px; max-width: 820px; font-size: clamp(42px, 7vw, 78px); line-height: 1.03; letter-spacing: -.055em; }
+    h1 span { color: var(--cyan); }
+    .hero-lead { max-width: 760px; margin: 0; color: var(--muted); font-size: clamp(15px, 2vw, 18px); }
+    .hero-note {
+      margin-top: 27px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .status-card, .card, .step, details, .table-wrap {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+    .status-card { border-radius: 18px; padding: 17px; }
+    .status-card b { display: block; font-size: 12px; }
+    .status-card p { margin: 5px 0 0; color: var(--muted); font-size: 10px; }
+    .status-card .dot { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--green); }
+    .status-card.need .dot { background: var(--amber); }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 22px;
+    }
+    .pipeline span {
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: var(--panel-2);
+      padding: 14px 16px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .pipeline b { display: block; margin-bottom: 2px; color: var(--text); font-size: 13px; }
+
+    .layout { display: grid; grid-template-columns: 205px minmax(0, 1fr); gap: 34px; padding: 28px 0 90px; }
+    .toc { position: sticky; top: 90px; align-self: start; }
+    .toc small { color: var(--faint); font-size: 9px; letter-spacing: .13em; }
+    .toc nav { display: grid; gap: 5px; margin-top: 10px; }
+    .toc a { border-radius: 10px; padding: 8px 10px; color: var(--muted); font-size: 11px; text-decoration: none; }
+    .toc a:hover, .toc a.active { background: var(--panel-2); color: var(--text); }
+    .toc-progress { margin-top: 22px; }
+    .progress-head { display: flex; justify-content: space-between; color: var(--muted); font-size: 9px; }
+    .progress-track { height: 4px; margin-top: 8px; overflow: hidden; border-radius: 99px; background: var(--line); }
+    .progress-track span { display: block; width: 0; height: 100%; background: var(--cyan); transition: width .2s ease; }
+
+    .content { min-width: 0; }
+    .section { scroll-margin-top: 90px; }
+    .section + .section { margin-top: 58px; }
+    .kicker { margin-bottom: 6px; color: var(--cyan); font-size: 9px; font-weight: 800; letter-spacing: .14em; }
+    h2 { margin: 0; font-size: clamp(26px, 4vw, 40px); letter-spacing: -.035em; }
+    .intro { max-width: 760px; margin: 9px 0 22px; color: var(--muted); font-size: 13px; }
+    .card { border-radius: var(--radius); padding: 22px; }
+    .check-grid, .asset-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 11px; }
+    .check {
+      display: flex;
+      gap: 10px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel-2);
+      padding: 14px;
+      font-size: 11px;
+    }
+    .check input { margin-top: 4px; accent-color: var(--cyan); }
+    .check span { display: block; color: var(--muted); font-size: 9px; }
+
+    .step { border-radius: 28px; overflow: hidden; }
+    .step-head { display: flex; align-items: center; gap: 15px; border-bottom: 1px solid var(--line); padding: 19px 22px; }
+    .step-number {
+      display: grid;
+      width: 42px;
+      height: 42px;
+      flex: 0 0 auto;
+      place-items: center;
+      border-radius: 14px;
+      background: var(--cyan);
+      color: var(--cyan-ink);
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .step-head h3 { margin: 0; font-size: 16px; }
+    .step-head p { margin: 2px 0 0; color: var(--muted); font-size: 10px; }
+    .done-button {
+      margin-left: auto;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 8px 11px;
+      font-size: 9px;
+    }
+    .done-button[aria-pressed="true"] { border-color: color-mix(in srgb, var(--green) 40%, var(--line)); color: var(--green); }
+    .step-body { padding: 22px; }
+    ol { margin: 0; padding-left: 21px; }
+    li { padding-left: 5px; color: var(--muted); font-size: 12px; }
+    li + li { margin-top: 10px; }
+    li strong { color: var(--text); }
+    .button-label { display: inline-block; border-radius: 7px; background: color-mix(in srgb, var(--cyan) 15%, transparent); color: var(--cyan); padding: 1px 6px; font-size: .92em; }
+    .flow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .flow span { border: 1px solid var(--line); border-radius: 9px; background: var(--panel-2); padding: 7px 10px; }
+    .flow i { align-self: center; color: var(--faint); font-style: normal; }
+    .callout { display: flex; gap: 11px; margin-top: 17px; border-radius: 14px; background: color-mix(in srgb, var(--amber) 9%, transparent); padding: 14px; }
+    .callout.ok { background: color-mix(in srgb, var(--green) 9%, transparent); }
+    .callout b { font-size: 11px; }
+    .callout p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
+    .callout-icon { color: var(--amber); font-weight: 900; }
+    .callout.ok .callout-icon { color: var(--green); }
+
+    .asset-grid { margin-top: 18px; grid-template-columns: repeat(3, 1fr); }
+    .asset-card { border: 1px solid var(--line); border-radius: 16px; background: var(--panel-2); padding: 15px; }
+    .asset-card b { font-size: 12px; }
+    .asset-card p { min-height: 42px; margin: 5px 0 11px; color: var(--muted); font-size: 9px; }
+    .asset-card span { display: block; border-top: 1px solid var(--line); padding-top: 9px; color: var(--cyan); font-size: 9px; }
+
+    .prompt-sample { margin-top: 18px; border: 1px solid var(--line); border-radius: 15px; background: #080a0d; padding: 15px; color: #cbd5df; white-space: pre-wrap; font: 10px/1.72 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .checkpoint { margin-top: 18px; border-left: 3px solid var(--cyan); border-radius: 0 14px 14px 0; background: var(--panel-2); padding: 13px 15px; }
+    .checkpoint b { font-size: 11px; }
+    .checkpoint p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
+
+    details { border-radius: 16px; padding: 14px 16px; }
+    details + details { margin-top: 9px; }
+    summary { cursor: pointer; font-size: 12px; font-weight: 700; }
+    details p { margin: 10px 0 0; color: var(--muted); font-size: 11px; }
+    .table-wrap { overflow-x: auto; border-radius: 18px; }
+    table { width: 100%; border-collapse: collapse; min-width: 690px; }
+    th, td { border-bottom: 1px solid var(--line); padding: 13px 14px; text-align: left; vertical-align: top; font-size: 10px; }
+    th { color: var(--faint); font-weight: 700; }
+    td { color: var(--muted); }
+    td strong { color: var(--text); }
+
+    .finish { border-radius: 24px; background: linear-gradient(135deg, color-mix(in srgb, var(--cyan) 18%, var(--panel)), var(--panel)); padding: 24px; }
+    .finish h3 { margin: 0; font-size: 20px; }
+    .finish p { margin: 7px 0 16px; color: var(--muted); font-size: 11px; }
+    footer { display: flex; justify-content: space-between; gap: 16px; border-top: 1px solid var(--line); padding: 22px 0 34px; color: var(--faint); font-size: 9px; }
+
+    @media (max-width: 820px) {
+      .hero-note, .pipeline, .asset-grid { grid-template-columns: 1fr; }
+      .layout { grid-template-columns: 1fr; }
+      .toc { position: static; display: none; }
+      .check-grid { grid-template-columns: 1fr; }
+      .step-head { align-items: flex-start; flex-wrap: wrap; }
+      .done-button { margin-left: 57px; }
+    }
+    @media print {
+      :root { color-scheme: light; --bg: #fff; --panel: #fff; --panel-2: #f7f7f7; --line: #ddd; --text: #111; --muted: #444; --faint: #666; --cyan: #087f86; }
+      body { background: #fff; }
+      .topbar, .toc, .done-button, .tools { display: none !important; }
+      .page { width: 100%; }
+      .layout { display: block; }
+      .section, .step, details, .asset-card { break-inside: avoid; box-shadow: none; }
+      details > * { display: block !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar" id="top">
+    <div class="topbar-inner">
+      <a class="brand" href="#overview">
+        <span class="brand-mark">EV</span>
+        <span><strong>Evan 视频复刻</strong><small>三步简单模式使用教程</small></span>
+      </a>
+      <div class="tools">
+        <button class="tool-button" id="themeButton" type="button">切换主题</button>
+        <button class="tool-button" id="printButton" type="button">打印 / 保存 PDF</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="hero section" id="overview">
+      <div class="eyebrow">当前版本 · 默认简单模式</div>
+      <h1>最少三步，完成<br><span>视频复刻</span></h1>
+      <p class="hero-lead">从顶部进入独立“短视频复刻”工作区，导入参考视频，最少准备一名人物的主参考图，就能直接生成成片。场景、道具、多角度设定图和首尾关键帧都可按需补强，不再阻断生成。</p>
+
+      <div class="hero-note">
+        <div class="status-card"><b><span class="dot"></span>未登录 Gemini 不影响应用运行</b><p>画布、项目、导入、自动拆镜和本地处理都可正常使用。</p></div>
+        <div class="status-card need"><b><span class="dot"></span>自动分析时才需要登录</b><p>走到视频理解阶段会提示打开正式版 Chrome 登录。</p></div>
+        <div class="status-card need"><b><span class="dot"></span>生成时使用对应平台</b><p>图片和视频只有提交生成时才使用相应平台额度。</p></div>
+      </div>
+
+      <div class="pipeline" aria-label="三步流程">
+        <span><b>01 导入并分析</b>本地导入、自动拆镜、自动理解</span>
+        <span><b>02 准备参考资产</b>人物主图为最低门槛</span>
+        <span><b>03 直接生成成片</b>镜头视频、时长校准、最终合成</span>
+      </div>
+    </section>
+
+    <div class="layout">
+      <aside class="toc">
+        <small>教程目录</small>
+        <nav>
+          <a href="#overview">快速了解</a>
+          <a href="#prepare">开始前准备</a>
+          <a href="#step1">1. 导入并分析</a>
+          <a href="#step2">2. 准备参考资产</a>
+          <a href="#step3">3. 生成成片</a>
+          <a href="#advanced">高级模式</a>
+          <a href="#recovery">失败恢复</a>
+          <a href="#faq">常见问题</a>
+        </nav>
+        <div class="toc-progress">
+          <div class="progress-head"><span>完成进度</span><strong id="progressText">0 / 3</strong></div>
+          <div class="progress-track"><span id="progressBar"></span></div>
+        </div>
+      </aside>
+
+      <article class="content">
+        <section class="section" id="prepare">
+          <div class="kicker">开始前准备</div>
+          <h2>准备项目和参考视频</h2>
+          <p class="intro">首次使用先检查四项。Chrome 是 AI 平台登录入口；Evan 不会读取你的日常 Chrome 用户资料。</p>
+          <div class="card check-grid">
+            <label class="check"><input type="checkbox"><b>保存当前项目<span>素材和中间结果需要写入项目目录。</span></b></label>
+            <label class="check"><input type="checkbox"><b>准备参考视频<span>建议 15–30 秒、3–8 个镜头、主体和动作清楚。</span></b></label>
+            <label class="check"><input type="checkbox"><b>安装正式版 Chrome<span>AI 登录只支持符合版本要求的正式版 Google Chrome。</span></b></label>
+            <label class="check"><input type="checkbox"><b>预留磁盘空间<span>原片、可选参考图、镜头视频和成片都会保存在本机。</span></b></label>
+          </div>
+        </section>
+
+        <section class="section" id="step1">
+          <div class="kicker">步骤 01</div>
+          <h2>导入并分析</h2>
+          <p class="intro">简单模式会把导入、自动拆镜和结构化分析连在一起。通常只需选择一次视频。</p>
+          <div class="step" data-step="1">
+            <div class="step-head">
+              <div class="step-number">01</div>
+              <div><h3>选择参考视频</h3><p>本地文件、分享链接或画布视频三选一</p></div>
+              <button class="done-button" type="button" aria-pressed="false">标记完成</button>
+            </div>
+            <div class="step-body">
+              <ol>
+                <li>点击应用顶部 <span class="button-label">短视频复刻</span>，再点左侧 <span class="button-label">新建复刻任务</span>；保持默认的 <span class="button-label">简单模式</span>。</li>
+                <li>拖入本地视频，或粘贴分享链接；已有画布视频也可右键选择 <span class="button-label">发送到短视频复刻</span>，应用会自动创建任务并切换过去。</li>
+                <li>Evan 自动复制素材、生成分析代理、拆分镜头并开始理解人物、场景、道具、动作与运镜。</li>
+                <li>如果出现“Gemini 尚未登录”，点击 <span class="button-label">打开 Gemini 登录</span>，在弹出的正式版 Chrome 中完成登录，然后返回重试。</li>
+              </ol>
+              <div class="flow"><span>导入素材</span><i>→</i><span>本地自动拆镜</span><i>→</i><span>Gemini 全片分析</span><i>→</i><span>进入资产步骤</span></div>
+              <div class="callout"><div class="callout-icon">!</div><div><b>没有登录不会卡住本地功能</b><p>未登录时，导入和拆镜已经完成，只是暂停在自动视频理解阶段；不会影响其他 Evan 项目。</p></div></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="step2">
+          <div class="kicker">步骤 02</div>
+          <h2>准备参考资产</h2>
+          <p class="intro">AI 会说明剧情需要怎样的人物、场景和道具，并给出可直接生成的中文提示词。有角色时，最少只需生成或上传一名人物的主参考图；场景和道具没有图片时会直接按提示词生成。</p>
+          <div class="step" data-step="2">
+            <div class="step-head">
+              <div class="step-number">02</div>
+              <div><h3>一张人物主图即可开始</h3><p>看文字方案 → 生成或上传人物主图 → 直接进入视频</p></div>
+              <button class="done-button" type="button" aria-pressed="false">标记完成</button>
+            </div>
+            <div class="step-body">
+              <ol>
+                <li>在“人物 / 场景 / 道具”间切换，先阅读卡片中的“AI 对剧情的资产要求”。这里展示的是文字方案，不是原视频截图。</li>
+                <li>卡片直接显示“可直接使用的中文生成提示词”；可一键复制，并可展开查看跨镜头不变形锚点。</li>
+                <li>接受 AI 方案时点 <span class="button-label">AI 生成主图</span>；“一致性图片模型”可选 Google Flow、即梦、Gemini Web 或 <span class="button-label">Codex CLI · ChatGPT 生图</span>。使用自己的产品、人物或场景时点 <span class="button-label">上传替换图</span>，也可点 <span class="button-label">从素材库选择</span>。</li>
+                <li>原片有人物时，至少为任意一名人物生成或上传一张主参考图。主图生成成功后就已达到最低门槛，不必等待全部资产。</li>
+                <li>场景和道具图片可全部跳过；每个镜头会自动使用卡片中的场景、材质、产品结构与不变形锚点提示词。需要更强控制时再生成或上传对应参考图。</li>
+                <li>面部多角度、全身设定板、场景布局图和产品结构图仍可点击 <span class="button-label">一键生成剩余 2 张</span> 补齐，但它们属于一致性增强，不会阻止视频生成。</li>
+                <li>达到最低门槛后，点 <span class="button-label">使用当前人物直接生成视频</span>。如果分析结果没有人物，则可直接点 <span class="button-label">按提示词直接生成视频</span>。</li>
+              </ol>
+
+              <div class="asset-grid">
+                <div class="asset-card"><b>人物：最低准备 1 张</b><p>人物主参考图用于锁定五官、脸部骨骼、发型、身材比例和身份记忆点。</p><span>正面身份照即可启动；多角度与全身板为推荐增强</span></div>
+                <div class="asset-card"><b>场景：可选</b><p>没有图片时，自动按空间拓扑、功能区、固定构件、材质和主光方向提示词生成。</p><span>可选补充：主场景图 → 多机位布局图 → 材质灯光图</span></div>
+                <div class="asset-card"><b>道具 / 产品：可选</b><p>没有图片时，自动按轮廓比例、组件、按钮接口、材质、颜色和标志位置提示词生成。</p><span>可选补充：正面结构图 → 多角度结构图 → 细节尺度图</span></div>
+              </div>
+
+              <pre class="prompt-sample">【资产主提示词】固定不可漂移的身份、结构、比例、材质与记忆点
+【本图任务】只定义当前设定图的角度、排版和展示内容
+【生成顺序】严格基于已确认的前序参考图继续生成
+【跨镜头锁定】在所有镜头中视为同一人物、同一空间或同一实体</pre>
+              <div class="callout ok"><div class="callout-icon">✓</div><div><b>一张图能启动，三张图能提质</b><p>人物主图已经足够进入视频生成；补齐多角度和全身设定板可以进一步减少复杂镜头中的变脸、变形和比例漂移，但不再是流程门槛。</p></div></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="step3">
+          <div class="kicker">步骤 03</div>
+          <h2>生成成片</h2>
+          <p class="intro">简单模式自动整理中文生成提示词，并在生成前直接提供视频模型、画幅、分辨率和候选数量设置。系统直接生成镜头视频，不再要求先生成或确认首帧、尾帧。</p>
+          <div class="step" data-step="3">
+            <div class="step-head">
+              <div class="step-number">03</div>
+              <div><h3>镜头视频 → 最终视频</h3><p>参考图与提示词自动组合，首尾帧可选</p></div>
+              <button class="done-button" type="button" aria-pressed="false">标记完成</button>
+            </div>
+            <div class="step-body">
+              <ol>
+                <li>先在始终可见的“生成参数”中选择 <span class="button-label">视频模型</span>、<span class="button-label">画幅</span>、<span class="button-label">分辨率</span> 和 <span class="button-label">每个镜头生成数量</span>。下方会显示预计生成任务总数。</li>
+                <li>数量默认为 1；可选 1–4 个候选。选择 2 个表示每个镜头各生成 2 条独立视频，平台会按实际任务分别计费。</li>
+                <li>点 <span class="button-label">生成全部未完成视频</span>。Evan 自动把已有的人物、场景、产品参考图与缺图资产的中文提示词组合到每个镜头。</li>
+                <li>没有任何资产图的无人镜头会直接走文生视频；只有一张人物图时，它会作为人物资产参考，而不会被误当成证件照式首帧。</li>
+                <li>每个镜头只有 1 个候选时，全部成功后自动进入成片；有多个候选时，先逐条预览并点击 <span class="button-label">选用这个候选</span>，每个镜头选定一条后进入合成。</li>
+                <li>如需精确控制某个镜头的开场或收尾构图，可在高级模式打开“关键帧”，选择性生成起始 / 中间 / 结束帧；不做也能继续。</li>
+                <li>点 <span class="button-label">生成最终视频</span>，等待本地渲染完成。最终画布会沿用所选画幅与分辨率。</li>
+                <li>完成后成片先保存在当前复刻任务中。需要继续在画布加工时，点击 <span class="button-label">发送到 AI 画布</span>，画布只创建或更新一个普通视频节点。</li>
+              </ol>
+              <div class="checkpoint"><b>推荐人工检查点：人物主参考图</b><p>先确认人物身份没有明显错误，再直接生成视频；只有对构图要求特别严格时才需要增加关键帧。</p></div>
+              <div class="flow"><span>自动中文提示词</span><i>→</i><span>自动选择可用资产图</span><i>→</i><span>镜头视频</span><i>→</i><span>时长校准</span><i>→</i><span>本地成片</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="advanced">
+          <div class="kicker">可选</div>
+          <h2>什么时候使用高级模式</h2>
+          <p class="intro">简单模式适合绝大多数复刻。只有需要精细控制时才切换高级模式，已有结果不会丢失。</p>
+          <details open><summary>高级模式中可以控制什么？</summary><p>可编辑镜头时间线和分析蓝图，检查四层提示词，按动作复杂度生成起始 / 中间 / 结束关键帧，选择视频模型、分辨率和声音，以及调整成片时间线、背景音乐、字幕、转场和连续性检查。</p></details>
+          <details><summary>简单模式自动隐藏了哪些内容？</summary><p>镜头拆分细节、原始提示词模板、当前资产解析提示词、模型优化提示词、逐镜参考图优先级和时长校准策略仍在内部工作；模型、画幅、分辨率、数量和声音这些常用参数会直接显示。</p></details>
+          <details><summary>切换高级模式会重新收费吗？</summary><p>仅查看或编辑不会。只有重新提交图片或视频生成时才会再次使用对应平台额度；本地拆镜、时长校准和最终渲染不使用 AI 生成额度。</p></details>
+        </section>
+
+        <section class="section" id="recovery">
+          <div class="kicker">失败恢复</div>
+          <h2>遇到问题时怎么处理</h2>
+          <p class="intro">项目会保存结构化数据、确认状态和中间结果。多数问题只需重试当前项。</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>提示</th><th>发生阶段</th><th>处理方法</th><th>是否影响其他功能</th></tr></thead>
+              <tbody>
+                <tr><td><strong>Gemini 尚未登录</strong></td><td>自动分析</td><td>打开 Gemini 登录，完成后重试未完成分析</td><td>不影响导入、拆镜和其他项目</td></tr>
+                <tr><td><strong>分享链接无法解析</strong></td><td>导入</td><td>粘贴完整分享文案；仍失败则下载后本地导入</td><td>不影响本地文件导入</td></tr>
+                <tr><td><strong>设定图生成失败</strong></td><td>锁定资产</td><td>只重试失败图片，或复制对应提示词到外部生成后上传</td><td>已完成图片会保留</td></tr>
+                <tr><td><strong>提交状态不确定</strong></td><td>图片 / 视频生成</td><td>先检查平台历史和项目素材，确认没有结果再单独重试</td><td>避免直接批量重试导致重复扣费</td></tr>
+                <tr><td><strong>视频时长校准失败</strong></td><td>镜头视频</td><td>直接重试本地校准，不需要重新生成视频</td><td>不会再次调用视频平台</td></tr>
+                <tr><td><strong>更换资产后结果待确认</strong></td><td>任意下游阶段</td><td>重新确认当前资产方案并生成受影响的视频；若使用了可选关键帧，再更新对应关键帧</td><td>这是防止旧资产混入的保护机制</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="section" id="faq">
+          <div class="kicker">常见问题</div>
+          <h2>登录、提示词和一致性</h2>
+          <p class="intro">几个最常见的问题集中说明。</p>
+          <details open><summary>目前没有登录 Gemini，会影响项目运行吗？</summary><p>不会。Evan 本身、画布、项目、本地视频导入、自动拆镜、素材编辑和本地渲染都能运行。只有简单模式自动进入视频理解阶段时需要登录 Gemini。</p></details>
+          <details><summary>为什么画布里找不到“视频复刻”节点？</summary><p>视频复刻已经是独立工作区。请点击顶部“短视频复刻”，同一项目可新建多个任务；切回“AI 画布”不会丢失任务进度。</p></details>
+          <details><summary>成片会自动出现在画布吗？</summary><p>不会。成片默认只保存在复刻任务中，避免打乱画布。只有点击“发送到 AI 画布”后，才创建或更新一个普通视频节点。</p></details>
+          <details><summary>人物、场景和道具提示词在哪里？</summary><p>步骤 2 的每张资产卡都会直接显示“AI 对剧情的资产要求”和中文生成提示词，不需要先看视频截图或展开隐藏面板。三张一致性设定图也各自保留对应提示词与复制按钮。</p></details>
+          <details><summary>场景、道具和三图参考包必须全部生成吗？</summary><p>不需要。有角色时，至少准备一名人物的主参考图即可；场景和道具可完全使用中文提示词，多角度或三图参考包只用于增强一致性。没有人物的原片还可以直接文生视频。</p></details>
+          <details><summary>不同镜头会不会乱用参考图？</summary><p>Evan 会结合景别、人物 / 产品交互、模型可接收的参考图数量来排序：人物近景优先正脸和多角度，人物全身优先全身板，产品特写优先产品三图，场景镜头优先主场景和布局图。</p></details>
+          <details><summary>原视频和日常 Chrome 用户资料会被修改吗？</summary><p>不会。参考视频会复制到当前项目；AI 浏览器使用独立共享资料目录，不读取或影响日常 Chrome 的用户资料。</p></details>
+
+          <div class="finish">
+            <h3>三步速查</h3>
+            <p>导入并分析 → 准备至少一名人物主图（场景道具可选）→ 直接生成镜头视频和成片。</p>
+            <button class="copy-button" id="copyButton" type="button">复制三步清单</button>
+          </div>
+        </section>
+      </article>
+    </div>
+
+    <footer><span>Evan 视频复刻使用教程 · 对应当前实现 · 2026-08-02</span><a href="#top">返回顶部 ↑</a></footer>
+  </main>
+
+  <script>
+    (() => {
+      const root = document.documentElement;
+      const themeButton = document.getElementById('themeButton');
+      const printButton = document.getElementById('printButton');
+      const doneButtons = [...document.querySelectorAll('.done-button')];
+      const progressText = document.getElementById('progressText');
+      const progressBar = document.getElementById('progressBar');
+      const tocLinks = [...document.querySelectorAll('.toc a')];
+      const sections = [...document.querySelectorAll('.section')];
+
+      const read = (key) => {
+        try { return localStorage.getItem(key); } catch (_) { return null; }
+      };
+      const write = (key, value) => {
+        try { localStorage.setItem(key, value); } catch (_) { /* 本地文件隐私模式 */ }
+      };
+
+      root.dataset.theme = read('evan-remix-guide-theme')
+        || (window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      themeButton.addEventListener('click', () => {
+        root.dataset.theme = root.dataset.theme === 'light' ? 'dark' : 'light';
+        write('evan-remix-guide-theme', root.dataset.theme);
+      });
+      printButton.addEventListener('click', () => window.print());
+
+      let completed = [];
+      try {
+        completed = JSON.parse(read('evan-remix-simple-guide-progress') || '[]');
+        if (!Array.isArray(completed)) completed = [];
+      } catch (_) { completed = []; }
+
+      const renderProgress = () => {
+        doneButtons.forEach((button, index) => {
+          const key = String(index + 1);
+          const done = completed.includes(key);
+          button.setAttribute('aria-pressed', String(done));
+          button.textContent = done ? '已完成 ✓' : '标记完成';
+        });
+        progressText.textContent = `${completed.length} / ${doneButtons.length}`;
+        progressBar.style.width = `${doneButtons.length ? completed.length / doneButtons.length * 100 : 0}%`;
+      };
+      doneButtons.forEach((button, index) => button.addEventListener('click', () => {
+        const key = String(index + 1);
+        completed = completed.includes(key)
+          ? completed.filter(item => item !== key)
+          : [...completed, key];
+        write('evan-remix-simple-guide-progress', JSON.stringify(completed));
+        renderProgress();
+      }));
+      renderProgress();
+
+      const checklist = [
+        '1. 导入参考视频；自动拆镜并完成 Gemini 分析',
+        '2. 最少准备一名人物主参考图；场景、道具和三图包可选',
+        '3. 不做首尾帧也可直接生成镜头视频和最终成片'
+      ].join('\n');
+      document.getElementById('copyButton').addEventListener('click', async (event) => {
+        try { await navigator.clipboard.writeText(checklist); }
+        catch (_) {
+          const area = document.createElement('textarea');
+          area.value = checklist;
+          document.body.appendChild(area);
+          area.select();
+          document.execCommand('copy');
+          area.remove();
+        }
+        event.currentTarget.textContent = '已复制 ✓';
+        window.setTimeout(() => { event.currentTarget.textContent = '复制三步清单'; }, 1600);
+      });
+
+      if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver((entries) => {
+          const visible = entries.filter(entry => entry.isIntersecting)
+            .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+          if (!visible) return;
+          tocLinks.forEach(link => link.classList.toggle(
+            'active', link.getAttribute('href') === `#${visible.target.id}`
+          ));
+        }, { rootMargin: '-18% 0px -66% 0px', threshold: [0, .1, .3] });
+        sections.forEach(section => observer.observe(section));
+      }
+    })();
+  </script>
+</body>
+</html>

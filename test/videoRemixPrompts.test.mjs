@@ -10,11 +10,13 @@ import {
   confirmVideoRemixPrompts,
   createVideoRemixState,
   getVideoRemixPromptReadiness,
+  prepareVideoRemixSimplePrompts,
   replaceVideoRemixAsset,
   resolveVideoRemixPromptTemplate,
   setVideoRemixPropRemoved,
   setVideoRemixPromptOptimizationError,
   setVideoRemixShotCharacterLook,
+  setVideoRemixWorkspaceMode,
   updateVideoRemixPromptLayer,
   validateVideoRemixPromptTemplate,
 } from '../shared/videoRemix.js';
@@ -121,19 +123,19 @@ function promptFixture() {
             name: '日常装',
             description: '白色衬衫与深色长裤',
             referenceImages: ['/library/char-look-1.png'],
-            source: 'analysis',
+            source: 'library',
           },
           {
             id: 'LOOK_02',
             name: '晚宴装',
             description: '黑色礼服与银色耳环',
             referenceImages: ['/library/char-look-2.png'],
-            source: 'analysis',
+            source: 'library',
           },
         ],
         referenceImages: ['/library/char.png'],
         appearsInShots: [shot.shotId],
-        source: 'analysis',
+        source: 'library',
       }],
       scenes: [{
         id: 'SCENE_01',
@@ -147,7 +149,7 @@ function promptFixture() {
         }],
         referenceImages: ['/library/scene.png'],
         appearsInShots: [shot.shotId],
-        source: 'analysis',
+        source: 'library',
       }],
       props: [{
         id: 'PROP_01',
@@ -156,7 +158,7 @@ function promptFixture() {
         description: '白色陶瓷杯',
         referenceImages: ['/library/prop.png'],
         appearsInShots: [shot.shotId],
-        source: 'analysis',
+        source: 'library',
       }],
     },
     keyframes: [{ id: 'stale', shotId: shot.shotId, position: 'start', status: 'confirmed' }],
@@ -217,6 +219,26 @@ test('Resolved Prompt 按目标模型解析当前资产与单 Shot Look', () => 
     { targetModel: 'google-flow-omni-flash' }
   );
   assert.match(changed, /晚宴装：黑色礼服与银色耳环/);
+});
+
+test('旧分析截图不会被解析为即梦资产引用标签', () => {
+  const state = promptFixture();
+  state.assets.characters[0].source = 'analysis';
+  state.assets.characters[0].looks.forEach(look => {
+    look.source = 'analysis';
+  });
+  state.assets.scenes[0].source = 'analysis';
+  state.assets.props[0].source = 'analysis';
+  const shotId = state.shots[0].shotId;
+  const raw = buildVideoRemixRawPrompt(state, shotId);
+  const resolved = resolveVideoRemixPromptTemplate(state, shotId, raw, {
+    targetModel: 'jimeng-seedance-2-0',
+  });
+
+  assert.doesNotMatch(resolved, /@CHAR_01|@SCENE_01|@PROP_01/);
+  assert.match(resolved, /原女主（资产 CHAR_01/);
+  assert.match(resolved, /酒店大堂（资产 SCENE_01/);
+  assert.match(resolved, /咖啡杯（资产 PROP_01/);
 });
 
 test('优化模板必须完整保留资产占位符', () => {
@@ -394,4 +416,21 @@ test('手动修改 Raw 会重新解析并清空旧视频优化结果', () => {
   assert.equal(state.prompts[shotId].optimizedPrompt, '');
   assert.equal(state.prompts[shotId].rawSource, 'user');
   assert.equal(state.promptReview.confirmed, false);
+});
+
+test('新工作流默认使用简单模式，并自动准备和确认中文生成提示词', () => {
+  const initial = promptFixture();
+  assert.equal(initial.workspaceMode, 'simple');
+  assert.equal(setVideoRemixWorkspaceMode(initial, 'advanced').workspaceMode, 'advanced');
+
+  const state = prepareVideoRemixSimplePrompts(
+    initial,
+    'google-flow-omni-flash'
+  );
+  const shotId = state.shots[0].shotId;
+  assert.equal(state.promptReview.confirmed, true);
+  assert.equal(state.promptReview.targetModel, 'google-flow-omni-flash');
+  assert.equal(state.prompts[shotId].optimizationStatus, 'ready');
+  assert.match(state.prompts[shotId].optimizedPrompt, /人物身份锁定|原女主/);
+  assert.match(state.prompts[shotId].imagePrompt, /关键帧|静态画面/);
 });

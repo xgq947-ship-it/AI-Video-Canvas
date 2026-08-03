@@ -241,11 +241,49 @@ export const getCodexImageJob = async (jobId: string): Promise<CodexImageJob> =>
   return response.json();
 };
 
+const waitForCodexImageResult = async (
+  initialJob: CodexImageJob,
+  timeoutMs = 60 * 60 * 1000
+): Promise<string> => {
+  const startedAt = Date.now();
+  let job = initialJob;
+  while (Date.now() - startedAt < timeoutMs) {
+    if (job.status === 'completed' && job.resultUrl) return job.resultUrl;
+    if (job.status === 'failed') {
+      throw new Error(job.error || 'Codex CLI 生图任务失败');
+    }
+    await new Promise(resolve => globalThis.setTimeout(resolve, 1_500));
+    job = await getCodexImageJob(job.id);
+  }
+  throw new Error('Codex CLI 生图等待超时，任务可能仍在后台；请先到“设置 → Codex 服务”检查状态，不要重复提交');
+};
+
 /**
  * Generates an image by calling the backend API
  */
 export const generateImageBatch = async (params: GenerateImageParams): Promise<string[]> => {
   try {
+    if (params.imageModel === 'codex-imagegen') {
+      const requestedCount = Math.max(1, Number(params.count) || 1);
+      if (requestedCount !== 1) {
+        throw new Error('Codex CLI 生图当前每次生成 1 张图片');
+      }
+      if (!params.nodeId) throw new Error('Codex CLI 生图缺少节点 ID');
+      const referenceImages = params.imageBase64
+        ? (Array.isArray(params.imageBase64) ? params.imageBase64 : [params.imageBase64])
+            .filter(Boolean)
+        : undefined;
+      const job = await queueCodexImage({
+        workflowId: params.workflowId,
+        nodeId: params.nodeId,
+        prompt: params.prompt,
+        aspectRatio: params.aspectRatio || 'Auto',
+        resolution: params.resolution || 'Auto',
+        referenceImages,
+      });
+      return [await waitForCodexImageResult(job)];
+    }
+
     const response = await fetch('/api/generate-image', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

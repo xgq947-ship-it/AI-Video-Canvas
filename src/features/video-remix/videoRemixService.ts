@@ -440,7 +440,7 @@ export async function optimizeVideoRemixPrompt({
   };
   if (!response.ok || !payload.optimizedPrompt) {
     throw new VideoRemixRequestError(
-      payload.error || `Prompt 优化失败（HTTP ${response.status}）`,
+      payload.error || `提示词优化失败（HTTP ${response.status}）`,
       {
         code: payload.code || 'PROMPT_OPTIMIZATION_FAILED',
         retryable: payload.retryable ?? response.status >= 500,
@@ -656,7 +656,7 @@ export async function uploadVideoRemixBgm({
     });
   }
   if (file.size > 100 * 1024 * 1024) {
-    throw new VideoRemixRequestError('BGM 文件不能超过 100MB', {
+    throw new VideoRemixRequestError('背景音乐文件不能超过 100MB', {
       code: 'AUDIO_TOO_LARGE',
       retryable: false,
     });
@@ -678,7 +678,7 @@ export async function uploadVideoRemixBgm({
   );
   if (!response.ok || !payload.url) {
     throw new VideoRemixRequestError(
-      payload.error || `BGM 上传失败（HTTP ${response.status}）`,
+      payload.error || `背景音乐上传失败（HTTP ${response.status}）`,
       payload
     );
   }

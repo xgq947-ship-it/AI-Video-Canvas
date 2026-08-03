@@ -401,9 +401,22 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   if (collapsed) {
     return (
       <aside className={`fixed inset-y-0 left-0 z-30 flex w-16 flex-col items-center border-r ${surface}`}>
-        <button className={`mt-3 rounded-xl p-2.5 ${hover}`} onClick={() => setCollapsed(false)} title="展开侧边栏">
-          <img src="/TwitCanva-logo.png" alt="Evan" className="h-7 w-7 rounded-md object-contain" />
-        </button>
+        <div className={`flex h-14 w-full shrink-0 items-center justify-center border-b ${
+          isDark ? 'border-white/[0.07] bg-[#111214]' : 'border-neutral-200 bg-white'
+        }`}>
+          <button
+            type="button"
+            className={`flex h-10 w-10 items-center justify-center rounded-xl border transition-all ${
+              isDark
+                ? 'border-white/10 bg-black/20 hover:border-white/15 hover:bg-white/[0.07]'
+                : 'border-neutral-200 bg-white hover:bg-neutral-100'
+            }`}
+            onClick={() => setCollapsed(false)}
+            title="展开侧边栏"
+          >
+            <img src="/TwitCanva-logo.png" alt="Evan" className="h-7 w-7 rounded-lg object-contain" />
+          </button>
+        </div>
         <div className="mt-auto mb-5 flex flex-col gap-2">
           <SidebarIcon title="工作流" onClick={onOpenWorkflows}><Grid2X2 size={20} /></SidebarIcon>
           <SidebarIcon title="生成记录" onClick={onOpenHistory}><LocateFixed size={20} /></SidebarIcon>
@@ -416,16 +429,40 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
 
   return (
     <aside className={`fixed inset-y-0 left-0 z-30 flex w-[260px] flex-col border-r shadow-2xl ${surface}`}>
-      <div className="flex shrink-0 items-center border-b border-inherit px-3 py-3">
-        <div className="flex gap-2">
-          <TabButton active={activeTab === 'canvas'} onClick={() => { setActiveTab('canvas'); setQuery(''); }}>画布</TabButton>
-          <TabButton active={activeTab === 'assets'} onClick={() => { setActiveTab('assets'); setQuery(''); }}>资产</TabButton>
+      <div className={`flex h-14 shrink-0 items-center gap-2 border-b px-3 ${
+        isDark ? 'border-white/[0.07] bg-[#111214]' : 'border-neutral-200 bg-white'
+      }`}>
+        <img
+          src="/TwitCanva-logo.png"
+          alt="Evan"
+          title="Evan AI Video Canvas"
+          className={`h-8 w-8 shrink-0 rounded-[10px] border object-contain shadow-sm ${
+            isDark ? 'border-white/10 bg-black/20' : 'border-neutral-200 bg-white'
+          }`}
+        />
+        <div className={`flex min-w-0 flex-1 items-center rounded-xl border p-1 ${
+          isDark ? 'border-white/10 bg-black/25 shadow-inner' : 'border-neutral-200 bg-neutral-100'
+        }`}>
+          <TabButton active={activeTab === 'canvas'} dark={isDark} onClick={() => { setActiveTab('canvas'); setQuery(''); }}>
+            <Grid2X2 size={13} />
+            画布
+          </TabButton>
+          <TabButton active={activeTab === 'assets'} dark={isDark} onClick={() => { setActiveTab('assets'); setQuery(''); }}>
+            <Boxes size={13} />
+            资产
+          </TabButton>
         </div>
-        <div ref={menuRef} className="relative ml-auto">
+        <div ref={menuRef} className="relative shrink-0">
           <button
             type="button"
             onClick={() => setProjectMenuOpen(value => !value)}
-            className={`rounded-lg p-2 transition-colors ${projectMenuOpen ? 'bg-[#2b2b2b] text-white' : `${muted} ${hover}`}`}
+            className={`flex h-10 w-10 items-center justify-center rounded-xl border transition-all ${
+              projectMenuOpen
+                ? isDark ? 'border-white/15 bg-white/10 text-white' : 'border-neutral-300 bg-neutral-100 text-neutral-900'
+                : isDark
+                  ? 'border-white/10 bg-black/20 text-neutral-400 hover:border-white/15 hover:bg-white/[0.07] hover:text-white'
+                  : 'border-neutral-200 bg-white text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900'
+            }`}
             title="项目菜单"
             aria-label="项目菜单"
             aria-expanded={projectMenuOpen}
@@ -433,18 +470,20 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
             <BookOpen size={20} />
           </button>
           {projectMenuOpen && (
-            <div className="absolute right-0 top-11 z-50 w-[228px] overflow-hidden rounded-2xl border border-[#404040] bg-[#262626] p-1.5 shadow-2xl">
-              <ProjectMenuButton onClick={() => setProjectMenuOpen(false)}>回到画布</ProjectMenuButton>
-              <ProjectMenuButton onClick={(e) => { setProjectMenuOpen(false); onOpenWorkflows(e); }}>全部项目</ProjectMenuButton>
-              <ProjectMenuButton disabled={!workflowId || revealingProject} onClick={() => void handleRevealProject()}>
+            <div className={`absolute right-0 top-12 z-50 w-[228px] overflow-hidden rounded-2xl border p-1.5 shadow-2xl ${
+              isDark ? 'border-white/10 bg-[#202123]' : 'border-neutral-200 bg-white'
+            }`}>
+              <ProjectMenuButton dark={isDark} onClick={() => setProjectMenuOpen(false)}>回到画布</ProjectMenuButton>
+              <ProjectMenuButton dark={isDark} onClick={(e) => { setProjectMenuOpen(false); onOpenWorkflows(e); }}>全部项目</ProjectMenuButton>
+              <ProjectMenuButton dark={isDark} disabled={!workflowId || revealingProject} onClick={() => void handleRevealProject()}>
                 <span className="flex items-center gap-2">
                   {revealingProject ? <Loader2 size={15} className="animate-spin" /> : <FolderOpen size={15} />}
                   {revealProjectLabel}
                 </span>
               </ProjectMenuButton>
-              <div className="my-1.5 border-t border-[#3c3c3c]" />
-              <ProjectMenuButton onClick={() => { setProjectMenuOpen(false); onCreateProject(); }}>创建新项目</ProjectMenuButton>
-              <ProjectMenuButton danger disabled={!workflowId} onClick={() => { setProjectMenuOpen(false); onDeleteProject(); }}>删除项目</ProjectMenuButton>
+              <div className={`my-1.5 border-t ${isDark ? 'border-white/10' : 'border-neutral-200'}`} />
+              <ProjectMenuButton dark={isDark} onClick={() => { setProjectMenuOpen(false); onCreateProject(); }}>创建新项目</ProjectMenuButton>
+              <ProjectMenuButton dark={isDark} danger disabled={!workflowId} onClick={() => { setProjectMenuOpen(false); onDeleteProject(); }}>删除项目</ProjectMenuButton>
             </div>
           )}
         </div>
@@ -895,16 +934,31 @@ const NodeRow = ({
   );
 };
 
-const TabButton = ({ active, children, onClick }: { active: boolean; children: React.ReactNode; onClick: () => void }) => (
-  <button onClick={onClick} className={`rounded-xl px-3.5 py-1.5 text-sm transition-colors ${active ? 'bg-[#3a3a3a] text-white' : 'text-neutral-400 hover:text-white'}`}>{children}</button>
+const TabButton = ({ active, dark, children, onClick }: { active: boolean; dark: boolean; children: React.ReactNode; onClick: () => void }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    aria-pressed={active}
+    className={`flex h-8 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-medium transition-all ${
+      active
+        ? dark ? 'bg-white/12 text-white shadow-sm' : 'bg-white text-neutral-900 shadow-sm'
+        : dark ? 'text-neutral-500 hover:bg-white/5 hover:text-neutral-200' : 'text-neutral-500 hover:bg-white/70 hover:text-neutral-900'
+    }`}
+  >
+    {children}
+  </button>
 );
 
 const SidebarIcon = ({ title, children, onClick }: { title: string; children: React.ReactNode; onClick: (e: React.MouseEvent) => void }) => (
   <button onClick={onClick} className="rounded-lg p-2 text-neutral-300 transition-colors hover:bg-[#2b2b2b] hover:text-white" title={title}>{children}</button>
 );
 
-const ProjectMenuButton = ({ children, onClick, danger = false, disabled = false }: { children: React.ReactNode; onClick: (e: React.MouseEvent) => void; danger?: boolean; disabled?: boolean }) => (
-  <button disabled={disabled} onClick={onClick} className={`w-full rounded-xl px-4 py-3 text-left text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${danger ? 'text-red-300 hover:bg-red-500/10' : 'text-white hover:bg-[#333]'}`}>{children}</button>
+const ProjectMenuButton = ({ children, onClick, dark, danger = false, disabled = false }: { children: React.ReactNode; onClick: (e: React.MouseEvent) => void; dark: boolean; danger?: boolean; disabled?: boolean }) => (
+  <button disabled={disabled} onClick={onClick} className={`w-full rounded-xl px-4 py-3 text-left text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
+    danger
+      ? dark ? 'text-red-300 hover:bg-red-500/10' : 'text-red-600 hover:bg-red-50'
+      : dark ? 'text-white hover:bg-white/[0.07]' : 'text-neutral-700 hover:bg-neutral-100'
+  }`}>{children}</button>
 );
 
 const SearchBox = ({ value, onChange, placeholder = '搜索', compact = false, onCompactClose }: { value: string; onChange: (value: string) => void; placeholder?: string; compact?: boolean; onCompactClose?: () => void }) => (

@@ -7,6 +7,10 @@ Phase 5 把 Gemini 的结构化分析结果转换为可替换、可确认的项�
 
 分析结果保留为资产基线，用户选择的内容写入可选 `replacement`：
 
+资产基线只保存 Gemini 根据剧情产出的中文角色/美术需求、主提示词和冻结锚点。
+分镜分析帧属于镜头构图证据，不写入人物、场景、道具或 Character Look 的
+`referenceImages`，也不会播种一致性参考包。
+
 ```ts
 interface VideoRemixAssetReplacement {
   source: 'analysis' | 'generated' | 'upload' | 'library'
@@ -53,10 +57,11 @@ Prop 保留 `hero | interactive | background` 分类。全局替换仍保留动�
 
 ## 资产来源
 
-资产页支持四种来源：
+资产页支持以下来源：
 
-- 沿用 Gemini 反推的截图与描述
+- 沿用 Gemini 根据剧情给出的中文资产方案与提示词（不包含分镜截图）
 - 用户明确点击后，通过现有 Flow、即梦或 Gemini Web 图片 Provider 重新设计
+- 使用用户单独安装并登录的 Codex CLI，通过 Evan 的持久化生图队列生成参考图
 - 上传本地图片到当前项目
 - 从现有角色库、场景库或道具库选择
 
@@ -69,8 +74,10 @@ AI 重新设计不会自动运行。只有用户点击“生成并设为当前�
 
 ## 确认与派生结果失效
 
-所有 Shot 完成结构化分析后，用户可以确认资产，状态进入 `assets_ready`。任何人物、
-Look、Scene、Prop 或单 Shot Look 修改都会：
+所有 Shot 完成结构化分析后，简单模式使用最小资产门槛：存在人物时，任意一名人物拥有
+一张由用户上传、选择或真实生成的主参考图即可确认；没有人物时可以直接使用提示词。
+Scene、Prop 和完整三图一致性包都属于可选增强。确认后状态进入 `assets_ready`。
+任何人物、Look、Scene、Prop 或单 Shot Look 修改都会：
 
 - 取消资产确认，并把后续阶段退回 `analysis_ready`
 - 清空 Raw/Resolved/Optimized Prompt

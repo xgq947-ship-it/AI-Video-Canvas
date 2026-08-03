@@ -121,5 +121,9 @@ export const runGeminiWebStructuredMediaTask = options => runWithExecutionMode({
     // happens in the same conversation above this layer; replaying this HTTP
     // closure would upload the complete proxy a second time.
     httpAttempts: 1,
-    http: () => runGeminiMediaTextTaskHttp(options)
+    http: () => runGeminiMediaTextTaskHttp({
+        ...options,
+        recoverRemoteResult: true,
+        recoveryTimeoutSeconds: 3 * 60,
+    })
 });

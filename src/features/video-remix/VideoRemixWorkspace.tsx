@@ -30,6 +30,8 @@ import {
 } from 'lucide-react';
 import {
   VIDEO_REMIX_WORKSPACE_TABS,
+  VIDEO_REMIX_STAGE_LABELS,
+  VIDEO_REMIX_MOTION_LABELS,
   applyVideoRemixGlobalAnalysis,
   applyVideoRemixShotAnalysis,
   beginVideoRemixPreprocessing,
@@ -44,6 +46,7 @@ import {
   setVideoRemixPreprocessingError,
   setVideoRemixShotAnalysisError,
   setVideoRemixSourceError,
+  setVideoRemixWorkspaceMode,
   summarizeVideoRemixState,
   workspaceTabForStage,
   type EditableField,
@@ -67,6 +70,7 @@ import { VideoRemixFinalWorkspace } from './VideoRemixFinalWorkspace';
 import { VideoRemixKeyframesWorkspace } from './VideoRemixKeyframesWorkspace';
 import { VideoRemixPromptsWorkspace } from './VideoRemixPromptsWorkspace';
 import { VideoRemixVideosWorkspace } from './VideoRemixVideosWorkspace';
+import { VideoRemixSimpleGenerationWorkspace } from './VideoRemixSimpleGenerationWorkspace';
 
 interface VideoRemixWorkspaceProps {
   node: NodeData;
@@ -82,7 +86,17 @@ interface VideoRemixWorkspaceProps {
     fps: number;
     aspectRatio: string;
   }) => void;
-  onClose: () => void;
+  onSendFinalToCanvas?: (output: {
+    nodeId: string;
+    url: string;
+    duration: number;
+    width: number;
+    height: number;
+    fps: number;
+    aspectRatio: string;
+  }) => void;
+  embedded?: boolean;
+  onClose?: () => void;
 }
 
 const TAB_ICONS: Record<VideoRemixWorkspaceTab, React.ReactNode> = {
@@ -95,12 +109,37 @@ const TAB_ICONS: Record<VideoRemixWorkspaceTab, React.ReactNode> = {
   final: <Sparkles size={17} />,
 };
 
+type SimpleStep = 'setup' | 'assets' | 'generate';
+
+const SIMPLE_STEPS: ReadonlyArray<{
+  id: SimpleStep;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+}> = [
+  { id: 'setup', label: '导入并分析', description: '自动拆镜与理解视频', icon: <ScanSearch size={17} /> },
+  { id: 'assets', label: '准备参考资产', description: '人物必选其一，场景道具可选', icon: <Boxes size={17} /> },
+  { id: 'generate', label: '直接生成成片', description: '首尾帧均为可选增强', icon: <Sparkles size={17} /> },
+];
+
+function simpleStepForState(state: ReturnType<typeof createVideoRemixState>): SimpleStep {
+  if (state.assetReview?.confirmed) return 'generate';
+  if (
+    state.story
+    && state.shots.length > 0
+    && state.shots.every(shot => shot.analysisStatus === 'ready')
+  ) return 'assets';
+  return 'setup';
+}
+
 export const VideoRemixWorkspace: React.FC<VideoRemixWorkspaceProps> = ({
   node,
   workflowId,
   canvasTheme = 'dark',
   onUpdateNode,
   onFinalOutput,
+  onSendFinalToCanvas,
+  embedded = false,
   onClose,
 }) => {
   // Keep schema-v1 projects created before later phases readable: the shared
@@ -112,25 +151,65 @@ export const VideoRemixWorkspace: React.FC<VideoRemixWorkspaceProps> = ({
   const [activeTab, setActiveTab] = React.useState<VideoRemixWorkspaceTab>(
     workspaceTabForStage(state.stage)
   );
+  const [activeSimpleStep, setActiveSimpleStep] = React.useState<SimpleStep>(
+    simpleStepForState(state)
+  );
+  const recommendedSimpleStep = simpleStepForState(state);
+  const previousRecommendedSimpleStepRef = React.useRef(recommendedSimpleStep);
   const summary = summarizeVideoRemixState(state);
   const isDark = canvasTheme === 'dark';
+  const simpleMode = state.workspaceMode !== 'advanced';
+  const navigationItems: Array<{
+    id: SimpleStep | VideoRemixWorkspaceTab;
+    label: string;
+    icon: React.ReactNode;
+  }> = simpleMode
+    ? SIMPLE_STEPS.map(item => ({ id: item.id, label: item.label, icon: item.icon }))
+    : VIDEO_REMIX_WORKSPACE_TABS.map(item => ({
+      id: item.id,
+      label: item.label,
+      icon: TAB_ICONS[item.id],
+    }));
 
   React.useEffect(() => {
+    if (!simpleMode) return;
+    const previous = previousRecommendedSimpleStepRef.current;
+    if (previous === recommendedSimpleStep) return;
+    previousRecommendedSimpleStepRef.current = recommendedSimpleStep;
+    setActiveSimpleStep(current => {
+      const order: SimpleStep[] = ['setup', 'assets', 'generate'];
+      if (order.indexOf(recommendedSimpleStep) < order.indexOf(previous)) {
+        return recommendedSimpleStep;
+      }
+      return order.indexOf(recommendedSimpleStep) > order.indexOf(current)
+        ? recommendedSimpleStep
+        : current;
+    });
+  }, [recommendedSimpleStep, simpleMode]);
+
+  const persistMode = (mode: 'simple' | 'advanced') => {
+    onUpdateNode(node.id, {
+      videoRemix: setVideoRemixWorkspaceMode(state, mode),
+    });
+  };
+
+  React.useEffect(() => {
+    if (!onClose || embedded) return undefined;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  }, [embedded, onClose]);
 
   return (
     <div
-      className={`fixed inset-0 z-[300] flex ${isDark ? 'bg-[#090a0b] text-white' : 'bg-[#f4f4f5] text-neutral-900'}`}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Video Remix 工作台"
+      className={`${embedded ? 'relative h-full w-full' : 'fixed inset-0 z-[300]'} flex ${isDark ? 'bg-[#090a0b] text-white' : 'bg-[#f4f4f5] text-neutral-900'}`}
+      role={embedded ? 'region' : 'dialog'}
+      aria-modal={embedded ? undefined : true}
+      aria-label="视频复刻工作台"
     >
-      <aside className={`flex w-[232px] shrink-0 flex-col border-r px-3 py-4 ${
+      {!embedded && <aside className={`flex w-[232px] shrink-0 flex-col border-r px-3 py-4 ${
         isDark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
       }`}>
         <div className="flex items-center gap-3 px-3 py-2">
@@ -138,29 +217,56 @@ export const VideoRemixWorkspace: React.FC<VideoRemixWorkspaceProps> = ({
             <Film size={19} />
           </div>
           <div>
-            <div className="text-sm font-semibold">Video Remix</div>
-            <div className={`text-[10px] ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>高复刻工作台</div>
+            <div className="text-sm font-semibold">视频复刻</div>
+            <div className={`text-[10px] ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>一致性生成工作台</div>
           </div>
         </div>
 
         <nav className="mt-5 flex flex-col gap-1">
-          {VIDEO_REMIX_WORKSPACE_TABS.map(tab => (
+          {navigationItems.map(item => {
+            const active = simpleMode
+              ? activeSimpleStep === item.id
+              : activeTab === item.id;
+            return (
             <button
-              key={tab.id}
+              key={item.id}
               type="button"
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => {
+                if (simpleMode) setActiveSimpleStep(item.id as SimpleStep);
+                else setActiveTab(item.id as VideoRemixWorkspaceTab);
+              }}
               className={`flex h-10 items-center gap-3 rounded-xl px-3 text-left text-sm transition-colors ${
-                activeTab === tab.id
+                active
                   ? isDark ? 'bg-white/10 text-white' : 'bg-neutral-900 text-white'
                   : isDark ? 'text-neutral-400 hover:bg-white/5 hover:text-white' : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900'
               }`}
             >
-              {TAB_ICONS[tab.id]}
-              <span className="flex-1">{tab.label}</span>
-              {activeTab === tab.id && <ChevronRight size={14} />}
+              {item.icon}
+              <span className="flex-1">{item.label}</span>
+              {active && <ChevronRight size={14} />}
+            </button>
+          );})}
+        </nav>
+
+        <div className={`mt-4 flex rounded-xl p-1 ${isDark ? 'bg-black/35' : 'bg-neutral-100'}`}>
+          {([
+            ['simple', '简单模式'],
+            ['advanced', '高级模式'],
+          ] as const).map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => persistMode(mode)}
+              className={`flex-1 rounded-lg px-2 py-2 text-[10px] ${
+                state.workspaceMode === mode
+                  ? isDark ? 'bg-white text-neutral-950' : 'bg-white text-neutral-900 shadow-sm'
+                  : isDark ? 'text-neutral-500' : 'text-neutral-500'
+              }`}
+            >
+              {label}
             </button>
           ))}
-        </nav>
+        </div>
 
         <div className={`mt-auto rounded-2xl border p-3 ${
           isDark ? 'border-white/8 bg-white/[0.035]' : 'border-neutral-200 bg-neutral-50'
@@ -173,14 +279,14 @@ export const VideoRemixWorkspace: React.FC<VideoRemixWorkspaceProps> = ({
             剧情、动作、构图、运镜与时长默认锁定。人物、场景、道具和风格可替换。
           </div>
         </div>
-      </aside>
+      </aside>}
 
-      <main className="min-w-0 flex-1 overflow-hidden">
-        <header className={`flex h-16 items-center justify-between border-b px-7 ${
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <header className={`flex h-16 shrink-0 items-center justify-between border-b px-7 ${
           isDark ? 'border-white/8 bg-[#111214]/90' : 'border-neutral-200 bg-white/90'
         }`}>
           <div>
-            <div className="text-sm font-semibold">{node.title || 'Video Remix'}</div>
+            <div className="text-sm font-semibold">{node.title || '视频复刻'}</div>
             <div className={`mt-0.5 text-[11px] ${isDark ? 'text-neutral-500' : 'text-neutral-400'}`}>
               所有中间状态随当前项目保存，可关闭后继续
             </div>
@@ -189,38 +295,254 @@ export const VideoRemixWorkspace: React.FC<VideoRemixWorkspaceProps> = ({
             <span className={`rounded-full px-3 py-1 text-[11px] ${
               isDark ? 'bg-cyan-400/10 text-cyan-300' : 'bg-cyan-50 text-cyan-700'
             }`}>
-              阶段式自动化
+              {simpleMode ? '三步极简流程' : '高级控制'}
             </span>
-            <button
+            {embedded && (
+              <div className={`flex rounded-xl p-1 ${isDark ? 'bg-black/35' : 'bg-neutral-100'}`}>
+                {([
+                  ['simple', '简单模式'],
+                  ['advanced', '高级设置'],
+                ] as const).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => persistMode(mode)}
+                    className={`rounded-lg px-3 py-1.5 text-[10px] ${
+                      state.workspaceMode === mode
+                        ? isDark ? 'bg-white text-neutral-950' : 'bg-white text-neutral-900 shadow-sm'
+                        : isDark ? 'text-neutral-500' : 'text-neutral-500'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {!embedded && onClose && <button
               type="button"
-              aria-label="关闭 Video Remix 工作台"
+              aria-label="关闭视频复刻工作台"
               onClick={onClose}
               className={`flex h-9 w-9 items-center justify-center rounded-xl ${
                 isDark ? 'bg-white/6 text-neutral-300 hover:bg-white/10' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
               }`}
             >
               <X size={18} />
-            </button>
+            </button>}
           </div>
         </header>
 
-        <div className="h-[calc(100vh-64px)] overflow-y-auto px-8 py-7">
+        {embedded && (
+          <nav className={`flex min-h-14 shrink-0 items-center gap-2 overflow-x-auto border-b px-7 ${
+            isDark ? 'border-white/8 bg-[#0d0e10]' : 'border-neutral-200 bg-white'
+          }`}>
+            {navigationItems.map((item, index) => {
+              const active = simpleMode
+                ? activeSimpleStep === item.id
+                : activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    if (simpleMode) setActiveSimpleStep(item.id as SimpleStep);
+                    else setActiveTab(item.id as VideoRemixWorkspaceTab);
+                  }}
+                  className={`flex h-9 shrink-0 items-center gap-2 rounded-xl px-3 text-xs transition-colors ${
+                    active
+                      ? isDark ? 'bg-white text-neutral-950' : 'bg-neutral-900 text-white'
+                      : isDark ? 'text-neutral-500 hover:bg-white/5 hover:text-white' : 'text-neutral-500 hover:bg-neutral-100'
+                  }`}
+                >
+                  {simpleMode && <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[9px] ${active ? 'bg-black/10' : isDark ? 'bg-white/8' : 'bg-neutral-200'}`}>{index + 1}</span>}
+                  {item.icon}
+                  {item.label}
+                </button>
+              );
+            })}
+            <div className={`ml-auto hidden items-center gap-2 text-[10px] xl:flex ${isDark ? 'text-neutral-600' : 'text-neutral-400'}`}>
+              <Lock size={12} className="text-cyan-400" />
+              剧情、动作、构图、运镜与时长已锁定
+            </div>
+          </nav>
+        )}
+
+        <div className={`${embedded ? 'min-h-0 flex-1' : 'h-[calc(100vh-64px)]'} overflow-y-auto px-8 py-7`}>
           <div className="mx-auto max-w-[1180px]">
-            <WorkspaceContent
-              activeTab={activeTab}
-              state={state}
-              summary={summary}
-              dark={isDark}
-              node={node}
-              workflowId={workflowId}
-              onUpdateNode={onUpdateNode}
-              onFinalOutput={onFinalOutput}
-              onSelectTab={setActiveTab}
-            />
+            {simpleMode ? (
+              <SimpleWorkspaceContent
+                activeStep={activeSimpleStep}
+                state={state}
+                summary={summary}
+                dark={isDark}
+                node={node}
+                workflowId={workflowId}
+                onUpdateNode={onUpdateNode}
+                onFinalOutput={onFinalOutput}
+                onSendFinalToCanvas={onSendFinalToCanvas}
+                onSelectStep={setActiveSimpleStep}
+                onOpenAdvanced={tab => {
+                  setActiveTab(tab);
+                  persistMode('advanced');
+                }}
+              />
+            ) : (
+              <WorkspaceContent
+                activeTab={activeTab}
+                state={state}
+                summary={summary}
+                dark={isDark}
+                node={node}
+                workflowId={workflowId}
+                onUpdateNode={onUpdateNode}
+                onFinalOutput={onFinalOutput}
+                onSendFinalToCanvas={onSendFinalToCanvas}
+                onSelectTab={setActiveTab}
+              />
+            )}
           </div>
         </div>
       </main>
     </div>
+  );
+};
+
+const SimpleWorkspaceContent: React.FC<{
+  activeStep: SimpleStep;
+  state: ReturnType<typeof createVideoRemixState>;
+  summary: ReturnType<typeof summarizeVideoRemixState>;
+  dark: boolean;
+  node: NodeData;
+  workflowId?: string;
+  onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
+  onFinalOutput: (output: {
+    nodeId: string;
+    url: string;
+    duration: number;
+    width: number;
+    height: number;
+    fps: number;
+    aspectRatio: string;
+  }) => void;
+  onSendFinalToCanvas?: VideoRemixWorkspaceProps['onSendFinalToCanvas'];
+  onSelectStep: (step: SimpleStep) => void;
+  onOpenAdvanced: (tab: VideoRemixWorkspaceTab) => void;
+}> = ({
+  activeStep,
+  state,
+  summary,
+  dark,
+  node,
+  workflowId,
+  onUpdateNode,
+  onFinalOutput,
+  onSendFinalToCanvas,
+  onSelectStep,
+  onOpenAdvanced,
+}) => {
+  const step = SIMPLE_STEPS.find(item => item.id === activeStep) || SIMPLE_STEPS[0];
+  const hasShotTimeline = Boolean(state.source?.proxyUrl && state.shots.length > 0);
+  const analysisComplete = Boolean(
+    state.story
+    && state.shots.length > 0
+    && state.shots.every(shot => shot.analysisStatus === 'ready')
+  );
+
+  return (
+    <>
+      <div className="flex items-end justify-between gap-6">
+        <div>
+          <div className={`text-xs font-medium tracking-[0.16em] ${dark ? 'text-cyan-300' : 'text-cyan-700'}`}>
+            第 {SIMPLE_STEPS.findIndex(item => item.id === activeStep) + 1} 步，共 3 步
+          </div>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight">{step.label}</h1>
+          <p className={`mt-2 max-w-2xl text-sm leading-6 ${dark ? 'text-neutral-400' : 'text-neutral-500'}`}>
+            {step.description}。复杂参数已经自动折叠，需要时可切换到高级模式。
+          </p>
+        </div>
+        <div className={`rounded-full px-3 py-1.5 text-xs ${dark ? 'bg-white/6 text-neutral-300' : 'bg-white text-neutral-600'}`}>
+          {VIDEO_REMIX_STAGE_LABELS[state.stage] || '准备中'}
+        </div>
+      </div>
+
+      {activeStep === 'setup' ? (
+        analysisComplete ? (
+          <div className={`mt-7 rounded-[26px] border p-6 ${dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'}`}>
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Check size={16} className="text-emerald-400" />
+                  参考视频已分析完成
+                </div>
+                <p className={`mt-2 text-xs ${dark ? 'text-neutral-500' : 'text-neutral-500'}`}>
+                  已识别 {summary.shots} 个镜头、{summary.characters} 个人物、{summary.scenes} 个场景和 {summary.props} 个道具。
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => onOpenAdvanced('analysis')}
+                  className={`rounded-xl px-4 py-2.5 text-xs ${dark ? 'bg-white/6 text-neutral-300' : 'bg-neutral-100 text-neutral-600'}`}
+                >
+                  查看分析详情
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSelectStep('assets')}
+                  className={`rounded-xl px-5 py-2.5 text-xs font-medium ${dark ? 'bg-cyan-400 text-neutral-950' : 'bg-cyan-600 text-white'}`}
+                >
+                  下一步：锁定资产
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : hasShotTimeline ? (
+          <AnalysisWorkspace
+            node={node}
+            state={state}
+            workflowId={workflowId}
+            onUpdateNode={onUpdateNode}
+            onSelectShots={() => onOpenAdvanced('shots')}
+            simpleMode
+            onComplete={() => onSelectStep('assets')}
+            dark={dark}
+          />
+        ) : (
+          <SourceWorkspace
+            node={node}
+            state={state}
+            summary={summary}
+            workflowId={workflowId}
+            onUpdateNode={onUpdateNode}
+            onSelectShots={() => undefined}
+            simpleMode
+            dark={dark}
+          />
+        )
+      ) : activeStep === 'assets' ? (
+        <VideoRemixAssetsWorkspace
+          node={node}
+          state={state}
+          workflowId={workflowId}
+          onUpdateNode={onUpdateNode}
+          onSelectAnalysis={() => onSelectStep('setup')}
+          simpleMode
+          onConfirmed={() => onSelectStep('generate')}
+          dark={dark}
+        />
+      ) : (
+        <VideoRemixSimpleGenerationWorkspace
+          node={node}
+          state={state}
+          workflowId={workflowId}
+          onUpdateNode={onUpdateNode}
+          onFinalOutput={onFinalOutput}
+          onSendFinalToCanvas={onSendFinalToCanvas}
+          onSelectAssets={() => onSelectStep('assets')}
+          onOpenAdvanced={onOpenAdvanced}
+          dark={dark}
+        />
+      )}
+    </>
   );
 };
 
@@ -241,6 +563,7 @@ const WorkspaceContent: React.FC<{
     fps: number;
     aspectRatio: string;
   }) => void;
+  onSendFinalToCanvas?: VideoRemixWorkspaceProps['onSendFinalToCanvas'];
   onSelectTab: (tab: VideoRemixWorkspaceTab) => void;
 }> = ({
   activeTab,
@@ -251,17 +574,18 @@ const WorkspaceContent: React.FC<{
   workflowId,
   onUpdateNode,
   onFinalOutput,
+  onSendFinalToCanvas,
   onSelectTab,
 }) => {
-  const title = VIDEO_REMIX_WORKSPACE_TABS.find(tab => tab.id === activeTab)?.label || 'Video Remix';
+  const title = VIDEO_REMIX_WORKSPACE_TABS.find(tab => tab.id === activeTab)?.label || '视频复刻';
   const descriptions: Record<VideoRemixWorkspaceTab, string> = {
     source: '导入本地视频、画布视频或分享链接，并保留不可修改的原始文件。',
     analysis: '查看全片故事理解、人物关系、场景、道具和结构化分析结果。',
-    assets: '统一管理人物身份与造型、场景功能区和交互道具。',
+    assets: '准备人物身份参考；场景、道具和三图一致性包都可按需要补强。',
     shots: '逐镜查看并编辑动作、构图、运镜、时间和声音蓝图。',
-    keyframes: '按镜头复杂度生成关键帧，确认后才允许进入视频生成。',
-    videos: '批量生成镜头视频，并支持单镜头重试与时长校准。',
-    final: '按原片顺序拼接镜头，配置 BGM、字幕并交给 Remotion 输出。',
+    keyframes: '可选生成起始、中间或结束关键帧，用于加强构图控制，不再阻止视频生成。',
+    videos: '可直接按资产参考与中文提示词批量生成镜头视频，并支持单镜头重试与时长校准。',
+    final: '按原片顺序拼接镜头，配置背景音乐、字幕并交给 Remotion 输出。',
   };
 
   return (
@@ -269,7 +593,7 @@ const WorkspaceContent: React.FC<{
       <div className="flex items-end justify-between gap-6">
         <div>
           <div className={`text-xs font-medium uppercase tracking-[0.18em] ${dark ? 'text-cyan-300' : 'text-cyan-700'}`}>
-            Video Remix Workspace
+            视频复刻高级工作台
           </div>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight">{title}</h1>
           <p className={`mt-2 max-w-2xl text-sm leading-6 ${dark ? 'text-neutral-400' : 'text-neutral-500'}`}>
@@ -277,7 +601,7 @@ const WorkspaceContent: React.FC<{
           </p>
         </div>
         <div className={`rounded-full px-3 py-1.5 text-xs ${dark ? 'bg-white/6 text-neutral-300' : 'bg-white text-neutral-600'}`}>
-          当前阶段：{state.stage}
+          当前阶段：{VIDEO_REMIX_STAGE_LABELS[state.stage] || state.stage}
         </div>
       </div>
 
@@ -346,6 +670,7 @@ const WorkspaceContent: React.FC<{
           onUpdateNode={onUpdateNode}
           onSelectVideos={() => onSelectTab('videos')}
           onFinalOutput={onFinalOutput}
+          onSendFinalToCanvas={onSendFinalToCanvas}
           dark={dark}
         />
       )}
@@ -369,8 +694,18 @@ const SourceWorkspace: React.FC<{
   workflowId?: string;
   onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
   onSelectShots: () => void;
+  simpleMode?: boolean;
   dark: boolean;
-}> = ({ node, state, summary, workflowId, onUpdateNode, onSelectShots, dark }) => {
+}> = ({
+  node,
+  state,
+  summary,
+  workflowId,
+  onUpdateNode,
+  onSelectShots,
+  simpleMode = false,
+  dark,
+}) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [urlInput, setUrlInput] = React.useState(
     state.source?.sourceType === 'url' ? state.source.sourceUrl || '' : ''
@@ -400,14 +735,44 @@ const SourceWorkspace: React.FC<{
 
   const storeSource = React.useCallback((source: NonNullable<typeof state.source>) => {
     setLocalError('');
+    const next = replaceVideoRemixSource(state, source);
     onUpdateNode(node.id, {
-      videoRemix: replaceVideoRemixSource(state, source),
+      videoRemix: next,
     });
+    return next;
   }, [node.id, onUpdateNode, state]);
 
   const requireProject = () => {
-    if (!workflowId) throw new Error('请先把当前画布保存为项目，再导入参考视频');
+    if (!workflowId) throw new Error('请先创建或打开项目，再导入参考视频');
     return workflowId;
+  };
+
+  const preprocessState = async (
+    working: ReturnType<typeof createVideoRemixState>
+  ) => {
+    if (!working.source) throw new Error('请先导入参考视频');
+    setBusy('preprocess');
+    const started = beginVideoRemixPreprocessing(working);
+    onUpdateNode(node.id, { videoRemix: started });
+    try {
+      const result = await preprocessReferenceVideo({
+        workflowId: requireProject(),
+        remixId: working.remixId,
+        source: working.source,
+        threshold: sceneThreshold,
+      });
+      const completed = completeVideoRemixPreprocessing(working, result);
+      onUpdateNode(node.id, { videoRemix: completed });
+      onSelectShots();
+      return completed;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '视频预处理失败';
+      setLocalError(message);
+      onUpdateNode(node.id, {
+        videoRemix: setVideoRemixPreprocessingError(working, message),
+      });
+      return null;
+    }
   };
 
   const handleFile = async (file?: File) => {
@@ -424,7 +789,8 @@ const SourceWorkspace: React.FC<{
         remixId: state.remixId,
         file,
       });
-      storeSource(source);
+      const working = storeSource(source);
+      if (simpleMode) await preprocessState(working);
     } catch (error) {
       storeFailure(error);
     } finally {
@@ -447,7 +813,8 @@ const SourceWorkspace: React.FC<{
         remixId: state.remixId,
         input: urlInput.trim(),
       });
-      storeSource(source);
+      const working = storeSource(source);
+      if (simpleMode) await preprocessState(working);
     } catch (error) {
       storeFailure(error);
     } finally {
@@ -461,28 +828,9 @@ const SourceWorkspace: React.FC<{
       storeFailure(new Error('请先导入参考视频'));
       return;
     }
-    setBusy('preprocess');
     setLocalError('');
-    onUpdateNode(node.id, {
-      videoRemix: beginVideoRemixPreprocessing(state),
-    });
     try {
-      const result = await preprocessReferenceVideo({
-        workflowId: requireProject(),
-        remixId: state.remixId,
-        source: state.source,
-        threshold: sceneThreshold,
-      });
-      onUpdateNode(node.id, {
-        videoRemix: completeVideoRemixPreprocessing(state, result),
-      });
-      onSelectShots();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '视频预处理失败';
-      setLocalError(message);
-      onUpdateNode(node.id, {
-        videoRemix: setVideoRemixPreprocessingError(state, message),
-      });
+      await preprocessState(state);
     } finally {
       setBusy(null);
     }
@@ -554,7 +902,9 @@ const SourceWorkspace: React.FC<{
             </span>
             <span>
               <span className="block text-sm font-medium">
-                {busy === 'local' ? '正在复制并读取视频…' : '选择或拖入本地视频'}
+                {busy === 'local'
+                  ? '正在复制并读取视频…'
+                  : simpleMode ? '选择视频，随后自动分析' : '选择或拖入本地视频'}
               </span>
               <span className={`mt-1 block text-[11px] leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
                 MP4 / MOV / WebM，原文件会独立保存且不被修改
@@ -589,7 +939,9 @@ const SourceWorkspace: React.FC<{
               }`}
             >
               {busy === 'url' ? <Loader2 size={14} className="animate-spin" /> : <CloudDownload size={14} />}
-              {busy === 'url' ? '正在解析并下载…' : '解析并保存到当前项目'}
+              {busy === 'url'
+                ? '正在解析并下载…'
+                : simpleMode ? '解析并自动拆镜分析' : '解析并保存到当前项目'}
             </button>
           </div>
         </div>
@@ -610,13 +962,15 @@ const SourceWorkspace: React.FC<{
             <div>
               <div className="flex items-center gap-2 text-sm font-medium">
                 <ScanSearch size={16} className="text-cyan-400" />
-                本地自动拆镜
+                {simpleMode ? '自动拆镜与视频分析' : '本地自动拆镜'}
               </div>
               <div className={`mt-1 text-[11px] leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-500'}`}>
-                生成 720p / 15fps H.264 分析代理，通过 FFmpeg 场景分数确定切点，并为每个镜头抽取五帧。
+                {simpleMode
+                  ? '导入后自动拆分镜头，并继续执行视频理解；Gemini 未登录时会保留本地拆镜结果并提示登录。'
+                  : '生成 720p / 15fps H.264 分析代理，通过内置媒体工具的场景分数确定切点，并为每个镜头抽取五帧。'}
               </div>
             </div>
-            <label className={`min-w-[180px] text-[11px] ${dark ? 'text-neutral-400' : 'text-neutral-600'}`}>
+            {!simpleMode && <label className={`min-w-[180px] text-[11px] ${dark ? 'text-neutral-400' : 'text-neutral-600'}`}>
               切镜阈值 {sceneThreshold.toFixed(2)}
               <input
                 type="range"
@@ -628,7 +982,7 @@ const SourceWorkspace: React.FC<{
                 onChange={event => setSceneThreshold(Number(event.target.value))}
                 className="mt-2 block w-full accent-cyan-400"
               />
-            </label>
+            </label>}
           </div>
           <button
             type="button"
@@ -639,7 +993,11 @@ const SourceWorkspace: React.FC<{
             }`}
           >
             {busy === 'preprocess' ? <Loader2 size={16} className="animate-spin" /> : <Scissors size={16} />}
-            {busy === 'preprocess' ? '正在生成代理、检测切点并抽帧…' : state.shots.length ? '重新自动拆镜' : '生成分析代理并自动拆镜'}
+            {busy === 'preprocess'
+              ? '正在生成代理、检测切点并抽帧…'
+              : state.shots.length
+                ? '重新自动拆镜'
+                : simpleMode ? '自动拆镜并继续分析' : '生成分析代理并自动拆镜'}
           </button>
         </div>
 
@@ -654,7 +1012,7 @@ const SourceWorkspace: React.FC<{
         }`}>
           <div className="flex items-center gap-2 text-xs font-medium">
             <FileVideo size={15} className="text-cyan-400" />
-            Reference Video
+            参考视频
           </div>
           {state.source ? (
             <div className="mt-4 space-y-3">
@@ -719,8 +1077,19 @@ const AnalysisWorkspace: React.FC<{
   workflowId?: string;
   onUpdateNode: (nodeId: string, updates: Partial<NodeData>) => void;
   onSelectShots: () => void;
+  simpleMode?: boolean;
+  onComplete?: () => void;
   dark: boolean;
-}> = ({ node, state, workflowId, onUpdateNode, onSelectShots, dark }) => {
+}> = ({
+  node,
+  state,
+  workflowId,
+  onUpdateNode,
+  onSelectShots,
+  simpleMode = false,
+  onComplete,
+  dark,
+}) => {
   const [mode, setMode] = React.useState<VideoAnalysisMode>(
     state.analysisRun?.mode === 'deep' ? 'deep' : 'fast'
   );
@@ -730,6 +1099,7 @@ const AnalysisWorkspace: React.FC<{
     state.errors.some(item => item.scope === 'analysis' && item.code === 'AUTH_EXPIRED')
   );
   const recoveryKeyRef = React.useRef('');
+  const simpleAutoRunRef = React.useRef(false);
   const running = Boolean(busy);
   const completedShots = state.shots.filter(shot => shot.analysisStatus === 'ready').length;
   const hasGlobal = state.analysisRun?.globalStatus === 'ready' && Boolean(state.story);
@@ -869,7 +1239,13 @@ const AnalysisWorkspace: React.FC<{
       });
       working = applyVideoRemixGlobalAnalysis(working, global);
       persist(working);
-      await analyzeShotIds(working, working.shots.map(shot => shot.shotId));
+      const analyzed = await analyzeShotIds(
+        working,
+        working.shots.map(shot => shot.shotId)
+      );
+      if (analyzed.shots.every(shot => shot.analysisStatus === 'ready')) {
+        onComplete?.();
+      }
     } catch (error) {
       const details = errorDetails(error);
       working = setVideoRemixGlobalAnalysisError(working, details.message, details);
@@ -888,7 +1264,10 @@ const AnalysisWorkspace: React.FC<{
     }
     setLocalError('');
     setAuthRequired(false);
-    await analyzeShotIds(state, pendingShotIds);
+    const analyzed = await analyzeShotIds(state, pendingShotIds);
+    if (analyzed.shots.every(shot => shot.analysisStatus === 'ready')) {
+      onComplete?.();
+    }
   };
 
   const retryOneShot = async (shotId: string) => {
@@ -904,13 +1283,31 @@ const AnalysisWorkspace: React.FC<{
     setLocalError('');
     try {
       await openGeminiLogin();
-      setLocalError('登录窗口已打开。完成 Google 登录后，回到这里点击“重试未完成 Shot”。');
+      setLocalError('登录窗口已打开。完成 Google 登录后，回到这里点击“重试未完成镜头”。');
     } catch (error) {
       setLocalError(errorDetails(error).message);
     } finally {
       setBusy(null);
     }
   };
+
+  React.useEffect(() => {
+    if (
+      !simpleMode
+      || simpleAutoRunRef.current
+      || running
+      || !workflowId
+      || !state.source?.proxyUrl
+      || state.shots.length === 0
+      || state.shots.every(shot => shot.analysisStatus === 'ready')
+      || state.errors.some(item => (
+        item.scope === 'analysis'
+        && ['AUTH_EXPIRED', 'RECAPTCHA_REQUIRED'].includes(item.code || '')
+      ))
+    ) return;
+    simpleAutoRunRef.current = true;
+    void retryPendingShots();
+  }, [simpleMode, state, workflowId]);
 
   const updateEditableField = (
     shotId: string,
@@ -948,7 +1345,7 @@ const AnalysisWorkspace: React.FC<{
       }`}>
         <div className="max-w-sm text-center">
           <BrainCircuit size={28} className="mx-auto text-cyan-400" />
-          <div className="mt-4 text-sm font-medium">需要先确认 Shot 时间线</div>
+          <div className="mt-4 text-sm font-medium">需要先生成镜头时间线</div>
           <p className={`mt-2 text-xs leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
             Gemini 分析使用本地拆镜结果；未生成代理时不会上传原视频。
           </p>
@@ -982,11 +1379,11 @@ const AnalysisWorkspace: React.FC<{
               结构化视频分析
             </div>
             <p className={`mt-2 text-xs leading-5 ${dark ? 'text-neutral-500' : 'text-neutral-500'}`}>
-              完整代理视频只在全片阶段上传一次；随后 Simple Shot 使用三帧、Medium 使用五帧、
-              Complex 使用本地裁出的完整镜头。每个 Shot 独立保存并可单独重试。
+              完整代理视频只在全片阶段上传一次；随后简单镜头使用三帧、中等镜头使用五帧、
+              复杂镜头使用本地裁出的完整镜头。每个镜头独立保存并可单独重试。
             </p>
           </div>
-          <div className={`flex rounded-xl p-1 ${dark ? 'bg-black/35' : 'bg-neutral-100'}`}>
+          {!simpleMode && <div className={`flex rounded-xl p-1 ${dark ? 'bg-black/35' : 'bg-neutral-100'}`}>
             {([
               ['fast', '快速'],
               ['deep', '深度'],
@@ -1005,7 +1402,7 @@ const AnalysisWorkspace: React.FC<{
                 {label}
               </button>
             ))}
-          </div>
+          </div>}
         </div>
 
         <div className="mt-5">
@@ -1016,8 +1413,8 @@ const AnalysisWorkspace: React.FC<{
             />
           </div>
           <div className={`mt-2 flex justify-between text-[11px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-            <span>全片：{state.analysisRun?.globalStatus || 'idle'}</span>
-            <span>Shot {completedShots}/{state.shots.length}</span>
+            <span>全片：{state.analysisRun?.globalStatus === 'ready' ? '已完成' : state.analysisRun?.globalStatus === 'failed' ? '失败' : running ? '分析中' : '待开始'}</span>
+            <span>镜头 {completedShots}/{state.shots.length}</span>
           </div>
         </div>
 
@@ -1084,7 +1481,7 @@ const AnalysisWorkspace: React.FC<{
                 }`}
               >
                 {running && busy !== 'login' ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
-                {running && busy !== 'login' ? `正在分析 ${busy}…` : `重试未完成 Shot（${pendingShotIds.length}）`}
+                {running && busy !== 'login' ? `正在分析 ${busy}…` : `重试未完成镜头（${pendingShotIds.length}）`}
               </button>
               <button
                 type="button"
@@ -1142,9 +1539,9 @@ const AnalysisWorkspace: React.FC<{
         dark ? 'border-white/8 bg-[#111214]' : 'border-neutral-200 bg-white'
       }`}>
         <div>
-          <div className="text-sm font-medium">逐 Shot Blueprint</div>
+          <div className="text-sm font-medium">逐镜头蓝图</div>
           <div className={`mt-1 text-[11px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-            修改字段会标记为 user + locked，后续重新分析不会覆盖；可手动解除锁定。
+            修改字段会标记为“用户已锁定”，后续重新分析不会覆盖；可手动解除锁定。
           </div>
         </div>
         <div className="mt-5 space-y-4">
@@ -1162,12 +1559,12 @@ const AnalysisWorkspace: React.FC<{
               }`}>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <div className="text-xs font-medium">Shot {String(index + 1).padStart(2, '0')}</div>
+                    <div className="text-xs font-medium">镜头 {String(index + 1).padStart(2, '0')}</div>
                     <span className={`rounded-full px-2.5 py-1 text-[9px] ${statusStyle}`}>
                       {shotBusy ? '分析中' : status === 'ready' ? '已完成' : status === 'failed' ? '失败' : '待分析'}
                     </span>
                     <span className={`text-[10px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-                      {shot.motionComplexity} · {shot.motionComplexityConfidence === undefined
+                      {VIDEO_REMIX_MOTION_LABELS[shot.motionComplexity]} · {shot.motionComplexityConfidence === undefined
                         ? '待分类'
                         : `${Math.round(shot.motionComplexityConfidence * 100)}%`}
                     </span>
@@ -1203,7 +1600,7 @@ const AnalysisWorkspace: React.FC<{
                 {status === 'ready' && (
                   <div className="mt-4 grid gap-3 md:grid-cols-2">
                     <EditableAnalysisField
-                      label="Story Beat"
+                      label="剧情节点"
                       field={shot.storyBeat}
                       disabled={running}
                       dark={dark}
@@ -1303,11 +1700,11 @@ const EditableAnalysisField: React.FC<{
 );
 
 const FRAME_LABELS: Record<ShotAnalysisFramePosition, string> = {
-  start: 'Start',
+  start: '起始',
   quarter: '25%',
   middle: '50%',
   three_quarter: '75%',
-  end: 'End',
+  end: '结束',
 };
 
 const ShotsWorkspace: React.FC<{
@@ -1383,7 +1780,7 @@ const ShotsWorkspace: React.FC<{
   const saveTimeline = async () => {
     if (busy || !state.source) return;
     if (!workflowId) {
-      setLocalError('请先把当前画布保存为项目');
+      setLocalError('请先创建或打开项目');
       return;
     }
     setBusy(true);
@@ -1603,9 +2000,9 @@ const ShotsWorkspace: React.FC<{
       }`}>
         <div className="flex items-center justify-between">
           <div>
-            <div className="text-sm font-medium">Shot 分析帧</div>
+            <div className="text-sm font-medium">镜头分析帧</div>
             <div className={`mt-1 text-[11px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
-              每镜头固定抽取 Start / 25% / 50% / 75% / End，供下一阶段语义分析使用。
+              每个镜头固定抽取起始 / 25% / 50% / 75% / 结束五帧，供下一阶段语义分析使用。
             </div>
           </div>
           {dirty && (
@@ -1622,7 +2019,7 @@ const ShotsWorkspace: React.FC<{
               dark ? 'border-white/8 bg-black/20' : 'border-neutral-200 bg-neutral-50'
             }`}>
               <div className="flex items-center justify-between gap-4">
-                <div className="text-xs font-medium">Shot {String(index + 1).padStart(2, '0')}</div>
+                <div className="text-xs font-medium">镜头 {String(index + 1).padStart(2, '0')}</div>
                 <div className={`text-[11px] ${dark ? 'text-neutral-500' : 'text-neutral-400'}`}>
                   {formatDuration(shot.start)} – {formatDuration(shot.end)} · {Number(shot.duration).toFixed(2)}s
                 </div>

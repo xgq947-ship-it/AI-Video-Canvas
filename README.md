@@ -26,10 +26,14 @@ Node.js、Python 或 Chrome Beta，但电脑必须安装可自动更新的正式
 新建项目时可以保留 Evan 默认位置，也可以用系统文件夹选择器将完整项目放到桌面、其他
 工作目录或其他磁盘。项目文件夹包含画布 `project.json` 及图片、视频、音频素材。
 
-Video Remix 提供“参考视频 → 拆镜头 → 结构化分析 → 替换人物/场景/道具 → 关键帧
-→ Shot 视频 → Remotion 成片”的阶段式工作流。除真实 AI 分析与生成请求外，导入、
-预处理、编辑、恢复和本地渲染均不要求登录 Gemini。范围与验证结果见
-[Video Remix MVP 验收说明](docs/video-remix-mvp-acceptance.md)。
+顶部可在“AI 画布”和“短视频复刻”两个独立工作区之间切换。视频复刻不再占用画布节点，
+同一个项目可保存多个复刻任务，并默认提供“导入并分析 → 准备参考资产 → 直接生成成片”
+三步简单模式。有角色时最少准备一张人物主参考图即可继续；场景、道具、三图一致性包和
+首尾关键帧均为可选增强，缺图资产由中文主提示词与冻结锚点直接约束；
+成片前可直接选择视频模型、画幅、分辨率和每镜头 1–4 个候选，多个候选只选一条进入最终合成；
+除真实 AI 分析与生成请求外，任务管理、导入、预处理、编辑、恢复和本地渲染均不要求登录 Gemini。
+画布视频可右键发送到复刻工作区，最终成片只有在用户点击“发送到 AI 画布”后才创建普通视频节点。
+范围与验证结果见[视频复刻 MVP 验收说明](docs/video-remix-mvp-acceptance.md)。
 
 ## 开发者
 
@@ -62,7 +66,8 @@ npm run desktop:dist:win   # 必须在 Windows x64 上运行
 - [Remotion 渲染说明](docs/Remotion渲染说明.md)
 - [项目数据格式](docs/项目数据格式.md)
 - [视频剪辑节点](docs/video-editor-node.md)
-- [Video Remix MVP 验收说明](docs/video-remix-mvp-acceptance.md)
+- [视频复刻使用教程（HTML）](docs/video-remix-user-guide.html)
+- [视频复刻 MVP 验收说明](docs/video-remix-mvp-acceptance.md)
 - [Modal 相机角度服务](docs/modal-camera-integration.md)
 - [三平台生成运行时架构](docs/generation-runtime-architecture.md)
 

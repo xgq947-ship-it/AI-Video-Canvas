@@ -13,12 +13,14 @@ test('只有 Codex CLI 提示词后端声明支持当前节点图片识别', () 
 
     const codex = listPromptOptimizerProviders().find(provider => provider.id === 'codex-cli');
     assert.equal(codex?.supportsImage, true);
+    assert.equal(codex?.defaultModel, 'gpt-5.6-luna');
+    assert.equal(codex?.defaultEffort, 'xhigh');
 });
 
 test('Windows 的 npm CLI 包装脚本必须通过 ComSpec 启动', () => {
     const invocation = buildCliInvocation(
         'C:\\Users\\测试 用户\\AppData\\Roaming\\npm\\codex.cmd',
-        ['exec', '--model', 'gpt-5.6-sol', '包含空格 & 符号的提示词'],
+        ['exec', '--model', 'gpt-5.6-luna', '包含空格 & 符号的提示词'],
         {
             platform: 'win32',
             environment: { ComSpec: 'C:\\Windows\\System32\\cmd.exe' }

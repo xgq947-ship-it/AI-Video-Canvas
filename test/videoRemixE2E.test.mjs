@@ -33,7 +33,6 @@ import {
   setVideoRemixSubtitles,
   videoRemixOutputNodeId,
 } from '../shared/videoRemix.js';
-import { upsertVideoRemixFinalNode } from '../src/utils/videoRemixFinalNode.js';
 
 const editable = value => ({
   value,
@@ -458,29 +457,4 @@ test('18 秒 / 3 Shot MVP 从本地化状态贯通到唯一 Final Video Node', (
     nodeId: outputNodeId,
   });
   assert.equal(state.stage, 'completed');
-
-  const canvas = upsertVideoRemixFinalNode([{
-    id: 'remix-node-acceptance',
-    type: 'Video Remix',
-    title: 'Video Remix 验收',
-    x: 100,
-    y: 120,
-    prompt: '',
-    status: 'idle',
-    model: 'Banana Pro',
-    aspectRatio: 'Auto',
-    resolution: 'Auto',
-  }], 'remix-node-acceptance', {
-    nodeId: outputNodeId,
-    url: state.output.url,
-    duration: state.output.duration,
-    width: manifest.composition.width,
-    height: manifest.composition.height,
-    fps: manifest.composition.fps,
-    aspectRatio: '9:16',
-  });
-  assert.equal(canvas.length, 2);
-  assert.equal(canvas.filter(node => node.type === 'Video').length, 1);
-  assert.equal(canvas[1].resultUrl.split('?')[0], '/library/projects/Acceptance/videos/final.mp4');
-  assert.deepEqual(canvas[1].parentIds, ['remix-node-acceptance']);
 });

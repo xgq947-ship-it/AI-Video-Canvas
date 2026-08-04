@@ -5,7 +5,7 @@
  * Users drag balls on arcs to adjust rotation, tilt, and zoom.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useCallback } from 'react';
 import { X, RotateCcw } from 'lucide-react';
 import { OrbitCameraControl } from './OrbitCameraControl';
 
@@ -145,6 +145,3 @@ export const ChangeAnglePanel: React.FC<ChangeAnglePanelProps> = ({
         </div>
     );
 };
-
-export default ChangeAnglePanel;
-

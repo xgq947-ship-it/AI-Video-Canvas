@@ -76,6 +76,21 @@ interface OptimizerProvider {
     unavailableHint?: string;
 }
 
+interface OptimizerModelOption {
+    id: string;
+    label: string;
+}
+
+interface OptimizerModelCatalog {
+    models: OptimizerModelOption[];
+    discovered: boolean;
+    syncSupported: boolean;
+    source: string;
+    message: string;
+    updatedAt: string | null;
+    defaultModel: string;
+}
+
 interface CodexStatus {
     available: boolean;
     authenticated: boolean;
@@ -186,6 +201,9 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
     const [optimizerProvider, setOptimizerProvider] = useState('deepseek');
     // 模型覆盖按后端各自记忆：{ 后端id: 模型字符串 }
     const [optimizerModels, setOptimizerModels] = useState<Record<string, string>>({});
+    const [optimizerModelCatalogs, setOptimizerModelCatalogs] = useState<Record<string, OptimizerModelCatalog>>({});
+    const [optimizerModelChoices, setOptimizerModelChoices] = useState<Record<string, string>>({});
+    const [isRefreshingOptimizerModels, setIsRefreshingOptimizerModels] = useState(false);
     const [initialOptimizer, setInitialOptimizer] = useState<{ provider: string; models: Record<string, string> }>({ provider: 'deepseek', models: {} });
     const [codexStatus, setCodexStatus] = useState<CodexStatus | null>(null);
     const [isCodexBusy, setIsCodexBusy] = useState(false);
@@ -208,6 +226,16 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
         if (!response.ok) throw new Error(result.error || '读取 Codex 状态失败');
         applyCodexStatus(result);
         return result as CodexStatus;
+    };
+
+    const loadOptimizerModelCatalog = async (refresh = false) => {
+        const response = await fetch(`/api/settings/optimizer/models${refresh ? '?refresh=1' : ''}`, {
+            cache: 'no-store'
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || '读取优化模型列表失败');
+        setOptimizerModelCatalogs(result.providers || {});
+        return result;
     };
 
     useEffect(() => {
@@ -237,6 +265,7 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                     setInitialOptimizer({ provider: current.provider, models });
                 }
             }),
+            loadOptimizerModelCatalog(),
             loadCodexStatus()
             ,fetch('/api/capabilities', { cache: 'no-store' }).then(async response => {
                 const result = await response.json();
@@ -296,6 +325,16 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
 
     // 当前后端的模型覆盖值（各后端独立记忆，切换后端时自动显示各自的值）
     const optimizerModel = optimizerModels[optimizerProvider] || '';
+    const optimizerModelCatalog = optimizerModelCatalogs[optimizerProvider];
+    const optimizerModelOptions = optimizerModelCatalog?.models || [];
+    const optimizerModelIsKnown = optimizerModelOptions.some(option => option.id === optimizerModel);
+    const explicitModelChoice = optimizerModelChoices[optimizerProvider];
+    const explicitChoiceIsValid = explicitModelChoice === ''
+        || explicitModelChoice === '__custom__'
+        || optimizerModelOptions.some(option => option.id === explicitModelChoice);
+    const optimizerModelSelection = explicitModelChoice !== undefined && explicitChoiceIsValid
+        ? explicitModelChoice
+        : (optimizerModel && !optimizerModelIsKnown ? '__custom__' : optimizerModel);
     const apiKeyDirty = Object.values(values).some(value => value.trim()) || clearFields.size > 0;
     const optimizerDirty = optimizerProvider !== initialOptimizer.provider
         || optimizerModel.trim() !== (initialOptimizer.models[optimizerProvider] || '');
@@ -306,6 +345,34 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
     const sectionSurface = isDark
         ? 'border-white/[0.08] bg-white/[0.035] shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]'
         : 'border-neutral-200 bg-neutral-50/80 shadow-sm';
+
+    const handleOptimizerModelSelection = (value: string) => {
+        setOptimizerModelChoices(current => ({ ...current, [optimizerProvider]: value }));
+        setOptimizerModels(current => {
+            const existing = current[optimizerProvider] || '';
+            if (value === '__custom__') {
+                return {
+                    ...current,
+                    [optimizerProvider]: optimizerModelIsKnown ? '' : existing
+                };
+            }
+            return { ...current, [optimizerProvider]: value };
+        });
+        setSaved(false);
+    };
+
+    const handleRefreshOptimizerModels = async () => {
+        if (isRefreshingOptimizerModels) return;
+        setIsRefreshingOptimizerModels(true);
+        setError('');
+        try {
+            await loadOptimizerModelCatalog(true);
+        } catch (refreshError) {
+            setError(refreshError instanceof Error ? refreshError.message : '读取优化模型列表失败');
+        } finally {
+            setIsRefreshingOptimizerModels(false);
+        }
+    };
 
     const handleValueChange = (name: string, value: string) => {
         setValues(current => ({ ...current, [name]: value }));
@@ -349,6 +416,8 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                 setFields(result.fields || []);
                 setValues({});
                 setClearFields(new Set());
+                // 密钥保存成功后立即刷新目录；刷新失败不影响密钥本身的保存结果。
+                await loadOptimizerModelCatalog(true).catch(() => {});
             }
 
             if (optimizerDirty) {
@@ -835,21 +904,55 @@ export const ApiKeySettingsModal: React.FC<ApiKeySettingsModalProps> = ({ isOpen
                                         </select>
                                     </div>
                                     <div>
-                                        <label htmlFor="optimizer-model" className={`mb-1.5 block text-xs ${isDark ? 'text-neutral-300' : 'text-neutral-600'}`}>模型（可选）</label>
-                                        <input
+                                        <div className="mb-1.5 flex items-center justify-between gap-2">
+                                            <label htmlFor="optimizer-model" className={`block text-xs ${isDark ? 'text-neutral-300' : 'text-neutral-600'}`}>模型（可选）</label>
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleRefreshOptimizerModels()}
+                                                disabled={isRefreshingOptimizerModels}
+                                                title="刷新模型列表"
+                                                className={`rounded-md p-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${isDark ? 'text-neutral-400 hover:bg-white/10 hover:text-white' : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900'}`}
+                                            >
+                                                <RefreshCw size={13} className={isRefreshingOptimizerModels ? 'animate-spin' : ''} />
+                                            </button>
+                                        </div>
+                                        <select
                                             id="optimizer-model"
-                                            type="text"
-                                            value={optimizerModel}
-                                            onChange={event => {
-                                                const next = event.target.value;
-                                                setOptimizerModels(current => ({ ...current, [optimizerProvider]: next }));
-                                                setSaved(false);
-                                            }}
-                                            autoComplete="off"
-                                            spellCheck={false}
-                                            placeholder={selectedOptimizer?.defaultModel ? `默认：${selectedOptimizer.defaultModel}` : '留空用后端默认'}
-                                            className={`h-11 w-full rounded-xl border bg-transparent px-3 text-sm outline-none transition-colors ${isDark ? 'border-white/10 text-white placeholder-neutral-600 focus:border-blue-500 focus:bg-white/[0.03]' : 'border-neutral-300 text-neutral-900 placeholder-neutral-400 focus:border-blue-500'}`}
-                                        />
+                                            value={optimizerModelSelection}
+                                            onChange={event => handleOptimizerModelSelection(event.target.value)}
+                                            className={`h-11 w-full rounded-xl border bg-transparent px-3 text-sm outline-none transition-colors ${isDark ? 'border-white/10 text-white focus:border-blue-500 focus:bg-white/[0.03]' : 'border-neutral-300 text-neutral-900 focus:border-blue-500'}`}
+                                        >
+                                            <option value="" className={isDark ? 'bg-[#202020]' : ''}>
+                                                使用后端默认{selectedOptimizer?.defaultModel ? `（${selectedOptimizer.defaultModel}）` : ''}
+                                            </option>
+                                            {optimizerModelOptions.map(option => (
+                                                <option key={option.id} value={option.id} className={isDark ? 'bg-[#202020]' : ''}>
+                                                    {option.label}
+                                                </option>
+                                            ))}
+                                            <option value="__custom__" className={isDark ? 'bg-[#202020]' : ''}>
+                                                {optimizerModel && !optimizerModelIsKnown ? `当前自定义：${optimizerModel}` : '自定义模型 ID…'}
+                                            </option>
+                                        </select>
+                                        {optimizerModelSelection === '__custom__' && (
+                                            <input
+                                                id="optimizer-custom-model"
+                                                type="text"
+                                                value={optimizerModel}
+                                                onChange={event => {
+                                                    const next = event.target.value;
+                                                    setOptimizerModels(current => ({ ...current, [optimizerProvider]: next }));
+                                                    setSaved(false);
+                                                }}
+                                                autoComplete="off"
+                                                spellCheck={false}
+                                                placeholder="输入平台支持的模型 ID"
+                                                className={`mt-2 h-10 w-full rounded-xl border bg-transparent px-3 text-xs outline-none transition-colors ${isDark ? 'border-white/10 text-white placeholder-neutral-600 focus:border-blue-500 focus:bg-white/[0.03]' : 'border-neutral-300 text-neutral-900 placeholder-neutral-400 focus:border-blue-500'}`}
+                                            />
+                                        )}
+                                        <p className={`mt-1.5 text-[10px] leading-4 ${isDark ? 'text-neutral-500' : 'text-neutral-500'}`}>
+                                            {optimizerModelCatalog?.message || '模型列表同步中…'}
+                                        </p>
                                     </div>
                                 </div>
                                 {selectedOptimizer?.defaultEffort && (

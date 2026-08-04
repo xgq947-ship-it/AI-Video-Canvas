@@ -53,14 +53,14 @@ test('DyXhsDownloaderProvider 严格复用已验证的 resolve + parse 协议', 
     providers: [new DyXhsDownloaderProvider({ fetchImpl, origin: 'https://resolver.example' })],
   });
 
-  const result = await resolver.resolve('复制这段文案 https://v.douyin.com/abc/ 打开 App');
+  const result = await resolver.resolve('复制这段文案 https://www.bilibili.com/video/BV1gW411w7ES/ 打开 App');
 
   assert.equal(calls.length, 2);
-  assert.deepEqual(calls[0].body, { url: 'https://v.douyin.com/abc/' });
+  assert.deepEqual(calls[0].body, { url: 'https://www.bilibili.com/video/BV1gW411w7ES/' });
   assert.deepEqual(calls[1].body, {
     url: 'https://www.douyin.com/video/123',
-    originalUrl: 'https://v.douyin.com/abc/',
-    userInput: '复制这段文案 https://v.douyin.com/abc/ 打开 App',
+    originalUrl: 'https://www.bilibili.com/video/BV1gW411w7ES/',
+    userInput: '复制这段文案 https://www.bilibili.com/video/BV1gW411w7ES/ 打开 App',
   });
   assert.equal(calls[0].options.method, 'POST');
   assert.equal(calls[0].options.headers['content-type'], 'application/json');
@@ -84,6 +84,36 @@ test('普通视频直链不调用第三方 parse 接口', async () => {
   assert.equal(calls, 0);
   assert.equal(result.platform, 'direct');
   assert.equal(result.videoUrl, 'https://media.example/path/demo.webm?download=1');
+});
+
+test('抖音分享链接使用备用解析，不依赖被 Cloudflare 拦截的旧解析站', async () => {
+  const calls = [];
+  const provider = new DyXhsDownloaderProvider({
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return new Response(JSON.stringify({
+        code: 200,
+        msg: '解析成功',
+        data: {
+          title: '抖音测试视频',
+          url: 'https://cdn.example/video-hd.mp4',
+          cover: 'https://cdn.example/cover.jpg',
+          author: { nickname: '作者' },
+          images: '当前为短视频解析模式',
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+
+  const result = await provider.resolve('复制打开抖音 https://v.douyin.com/abc123/');
+
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /^https:\/\/api\.xhus\.cn\/api\/douyin\?url=/);
+  assert.equal(calls[0].options.method, 'GET');
+  assert.equal(result.platform, 'douyin');
+  assert.equal(result.title, '抖音测试视频');
+  assert.equal(result.videoUrl, 'https://cdn.example/video-hd.mp4');
+  assert.equal(result.metadata.resolver, 'xhus');
 });
 
 test('图集结果会以可识别错误拒绝', async () => {

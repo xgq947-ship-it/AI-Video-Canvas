@@ -16,6 +16,7 @@ export const FLOW_DEFAULT_IMAGE_RESOLUTION = '2K';
 /** Current visible model defaults, used only when model discovery is unavailable. */
 export const FLOW_BASELINE_IMAGE_MODEL = 'NARWHAL';
 export const FLOW_BASELINE_VIDEO_MODEL = 'abra';
+export const FLOW_VIDEO_UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024;
 
 const IMAGE_ASPECT_RATIOS = Object.freeze({
     '1:1': 'IMAGE_ASPECT_RATIO_SQUARE',
@@ -89,6 +90,53 @@ export function parseUploadImageResponse(payload) {
         workflowId: payload?.media?.workflowId || '',
         width: payload?.media?.image?.dimensions?.width,
         height: payload?.media?.image?.dimensions?.height
+    };
+}
+
+export function buildStartVideoUploadRequest({ projectId, fileName, mimeType, size }) {
+    return {
+        url: `${FLOW_LABS_ORIGIN}/fx/api/upload-video?action=start`,
+        method: 'POST',
+        headers: {
+            'x-upload-project-id': String(projectId || ''),
+            'x-upload-content-length': String(size),
+            'x-upload-content-type': String(mimeType || 'video/mp4'),
+            'x-upload-file-name': encodeURIComponent(String(fileName || 'reference-video.mp4'))
+        }
+    };
+}
+
+export function parseStartVideoUploadResponse(payload) {
+    const sessionUrl = String(payload?.sessionUrl || '');
+    return sessionUrl ? { sessionUrl, status: String(payload?.status || '') } : null;
+}
+
+export function buildVideoUploadChunkRequest({ projectId, sessionUrl, fileName, offset, buffer, final }) {
+    return {
+        url: `${FLOW_LABS_ORIGIN}/fx/api/upload-video?action=upload`,
+        method: 'PUT',
+        headers: {
+            'content-type': 'application/octet-stream',
+            'x-upload-session-url': String(sessionUrl || ''),
+            'x-upload-offset': String(offset),
+            'x-upload-command': final ? 'upload, finalize' : 'upload',
+            'x-upload-project-id': String(projectId || ''),
+            'x-upload-file-name': encodeURIComponent(String(fileName || 'reference-video.mp4'))
+        },
+        body: Buffer.from(buffer)
+    };
+}
+
+export function parseVideoUploadResponse(payload) {
+    const mediaId = String(payload?.mediaServerId || '');
+    const workflowId = String(payload?.workflowServerId || '');
+    if (!mediaId || !workflowId) return null;
+    return {
+        mediaId,
+        workflowId,
+        status: String(payload?.status || ''),
+        width: Number(payload?.videoWidth) || undefined,
+        height: Number(payload?.videoHeight) || undefined
     };
 }
 
@@ -399,15 +447,24 @@ export function buildGenerateVideoRequest({
     seed,
     batchId,
     firstFrameMediaId = '',
-    referenceMediaIds = []
+    referenceMediaIds = [],
+    referenceVideo
 }) {
     const context = clientContext(auth);
     const references = referenceMediaIds.filter(Boolean);
+    if (referenceVideo && (firstFrameMediaId || references.length > 0)) {
+        throw new Error('Google Flow 参考视频不能与首帧或参考图混用');
+    }
     if (firstFrameMediaId && references.length > 0) {
         throw new Error('Google Flow 首帧模式与多参考图模式不能在同一请求中混用');
     }
-    const mode = references.length > 0 ? 'reference-images' : firstFrameMediaId ? 'start-image' : 'text';
-    const variant = resolveFlowVideoVariant({ modelFamily, mode, duration, aspectRatio });
+    if (referenceVideo && modelFamily !== 'abra') {
+        throw new Error('Google Flow 参考视频当前只支持 Omni Flash');
+    }
+    const mode = referenceVideo ? 'video-edit' : references.length > 0 ? 'reference-images' : firstFrameMediaId ? 'start-image' : 'text';
+    const variant = referenceVideo
+        ? { modelKey: 'abra_edit', apiPathname: 'batchAsyncGenerateVideoEditVideo' }
+        : resolveFlowVideoVariant({ modelFamily, mode, duration, aspectRatio });
 
     const requests = Array.from({ length: Math.max(1, count) }, (unused, index) => {
         const request = {
@@ -424,6 +481,14 @@ export function buildGenerateVideoRequest({
                 imageUsageType: 'IMAGE_USAGE_TYPE_ASSET'
             }));
         }
+        if (referenceVideo) {
+            request.metadata.workflowId = referenceVideo.workflowId;
+            request.videoInput = {
+                mediaId: referenceVideo.mediaId,
+                startFrameIndex: Number(referenceVideo.startFrameIndex) || 0,
+                endFrameIndex: Number(referenceVideo.endFrameIndex)
+            };
+        }
         return request;
     });
 
@@ -438,7 +503,7 @@ export function buildGenerateVideoRequest({
             mediaGenerationContext: { batchId, audioFailurePreference: 'BLOCK_SILENCED_VIDEOS' },
             clientContext: context,
             requests,
-            useV2ModelConfig: true
+            ...(referenceVideo ? {} : { useV2ModelConfig: true })
         })
     };
 }

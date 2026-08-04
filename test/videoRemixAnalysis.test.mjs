@@ -282,7 +282,11 @@ function makeAnalysisContext(t) {
   const global = globalFixture(shots.map(shot => shot.shotId));
   const analyzer = {
     analyzeVideo: async input => {
-      calls.push({ kind: 'global', files: [input.proxyFile] });
+      calls.push({
+        kind: 'global',
+        files: [input.proxyFile],
+        referenceFiles: input.referenceFiles || [],
+      });
       return global;
     },
     analyzeShot: async input => {
@@ -343,9 +347,16 @@ test('全片只上传一次，Shot 按复杂度使用三帧、五帧或完整片
     source,
     shots,
     mode: 'fast',
+    referenceFiles: [{
+      buffer: Buffer.from('product'),
+      fileName: 'reference-01.jpg',
+      mimeType: 'image/jpeg',
+      label: '产品参考图',
+    }],
   }, context);
   assert.ok(global.analysisKey);
   assert.equal(calls.filter(call => call.kind === 'global').length, 1);
+  assert.equal(calls.find(call => call.kind === 'global').referenceFiles[0].label, '产品参考图');
 
   for (const shot of shots) {
     await analyzeVideoRemixShot({

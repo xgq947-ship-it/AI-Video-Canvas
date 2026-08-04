@@ -1,5 +1,9 @@
 
 import type { VideoRemixState } from '../shared/videoRemix.js';
+import type {
+  VideoAnalysisInputPort,
+  VideoAnalysisNodeData,
+} from '../shared/videoAnalysis.js';
 
 export enum NodeType {
   TEXT = 'Text',
@@ -11,6 +15,7 @@ export enum NodeType {
   STORYBOARD = 'Storyboard Manager',
   CAMERA_ANGLE = 'Camera Angle',
   PRODUCT_SCENE_REPLACE = 'Product Scene Replace',
+  VIDEO_ANALYSIS = 'Video Analysis',
   VIDEO_REMIX = 'Video Remix',
   // Local open-source model nodes
   // AI 漫剧 0-1 生产节点（取值需与 shared/manifest.js 的 MANGA_NODE_TYPES 一致）
@@ -52,6 +57,10 @@ export interface NodeData {
   parentIds?: string[]; // For connecting lines (supports multiple inputs)
   groupId?: string; // ID of the group this node belongs to
   errorMessage?: string;
+  // True when the failed request was already accepted by the provider (quota
+  // consumed / task submitted). The result may exist in the provider's history,
+  // so blindly regenerating would spend quota a second time.
+  errorSubmitted?: boolean;
 
   // Text node specific
   textMode?: 'menu' | 'editing'; // For Text nodes: current mode
@@ -64,6 +73,13 @@ export interface NodeData {
   videoDuration?: number; // Video duration in seconds (e.g., 5, 6, 8, 10)
   generateAudio?: boolean; // 是否生成原生音频（如 Seedance）
   inputUrl?: string; // Input URL for video generation (image-to-video)
+  // 参考视频链接导入后保留来源元数据，节点可直接连接到视频分析。
+  videoSourceType?: 'url' | 'upload' | 'canvas' | 'generated';
+  videoSourceUrl?: string;
+  videoSourceLocalUrl?: string;
+  videoSourceId?: string;
+  videoSourcePlatform?: string;
+  videoSourceTitle?: string;
   subtitleSourceNodeId?: string; // 带字幕视频对应的源视频节点
   subtitleJobId?: string;
   subtitleJobStatus?: 'queued' | 'extracting' | 'transcribing' | 'rendering' | 'success' | 'failed' | 'cancelled';
@@ -207,6 +223,42 @@ export interface NodeData {
 
   // 仅兼容旧项目与项目级工作台适配器；新状态持久化在 workflow.videoRemixes[]。
   videoRemix?: VideoRemixState;
+
+  // 统一画布中的视频分析工作流节点。
+  videoAnalysis?: VideoAnalysisNodeData;
+  /** parentId -> 固定目标端口，连接语义不能依赖 parentIds 数组顺序。 */
+  inputPortByParentId?: Record<string, VideoAnalysisInputPort | string>;
+  outputPortId?: string;
+  inheritedReferences?: {
+    productNodeIds: string[];
+    characterNodeIds: string[];
+    sceneNodeIds: string[];
+  };
+  // 视频分析节点按可选资产提示词生成的三图一致性节点。
+  videoAnalysisAssetKind?: 'characters' | 'scenes' | 'props';
+  videoAnalysisAssetId?: string;
+  videoAnalysisAssetProfileId?: string;
+  videoAnalysisAssetRole?: 'main' | 'angle';
+  videoAnalysisAssetMainNodeId?: string;
+  videoAnalysisAssetMainLocked?: boolean;
+  // 该资产作为关键帧/视频的唯一选定参考图时，生成时不继续把它的
+  // 人物资产父链展开，避免把同一人物的三张图一起送入视频请求。
+  videoAnalysisAssetReferenceBoundary?: boolean;
+  origin?: {
+    type: 'video-remix';
+    analysisNodeId: string;
+    shotId?: string;
+    assetKind?: 'characters' | 'scenes' | 'props';
+    assetId?: string;
+    assetProfileId?: string;
+    assetRole?: 'main' | 'angle';
+    layoutVersion?: number;
+    order?: number;
+    role: 'keyframe' | 'video' | 'asset' | 'final';
+  };
+  promptSource?: 'analysis' | 'user';
+  promptLocked?: boolean;
+  needsUpdate?: boolean;
 
   // ==========================================================================
   // AI 漫剧生产节点字段（配音/音效/BGM/字幕/成片）

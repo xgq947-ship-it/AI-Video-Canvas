@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { removeCanvasConnection, removeCanvasConnections } from '../src/utils/canvasEdges.js';
+import { removeCanvasConnection, removeCanvasConnections, wouldCreateCycle } from '../src/utils/canvasEdges.js';
 
 test('删除 Edge 只改 child.parentIds，不删除节点、生成资源或其它连接', () => {
   const nodes = [
@@ -77,4 +77,54 @@ test('显式 input mapping 为空时不会因旧标量字段而复活已经断�
   assert.equal(next[0].productSceneInputMapping.sceneReferenceNodeId, undefined);
   assert.equal(next[0].productSceneInputMapping.productImageNodeId, undefined);
   assert.equal(next[0].productSceneInputMapping.promptSourceNodeId, undefined);
+});
+
+test('wouldCreateCycle：直接回连 A→B→A 会成环', () => {
+  const nodes = [
+    { id: 'a', type: 'Image' },
+    { id: 'b', type: 'Image', parentIds: ['a'] }, // a → b 已存在
+  ];
+  // 再连 b → a 会闭环
+  assert.equal(wouldCreateCycle(nodes, 'b', 'a'), true);
+});
+
+test('wouldCreateCycle：间接回连 A→B→C→A 会成环', () => {
+  const nodes = [
+    { id: 'a', type: 'Video' },
+    { id: 'b', type: 'Video', parentIds: ['a'] },
+    { id: 'c', type: 'Video', parentIds: ['b'] },
+  ];
+  assert.equal(wouldCreateCycle(nodes, 'c', 'a'), true);
+});
+
+test('wouldCreateCycle：自连算成环', () => {
+  assert.equal(wouldCreateCycle([{ id: 'a' }], 'a', 'a'), true);
+});
+
+test('wouldCreateCycle：正常向前连接与重连既有边不算成环', () => {
+  const nodes = [
+    { id: 'a', type: 'Image' },
+    { id: 'b', type: 'Image', parentIds: ['a'] },
+    { id: 'c', type: 'Image' },
+  ];
+  // a → b 已存在，重新拖同一条边不应被判成环
+  assert.equal(wouldCreateCycle(nodes, 'a', 'b'), false);
+  // 新增前向边 b → c 合法
+  assert.equal(wouldCreateCycle(nodes, 'b', 'c'), false);
+  // 汇聚：a 再连到 c（c 无下游）合法
+  assert.equal(wouldCreateCycle(nodes, 'a', 'c'), false);
+});
+
+test('wouldCreateCycle：菱形（多父）不会误判为环', () => {
+  // a → b, a → c, b → d, c → d（钻石），再把 d 连到一个全新的 e 合法
+  const nodes = [
+    { id: 'a' },
+    { id: 'b', parentIds: ['a'] },
+    { id: 'c', parentIds: ['a'] },
+    { id: 'd', parentIds: ['b', 'c'] },
+    { id: 'e' },
+  ];
+  assert.equal(wouldCreateCycle(nodes, 'd', 'e'), false);
+  // 但把 d 连回 a 会成环
+  assert.equal(wouldCreateCycle(nodes, 'd', 'a'), true);
 });

@@ -116,7 +116,6 @@ export const ImageEditorModal: React.FC<ImageEditorModalProps> = ({
     });
 
     const text = useImageEditorText({
-        imageRef,
         saveState,
         setElements
     });
@@ -264,7 +263,6 @@ export const ImageEditorModal: React.FC<ImageEditorModalProps> = ({
         onCropApply: handleCropApply
     });
 
-    const currentModel = IMAGE_MODELS.find(m => m.id === selectedModel) || IMAGE_MODELS[0];
     const hasInputImage = !!imageUrl;
 
     // --- Effects ---

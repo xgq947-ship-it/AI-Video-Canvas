@@ -337,7 +337,14 @@ async function detectScenes(proxyPath, threshold, context) {
 
 function analysisFrameTimes(shot) {
   const duration = Math.max(0, Number(shot.end) - Number(shot.start));
-  const endInset = Math.min(0.04, duration * 0.05);
+  // The proxy's declared duration can end slightly after its last decodable
+  // frame. A 40ms inset is not enough for short/VFR clips: the bundled FFmpeg
+  // may exit successfully while writing no JPEG at all. Keep the sample near
+  // the end, but leave enough decode room for the final real frame.
+  const endInset = Math.min(
+    duration * 0.45,
+    Math.max(0.08, Math.min(0.2, duration * 0.05)),
+  );
   const ratios = [0, 0.25, 0.5, 0.75, 1];
   return SHOT_ANALYSIS_FRAME_POSITIONS.map((position, index) => ({
     position,
@@ -387,6 +394,22 @@ async function extractAnalysisFrames(shots, proxyPath, runDirectory, publicRunPr
           timeoutMs: context.frameTimeoutMs || 45_000,
           label: `提取 ${shotId} 分析帧`,
         });
+        let stat;
+        try {
+          stat = await fsp.stat(outputPath);
+        } catch (error) {
+          throw new ShotPreprocessingError(`提取 ${shotId} ${frame.position} 分析帧失败，请重试`, {
+            code: 'SHOT_FRAME_NOT_CREATED',
+            status: 422,
+            cause: error,
+          });
+        }
+        if (!stat.isFile() || stat.size === 0) {
+          throw new ShotPreprocessingError(`提取 ${shotId} ${frame.position} 分析帧失败，请重试`, {
+            code: 'SHOT_FRAME_NOT_CREATED',
+            status: 422,
+          });
+        }
       });
       return {
         ...frame,

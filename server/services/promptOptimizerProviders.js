@@ -175,7 +175,7 @@ async function runCodexCli({ systemInstruction, userPrompt, model, effort, image
         '--output-last-message', outFile
     ];
     if (model) args.push('--model', model);
-    if (effort) args.push('-c', `model_reasoning_effort=${effort}`); // low / medium / high
+    if (effort) args.push('-c', `model_reasoning_effort=${effort}`); // minimal / low / medium / high / xhigh
     // `--image` accepts a variable number of values, so the positional prompt
     // must appear before it or Codex will consume the prompt as another filename.
     args.push(combined);
@@ -239,7 +239,8 @@ export const PROMPT_OPTIMIZER_PROVIDERS = {
         label: 'Claude CLI（本机）',
         supportsImage: false,
         apiKeyField: null,             // 走本机已登录的 CLI，无需密钥
-        defaultModel: 'claude-sonnet-5',
+        // 使用 CLI 官方别名，避免把某个具体快照锁死；用户仍可在设置中指定完整模型 ID。
+        defaultModel: 'sonnet',
         defaultEffort: 'high',         // --effort 档位：low/medium/high/xhigh/max
         run: runClaudeCli
     },
@@ -247,8 +248,8 @@ export const PROMPT_OPTIMIZER_PROVIDERS = {
         label: 'Codex CLI（本机）',
         supportsImage: true,
         apiKeyField: null,
-        defaultModel: 'gpt-5.6-sol',
-        defaultEffort: 'medium',       // model_reasoning_effort：low/medium/high
+        defaultModel: 'gpt-5.6-luna',
+        defaultEffort: 'xhigh',        // 参考 Codex 界面的「5.6 Luna · 最高」
         run: runCodexCli
     },
     'gemini-web': {

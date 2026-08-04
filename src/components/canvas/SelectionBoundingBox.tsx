@@ -7,6 +7,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { NodeData, NodeGroup, NodeType } from '../../types';
+import { VIDEO_ANALYSIS_NODE_HEIGHT } from '../../features/video-analysis/VideoAnalysisNode';
 
 interface SelectionBoundingBoxProps {
     selectedNodes: NodeData[];
@@ -68,6 +69,7 @@ const getNodeWidth = (node: NodeData, allNodes?: NodeData[]): number => {
     if (node.type === NodeType.VIDEO) return 385;
     if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 460;
     if (node.type === NodeType.VIDEO_REMIX) return 420;
+    if (node.type === NodeType.VIDEO_ANALYSIS) return 420;
     return 365;
 };
 
@@ -82,6 +84,7 @@ const getNodeHeight = (node: NodeData, allNodes?: NodeData[]): number => {
     // 716 是浏览器里实测的卡片高度，改动节点表单后要重新量，否则连线端点会偏。
     if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 716;
     if (node.type === NodeType.VIDEO_REMIX) return 306;
+    if (node.type === NodeType.VIDEO_ANALYSIS) return VIDEO_ANALYSIS_NODE_HEIGHT;
     const baseWidth = getNodeWidth(node, allNodes);
 
     // Handle Image Editor nodes

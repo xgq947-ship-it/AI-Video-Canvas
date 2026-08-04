@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback } from 'react';
 import { CharacterAsset } from '../hooks/useStoryboardGenerator';
 
 interface StoryInputProps {
@@ -83,7 +83,7 @@ export const StoryInput: React.FC<StoryInputProps> = ({
             preSelectionRange.selectNodeContents(containerEl);
             preSelectionRange.setEnd(range.startContainer, range.startOffset);
             return preSelectionRange.toString().length;
-        } catch (e) {
+        } catch {
             return null;
         }
     };
@@ -150,7 +150,7 @@ export const StoryInput: React.FC<StoryInputProps> = ({
         lastValue.current = value;
     }, [value, textToHtml]);
 
-    const handleInput = (e: React.SyntheticEvent<HTMLDivElement>) => {
+    const handleInput = () => {
         if (ref.current) {
             const plainText = ref.current.innerText;
             if (plainText !== lastValue.current) {

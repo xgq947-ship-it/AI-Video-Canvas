@@ -16,9 +16,7 @@ import {
     Grid,
     Line,
     Sphere,
-    Box,
-    useTexture,
-    Html
+    Box
 } from '@react-three/drei';
 import * as THREE from 'three';
 
@@ -50,7 +48,6 @@ interface SceneProps {
 
 const ORBIT_RADIUS = 2.5;
 const SPHERE_SIZE = 0.18;
-const ARC_TUBE_RADIUS = 0.04;
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -371,10 +368,9 @@ interface CameraIndicatorProps {
     rotation: number;
     tilt: number;
     liveAngles: React.MutableRefObject<LiveAnglesRef>;
-    isDragging: boolean;
 }
 
-const CameraIndicator: React.FC<CameraIndicatorProps> = ({ rotation, tilt, liveAngles, isDragging }) => {
+const CameraIndicator: React.FC<CameraIndicatorProps> = ({ rotation, tilt, liveAngles }) => {
     const groupRef = useRef<THREE.Group>(null);
 
     // Calculate position from angles
@@ -430,48 +426,6 @@ const CameraIndicator: React.FC<CameraIndicatorProps> = ({ rotation, tilt, liveA
             <Sphere args={[0.12, 16, 16]} position={[0, 0, -0.22]}>
                 <meshStandardMaterial color="#fbbf24" emissive="#fbbf24" emissiveIntensity={0.5} />
             </Sphere>
-        </group>
-    );
-};
-
-// ============================================================================
-// AXIS HELPER
-// ============================================================================
-
-const AxisLines: React.FC = () => {
-    const axisLength = 0.8;
-
-    return (
-        <group position={[-3.5, 0, -1.5]}>
-            {/* X axis (red) */}
-            <Line
-                points={[[0, 0, 0], [axisLength, 0, 0]]}
-                color="#ef4444"
-                lineWidth={3}
-            />
-            <Html position={[axisLength + 0.15, 0, 0]} center>
-                <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: '14px' }}>X</span>
-            </Html>
-
-            {/* Y axis (green) */}
-            <Line
-                points={[[0, 0, 0], [0, axisLength, 0]]}
-                color="#22c55e"
-                lineWidth={3}
-            />
-            <Html position={[0, axisLength + 0.15, 0]} center>
-                <span style={{ color: '#22c55e', fontWeight: 'bold', fontSize: '14px' }}>Y</span>
-            </Html>
-
-            {/* Z axis (blue) */}
-            <Line
-                points={[[0, 0, 0], [0, 0, axisLength]]}
-                color="#3b82f6"
-                lineWidth={3}
-            />
-            <Html position={[0, 0, axisLength + 0.1]} center>
-                <span style={{ color: '#3b82f6', fontWeight: 'bold', fontSize: '14px' }}>Z</span>
-            </Html>
         </group>
     );
 };
@@ -682,7 +636,6 @@ const Scene: React.FC<SceneProps> = ({
                 rotation={rotation}
                 tilt={tilt}
                 liveAngles={liveAngles}
-                isDragging={dragging !== null}
             />
 
             {/* Dashed line from camera to image center */}
@@ -766,5 +719,3 @@ export const OrbitCameraControl: React.FC<OrbitCameraControlProps> = ({
         </div>
     );
 };
-
-export default OrbitCameraControl;

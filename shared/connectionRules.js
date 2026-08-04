@@ -13,6 +13,7 @@ export const NODE = {
   IMAGE_EDITOR: 'Image Editor',
   VIDEO_EDITOR: 'Video Editor',
   PRODUCT_SCENE_REPLACE: 'Product Scene Replace',
+  VIDEO_ANALYSIS: 'Video Analysis',
   VIDEO_REMIX: 'Video Remix',
   SFX: 'SFX',
   BGM: 'BGM',
@@ -33,6 +34,20 @@ export const isValidNodeConnection = (parentType, childType) => {
   if (parentType === NODE.RENDER) return false;
   // 任何节点都不能连向 TEXT（文本不接收输入）
   if (childType === NODE.TEXT) return false;
+
+  // Video Analysis only accepts media references on its fixed input ports.
+  // Port assignment is handled by the canvas connection layer; this rule only
+  // guards the node-level type boundary.
+  if (childType === NODE.VIDEO_ANALYSIS) {
+    return parentType === NODE.VIDEO || parentType === NODE.IMAGE || parentType === NODE.IMAGE_EDITOR;
+  }
+
+  // The analysis result is a workflow source for ordinary image/video nodes
+  // and for the final render node. Reference images are inherited through the
+  // analysis node instead of being connected to every shot node.
+  if (parentType === NODE.VIDEO_ANALYSIS) {
+    return childType === NODE.IMAGE || childType === NODE.VIDEO || childType === NODE.RENDER;
+  }
 
   // RENDER 可接收：视频镜头 / 视频编辑 / 音轨(配音·音效·BGM) / 字幕
   if (childType === NODE.RENDER) {

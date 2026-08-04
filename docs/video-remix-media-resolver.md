@@ -4,7 +4,11 @@
 
 ## 公开页面协议
 
-目标站点：`https://dyxhsdownloader.com/`
+主协议目标站点：`https://dyxhsdownloader.com/`
+
+抖音短链优先使用 `https://api.xhus.cn/api/douyin` 的 JSON 接口；TikTok 使用 TikWM
+接口。原因是主站当前会对服务端请求返回 Cloudflare challenge 页面，不能再把 HTML 当 JSON
+解析。主站仍保留给 B 站、小红书等其它链接类型使用。
 
 公开页面前端先从用户粘贴的整段文案中提取 URL，然后依次调用两个同源 JSON 接口。
 

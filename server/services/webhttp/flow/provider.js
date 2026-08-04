@@ -11,6 +11,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import sharp from 'sharp';
 
 import {
@@ -24,9 +26,12 @@ import { downloadResultMedia, loadReferenceImageFiles, requireNonEmptyPrompt } f
 import {
     FLOW_BASELINE_IMAGE_MODEL,
     FLOW_BASELINE_VIDEO_MODEL,
+    FLOW_VIDEO_UPLOAD_CHUNK_BYTES,
     FLOW_VIDEO_FAMILY_CAPABILITIES,
     buildGenerateImagesRequest,
     buildGenerateVideoRequest,
+    buildStartVideoUploadRequest,
+    buildVideoUploadChunkRequest,
     buildFlowMediaUrl,
     buildProjectMediaRequest,
     buildUpsampleImageRequest,
@@ -40,8 +45,11 @@ import {
     parseGenerateVideoResponse,
     parseUpsampleImageResponse,
     parseUploadImageResponse,
+    parseStartVideoUploadResponse,
+    parseVideoUploadResponse,
     validateFlowImageDimensions
 } from './protocol.js';
+import { probeReferenceVideo } from '../../videoRemix/referenceVideo.js';
 
 const PROVIDER = 'google-flow';
 const PROVIDER_NAME = 'Google Flow';
@@ -466,6 +474,90 @@ export async function generateFlowImageHttp({
 
 const VIDEO_POLL_INTERVAL_MS = 10_000;
 
+function videoMimeType(filePath) {
+    const extension = path.extname(filePath).toLowerCase();
+    if (extension === '.mov') return 'video/quicktime';
+    if (extension === '.webm') return 'video/webm';
+    return 'video/mp4';
+}
+
+function resolveLocalLibraryVideo(input, libraryDir) {
+    if (!input || typeof input !== 'string') return null;
+    let candidate = input;
+    if (candidate.startsWith('http://') || candidate.startsWith('https://')) {
+        const url = new URL(candidate);
+        if (!['localhost', '127.0.0.1', '::1'].includes(url.hostname)) return null;
+        candidate = url.pathname;
+    }
+    if (!candidate.startsWith('/library/')) return null;
+    const cleanPath = decodeURIComponent(candidate.split('?')[0].split('#')[0]);
+    const root = path.resolve(libraryDir);
+    const resolved = path.resolve(root, cleanPath.replace(/^\/library\//, ''));
+    if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
+        throw new WebProviderError('Google Flow 参考视频路径超出素材库范围', {
+            provider: PROVIDER, code: 'INVALID_INPUT', submitted: false
+        });
+    }
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+        throw new WebProviderError('Google Flow 参考视频文件不存在', {
+            provider: PROVIDER, code: 'INVALID_INPUT', submitted: false
+        });
+    }
+    return resolved;
+}
+
+async function uploadReferenceVideo(auth, filePath, { signal }) {
+    const stat = fs.statSync(filePath);
+    if (!(stat.size > 0)) {
+        throw new WebProviderError('Google Flow 参考视频为空文件', {
+            provider: PROVIDER, code: 'INVALID_INPUT', submitted: false
+        });
+    }
+    const fileName = path.basename(filePath);
+    const start = await webFetchOk(PROVIDER, buildRequestSpec(buildStartVideoUploadRequest({
+        projectId: auth.projectId,
+        fileName,
+        mimeType: videoMimeType(filePath),
+        size: stat.size
+    })), { signal, submitted: false, what: '参考视频上传初始化' });
+    const session = parseStartVideoUploadResponse(start.json());
+    if (!session) {
+        throw new WebProviderError(`${PROVIDER_NAME} 没有返回参考视频上传会话`, {
+            provider: PROVIDER, code: 'PROTOCOL_CHANGED', submitted: false
+        });
+    }
+
+    const handle = fs.openSync(filePath, 'r');
+    try {
+        let offset = 0;
+        let completed = null;
+        while (offset < stat.size) {
+            const size = Math.min(FLOW_VIDEO_UPLOAD_CHUNK_BYTES, stat.size - offset);
+            const buffer = Buffer.allocUnsafe(size);
+            fs.readSync(handle, buffer, 0, size, offset);
+            const final = offset + size === stat.size;
+            const response = await webFetchOk(PROVIDER, buildRequestSpec(buildVideoUploadChunkRequest({
+                projectId: auth.projectId,
+                sessionUrl: session.sessionUrl,
+                fileName,
+                offset,
+                buffer,
+                final
+            })), { signal, submitted: false, what: '参考视频上传' });
+            if (final) completed = parseVideoUploadResponse(response.json());
+            offset += size;
+        }
+        if (!completed) {
+            throw new WebProviderError(`${PROVIDER_NAME} 参考视频上传完成但没有返回媒体 ID`, {
+                provider: PROVIDER, code: 'PROTOCOL_CHANGED', submitted: false
+            });
+        }
+        return completed;
+    } finally {
+        fs.closeSync(handle);
+    }
+}
+
 /**
  * Text-to-video and image-to-video.
  *
@@ -477,6 +569,7 @@ export async function generateFlowVideoHttp({
     prompt,
     firstFrameInput,
     referenceImageInputs = [],
+    referenceVideoInput,
     aspectRatio = '16:9',
     duration = 4,
     count = 1,
@@ -486,10 +579,32 @@ export async function generateFlowVideoHttp({
     signal
 }) {
     const cleanPrompt = requireNonEmptyPrompt(prompt, `${PROVIDER_NAME} 视频`);
+    if (referenceVideoInput && (firstFrameInput || referenceImageInputs.length > 0)) {
+        throw new WebProviderError('Google Flow 参考视频不能与参考图或首帧混用', {
+            provider: PROVIDER, code: 'INVALID_INPUT', submitted: false
+        });
+    }
     const frameInputs = [firstFrameInput, ...referenceImageInputs].filter(Boolean);
     const files = await loadReferenceImageFiles(frameInputs, libraryDir, { providerName: PROVIDER_NAME });
-    const uploadAuth = files.length ? await getFlowAuth({ signal, forceRefresh: true }) : null;
+    const referenceVideoPath = referenceVideoInput
+        ? resolveLocalLibraryVideo(referenceVideoInput, libraryDir)
+        : null;
+    if (referenceVideoInput && !referenceVideoPath) {
+        throw new WebProviderError('Google Flow 参考视频必须来自当前素材库', {
+            provider: PROVIDER, code: 'INVALID_INPUT', submitted: false
+        });
+    }
+    const probe = referenceVideoPath ? await probeReferenceVideo(referenceVideoPath) : null;
+    if (probe && probe.duration > 10.05) {
+        throw new WebProviderError(`Google Flow 参考视频最多 10 秒，当前为 ${probe.duration.toFixed(2)} 秒`, {
+            provider: PROVIDER, code: 'INVALID_INPUT', submitted: false
+        });
+    }
+    const uploadAuth = (files.length || referenceVideoPath) ? await getFlowAuth({ signal, forceRefresh: true }) : null;
     const mediaIds = files.length ? await uploadReferenceImages(uploadAuth, files, { signal }) : [];
+    const uploadedVideo = referenceVideoPath
+        ? await uploadReferenceVideo(uploadAuth, referenceVideoPath, { signal })
+        : null;
     const auth = await getFlowAuth({ signal, forceRefresh: true, recaptchaAction: 'VIDEO_GENERATION' });
 
     const batchId = randomUUID();
@@ -503,7 +618,13 @@ export async function generateFlowVideoHttp({
         count,
         batchId,
         firstFrameMediaId: firstFrameInput ? mediaIds[0] : '',
-        referenceMediaIds: firstFrameInput ? mediaIds.slice(1) : mediaIds
+        referenceMediaIds: firstFrameInput ? mediaIds.slice(1) : mediaIds,
+        referenceVideo: uploadedVideo ? {
+            mediaId: uploadedVideo.mediaId,
+            workflowId: uploadedVideo.workflowId,
+            startFrameIndex: 0,
+            endFrameIndex: Math.max(1, Math.round(probe.duration * 30))
+        } : null
     });
     const response = await webFetchOk(PROVIDER, buildRequestSpec(spec), {
         signal,

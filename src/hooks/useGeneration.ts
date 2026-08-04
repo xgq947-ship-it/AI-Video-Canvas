@@ -30,9 +30,13 @@ interface UseGenerationProps {
     updateNode: (id: string, updates: Partial<NodeData>) => void;
     addNodes: (nodes: NodeData[]) => void;
     workflowId?: string | null;
+    // Surfaced feedback for failures the node itself cannot show — chiefly a
+    // regeneration that fails while we keep the previous result (status stays
+    // SUCCESS, so the node's error UI never renders and the user sees nothing).
+    notify?: (message: string) => void;
 }
 
-export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGenerationProps) => {
+export const useGeneration = ({ nodes, updateNode, addNodes, workflowId, notify }: UseGenerationProps) => {
     // ============================================================================
     // HELPERS
     // ============================================================================
@@ -119,7 +123,15 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
         // Combine prompts: TEXT node prompts + node's own prompt
         const textNodePrompts = getTextNodePrompts();
         const combinedPrompt = [...textNodePrompts, node.prompt].filter(Boolean).join('\n\n');
-        const directReferences = collectNodeReferences(node.parentIds, nodes);
+        // Canvas-native remix nodes keep their semantic source/product/character/
+        // scene inputs in inheritedReferences instead of duplicating graph edges.
+        // Resolve both sets here so the existing image/video providers receive the
+        // same reference bundle regardless of whether the input is a direct edge.
+        const generationParentIds = [...new Set([
+            ...(node.parentIds || []),
+            ...Object.values(node.inheritedReferences || {}).flat(),
+        ])];
+        const directReferences = collectNodeReferences(generationParentIds, nodes);
         const explicitReferenceLabels = extractReferenceLabels(combinedPrompt, directReferences);
         const selectedReferences = selectPromptReferences(directReferences, combinedPrompt);
         const selectedReferenceIds = new Set(selectedReferences.map(reference => reference.id));
@@ -141,7 +153,8 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
             generationStartTime: Date.now(),
             codexJobId: undefined,
             codexJobStatus: undefined,
-            errorMessage: undefined
+            errorMessage: undefined,
+            errorSubmitted: undefined
         });
 
         try {
@@ -219,8 +232,8 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                 // A linear role workflow therefore keeps the original face identity image
                 // in every downstream request instead of replacing it with only the
                 // immediately preceding composite/full-body output.
-                if (node.parentIds && node.parentIds.length > 0) {
-                    const pendingParentIds = node.parentIds.filter(parentId => shouldUseReferenceParent(parentId));
+                if (generationParentIds.length > 0) {
+                    const pendingParentIds = generationParentIds.filter(parentId => shouldUseReferenceParent(parentId));
                     const visitedParentIds = new Set<string>();
                     const addedUrls = new Set<string>();
 
@@ -252,9 +265,14 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                             }
                         }
 
-                        for (const ancestorId of parent.parentIds || []) {
-                            if (!visitedParentIds.has(ancestorId)) {
-                                pendingParentIds.push(ancestorId);
+                        // 统一画布的选定资产参考图是引用边界：它可以依赖
+                        // 人物三图链生成自身，但下游关键帧/视频只继续使用
+                        // 这张选定图，不把同一人物的其它资产图展开进去。
+                        if (!parent.videoAnalysisAssetReferenceBoundary) {
+                            for (const ancestorId of parent.parentIds || []) {
+                                if (!visitedParentIds.has(ancestorId)) {
+                                    pendingParentIds.push(ancestorId);
+                                }
                             }
                         }
                     }
@@ -400,7 +418,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                 const isSeedanceModel = !!node.videoModel?.startsWith('seedance-');
                 const supportsSeedanceReferenceAudio = node.videoModel === 'seedance-2-0' || node.videoModel === 'seedance-2-0-fast';
                 const connectedSeedanceAudioUrls = isSeedanceModel
-                    ? (node.parentIds || [])
+                    ? generationParentIds
                         .filter(parentId => shouldUseReferenceParent(parentId))
                         .map(parentId => nodes.find(n => n.id === parentId))
                         .filter(parent => parent?.type === NodeType.AUDIO && parent.mediaUrl)
@@ -414,7 +432,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
 
                 // Only visual parents participate in first/last-frame selection.
                 // Connected AUDIO nodes are handled separately as Seedance references.
-                const imageParentIds = node.parentIds?.filter(pid => {
+                const imageParentIds = generationParentIds.filter(pid => {
                     if (!shouldUseReferenceParent(pid)) return false;
                     const parent = nodes.find(n => n.id === pid);
                     // 产品场景替换的控制节点没有 resultUrl，成图在它的子 Image 节点上，
@@ -432,6 +450,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                 //   即梦        —— 没有首帧概念，连 1 张就是参考素材。
                 let videoReferenceImages: string[] | undefined;
                 let videoReferenceLabels: string[] | undefined;
+                let referenceVideo: string | undefined;
                 // 图和它的名字必须来自**同一条有序列表**：节点面板显示的标签来自
                 // collectNodeReferences，如果这里另起一份 imageParentIds 推导，
                 // 两边顺序/子集一旦不同，提示词里的 @参考图2 就会指到别的图。
@@ -441,20 +460,31 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                     && Boolean(reference.previewUrl || reference.url)
                 );
                 const videoProvider = getVideoGenerationProvider(node.videoModel);
+                const selectedVideoReferences = visualReferences.filter(reference => reference.kind === 'video');
+                if (selectedVideoReferences.length > 0) {
+                    if (!videoProvider?.supportsVideoReference) {
+                        throw new Error(`${videoProvider?.name || '当前模型'}不支持参考视频生成视频`);
+                    }
+                    if (selectedVideoReferences.length !== 1 || visualReferences.length !== 1) {
+                        throw new Error('Google Flow 参考视频模式只能连接 1 个视频，不能同时连接参考图');
+                    }
+                    referenceVideo = selectedVideoReferences[0].url;
+                }
                 if (videoProvider && visualReferences.length > videoProvider.maxReferenceImages) {
                     throw new Error(`${videoProvider.name} 最多支持 ${videoProvider.maxReferenceImages} 张参考图`);
                 }
-                const useReferenceImages = shouldUseReferenceImages(node.videoModel, visualReferences.length);
+                const imageReferences = visualReferences.filter(reference => reference.kind === 'image');
+                const useReferenceImages = !referenceVideo && shouldUseReferenceImages(node.videoModel, imageReferences.length);
                 if (useReferenceImages) {
-                    videoReferenceImages = visualReferences.map(reference => (reference.previewUrl || reference.url)!);
-                    videoReferenceLabels = visualReferences.map(reference => reference.label);
+                    videoReferenceImages = imageReferences.map(reference => (reference.previewUrl || reference.url)!);
+                    videoReferenceLabels = imageReferences.map(reference => reference.label);
                     const minimum = minimumReferenceImages(node.videoModel);
                     if (videoReferenceImages.length < minimum) {
                         throw new Error(`多参考图需要至少 ${minimum} 张已生成的图片，请检查连接的图片节点是否都已出图`);
                     }
                 }
 
-                const isFrameToFrame = !useReferenceImages && (node.videoMode === 'frame-to-frame' || hasMultipleInputs || hasExplicitFrameInputs);
+                const isFrameToFrame = !referenceVideo && !useReferenceImages && (node.videoMode === 'frame-to-frame' || hasMultipleInputs || hasExplicitFrameInputs);
 
                 if (isFrameToFrame && imageParentIds.length >= 2) {
                     // Get start and end frames from frameInputs (if user reordered) or default order
@@ -484,7 +514,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                         if (parent1?.resultUrl) imageBase64 = parent1.resultUrl;
                         if (parent2?.resultUrl) lastFrameBase64 = parent2.resultUrl;
                     }
-                } else if (imageParentIds.length > 0) {
+                } else if (!referenceVideo && imageParentIds.length > 0) {
                     // Standard mode: get first parent image or video last frame.
                     const parent = nodes.find(n => n.id === imageParentIds[0]);
 
@@ -508,6 +538,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                     imageBase64,
                     lastFrameBase64,
                     referenceImages: videoReferenceImages,
+                    referenceVideo,
                     referenceImageLabels: videoReferenceLabels,
                     aspectRatio: node.aspectRatio,
                     resolution: node.resolution,
@@ -522,8 +553,15 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                 // (Backend uses nodeId as filename, so URL is the same for regenerated videos)
                 const resultUrl = `${rawResultUrl}?t=${Date.now()}`;
 
-                // Extract last frame for chaining
-                const lastFrame = await extractVideoLastFrame(resultUrl);
+                // Last frame is an auxiliary reference for the next node. It
+                // must never keep a successfully generated video in LOADING
+                // when Chromium cannot seek a remote file to its exact end.
+                let lastFrame: string | undefined;
+                try {
+                    lastFrame = await extractVideoLastFrame(resultUrl);
+                } catch (error) {
+                    console.warn('视频已生成，但尾帧提取失败，继续保存视频结果:', error);
+                }
 
                 // Detect video aspect ratio
                 let resultAspectRatio: string | undefined;
@@ -566,9 +604,17 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                 errorMessage = '⚠️ Input image incompatible. Veo requires: JPEG format, 16:9 or 9:16 aspect ratio. Try a different image or generate without input.';
             }
 
+            // The provider already accepted (and billed) the request when it flags
+            // `submitted`, or when the message carries the platform recovery notice.
+            // Surface that so the node can warn before a quota-spending retry.
+            const errorSubmitted = error?.submitted === true
+                || errorMessage.includes('不要直接重新生成')
+                || undefined;
+
             updateNode(id, {
                 status: node.resultUrl ? NodeStatus.SUCCESS : NodeStatus.ERROR,
                 errorMessage,
+                errorSubmitted,
                 productSceneStage: undefined,
                 productSceneJobStatus: node.type === NodeType.PRODUCT_SCENE_REPLACE ? 'failed' : undefined,
                 productSceneStageLabel: node.type === NodeType.PRODUCT_SCENE_REPLACE ? '任务创建失败' : undefined,
@@ -580,6 +626,11 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId }: UseGe
                 // 导致 waitForNodeResult 一直等不到 ERROR 状态、卡住整整一小时超时——
                 // 期间 generationPromisesRef 里的 promise 不会清掉，点重新生成/运行没有任何反应。
             });
+            // 保留上次结果的节点会停在 SUCCESS，错误 UI 不渲染 → 用户点了重新生成却毫无反馈。
+            // 用 toast 补一条提示，让「重试失败、仍是旧结果」这件事看得见。
+            if (node.resultUrl) {
+                notify?.(`重新生成失败，已保留上次结果：${errorMessage}`);
+            }
             console.error('Generation failed:', error);
         }
     };

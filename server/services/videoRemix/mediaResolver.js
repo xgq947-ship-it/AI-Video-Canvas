@@ -1,7 +1,10 @@
 const DEFAULT_RESOLVER_ORIGIN = 'https://dyxhsdownloader.com';
+const XHUS_DOUYIN_API_ORIGIN = 'https://api.xhus.cn/api/douyin';
+const TIKWM_API_ORIGIN = 'https://www.tikwm.com/api/';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DIRECT_VIDEO_EXTENSION_RE = /\.(?:mp4|mov|webm)(?:$|[?#])/i;
 const TRAILING_SHARE_PUNCTUATION_RE = /[)\]}>，。！？；：、）》】」』"'`.,!?;:]+$/u;
+const TIKWM_HOST_RE = /(?:^|\.)(?:douyin\.com|iesdouyin\.com|tiktok\.com)$/i;
 
 export class MediaResolverError extends Error {
   constructor(message, { code = 'MEDIA_RESOLVER_FAILED', status = 502, cause } = {}) {
@@ -62,10 +65,14 @@ async function readJsonResponse(response, endpointName) {
   try {
     payload = await response.json();
   } catch (error) {
-    throw new MediaResolverError(`${endpointName}返回了无法识别的数据`, {
-      code: 'MEDIA_RESOLVER_PROTOCOL_CHANGED',
-      cause: error,
-    });
+    const contentType = response.headers?.get?.('content-type') || '';
+    throw new MediaResolverError(
+      `${endpointName}返回了无法识别的数据（HTTP ${response.status}${contentType ? `，${contentType}` : ''}），解析服务可能被安全验证拦截`,
+      {
+        code: 'MEDIA_RESOLVER_PROTOCOL_CHANGED',
+        cause: error,
+      }
+    );
   }
   if (!response.ok) {
     throw new MediaResolverError(
@@ -107,6 +114,124 @@ async function postJson(fetchImpl, url, body, timeoutMs) {
   } finally {
     timeout.clear();
   }
+}
+
+async function getJson(fetchImpl, url, timeoutMs, endpointName) {
+  const timeout = createTimeoutSignal(timeoutMs);
+  try {
+    const response = await fetchImpl(url, {
+      method: 'GET',
+      headers: {
+        accept: 'application/json',
+        'user-agent': 'Mozilla/5.0 Evan AI Video Canvas',
+      },
+      signal: timeout.signal,
+    });
+    return await readJsonResponse(response, endpointName);
+  } catch (error) {
+    if (error instanceof MediaResolverError) throw error;
+    const timedOut = timeout.signal.aborted;
+    throw new MediaResolverError(
+      timedOut ? '备用媒体解析服务请求超时，请稍后重试' : `备用媒体解析服务不可用：${error?.message || '网络请求失败'}`,
+      {
+        code: timedOut ? 'MEDIA_RESOLVER_TIMEOUT' : 'MEDIA_RESOLVER_UNAVAILABLE',
+        cause: error,
+      }
+    );
+  } finally {
+    timeout.clear();
+  }
+}
+
+function isTikwmSupportedUrl(sourceUrl) {
+  try {
+    return TIKWM_HOST_RE.test(new URL(sourceUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isDouyinUrl(sourceUrl) {
+  try {
+    return /(?:^|\.)(?:douyin\.com|iesdouyin\.com)$/i.test(new URL(sourceUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
+async function resolveWithXhus(fetchImpl, sourceUrl, timeoutMs) {
+  const payload = await getJson(
+    fetchImpl,
+    `${XHUS_DOUYIN_API_ORIGIN}?url=${encodeURIComponent(sourceUrl)}`,
+    timeoutMs,
+    '抖音备用解析接口'
+  );
+  if (Number(payload?.code) !== 200 || !payload?.data || typeof payload.data !== 'object') {
+    throw new MediaResolverError(String(payload?.msg || '抖音备用解析接口没有返回可用数据'), {
+      code: 'MEDIA_RESOLVER_REJECTED',
+    });
+  }
+  const data = payload.data;
+  const videoUrl = typeof data.url === 'string' ? data.url : '';
+  if (!videoUrl || (typeof data.images === 'string' && data.images !== '当前为短视频解析模式')) {
+    throw new MediaResolverError('当前抖音链接不是可下载的视频，可能是图集或受限内容', {
+      code: 'UNSUPPORTED_MEDIA_TYPE',
+      status: 415,
+    });
+  }
+  return {
+    sourceUrl,
+    platform: 'douyin',
+    type: 'video',
+    title: typeof data.title === 'string' ? data.title : undefined,
+    coverUrl: typeof data.cover === 'string' ? data.cover : undefined,
+    videoUrl,
+    metadata: {
+      resolver: 'xhus',
+      author: typeof data.author === 'string' ? data.author : undefined,
+    },
+  };
+}
+
+async function resolveWithTikwm(fetchImpl, sourceUrl, timeoutMs) {
+  const payload = await getJson(
+    fetchImpl,
+    `${TIKWM_API_ORIGIN}?url=${encodeURIComponent(sourceUrl)}`,
+    timeoutMs,
+    'TikWM 解析接口'
+  );
+  if (Number(payload?.code) !== 0 || !payload?.data || typeof payload.data !== 'object') {
+    throw new MediaResolverError(String(payload?.msg || 'TikWM 没有返回可用的视频'), {
+      code: 'MEDIA_RESOLVER_REJECTED',
+    });
+  }
+
+  const data = payload.data;
+  const videoUrl = [data.hdplay, data.play, data.wmplay]
+    .find(value => typeof value === 'string' && value.length > 0) || '';
+  if (!videoUrl) {
+    throw new MediaResolverError('TikWM 返回的内容不是视频，或视频地址已失效', {
+      code: 'UNSUPPORTED_MEDIA_TYPE',
+      status: 415,
+    });
+  }
+
+  const hostname = new URL(sourceUrl).hostname.toLowerCase();
+  return {
+    sourceUrl,
+    platform: hostname.includes('tiktok') ? 'tiktok' : 'douyin',
+    type: 'video',
+    title: typeof data.title === 'string' && data.title ? data.title : undefined,
+    coverUrl: typeof data.cover === 'string' ? data.cover : typeof data.origin_cover === 'string' ? data.origin_cover : undefined,
+    videoUrl,
+    metadata: {
+      resolver: 'tikwm',
+      author: typeof data.author?.nickname === 'string'
+        ? data.author.nickname
+        : typeof data.author?.unique_id === 'string' ? data.author.unique_id : undefined,
+      alternateVideoUrl: typeof data.wmplay === 'string' && data.wmplay !== videoUrl ? data.wmplay : undefined,
+    },
+  };
 }
 
 /**
@@ -157,6 +282,24 @@ export class DyXhsDownloaderProvider {
         videoUrl: sourceUrl,
         metadata: { resolver: this.id, direct: true },
       };
+    }
+
+    // dyxhsdownloader.com is currently protected by a Cloudflare challenge for
+    // server-to-server requests. Douyin has a separate JSON endpoint that
+    // accepts the same share links; TikTok keeps the TikWM fallback.
+    if (isDouyinUrl(sourceUrl)) {
+      try {
+        return await resolveWithXhus(this.fetchImpl, sourceUrl, this.timeoutMs);
+      } catch (xhusError) {
+        try {
+          return await resolveWithTikwm(this.fetchImpl, sourceUrl, this.timeoutMs);
+        } catch {
+          throw xhusError;
+        }
+      }
+    }
+    if (isTikwmSupportedUrl(sourceUrl)) {
+      return resolveWithTikwm(this.fetchImpl, sourceUrl, this.timeoutMs);
     }
 
     const resolved = await postJson(

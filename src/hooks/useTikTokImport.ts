@@ -16,7 +16,6 @@ import { getCanvasRect } from '../utils/canvasRect';
 // ============================================================================
 
 interface UseTikTokImportProps {
-    nodes: NodeData[];
     setNodes: React.Dispatch<React.SetStateAction<NodeData[]>>;
     setSelectedNodeIds: React.Dispatch<React.SetStateAction<string[]>>;
     viewport: { x: number; y: number; zoom: number };
@@ -34,7 +33,6 @@ interface UseTikTokImportReturn {
 // ============================================================================
 
 export const useTikTokImport = ({
-    nodes,
     setNodes,
     setSelectedNodeIds,
     viewport

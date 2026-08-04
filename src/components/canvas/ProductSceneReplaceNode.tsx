@@ -291,7 +291,7 @@ export const ProductSceneReplaceNode: React.FC<Props> = ({
           </div>
 
           <div className={`rounded-lg px-3 py-2 text-[11px] ${isDark ? 'bg-neutral-900 text-neutral-400' : 'bg-neutral-100 text-neutral-600'}`}>
-            <div>识图：{data.productSceneRecognitionModel || (data.productSceneRecognitionProvider === 'gemini-web' ? 'Gemini Web' : 'Codex CLI · gpt-5.6-sol')}</div>
+            <div>识图：{data.productSceneRecognitionModel || (data.productSceneRecognitionProvider === 'gemini-web' ? 'Gemini Web' : 'Codex CLI · gpt-5.6-luna')}</div>
             <div className="mt-0.5">生图：{imageProvider.name} · {imageCount} 张 · {aspectRatio} · {imageResolution}</div>
             {data.productSceneAutoGenerateVideo && (
               <div className="mt-0.5">

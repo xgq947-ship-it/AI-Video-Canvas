@@ -72,7 +72,7 @@ export const IMAGE_GENERATION_PROVIDERS = Object.freeze([
 export const VIDEO_GENERATION_PROVIDERS = Object.freeze([
   {
     id: 'google-flow-omni-flash', name: 'Google Flow · Omni Flash', provider: 'workflow', browserProvider: 'google-flow',
-    supportsTextToVideo: true, supportsImageToVideo: true, supportsMultipleReferenceImages: true,
+    supportsTextToVideo: true, supportsImageToVideo: true, supportsVideoReference: true, supportsMultipleReferenceImages: true,
     maxReferenceImages: 7, supportsNativeAudio: true, supportsExtend: false,
     supportedDurations: [4, 6, 8, 10], resolutions: ['自动'], supportedAspectRatios: ['16:9', '9:16'],
   },
@@ -140,7 +140,7 @@ const capabilityOverlay = new Map();
 const CAPABILITY_KEYS = new Set([
   'name', 'maxReferenceImages', 'maxOutputCount', 'supportsMultipleOutputs',
   'supportsMultipleReferenceImages', 'supportsImageToImage', 'supportsImageToVideo',
-  'supportsTextToVideo', 'supportsNativeAudio', 'resolutions', 'supportedAspectRatios',
+  'supportsTextToVideo', 'supportsVideoReference', 'supportsNativeAudio', 'resolutions', 'supportedAspectRatios',
   'supportedDurations', 'defaultResolution'
 ]);
 
@@ -187,6 +187,7 @@ export function applyDiscoveredModelRegistry(registry) {
         overlay.supportsImageToVideo = model.inputModes.some(mode =>
           ['image-to-video', 'first-frame', 'reference-image', 'unified-edit', 'multi-reference'].includes(mode));
         overlay.supportsTextToVideo = model.inputModes.includes('text');
+        if (model.inputModes.includes('video-edit')) overlay.supportsVideoReference = true;
       } else {
         overlay.supportsImageToImage = model.inputModes.some(mode =>
           ['reference-image', 'multi-reference', 'unified-edit'].includes(mode));

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
   CONNECTION_DROP_SLOP_PX,
+  CONNECTION_PORT_DROP_SLOP_PX,
+  resolveConnectionInputPortTarget,
   resolveConnectionDropTarget,
 } from '../src/utils/connectionDropTarget.js';
 
@@ -32,6 +34,33 @@ test('松手落在显式连接点时优先采用连接点方向', () => {
     candidates: [{ nodeId: 'product-scene', rect: rect(0, 0, 460, 600) }],
   });
   assert.deepEqual(target, { nodeId: 'product-scene', side: 'left' });
+});
+
+test('视频分析的编号端口在按钮附近松手时保留精确端口语义', () => {
+  const target = resolveConnectionInputPortTarget({
+    point: { x: 92, y: 136 + 28 + Math.min(4, CONNECTION_PORT_DROP_SLOP_PX - 1) },
+    sourceNodeId: 'image-1',
+    candidates: [
+      { nodeId: 'analysis', inputPortId: 'product-reference', rect: rect(80, 100, 28, 28) },
+      { nodeId: 'analysis', inputPortId: 'character-reference', rect: rect(80, 136, 28, 28) },
+      { nodeId: 'analysis', inputPortId: 'scene-reference', rect: rect(80, 172, 28, 28) },
+    ],
+  });
+  assert.deepEqual(target, {
+    nodeId: 'analysis',
+    side: 'left',
+    inputPortId: 'character-reference',
+  });
+});
+
+test('视频分析的编号端口常驻显示，不依赖节点 hover', () => {
+  const source = fs.readFileSync(new URL('../src/components/canvas/NodeConnectors.tsx', import.meta.url), 'utf8');
+  const fixedPortBlock = source.slice(
+    source.indexOf('data-input-port-id={port.id}'),
+    source.indexOf('style={{ top:', source.indexOf('data-input-port-id={port.id}')),
+  );
+  assert.match(fixedPortBlock, /opacity-100/);
+  assert.doesNotMatch(fixedPortBlock, /opacity-0|group-hover\/node:opacity-100/);
 });
 
 test('连接点附近允许小范围松手误差，提升 Windows 触控板稳定性', () => {

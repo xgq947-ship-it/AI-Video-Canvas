@@ -12,6 +12,8 @@ export interface VideoRemixProject {
   updatedAt: string;
   sourceCanvasNodeId?: string;
   finalCanvasNodeId?: string;
+  canvasMigrationVersion?: number;
+  canvasAnalysisNodeId?: string;
 }
 
 export function createVideoRemixProject(

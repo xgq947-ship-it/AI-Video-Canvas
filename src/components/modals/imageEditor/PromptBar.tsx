@@ -7,7 +7,7 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import { ChevronDown, Check, Banana, Image as ImageIcon, Images, Crop, Monitor, Sparkles } from 'lucide-react';
-import { ImageModel, IMAGE_MODELS } from './imageEditor.types';
+import { IMAGE_MODELS } from './imageEditor.types';
 import { useBrowserModels } from '../../../hooks/useBrowserModels';
 
 // ============================================================================

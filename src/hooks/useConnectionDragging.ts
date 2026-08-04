@@ -6,16 +6,39 @@
  */
 
 import React, { useState, useRef } from 'react';
-import { NodeData, NodeType } from '../types';
+import { NodeData } from '../types';
 // @ts-ignore — 纯 JS 共享模块，类型由 shared/connectionRules.d.ts 提供
 import { isValidNodeConnection } from '@/shared/connectionRules.js';
-import { resolveConnectionDropTarget, ConnectionDropCandidate } from '../utils/connectionDropTarget.js';
-import { removeCanvasConnection } from '../utils/canvasEdges.js';
+import {
+    resolveConnectionDropTarget,
+    resolveConnectionInputPortTarget,
+    ConnectionDropCandidate,
+    ConnectionInputPortCandidate,
+} from '../utils/connectionDropTarget.js';
+import { removeCanvasConnection, wouldCreateCycle } from '../utils/canvasEdges.js';
 
 interface ConnectionStart {
     nodeId: string;
     handle: 'left' | 'right';
+    portId?: string;
 }
+
+interface ConnectionRectCache {
+    nodes: ConnectionDropCandidate[];
+    ports: ConnectionInputPortCandidate[];
+}
+
+const elementRect = (element: HTMLElement) => {
+    const rect = element.getBoundingClientRect();
+    return {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+    };
+};
 
 export const useConnectionDragging = () => {
     // ============================================================================
@@ -25,25 +48,23 @@ export const useConnectionDragging = () => {
     const [isDraggingConnection, setIsDraggingConnection] = useState(false);
     const [connectionStart, setConnectionStart] = useState<ConnectionStart | null>(null);
     const [tempConnectionEnd, setTempConnectionEnd] = useState<{ x: number; y: number } | null>(null);
-    const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
-    const [hoveredSide, setHoveredSide] = useState<'left' | 'right' | null>(null);
     const [selectedConnection, setSelectedConnection] = useState<{ parentId: string; childId: string } | null>(null);
     const dragStartTime = useRef<number>(0);
     const isDraggingConnectionRef = useRef(false);
     const connectionStartRef = useRef<ConnectionStart | null>(null);
     const hoveredNodeIdRef = useRef<string | null>(null);
     const hoveredSideRef = useRef<'left' | 'right' | null>(null);
+    const hoveredPortIdRef = useRef<string | undefined>(undefined);
 
     // ============================================================================
     // HELPERS
     // ============================================================================
 
-    /** 同步 hover 目标：ref 供同一帧内的命中判定读取，state 供渲染高亮。 */
-    const setHoveredTarget = (target: { nodeId: string; side: 'left' | 'right' } | null) => {
+    /** 同步 hover 目标，供同一帧内的命中判定读取。 */
+    const setHoveredTarget = (target: { nodeId: string; side: 'left' | 'right'; inputPortId?: string } | null) => {
         hoveredNodeIdRef.current = target?.nodeId || null;
         hoveredSideRef.current = target?.side || null;
-        setHoveredNodeId(target?.nodeId || null);
-        setHoveredSide(target?.side || null);
+        hoveredPortIdRef.current = target?.inputPortId;
     };
 
     /**
@@ -55,7 +76,7 @@ export const useConnectionDragging = () => {
      * 连线拖拽期间只有 tempConnectionEnd / hover 高亮在变，节点位置不动。
      * 按帧而不是按整次拖拽缓存，是为了让拖拽中途的缩放、平移立刻生效。
      */
-    const nodeRectCache = useRef<ConnectionDropCandidate[] | null>(null);
+    const nodeRectCache = useRef<ConnectionRectCache | null>(null);
     const nodeRectFrame = useRef<number | null>(null);
 
     const invalidateNodeRects = () => {
@@ -63,10 +84,10 @@ export const useConnectionDragging = () => {
         nodeRectFrame.current = null;
     };
 
-    const readNodeRects = (): ConnectionDropCandidate[] => {
+    const readNodeRects = (): ConnectionRectCache => {
         if (nodeRectCache.current) return nodeRectCache.current;
 
-        const candidates = Array.from(document.querySelectorAll<HTMLElement>('[data-node-id]'))
+        const nodes = Array.from(document.querySelectorAll<HTMLElement>('[data-node-id]'))
             .map(element => {
                 const rect = element.getBoundingClientRect();
                 return {
@@ -82,15 +103,25 @@ export const useConnectionDragging = () => {
                 };
             })
             .filter(candidate => Boolean(candidate.nodeId));
+        const ports = Array.from(document.querySelectorAll<HTMLElement>(
+            '[data-connector-node-id][data-connector-side="left"][data-input-port-id]'
+        ))
+            .map(element => ({
+                nodeId: element.dataset.connectorNodeId || '',
+                inputPortId: element.dataset.inputPortId || '',
+                rect: elementRect(element),
+            }))
+            .filter(candidate => Boolean(candidate.nodeId && candidate.inputPortId));
+        const cache = { nodes, ports };
 
         // 只在拿得到 rAF 时才缓存：拿不到就没有可靠的作废时机，宁可每次重算。
         if (typeof requestAnimationFrame === 'function') {
-            nodeRectCache.current = candidates;
+            nodeRectCache.current = cache;
             if (nodeRectFrame.current === null) {
                 nodeRectFrame.current = requestAnimationFrame(invalidateNodeRects);
             }
         }
-        return candidates;
+        return cache;
     };
 
     const resolveDropTargetAtPoint = (mouseX: number, mouseY: number, sourceNodeId: string) => {
@@ -102,19 +133,30 @@ export const useConnectionDragging = () => {
         const connector = elementsAtPoint
             .map(element => element.closest<HTMLElement>('[data-connector-node-id][data-connector-side]'))
             .find((element): element is HTMLElement => Boolean(element));
+        const rects = readNodeRects();
+        const fixedPortTarget = resolveConnectionInputPortTarget({
+            point: { x: mouseX, y: mouseY },
+            sourceNodeId,
+            candidates: rects.ports,
+        });
         const connectorNodeId = connector?.dataset.connectorNodeId;
         const connectorSide = connector?.dataset.connectorSide;
-        const connectorTarget: { nodeId: string; side: 'left' | 'right' } | null =
-            connectorNodeId && (connectorSide === 'left' || connectorSide === 'right')
-            ? { nodeId: connectorNodeId, side: connectorSide }
-            : null;
+        const connectorTarget: { nodeId: string; side: 'left' | 'right'; inputPortId?: string } | null =
+            fixedPortTarget
+            || (connectorNodeId && (connectorSide === 'left' || connectorSide === 'right')
+            ? {
+                nodeId: connectorNodeId,
+                side: connectorSide,
+                inputPortId: connector?.dataset.inputPortId || undefined,
+            }
+            : null);
 
         // 指针正下方的节点排在最前，让重叠节点按「最上面的赢」定序；
         // resolveConnectionDropTarget 内部按 nodeId 去重，重复项不影响结果。
         const nodeIdsAtPoint = elementsAtPoint
             .map(element => element.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId)
             .filter((nodeId): nodeId is string => Boolean(nodeId));
-        const allCandidates = readNodeRects();
+        const allCandidates = rects.nodes;
         const candidates = nodeIdsAtPoint.length
             ? [
                 ...nodeIdsAtPoint
@@ -157,7 +199,8 @@ export const useConnectionDragging = () => {
     const handleConnectorPointerDown = (
         e: React.PointerEvent,
         nodeId: string,
-        side: 'left' | 'right'
+        side: 'left' | 'right',
+        explicitPortId?: string,
     ) => {
         e.stopPropagation();
         e.preventDefault();
@@ -166,10 +209,13 @@ export const useConnectionDragging = () => {
         }
         dragStartTime.current = Date.now();
         isDraggingConnectionRef.current = true;
-        connectionStartRef.current = { nodeId, handle: side };
+        const portId = explicitPortId || (e.currentTarget instanceof HTMLElement
+            ? e.currentTarget.dataset.inputPortId || undefined
+            : undefined);
+        connectionStartRef.current = { nodeId, handle: side, portId };
         invalidateNodeRects();
         setIsDraggingConnection(true);
-        setConnectionStart({ nodeId, handle: side });
+        setConnectionStart({ nodeId, handle: side, portId });
         setTempConnectionEnd({ x: e.clientX, y: e.clientY });
     };
 
@@ -198,7 +244,13 @@ export const useConnectionDragging = () => {
         ) => void,
         onUpdateNodes: (updater: (prev: NodeData[]) => NodeData[]) => void,
         nodes: NodeData[],
-        onConnectionMade?: (parentId: string, childId: string, currentNodes: NodeData[]) => Partial<NodeData> | void,
+        onConnectionMade?: (
+            parentId: string,
+            childId: string,
+            currentNodes: NodeData[],
+            targetPortId?: string,
+            sourcePortId?: string,
+        ) => Partial<NodeData> | void,
         pointerPosition?: { x: number; y: number }
     ): boolean => {
         const activeStart = connectionStartRef.current;
@@ -208,7 +260,11 @@ export const useConnectionDragging = () => {
         const dropTarget = pointerPosition
             ? resolveDropTargetAtPoint(pointerPosition.x, pointerPosition.y, activeStart.nodeId)
             : (hoveredNodeIdRef.current && hoveredSideRef.current
-                ? { nodeId: hoveredNodeIdRef.current, side: hoveredSideRef.current }
+                ? {
+                    nodeId: hoveredNodeIdRef.current,
+                    side: hoveredSideRef.current,
+                    inputPortId: hoveredPortIdRef.current,
+                }
                 : null);
 
         /**
@@ -219,6 +275,10 @@ export const useConnectionDragging = () => {
             const childNode = nodes.find(n => n.id === childId);
             if (!parentNode || !childNode) return false;
             if (parentId === childId) return false;
+            // Type rules alone allow Image→Image / Video→Video, which can close a
+            // loop (A→B→A). Reject any edge that would make the graph cyclic so
+            // downstream traversal never depends on visited-set guards to survive.
+            if (wouldCreateCycle(nodes, parentId, childId)) return false;
             return isValidNodeConnection(parentNode.type, childNode.type);
         };
 
@@ -240,18 +300,24 @@ export const useConnectionDragging = () => {
 
                 // Add source as a parent to target node
                 onUpdateNodes(prev => {
-                    const connectionUpdates = onConnectionMade?.(activeStart.nodeId, targetNodeId, prev) || {};
+                    const connectionUpdates = onConnectionMade?.(
+                        activeStart.nodeId,
+                        targetNodeId,
+                        prev,
+                        dropTarget.inputPortId,
+                        activeStart.portId,
+                    ) || {};
                     return prev.map(n => {
                         if (n.id === targetNodeId) {
                             const existingParents = n.parentIds || [];
-                            // Prevent duplicate connections
-                            if (!existingParents.includes(activeStart.nodeId)) {
-                                return {
-                                    ...n,
-                                    parentIds: [...existingParents, activeStart.nodeId],
-                                    ...connectionUpdates
-                                };
-                            }
+                            // Re-dropping an existing edge may change its semantic port.
+                            return {
+                                ...n,
+                                parentIds: existingParents.includes(activeStart.nodeId)
+                                    ? existingParents
+                                    : [...existingParents, activeStart.nodeId],
+                                ...connectionUpdates,
+                            };
                         }
                         return n;
                     });
@@ -267,18 +333,23 @@ export const useConnectionDragging = () => {
 
                 // Add target as a parent to source node
                 onUpdateNodes(prev => {
-                    const connectionUpdates = onConnectionMade?.(targetNodeId, activeStart.nodeId, prev) || {};
+                    const connectionUpdates = onConnectionMade?.(
+                        targetNodeId,
+                        activeStart.nodeId,
+                        prev,
+                        activeStart.portId,
+                        dropTarget.inputPortId,
+                    ) || {};
                     return prev.map(n => {
                         if (n.id === activeStart.nodeId) {
                             const existingParents = n.parentIds || [];
-                            // Prevent duplicate connections
-                            if (!existingParents.includes(targetNodeId)) {
-                                return {
-                                    ...n,
-                                    parentIds: [...existingParents, targetNodeId],
-                                    ...connectionUpdates
-                                };
-                            }
+                            return {
+                                ...n,
+                                parentIds: existingParents.includes(targetNodeId)
+                                    ? existingParents
+                                    : [...existingParents, targetNodeId],
+                                ...connectionUpdates,
+                            };
                         }
                         return n;
                     });
@@ -318,7 +389,6 @@ export const useConnectionDragging = () => {
         isDraggingConnection,
         connectionStart,
         tempConnectionEnd,
-        hoveredNodeId,
         selectedConnection,
         setSelectedConnection,
         handleConnectorPointerDown,

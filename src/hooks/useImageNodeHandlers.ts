@@ -17,7 +17,6 @@ interface UseImageNodeHandlersOptions {
     nodes: NodeData[];
     setNodes: React.Dispatch<React.SetStateAction<NodeData[]>>;
     setSelectedNodeIds: React.Dispatch<React.SetStateAction<string[]>>;
-    onGenerateNode?: (nodeId: string) => void; // Callback to trigger generation on a node
     workflowId?: string | null;
 }
 
@@ -68,7 +67,6 @@ export const useImageNodeHandlers = ({
     nodes,
     setNodes,
     setSelectedNodeIds,
-    onGenerateNode,
     workflowId
 }: UseImageNodeHandlersOptions) => {
     /**

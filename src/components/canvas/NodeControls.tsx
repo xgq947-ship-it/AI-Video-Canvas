@@ -7,7 +7,7 @@
  */
 
 import React, { useState, useRef, useEffect, useMemo, memo } from 'react';
-import { Sparkles, Banana, Settings2, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Images, Film, Clock, Expand, Shrink, Monitor, Crop, HardDrive, Upload, Loader2, Mic2, ScanSearch } from 'lucide-react';
+import { Sparkles, Banana, Check, ChevronDown, ChevronUp, GripVertical, Image as ImageIcon, Images, Film, Clock, Expand, Shrink, Monitor, Crop, Upload, Loader2, Mic2, ScanSearch, Link2, CloudDownload } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { useBrowserModels } from '../../hooks/useBrowserModels';
 import { useGenerationModelRegistry } from '../../hooks/useGenerationModelRegistry';
@@ -19,7 +19,6 @@ import {
     IMAGE_PROMPT_OPTIMIZATION_PROFILES,
     VIDEO_PROMPT_OPTIMIZATION_PROFILES,
     resolveVideoProfileForModel,
-    PROMPT_OPTIMIZATION_PROFILES,
     type PromptOptimizationProfile
 } from '../../../shared/promptOptimizationProfiles.js';
 import { shouldUseReferenceImages, usesReferenceMaterialsOnly } from '../../utils/videoModelCapabilities.js';
@@ -31,6 +30,7 @@ import {
     supportedImageOutputCounts,
     type VideoGenerationProvider,
 } from '../../../shared/generationProviders.js';
+import { resolveUrlReferenceVideo } from '../../features/video-remix/videoRemixService';
 
 interface NodeControlsProps {
     workflowId?: string;
@@ -54,9 +54,6 @@ const IMAGE_RATIOS = [
 const VIDEO_RESOLUTIONS = [
     "Auto", "1080p", "768p", "720p", "512p"
 ];
-
-// Video durations in seconds
-const VIDEO_DURATIONS = [5, 6, 8, 10];
 
 // Video model versions with metadata
 // supportsTextToVideo: Can generate video from text prompt only
@@ -122,6 +119,8 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const [showImageCountDropdown, setShowImageCountDropdown] = useState(false);
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
     const [isUploadingVideo, setIsUploadingVideo] = useState(false);
+    const [videoUrlInput, setVideoUrlInput] = useState(data.videoSourceUrl || '');
+    const [isResolvingVideoUrl, setIsResolvingVideoUrl] = useState(false);
     const [localPrompt, setLocalPrompt] = useState(data.prompt || '');
     const [showPromptOptimizer, setShowPromptOptimizer] = useState(false);
     const [showImagePromptMenu, setShowImagePromptMenu] = useState(false);
@@ -202,6 +201,10 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
             lastSentPromptRef.current = data.prompt;
         }
     }, [data.prompt]);
+
+    useEffect(() => {
+        setVideoUrlInput(data.videoSourceUrl || '');
+    }, [data.videoSourceUrl]);
 
     // Cleanup timeout on unmount
     useEffect(() => {
@@ -303,19 +306,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
         setShowAspectRatioDropdown(false);
     };
 
-    const handleVideoModeChange = (mode: 'standard' | 'frame-to-frame') => {
-        if (mode === 'frame-to-frame') {
-            // Initialize frameInputs from connected nodes
-            const initialFrameInputs = connectedImageNodes.slice(0, 2).map((node, idx) => ({
-                nodeId: node.id,
-                order: idx === 0 ? 'start' : 'end' as 'start' | 'end'
-            }));
-            onUpdate(data.id, { videoMode: mode, frameInputs: initialFrameInputs });
-        } else {
-            onUpdate(data.id, { videoMode: mode, frameInputs: undefined });
-        }
-    };
-
     const handleFrameReorder = (fromIndex: number, toIndex: number) => {
         if (fromIndex === toIndex || connectedImageNodes.length < 2) return;
 
@@ -350,7 +340,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
     const imageAspectRatioOptions = currentImageModelForRatios.aspectRatios || IMAGE_RATIOS;
     const isVideoNode = data.type === NodeType.VIDEO;
     const isImageNode = data.type === NodeType.IMAGE;
-    const hasConnectedImages = connectedImageNodes.length > 0;
 
     // Video model selection logic
     const currentVideoModel = VIDEO_MODELS.find(m => m.id === data.videoModel) || VIDEO_MODELS[0];
@@ -715,12 +704,67 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                 lastFrame: undefined,
                 trimStart: undefined,
                 trimEnd: undefined,
+                videoSourceType: 'upload',
+                videoSourceUrl: undefined,
+                videoSourceLocalUrl: undefined,
+                videoSourceId: undefined,
+                videoSourcePlatform: undefined,
+                videoSourceTitle: undefined,
             });
         } catch (error) {
             console.error('本地视频上传失败:', error);
             alert(error instanceof Error ? error.message : '上传视频失败，请稍后重试。');
         } finally {
             setIsUploadingVideo(false);
+        }
+    };
+
+    const handleVideoUrlImport = async () => {
+        const input = videoUrlInput.trim();
+        if (!input) {
+            alert('请粘贴视频链接或包含链接的分享文案。');
+            return;
+        }
+        if (!workflowId) {
+            alert('请先新建或打开项目。');
+            return;
+        }
+
+        setIsResolvingVideoUrl(true);
+        try {
+            const source = await resolveUrlReferenceVideo({
+                workflowId,
+                remixId: data.id,
+                input,
+            });
+            const resultUrl = source.previewUrl || source.localUrl;
+            const aspectRatio = source.width > source.height ? '16:9' : '9:16';
+            onUpdate(data.id, {
+                resultUrl,
+                resultAspectRatio: source.width > 0 && source.height > 0
+                    ? `${source.width}/${source.height}`
+                    : undefined,
+                aspectRatio,
+                resolution: 'Auto',
+                videoDuration: source.duration || data.videoDuration,
+                model: '参考视频链接',
+                status: NodeStatus.SUCCESS,
+                errorMessage: undefined,
+                generationStartTime: undefined,
+                lastFrame: undefined,
+                videoSourceType: 'url',
+                videoSourceUrl: source.sourceUrl || input,
+                videoSourceLocalUrl: source.localUrl,
+                videoSourceId: source.id,
+                videoSourcePlatform: source.platform,
+                videoSourceTitle: source.title,
+            });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : '视频链接解析失败，请稍后重试。';
+            onUpdate(data.id, { status: NodeStatus.ERROR, errorMessage: message });
+            alert(message);
+        } finally {
+            setIsResolvingVideoUrl(false);
         }
     };
 
@@ -804,6 +848,53 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
             onPointerDown={(e) => e.stopPropagation()} // Allow selecting text/interacting without dragging
             onClick={() => onSelect(data.id)} // Ensure clicking here selects the node
         >
+            {isVideoNode && (
+                <div className={`mb-3 rounded-xl border p-3 ${isDark ? 'border-cyan-500/20 bg-cyan-500/[0.04]' : 'border-cyan-200 bg-cyan-50/60'}`}>
+                    <div className="flex items-center gap-2 text-xs font-medium">
+                        <Link2 size={14} className="text-cyan-400" />
+                        <span>导入参考视频链接</span>
+                        {data.videoSourceType === 'url' && (
+                            <span className="ml-auto rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-300">
+                                已导入
+                            </span>
+                        )}
+                    </div>
+                    <div className="mt-2 flex gap-2">
+                        <input
+                            aria-label="参考视频链接"
+                            value={videoUrlInput}
+                            onChange={event => setVideoUrlInput(event.target.value)}
+                            onPointerDown={event => event.stopPropagation()}
+                            placeholder="粘贴抖音 / 小红书 / Bilibili / TikTok 链接"
+                            className={`min-w-0 flex-1 rounded-lg border px-2.5 py-2 text-xs outline-none ${isDark
+                                ? 'border-neutral-700 bg-black/30 text-white placeholder:text-neutral-600 focus:border-cyan-400/60'
+                                : 'border-neutral-200 bg-white text-neutral-900 placeholder:text-neutral-400 focus:border-cyan-500'}`}
+                        />
+                        <button
+                            type="button"
+                            aria-label="解析并导入视频链接"
+                            disabled={isResolvingVideoUrl || isUploadingVideo}
+                            onClick={event => {
+                                event.stopPropagation();
+                                void handleVideoUrlImport();
+                            }}
+                            className="flex shrink-0 items-center gap-1.5 rounded-lg bg-cyan-400 px-3 py-2 text-xs font-medium text-neutral-950 transition-colors hover:bg-cyan-300 disabled:cursor-wait disabled:opacity-55"
+                        >
+                            {isResolvingVideoUrl ? <Loader2 size={13} className="animate-spin" /> : <CloudDownload size={13} />}
+                            {isResolvingVideoUrl ? '解析中' : '解析导入'}
+                        </button>
+                    </div>
+                    <div className={`mt-1.5 text-[10px] leading-4 ${isDark ? 'text-neutral-500' : 'text-neutral-500'}`}>
+                        链接会解析、下载并保存到当前项目；完成后可连接到“视频分析”的参考视频端口。
+                    </div>
+                    {data.videoSourcePlatform && (
+                        <div className="mt-1 text-[10px] text-emerald-300/80">
+                            来源：{data.videoSourcePlatform}{data.videoSourceTitle ? ` · ${data.videoSourceTitle}` : ''}
+                        </div>
+                    )}
+                </div>
+            )}
+
             {/* Prompt Textarea with Expand Button - Hidden for storyboard-generated scenes */}
             {!(data.prompt && data.prompt.startsWith('Extract panel #')) && (
                 <div className="relative mb-3">

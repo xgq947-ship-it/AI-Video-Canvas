@@ -304,6 +304,7 @@ export async function analyzeVideoRemixGlobal({
   source,
   shots,
   mode,
+  referenceFiles = [],
 }, context) {
   const normalizedMode = normalizeMode(mode);
   const target = resolveAnalysisTarget(workflowId, remixId, context);
@@ -318,6 +319,7 @@ export async function analyzeVideoRemixGlobal({
       fileName: 'analysis_proxy.mp4',
       mimeType: 'video/mp4',
     },
+    referenceFiles,
     mode: normalizedMode,
     workflowId,
     nodeId: remixId,

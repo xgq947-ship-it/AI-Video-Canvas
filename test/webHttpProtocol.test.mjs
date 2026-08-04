@@ -53,6 +53,8 @@ import {
 import {
     buildGenerateImagesRequest,
     buildGenerateVideoRequest,
+    buildStartVideoUploadRequest,
+    buildVideoUploadChunkRequest,
     buildFlowMediaUrl,
     buildProjectMediaRequest,
     buildUpsampleImageRequest,
@@ -63,6 +65,8 @@ import {
     parseGenerateVideoResponse,
     parseUpsampleImageResponse,
     parseUploadImageResponse,
+    parseStartVideoUploadResponse,
+    parseVideoUploadResponse,
     resolveFlowVideoVariant,
     toFlowImageAspectRatio,
     validateFlowImageDimensions
@@ -871,6 +875,62 @@ test('Flow 视频按文本 / 首帧 / 多参考图切换真实 endpoint 与模�
     assert.throws(() => buildGenerateVideoRequest({
         auth, prompt: 'p', batchId: 'b', firstFrameMediaId: 'media-1', referenceMediaIds: ['media-a']
     }), /不能在同一请求中混用/);
+});
+
+test('Flow 参考视频使用分片上传和 Omni Flash 视频编辑协议', () => {
+    const start = buildStartVideoUploadRequest({
+        projectId: 'project-1', fileName: '参考 视频.mp4', mimeType: 'video/mp4', size: 123
+    });
+    assert.equal(start.url, 'https://labs.google/fx/api/upload-video?action=start');
+    assert.equal(start.method, 'POST');
+    assert.equal(start.headers['x-upload-content-length'], '123');
+    assert.equal(start.headers['x-upload-file-name'], encodeURIComponent('参考 视频.mp4'));
+    assert.deepEqual(parseStartVideoUploadResponse({ sessionUrl: 'upload-session', status: 'active' }), {
+        sessionUrl: 'upload-session', status: 'active'
+    });
+
+    const chunk = buildVideoUploadChunkRequest({
+        projectId: 'project-1', sessionUrl: 'upload-session', fileName: 'reference.mp4',
+        offset: 0, buffer: Buffer.from('video'), final: true
+    });
+    assert.equal(chunk.method, 'PUT');
+    assert.equal(chunk.headers['x-upload-command'], 'upload, finalize');
+    assert.equal(chunk.headers['x-upload-offset'], '0');
+    assert.deepEqual(chunk.body, Buffer.from('video'));
+    assert.deepEqual(parseVideoUploadResponse({
+        status: 'final', mediaServerId: 'media-video', workflowServerId: 'workflow-video',
+        videoWidth: 640, videoHeight: 360
+    }), {
+        mediaId: 'media-video', workflowId: 'workflow-video', status: 'final', width: 640, height: 360
+    });
+
+    const auth = {
+        accessToken: 'token', projectId: 'project-1', sessionId: ';1',
+        recaptchaToken: 'captcha', userPaygateTier: 'PAYGATE_TIER_ONE'
+    };
+    const spec = buildGenerateVideoRequest({
+        auth, prompt: '保持运动，改为电影灯光', batchId: 'batch-1', modelFamily: 'abra',
+        aspectRatio: '16:9', referenceVideo: {
+            mediaId: 'media-video', workflowId: 'workflow-video',
+            startFrameIndex: 0, endFrameIndex: 90
+        }
+    });
+    const body = JSON.parse(spec.body);
+    assert.match(spec.url, /video:batchAsyncGenerateVideoEditVideo$/);
+    assert.equal(body.requests[0].videoModelKey, 'abra_edit');
+    assert.deepEqual(body.requests[0].metadata, { workflowId: 'workflow-video' });
+    assert.deepEqual(body.requests[0].videoInput, {
+        mediaId: 'media-video', startFrameIndex: 0, endFrameIndex: 90
+    });
+    assert.equal(body.useV2ModelConfig, undefined);
+    assert.throws(() => buildGenerateVideoRequest({
+        auth, prompt: 'p', batchId: 'b', modelFamily: 'veo_3_1_fast',
+        referenceVideo: { mediaId: 'm', workflowId: 'w', endFrameIndex: 30 }
+    }), /只支持 Omni Flash/);
+    assert.throws(() => buildGenerateVideoRequest({
+        auth, prompt: 'p', batchId: 'b', modelFamily: 'abra', firstFrameMediaId: 'image',
+        referenceVideo: { mediaId: 'm', workflowId: 'w', endFrameIndex: 30 }
+    }), /不能与首帧或参考图混用/);
 });
 
 test('Flow 三个 Veo 3.1 档位使用页面抓到的精确模式 key', () => {

@@ -6,6 +6,7 @@
  */
 
 import React from 'react';
+import { LockKeyhole, UnlockKeyhole } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { NodeConnectors } from './NodeConnectors';
 import { NodeContent } from './NodeContent';
@@ -17,6 +18,7 @@ import { NodeHoverToolbar, NodeHoverToolbarAction } from './NodeHoverToolbar';
 import type { NodeReference } from '../../utils/nodeReferences.js';
 import { ProductSceneReplaceNode } from './ProductSceneReplaceNode';
 import { VideoRemixNode } from '../../features/video-remix/VideoRemixNode';
+import { VideoAnalysisNode } from '../../features/video-analysis/VideoAnalysisNode';
 
 interface CanvasNodeProps {
   workflowId?: string;
@@ -26,14 +28,12 @@ interface CanvasNodeProps {
   connectedReferences?: NodeReference[];
   onUpdate: (id: string, updates: Partial<NodeData>) => void;
   onGenerate: (id: string) => void;
-  onAddNext: (id: string, type: 'left' | 'right', anchor?: { x: number; y: number }) => void;
   selected: boolean;
   showControls?: boolean; // Only show controls when single node is selected (not in group selection)
   onSelect: (id: string) => void;
   onNodePointerDown: (e: React.PointerEvent, id: string) => void;
   onContextMenu: (e: React.MouseEvent, id: string) => void;
-  onConnectorDown: (e: React.PointerEvent, id: string, side: 'left' | 'right') => void;
-  isHoveredForConnection?: boolean;
+  onConnectorDown: (e: React.PointerEvent, id: string, side: 'left' | 'right', portId?: string) => void;
   onOpenEditor?: (nodeId: string) => void;
   onUpload?: (nodeId: string, imageDataUrl: string) => void;
   onExpand?: (imageUrl: string) => void;
@@ -48,6 +48,9 @@ interface CanvasNodeProps {
   onExtractLastFrame?: (nodeId: string) => void;
   onAutoSubtitle?: (nodeId: string) => void;
   onOpenVideoRemix?: (nodeId: string) => void;
+  onAnalyzeVideo?: (nodeId: string) => void;
+  onGenerateVideoAnalysisAssets?: (nodeId: string) => void;
+  onLockVideoAnalysisAssetMain?: (nodeId: string) => void;
   zoom: number;
   // 悬停回调带上 nodeId，调用方才能传稳定的引用（否则每次 render 都是新箭头函数，
   // React.memo 会全部失效）。
@@ -67,6 +70,7 @@ const NODE_TYPE_LABELS: Record<NodeType, string> = {
   [NodeType.STORYBOARD]: '分镜管理',
   [NodeType.CAMERA_ANGLE]: '镜头角度',
   [NodeType.PRODUCT_SCENE_REPLACE]: '产品短视频生成',
+  [NodeType.VIDEO_ANALYSIS]: '视频分析',
   [NodeType.VIDEO_REMIX]: '视频复刻',
   [NodeType.SFX]: '音效',
   [NodeType.BGM]: '背景音乐',
@@ -82,14 +86,12 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   connectedReferences,
   onUpdate,
   onGenerate,
-  onAddNext,
   selected,
   showControls = true, // Default to true for backward compatibility
   onSelect,
   onNodePointerDown,
   onContextMenu,
   onConnectorDown,
-  isHoveredForConnection,
   onOpenEditor,
   onUpload,
   onExpand,
@@ -102,6 +104,9 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   onExtractLastFrame,
   onAutoSubtitle,
   onOpenVideoRemix,
+  onAnalyzeVideo,
+  onGenerateVideoAnalysisAssets,
+  onLockVideoAnalysisAssetMain,
   zoom,
   onMouseEnter,
   onMouseLeave,
@@ -115,7 +120,6 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   const [editedTitle, setEditedTitle] = React.useState(data.title || data.type);
   const titleInputRef = React.useRef<HTMLInputElement>(null);
 
-  const isIdle = data.status === NodeStatus.IDLE || data.status === NodeStatus.ERROR;
   const isLoading = data.status === NodeStatus.LOADING;
   const isSuccess = data.status === NodeStatus.SUCCESS;
 
@@ -246,6 +250,24 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   // ============================================================================
   // RENDER
   // ============================================================================
+
+  // 产品场景替换使用独立的双图角色与尺寸参数界面。
+  if (data.type === NodeType.VIDEO_ANALYSIS) {
+    return (
+      <VideoAnalysisNode
+        data={data}
+        allNodes={allNodes || []}
+        selected={selected}
+        canvasTheme={canvasTheme}
+        onUpdate={onUpdate}
+        onAnalyze={onAnalyzeVideo || (() => undefined)}
+        onGenerateAssets={onGenerateVideoAnalysisAssets}
+        onNodePointerDown={onNodePointerDown}
+        onContextMenu={onContextMenu}
+        onConnectorDown={onConnectorDown}
+      />
+    );
+  }
 
   // 产品场景替换使用独立的双图角色与尺寸参数界面。
   if (data.type === NodeType.VIDEO_REMIX) {
@@ -559,6 +581,27 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
           />
         )}
 
+        {data.videoAnalysisAssetRole === 'main' && (
+          <button
+            type="button"
+            disabled={!data.resultUrl}
+            onPointerDown={event => event.stopPropagation()}
+            onClick={event => {
+              event.stopPropagation();
+              onLockVideoAnalysisAssetMain?.(data.id);
+            }}
+            className={`absolute right-2 top-2 z-20 flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-medium backdrop-blur transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+              data.videoAnalysisAssetMainLocked
+                ? isDark ? 'border-emerald-400/40 bg-emerald-400/15 text-emerald-200' : 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                : isDark ? 'border-white/15 bg-black/55 text-neutral-200 hover:border-cyan-300/50' : 'border-neutral-300 bg-white/85 text-neutral-700 hover:border-cyan-400'
+            }`}
+            title={data.videoAnalysisAssetMainLocked ? '解除主图锁定' : '锁定主图，允许生成其他角度'}
+          >
+            {data.videoAnalysisAssetMainLocked ? <LockKeyhole size={11} /> : <UnlockKeyhole size={11} />}
+            {data.videoAnalysisAssetMainLocked ? '主图已锁定' : '锁定主图'}
+          </button>
+        )}
+
         {data.type === NodeType.VIDEO && isSuccess && data.resultUrl && (
           <NodeHoverToolbar
             data={data}
@@ -617,12 +660,10 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
             data={data}
             inputUrl={inputUrl}
             selected={selected}
-            isIdle={isIdle}
             isLoading={isLoading}
             isSuccess={isSuccess}
             getAspectRatioStyle={getAspectRatioStyle}
             onUpload={onUpload}
-            onExpand={onExpand}
             onWriteContent={onWriteContent}
             onTextToVideo={onTextToVideo}
             onTextToImage={onTextToImage}

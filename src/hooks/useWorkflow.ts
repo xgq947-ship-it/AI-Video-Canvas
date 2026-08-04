@@ -16,10 +16,11 @@ import {
     mergeServerNormalizedVideoRemixes,
 } from '../utils/workflowSave.js';
 import {
-    migrateLegacyVideoRemixNodes,
-    normalizeVideoRemixProjects,
-    type VideoRemixProject,
+  migrateLegacyVideoRemixNodes,
+  normalizeVideoRemixProjects,
+  type VideoRemixProject,
 } from '@/shared/videoRemixProjects.js';
+import { migrateLegacyRemixProjectsToCanvas } from '../features/video-analysis/migrateLegacyRemix';
 
 interface WorkflowData {
     id: string | null;
@@ -179,10 +180,15 @@ export const useWorkflow = ({
                     workflow.nodes || [],
                     normalizeVideoRemixProjects(workflow.videoRemixes || [])
                 );
-                const loadedNodes: NodeData[] = migrated.nodes;
+                const canvasMigration = migrateLegacyRemixProjectsToCanvas({
+                    nodes: migrated.nodes,
+                    groups: workflow.groups || [],
+                    videoRemixes: migrated.videoRemixes,
+                });
+                const loadedNodes: NodeData[] = canvasMigration.nodes;
                 setNodes(loadedNodes);
-                setVideoRemixes(migrated.videoRemixes);
-                setGroups(workflow.groups || []); // Restore groups
+                setVideoRemixes(canvasMigration.videoRemixes);
+                setGroups(canvasMigration.groups); // Restore groups and one-time canvas migration
                 if (loadedNodes.length > 0) {
                     const bounds = loadedNodes.map(node => {
                         const parent = node.parentIds?.length
@@ -216,7 +222,7 @@ export const useWorkflow = ({
                 return {
                     nodeCount: loadedNodes.length,
                     title: workflow.title || 'Untitled',
-                    migratedVideoRemixes: migrated.migrated,
+                    migratedVideoRemixes: migrated.migrated || canvasMigration.migrated,
                 };
             }
         } catch (error) {

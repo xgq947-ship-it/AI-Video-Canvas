@@ -49,7 +49,7 @@ test('产品场景任务一次识别两张图、持久化阶段并输出独立�
   const context = {
     dirs: env.dirs,
     libraryDir: env.root,
-    recognitionModel: 'gpt-5.6-sol',
+    recognitionModel: 'gpt-5.6-luna',
     runRecognition: async request => {
       recognitionRequest = request;
       return JSON.stringify({
@@ -80,7 +80,8 @@ test('产品场景任务一次识别两张图、持久化阶段并输出独立�
   const completed = await waitForTerminalJob(created.id, context);
   assert.equal(completed.status, 'completed');
   assert.equal(completed.stage, 'completed');
-  assert.equal(completed.recognitionModel, 'gpt-5.6-sol');
+  assert.equal(completed.recognitionModel, 'gpt-5.6-luna');
+  assert.equal(recognitionRequest.effort, 'xhigh');
   assert.match(completed.prompt, /产品类别：揉腹仪/);
   assert.match(completed.prompt, /构图与姿势：半身入画/);
   assert.match(completed.prompt, /人物设定以此为准.*30 岁左右女性，短发/);

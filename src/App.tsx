@@ -17,7 +17,6 @@ import {
   dismissProductSceneResultNodes,
   generateImage,
   generateImageBatch,
-  generateVideo,
   type ProductSceneJob
 } from './services/generationService';
 import { useCanvasNavigation } from './hooks/useCanvasNavigation';
@@ -72,21 +71,19 @@ import { CanvasMinimap } from './components/canvas/CanvasMinimap';
 import { CanvasZoomControl } from './components/canvas/CanvasZoomControl';
 import { collectNodeReferences, type NodeReference } from './utils/nodeReferences.js';
 import { upsertProductSceneResultNode } from './utils/productSceneResult.js';
-import { upsertVideoRemixProjectFinalNode } from './utils/videoRemixFinalNode.js';
 import { getImageGenerationProvider } from '@/shared/generationProviders.js';
 import { assignProductSceneInputOnConnect } from './utils/productSceneInputMapping.js';
 import {
-  createVideoRemixState,
-  replaceVideoRemixSource,
-  setVideoRemixSourceError,
-} from '@/shared/videoRemix.js';
-import {
-  createVideoRemixProject,
   normalizeVideoRemixProjects,
   type VideoRemixProject,
 } from '@/shared/videoRemixProjects.js';
-import { VideoRemixHub } from './features/video-remix/VideoRemixHub';
-import { useCanvasVideoAsReference } from './features/video-remix/videoRemixService';
+import { analyzeVideoAnalysisNode } from './features/video-analysis/videoAnalysisService';
+import { buildVideoRemixGraph } from './features/video-analysis/remixGraphBuilder';
+import {
+  assignVideoAnalysisInputPort,
+  createVideoAnalysisNodeData,
+  markVideoAnalysisDependentsStale,
+} from '../shared/videoAnalysis.js';
 
 // ============================================================================
 // MAIN COMPONENT
@@ -96,20 +93,11 @@ import { useCanvasVideoAsReference } from './features/video-remix/videoRemixServ
 // 其余节点不该拿到这个每帧都变的数组，否则 CanvasNode 的 memo 形同虚设。
 const NODE_TYPES_NEEDING_ALL_NODES = new Set<NodeType>([
   NodeType.PRODUCT_SCENE_REPLACE,
+  NodeType.VIDEO_ANALYSIS,
   ...Object.values(NodeType).filter(isMangaNode)
 ]);
 
 type CanvasHistoryState = { nodes: NodeData[]; groups: ReturnType<typeof useGroupManagement>['groups'] };
-type AppWorkspace = 'canvas' | 'video-remix';
-type VideoRemixFinalOutput = {
-  nodeId: string;
-  url: string;
-  duration: number;
-  width: number;
-  height: number;
-  fps: number;
-  aspectRatio: string;
-};
 
 // Nodes and groups are always updated immutably. Reference equality therefore
 // preserves the existing history semantics without serializing every media URL.
@@ -140,7 +128,6 @@ export default function App() {
   // STATE
   // ============================================================================
 
-  const [hasApiKey] = useState(true); // Backend handles API key
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     isOpen: false,
     x: 0,
@@ -153,9 +140,7 @@ export default function App() {
   const [sidebarAssetPreview, setSidebarAssetPreview] = useState<(SidebarAssetPreview & { panelY: number }) | null>(null);
   const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
   const [isMinimapOpen, setIsMinimapOpen] = useState(false);
-  const [activeWorkspace, setActiveWorkspace] = useState<AppWorkspace>('canvas');
   const [videoRemixes, setVideoRemixes] = useState<VideoRemixProject[]>([]);
-  const [activeVideoRemixId, setActiveVideoRemixId] = useState<string | null>(null);
 
   // Panel state management (history, asset library, expand)
   const {
@@ -219,7 +204,6 @@ export default function App() {
     setNodes,
     selectedNodeIds,
     setSelectedNodeIds,
-    addNode,
     updateNode,
     deleteNodes,
     clearSelection,
@@ -230,7 +214,6 @@ export default function App() {
     isDraggingConnection,
     connectionStart,
     tempConnectionEnd,
-    hoveredNodeId: connectionHoveredNodeId,
     selectedConnection,
     setSelectedConnection,
     handleConnectorPointerDown,
@@ -501,7 +484,8 @@ export default function App() {
     nodes,
     updateNode,
     addNodes: newNodes => setNodes(previous => [...previous, ...newNodes]),
-    workflowId
+    workflowId,
+    notify: message => showToast(message, { tone: 'error', duration: 6500 })
   });
 
   // Keep the low-level generator current. Dependency orchestration below always
@@ -586,9 +570,26 @@ export default function App() {
       let current = nodesRef.current.find(node => node.id === nodeId);
       if (!current) throw new Error('找不到需要生成的节点');
 
-      const parentIds = (current.parentIds || []).filter(parentId => {
+      if (current.videoAnalysisAssetRole === 'angle') {
+        const mainNodeId = current.videoAnalysisAssetMainNodeId;
+        const mainNode = mainNodeId
+          ? nodesRef.current.find(node => node.id === mainNodeId)
+          : undefined;
+        if (!mainNode?.resultUrl || !mainNode.videoAnalysisAssetMainLocked) {
+          throw new Error('请先生成并锁定该资产的主图，再生成其他角度');
+        }
+      }
+
+      const parentIds = [...new Set([
+        ...(current.parentIds || []),
+        ...Object.values(current.inheritedReferences || {}).flat(),
+      ])].filter(parentId => {
         const parent = nodesRef.current.find(node => node.id === parentId);
-        return parent && parent.type !== NodeType.TEXT;
+        // Video Analysis is a completed semantic source for generated remix
+        // nodes, not a generatable media dependency. Keep its canvas edge so
+        // the relationship remains visible, but do not recurse into the
+        // analysis node when a keyframe is generated.
+        return parent && parent.type !== NodeType.TEXT && parent.type !== NodeType.VIDEO_ANALYSIS;
       });
 
       for (const parentId of parentIds) {
@@ -650,7 +651,6 @@ export default function App() {
     setNodes([]);
     setGroups([]); // Reset groups for new canvas
     setVideoRemixes([]);
-    setActiveVideoRemixId(null);
     setSelectedNodeIds([]);
     setCanvasTitle(title);
     setEditingTitleValue(title);
@@ -727,7 +727,7 @@ export default function App() {
     handleImageToImage,
     handleImageToVideo,
     handleChangeAngleGenerate
-  } = useImageNodeHandlers({ nodes, setNodes, setSelectedNodeIds, onGenerateNode: handleGenerate, workflowId });
+  } = useImageNodeHandlers({ nodes, setNodes, setSelectedNodeIds, workflowId });
 
   // Asset handlers (create asset modal)
   const {
@@ -762,6 +762,13 @@ export default function App() {
         if (childIndex <= 0) return node;
         const parent = ordered[childIndex - 1];
         if (!isValidNodeConnection(parent.type, node.type)) return node;
+        if (node.type === NodeType.VIDEO_ANALYSIS) {
+          const mapped = assignVideoAnalysisInputPort(node, parent);
+          return {
+            ...mapped,
+            parentIds: Object.keys(mapped.inputPortByParentId || {}),
+          };
+        }
         const parentIds = node.parentIds || [];
         return parentIds.includes(parent.id)
           ? node
@@ -995,11 +1002,9 @@ export default function App() {
   // TikTok Import Tool
   const {
     isModalOpen: isTikTokModalOpen,
-    openModal: openTikTokModal,
     closeModal: closeTikTokModal,
     handleVideoImported: handleTikTokVideoImported
   } = useTikTokImport({
-    nodes,
     setNodes,
     setSelectedNodeIds,
     viewport
@@ -1193,8 +1198,7 @@ export default function App() {
     handleAddNext,
     handleNodeContextMenu,
     handleContextMenuCreateAsset,
-    handleContextMenuSelect,
-    handleToolbarAdd
+    handleContextMenuSelect
   } = useContextMenuHandlers({
     nodes,
     viewport,
@@ -1655,108 +1659,31 @@ export default function App() {
 
   // Simple wrapper for updateNode (sync code removed - TEXT node prompts are combined at generation time)
   const updateNodeWithSync = React.useCallback((id: string, updates: Partial<NodeData>) => {
-    updateNode(id, updates);
-  }, [updateNode]);
-
-  const updateVideoRemixProject = React.useCallback((
-    id: string,
-    updates: Partial<NodeData>
-  ) => {
-    const now = new Date().toISOString();
-    setVideoRemixes(current => current.map(project => {
-      if (project.id !== id) return project;
-      return {
-        ...project,
-        ...(typeof updates.title === 'string' && updates.title.trim()
-          ? { title: updates.title.trim() }
-          : {}),
-        ...(updates.videoRemix
-          ? { state: createVideoRemixState({ ...updates.videoRemix, remixId: project.id }) }
-          : {}),
-        updatedAt: now,
-      };
-    }));
-  }, []);
-
-  const createBlankVideoRemix = React.useCallback((title?: string) => {
-    if (!workflowId) {
-      showToast('请先新建或打开项目', { tone: 'error' });
-      setIsCreateProjectModalOpen(true);
-      return null;
+    const currentNode = nodes.find(node => node.id === id);
+    const nextUpdates: Partial<NodeData> = { ...updates };
+    // Editing an auto-generated prompt freezes only that node. Re-analysis can
+    // still update the analysis result and every other unlocked shot.
+    if (
+      updates.prompt !== undefined
+      && currentNode?.origin?.type === 'video-remix'
+      && (currentNode.origin.role === 'keyframe'
+        || currentNode.origin.role === 'video'
+        || currentNode.origin.role === 'asset')
+    ) {
+      nextUpdates.promptSource = 'user';
+      nextUpdates.promptLocked = true;
     }
-    const record = createVideoRemixProject({
-      title: title || `短视频复刻 ${videoRemixes.length + 1}`,
-    });
-    setVideoRemixes(current => [...current, record]);
-    setActiveVideoRemixId(record.id);
-    setActiveWorkspace('video-remix');
-    return record;
-  }, [showToast, videoRemixes.length, workflowId]);
-
-  const handleVideoRemixFinalOutput = React.useCallback((
-    _remixId: string,
-    _output: VideoRemixFinalOutput
-  ) => {
-    showToast('成片已保存到当前项目，可按需发送到画布');
-  }, [showToast]);
-
-  const handleSendVideoRemixFinalToCanvas = React.useCallback((
-    remixId: string,
-    output: VideoRemixFinalOutput
-  ) => {
-    const project = videoRemixes.find(item => item.id === remixId);
-    if (!project) return;
-    // The canvas element is intentionally unmounted while the standalone
-    // Remix workspace is active. Reconstruct its real viewport so the sent
-    // video appears in the visible canvas center after switching back.
-    const canvasSidebarWidth = sidebarCollapsed
-      ? COLLAPSED_SIDEBAR_WIDTH
-      : EXPANDED_SIDEBAR_WIDTH;
-    const position = centerNodeAt(
-      canvasViewCenter({
-        left: canvasSidebarWidth,
-        top: 0,
-        width: Math.max(1, window.innerWidth - canvasSidebarWidth),
-        height: Math.max(1, window.innerHeight),
-      }, viewport),
-      DEFAULT_NODE_WIDTH,
-      DEFAULT_NODE_HEIGHT
-    );
-    setNodes(current => upsertVideoRemixProjectFinalNode(
-      current,
-      project,
-      output,
-      position
-    ));
-    setVideoRemixes(current => current.map(item => item.id === remixId
-      ? {
-          ...item,
-          finalCanvasNodeId: item.finalCanvasNodeId || output.nodeId,
-          updatedAt: new Date().toISOString(),
-        }
-      : item));
-    setSelectedNodeIds([project.finalCanvasNodeId || output.nodeId]);
-    setActiveWorkspace('canvas');
-    showToast('成片已作为普通视频节点发送到 AI 画布');
-  }, [setNodes, setSelectedNodeIds, showToast, sidebarCollapsed, videoRemixes, viewport]);
-
-  const renameVideoRemixProject = React.useCallback((id: string, title: string) => {
-    const safeTitle = title.trim();
-    if (!safeTitle) return;
-    setVideoRemixes(current => current.map(project => project.id === id
-      ? { ...project, title: safeTitle, updatedAt: new Date().toISOString() }
-      : project));
-  }, []);
-
-  const deleteVideoRemixProject = React.useCallback((id: string) => {
-    const project = videoRemixes.find(item => item.id === id);
-    if (!project) return;
-    if (!window.confirm(`确定删除复刻任务“${project.title}”吗？画布中的普通成片节点不会删除。`)) return;
-    setVideoRemixes(current => current.filter(item => item.id !== id));
-    setActiveVideoRemixId(current => current === id
-      ? videoRemixes.find(item => item.id !== id)?.id || null
-      : current);
-  }, [videoRemixes]);
+    updateNode(id, nextUpdates);
+    if (
+      updates.resultUrl !== undefined
+      || updates.lastFrame !== undefined
+      || updates.mediaUrl !== undefined
+      || updates.editorBackgroundUrl !== undefined
+      || updates.characterReferenceUrls !== undefined
+    ) {
+      setNodes(current => markVideoAnalysisDependentsStale(current, id));
+    }
+  }, [nodes, setNodes, updateNode]);
 
   const handleUseCanvasVideoAsReference = React.useCallback(async () => {
     if (!canvasEditLock.guard()) return;
@@ -1769,52 +1696,208 @@ export default function App() {
       showToast('请先新建或打开项目', { tone: 'error' });
       return;
     }
-
     const sourceTitle = sourceNode.displayName
       || sourceNode.resultName
       || sourceNode.title
       || '画布视频';
-    const remix = createVideoRemixProject({
-      title: `${sourceTitle} · 复刻`,
-      sourceCanvasNodeId: sourceNode.id,
-    });
-    setVideoRemixes(current => [...current, remix]);
-    setActiveVideoRemixId(remix.id);
-    setActiveWorkspace('video-remix');
-
-    try {
-      const source = await useCanvasVideoAsReference({
-        workflowId,
-        remixId: remix.id,
-        sourceUrl: sourceNode.resultUrl,
-        title: sourceTitle,
-      });
-      setVideoRemixes(current => current.map(project => project.id === remix.id
-        ? {
-            ...project,
-            state: replaceVideoRemixSource(project.state, source),
-            updatedAt: new Date().toISOString(),
-          }
-        : project));
-      showToast('参考视频已复制到当前项目');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '画布视频导入失败';
-      setVideoRemixes(current => current.map(project => project.id === remix.id
-        ? {
-            ...project,
-            state: setVideoRemixSourceError(project.state, message),
-            updatedAt: new Date().toISOString(),
-          }
-        : project));
-      showToast(message, { tone: 'error' });
+    const analysisNodeId = crypto.randomUUID();
+    const targetX = sourceNode.x + 480;
+    let targetY = sourceNode.y;
+    while (nodes.some(node => Math.abs(node.x - targetX) < 420 && Math.abs(node.y - targetY) < 360)) {
+      targetY += 390;
     }
+    const analysisNode: NodeData = {
+      id: analysisNodeId,
+      type: NodeType.VIDEO_ANALYSIS,
+      title: `${sourceTitle} · 视频分析`,
+      x: targetX,
+      y: targetY,
+      prompt: '',
+      status: NodeStatus.IDLE,
+      model: 'video-analysis',
+      aspectRatio: '9:16',
+      resolution: 'Auto',
+      parentIds: [],
+      outputPortId: 'analysis-output',
+      videoAnalysis: createVideoAnalysisNodeData({
+        status: 'idle',
+        inputRefs: { productNodeIds: [], characterNodeIds: [], sceneNodeIds: [] },
+      }),
+    };
+    const mapped = assignVideoAnalysisInputPort(analysisNode, sourceNode, 'source-video');
+    setNodes(current => [...current, mapped]);
+    setSelectedNodeIds([analysisNodeId]);
+    showToast('已创建视频分析节点，可补充参考图后开始分析');
   }, [
     canvasEditLock,
     contextMenu.sourceNodeId,
     nodes,
+    setNodes,
+    setSelectedNodeIds,
     showToast,
     workflowId,
   ]);
+
+  const handleAnalyzeVideoNode = React.useCallback(async (analysisNodeId: string) => {
+    if (!canvasEditLock.guard()) return;
+    if (!workflowId) {
+      showToast('请先新建或打开项目', { tone: 'error' });
+      return;
+    }
+    const analysisNode = nodes.find(node => node.id === analysisNodeId && node.type === NodeType.VIDEO_ANALYSIS);
+    if (!analysisNode) return;
+    const inputRefs = analysisNode.videoAnalysis?.inputRefs || {
+      productNodeIds: [],
+      characterNodeIds: [],
+      sceneNodeIds: [],
+    };
+    const sourceNode = inputRefs.videoNodeId
+      ? nodes.find(node => node.id === inputRefs.videoNodeId)
+      : undefined;
+    if (!sourceNode?.resultUrl) {
+      showToast('请先连接一个已有视频结果的参考视频节点', { tone: 'error' });
+      return;
+    }
+
+    // Ensure local media is adopted and base64 is sanitized before the server
+    // resolves the source/reference paths for the HTTP analyzer.
+    try {
+      await handleSaveWithTracking();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '分析前保存项目失败';
+      showToast(message, { tone: 'error' });
+      return;
+    }
+    // Saving may rewrite base64/cross-project URLs. Read the persisted snapshot
+    // after the save so the analyzer never receives the pre-normalization URL.
+    const persistedNodes = nodesRef.current;
+    const persistedAnalysisNode = persistedNodes.find(node => node.id === analysisNodeId);
+    const persistedInputRefs = persistedAnalysisNode?.videoAnalysis?.inputRefs || inputRefs;
+    const persistedSourceNode = persistedInputRefs.videoNodeId
+      ? persistedNodes.find(node => node.id === persistedInputRefs.videoNodeId)
+      : sourceNode;
+    const persistedSourceUrl = persistedSourceNode?.resultUrl || sourceNode.resultUrl;
+    const referenceEntries: Array<{ url: string; label: string }> = [];
+    const addReferenceNodes = (ids: string[], label: string) => {
+      ids.forEach(id => {
+        const node = persistedNodes.find(item => item.id === id);
+        const url = node?.resultUrl || node?.editorBackgroundUrl;
+        if (!url) return;
+        referenceEntries.push({
+          url,
+          label: node?.displayName || node?.title || label,
+        });
+      });
+    };
+    addReferenceNodes(persistedInputRefs.productNodeIds || [], '产品参考图');
+    addReferenceNodes(persistedInputRefs.characterNodeIds || [], '人物参考图');
+    addReferenceNodes(persistedInputRefs.sceneNodeIds || [], '场景参考图');
+    if (!persistedSourceUrl) {
+      showToast('参考视频保存后不可用，请重新生成或导入', { tone: 'error' });
+      return;
+    }
+    setNodes(current => current.map(node => node.id === analysisNodeId
+      ? {
+          ...node,
+          status: NodeStatus.LOADING,
+          errorMessage: undefined,
+          videoAnalysis: createVideoAnalysisNodeData({
+            ...node.videoAnalysis,
+            status: 'analyzing',
+            errorMessage: undefined,
+          }),
+        }
+      : node));
+
+    try {
+      const payload = await analyzeVideoAnalysisNode({
+        workflowId,
+        nodeId: analysisNodeId,
+        sourceUrl: persistedSourceUrl,
+        title: persistedSourceNode?.title || sourceNode.title || '参考视频',
+        referenceImages: referenceEntries,
+      });
+      const currentNodes = nodesRef.current;
+      const currentAnalysis = currentNodes.find(node => node.id === analysisNodeId);
+      if (!currentAnalysis) return;
+      const built = buildVideoRemixGraph({
+        analysisNode: {
+          ...currentAnalysis,
+          videoAnalysis: createVideoAnalysisNodeData({
+            ...currentAnalysis.videoAnalysis,
+            status: 'analyzing',
+          }),
+        },
+        result: payload.result,
+        existingNodes: currentNodes,
+        existingGroups: groups,
+      });
+      setNodes(built.nodes);
+      setGroups(current => [...current.filter(group => group.id !== built.group.id), built.group]);
+      setSelectedNodeIds([analysisNodeId]);
+      showToast(`已生成 ${payload.result.shots.length} 个镜头工作流，可逐个生成关键帧和视频`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '视频分析失败';
+      setNodes(current => current.map(node => node.id === analysisNodeId
+        ? {
+            ...node,
+            status: NodeStatus.ERROR,
+            errorMessage: message,
+            videoAnalysis: createVideoAnalysisNodeData({
+              ...node.videoAnalysis,
+              status: 'error',
+              errorMessage: message,
+            }),
+          }
+        : node));
+      showToast(message, { tone: 'error', duration: 6500 });
+    }
+  }, [canvasEditLock, groups, handleSaveWithTracking, nodes, setGroups, setNodes, setSelectedNodeIds, showToast, workflowId]);
+
+  const handleGenerateVideoAnalysisAssets = React.useCallback((analysisNodeId: string) => {
+    if (!canvasEditLock.guard()) return;
+    const currentNodes = nodesRef.current;
+    const analysisNode = currentNodes.find(node => (
+      node.id === analysisNodeId && node.type === NodeType.VIDEO_ANALYSIS
+    ));
+    const result = analysisNode?.videoAnalysis?.result;
+    if (!analysisNode || !result) {
+      showToast('请先完成视频分析，再选择资产提示词图', { tone: 'error' });
+      return;
+    }
+    try {
+      const built = buildVideoRemixGraph({
+        analysisNode,
+        result,
+        existingNodes: currentNodes,
+        existingGroups: groups,
+      });
+      const assetCount = built.generatedNodeIds.filter(nodeId => (
+        built.nodes.find(node => node.id === nodeId)?.origin?.role === 'asset'
+      )).length;
+      setNodes(built.nodes);
+      setGroups(current => [...current.filter(group => group.id !== built.group.id), built.group]);
+      setSelectedNodeIds([analysisNodeId]);
+      showToast(assetCount > 0 ? `已创建 ${assetCount} 个资产提示词参考节点` : '当前选择没有可创建的资产参考节点');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '资产参考节点创建失败', { tone: 'error' });
+    }
+  }, [canvasEditLock, groups, setGroups, setNodes, setSelectedNodeIds, showToast]);
+
+  const handleLockVideoAnalysisAssetMain = React.useCallback((nodeId: string) => {
+    if (!canvasEditLock.guard()) return;
+    const current = nodesRef.current.find(node => node.id === nodeId);
+    if (!current || current.videoAnalysisAssetRole !== 'main') return;
+    if (!current.resultUrl) {
+      showToast('请先生成主图，再锁定主图', { tone: 'error' });
+      return;
+    }
+    const nextLocked = !current.videoAnalysisAssetMainLocked;
+    setNodes(previous => previous.map(node => node.id === nodeId
+      ? { ...node, videoAnalysisAssetMainLocked: nextLocked }
+      : node));
+    showToast(nextLocked ? '主图已锁定，其他角度将以此图为参考' : '已解除主图锁定');
+  }, [canvasEditLock, setNodes, showToast]);
 
   const subtitleLaunchesRef = useRef(new Set<string>());
   const handleAutoSubtitle = React.useCallback(async (sourceNodeId: string) => {
@@ -1992,13 +2075,22 @@ export default function App() {
   const handleConnectionMade = React.useCallback((
     parentId: string,
     childId: string,
-    currentNodes: NodeData[] = nodes
+    currentNodes: NodeData[] = nodes,
+    targetPortId?: string,
   ): Partial<NodeData> => {
     const parentNode = currentNodes.find(n => n.id === parentId);
     const childNode = currentNodes.find(n => n.id === childId);
     if (!parentNode || !childNode) return {};
 
     const updates: Partial<NodeData> = {};
+    if (childNode.type === NodeType.VIDEO_ANALYSIS) {
+      const mapped = assignVideoAnalysisInputPort(childNode, parentNode, targetPortId);
+      return {
+        parentIds: Object.keys(mapped.inputPortByParentId || {}),
+        inputPortByParentId: mapped.inputPortByParentId,
+        videoAnalysis: mapped.videoAnalysis,
+      };
+    }
     if (parentNode.type === NodeType.TEXT && parentNode.prompt) {
       updates.prompt = parentNode.prompt;
     }
@@ -2052,7 +2144,7 @@ export default function App() {
 
   // Context menu handlers provided by useContextMenuHandlers hook
   // handleDoubleClick, handleGlobalContextMenu, handleAddNext, handleNodeContextMenu,
-  // handleContextMenuCreateAsset, handleContextMenuSelect, handleToolbarAdd
+  // handleContextMenuCreateAsset and handleContextMenuSelect are used below.
 
   // ==========================================================================
   // 画布节点的稳定 props
@@ -2096,15 +2188,19 @@ export default function App() {
     const result = new Map<string, NodeReference[]>();
 
     for (const node of nodes) {
-      const deps: unknown[] = [node.parentIds];
-      for (const parentId of node.parentIds || []) deps.push(byId.get(parentId));
+      const referenceParentIds = [...new Set([
+        ...(node.parentIds || []),
+        ...Object.values(node.inheritedReferences || {}).flat(),
+      ])];
+      const deps: unknown[] = [referenceParentIds.join('\u0000')];
+      for (const parentId of referenceParentIds) deps.push(byId.get(parentId));
 
       const cached = previous.get(node.id);
       const reusable = Boolean(cached)
         && cached!.deps.length === deps.length
         && cached!.deps.every((dep, index) => dep === deps[index]);
 
-      const value = reusable ? cached!.value : collectNodeReferences(node.parentIds, nodes);
+      const value = reusable ? cached!.value : collectNodeReferences(referenceParentIds, nodes);
       nextCache.set(node.id, { deps, value });
       result.set(node.id, value);
     }
@@ -2118,7 +2214,9 @@ export default function App() {
   const latestNodeCallbacks = {
     updateNodeWithSync,
     handleGenerate,
-    handleAddNext,
+    handleAnalyzeVideoNode,
+    handleGenerateVideoAnalysisAssets,
+    handleLockVideoAnalysisAssetMain,
     handleNodeContextMenu,
     handleConnectorPointerDown,
     handleOpenEditor,
@@ -2146,15 +2244,16 @@ export default function App() {
     onUpdate: (id: string, updates: Partial<NodeData>) =>
       nodeCallbacksRef.current.updateNodeWithSync(id, updates),
     onGenerate: (id: string) => nodeCallbacksRef.current.handleGenerate(id),
-    onAddNext: (id: string, type: 'left' | 'right', anchor?: { x: number; y: number }) =>
-      nodeCallbacksRef.current.handleAddNext(id, type, anchor),
     onContextMenu: (e: React.MouseEvent, id: string) =>
       nodeCallbacksRef.current.handleNodeContextMenu(e, id),
-    onConnectorDown: (e: React.PointerEvent, id: string, side: 'left' | 'right') => {
+    onConnectorDown: (e: React.PointerEvent, id: string, side: 'left' | 'right', portId?: string) => {
       // 连线拖拽全程读缓存的画布偏移，开始时兜底刷新一次（每次手势一次，不是每帧）。
       refreshCanvasOffset();
-      nodeCallbacksRef.current.handleConnectorPointerDown(e, id, side);
+      nodeCallbacksRef.current.handleConnectorPointerDown(e, id, side, portId);
     },
+    onAnalyzeVideo: (id: string) => nodeCallbacksRef.current.handleAnalyzeVideoNode(id),
+    onGenerateVideoAnalysisAssets: (id: string) => nodeCallbacksRef.current.handleGenerateVideoAnalysisAssets(id),
+    onLockVideoAnalysisAssetMain: (id: string) => nodeCallbacksRef.current.handleLockVideoAnalysisAssetMain(id),
     onSelect: (id: string) => {
       setSelectedConnection(null);
       nodeCallbacksRef.current.setSelectedNodeIds([id]);
@@ -2201,27 +2300,9 @@ export default function App() {
     }
   }), [refreshCanvasOffset]);
 
-  const handleWorkspaceChange = React.useCallback((workspace: AppWorkspace) => {
-    setActiveWorkspace(workspace);
-    setContextMenu(current => ({ ...current, isOpen: false }));
-    setSidebarAssetPreview(null);
-    closeHistoryPanel();
-    closeAssetLibrary();
-    closeWorkflowPanel();
-    if (workspace === 'video-remix' && !activeVideoRemixId && videoRemixes[0]) {
-      setActiveVideoRemixId(videoRemixes[0].id);
-    }
-  }, [
-    activeVideoRemixId,
-    closeAssetLibrary,
-    closeHistoryPanel,
-    closeWorkflowPanel,
-    videoRemixes,
-  ]);
-
   return (
     <div className={`w-screen h-screen ${canvasTheme === 'dark' ? 'bg-[#050505] text-white' : 'bg-neutral-50 text-neutral-900'} overflow-hidden select-none font-sans transition-colors duration-300`}>
-      {activeWorkspace === 'canvas' && !storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
+      {!storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
         <ProjectSidebar
           nodes={nodes}
           groups={groups}
@@ -2263,9 +2344,7 @@ export default function App() {
         }}
         currentWorkflowId={workflowId || undefined}
         panelY={workflowPanelY}
-        panelLeft={(activeWorkspace === 'video-remix'
-          ? EXPANDED_SIDEBAR_WIDTH
-          : sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH) + 20}
+        panelLeft={(sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH) + 20}
         canvasTheme={canvasTheme}
       />
 
@@ -2357,8 +2436,14 @@ export default function App() {
           hasUnsavedChanges={hasUnsavedChanges}
           canvasTheme={canvasTheme}
           onToggleTheme={() => setCanvasTheme(prev => prev === 'dark' ? 'light' : 'dark')}
-          activeWorkspace={activeWorkspace}
-          onWorkspaceChange={handleWorkspaceChange}
+          onOpenAssets={() => {
+            if (isAssetLibraryOpen) {
+              closeAssetLibrary();
+            } else {
+              openAssetLibraryModal(56, closeWorkflowPanel);
+            }
+          }}
+          assetsOpen={isAssetLibraryOpen}
           lastAutoSaveTime={lastAutoSaveTime}
           workflowId={workflowId}
           onRestoreNodes={(restoredNodes) => {
@@ -2369,36 +2454,13 @@ export default function App() {
             });
             setSelectedNodeIds(restoredNodes.map(node => node.id));
           }}
-          showBrand={activeWorkspace === 'video-remix'}
-          sidebarOffset={activeWorkspace === 'video-remix'
-            ? 0
-            : sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH}
+          showBrand={true}
+          sidebarOffset={sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH}
         />
       )}
 
-      {activeWorkspace === 'video-remix' && !storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
-        <div className="fixed inset-x-0 bottom-0 top-14 z-20">
-          <VideoRemixHub
-            projects={videoRemixes}
-            activeProjectId={activeVideoRemixId}
-            workflowId={workflowId || undefined}
-            projectTitle={canvasTitle}
-            canvasTheme={canvasTheme}
-            onSelectProject={setActiveVideoRemixId}
-            onCreateProject={() => { void createBlankVideoRemix(); }}
-            onCreateWorkflow={handleRequestNewProject}
-            onOpenWorkflows={handleWorkflowsClick}
-            onRenameProject={renameVideoRemixProject}
-            onDeleteProject={deleteVideoRemixProject}
-            onUpdateProject={updateVideoRemixProject}
-            onFinalOutput={handleVideoRemixFinalOutput}
-            onSendFinalToCanvas={handleSendVideoRemixFinalToCanvas}
-          />
-        </div>
-      )}
-
       {/* 没有项目时的只读提示。刻意只加一层提示，不改动画布本身的结构与样式。 */}
-      {activeWorkspace === 'canvas' && !canEditCanvas && (
+      {!canEditCanvas && (
         <div
           className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center"
           style={{ left: sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH }}
@@ -2411,7 +2473,7 @@ export default function App() {
       )}
 
       {/* Canvas */}
-      {activeWorkspace === 'canvas' && <div
+      <div
         ref={canvasRef}
         id="canvas-background"
         className="absolute inset-0 cursor-grab active:cursor-grabbing"
@@ -2475,14 +2537,15 @@ export default function App() {
                 connectedReferences={nodeConnectedReferences.get(node.id)}
                 onUpdate={stableNodeHandlers.onUpdate}
                 onGenerate={stableNodeHandlers.onGenerate}
-                onAddNext={stableNodeHandlers.onAddNext}
                 selected={selectedNodeIds.includes(node.id)}
                 showControls={selectedNodeIds.length === 1 && selectedNodeIds.includes(node.id)}
                 onNodePointerDown={stableNodeHandlers.onNodePointerDown}
                 onContextMenu={stableNodeHandlers.onContextMenu}
                 onSelect={stableNodeHandlers.onSelect}
                 onConnectorDown={stableNodeHandlers.onConnectorDown}
-                isHoveredForConnection={connectionHoveredNodeId === node.id}
+                onAnalyzeVideo={stableNodeHandlers.onAnalyzeVideo}
+                onGenerateVideoAnalysisAssets={stableNodeHandlers.onGenerateVideoAnalysisAssets}
+                onLockVideoAnalysisAssetMain={stableNodeHandlers.onLockVideoAnalysisAssetMain}
                 onOpenEditor={stableNodeHandlers.onOpenEditor}
                 onUpload={stableNodeHandlers.onUpload}
                 onExpand={stableNodeHandlers.onExpand}
@@ -2589,10 +2652,10 @@ export default function App() {
             }}
           />
         )}
-      </div >}
+      </div >
 
       {/* Context Menu */}
-      {activeWorkspace === 'canvas' && <ContextMenu
+      <ContextMenu
         state={contextMenu}
         onClose={() => setContextMenu(prev => ({ ...prev, isOpen: false }))}
         onSelectType={handleContextMenuSelect}
@@ -2615,10 +2678,10 @@ export default function App() {
         canUndo={canUndo}
         canRedo={canRedo}
         canvasTheme={canvasTheme}
-      />}
+      />
 
       {/* Canvas navigation controls */}
-      {activeWorkspace === 'canvas' && !storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
+      {!storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
         <div
           className="fixed bottom-6 z-50 flex flex-col items-start gap-2 transition-all duration-300"
           style={{ left: (sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH) + 24 }}

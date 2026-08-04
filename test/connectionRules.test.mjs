@@ -62,3 +62,13 @@ test('项目级视频复刻不再参与任何画布连线', () => {
   assert.equal(isValidNodeConnection(NODE.VIDEO_REMIX, NODE.VIDEO), false);
   assert.equal(isValidNodeConnection(NODE.VIDEO_REMIX, NODE.IMAGE), false);
 });
+
+test('统一画布视频分析只接收媒体输入，并向普通生成节点输出', () => {
+  assert.equal(isValidNodeConnection(NODE.VIDEO, NODE.VIDEO_ANALYSIS), true);
+  assert.equal(isValidNodeConnection(NODE.IMAGE, NODE.VIDEO_ANALYSIS), true);
+  assert.equal(isValidNodeConnection(NODE.IMAGE_EDITOR, NODE.VIDEO_ANALYSIS), true);
+  assert.equal(isValidNodeConnection(NODE.TEXT, NODE.VIDEO_ANALYSIS), false);
+  assert.equal(isValidNodeConnection(NODE.VIDEO_ANALYSIS, NODE.IMAGE), true);
+  assert.equal(isValidNodeConnection(NODE.VIDEO_ANALYSIS, NODE.VIDEO), true);
+  assert.equal(isValidNodeConnection(NODE.VIDEO_ANALYSIS, NODE.RENDER), true);
+});

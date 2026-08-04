@@ -111,6 +111,7 @@ export class GeminiVideoAnalyzer extends VideoAnalyzerProvider {
     source,
     shots,
     proxyFile,
+    referenceFiles = [],
     mode = 'fast',
     workflowId,
     nodeId,
@@ -127,6 +128,9 @@ export class GeminiVideoAnalyzer extends VideoAnalyzerProvider {
       '你是短视频结构化分析器。附件是完整参考视频的低码率分析代理，只分析真实可见/可听内容，不推测画外设定。',
       modeInstruction(mode),
       '一次建立全局故事、人物身份（身份与造型分离）、场景身份与区域、重要道具，以及每个镜头的动作复杂度。',
+      referenceFiles.length > 0
+        ? `附件中另有 ${referenceFiles.length} 张用户提供的参考图。按附件顺序和标注使用：${referenceFiles.map((file, index) => `${index + 1}号为${file.label || `参考图 ${index + 1}`}`).join('；')}。它们只用于识别与保持用户资产，不要把它们误判为参考视频镜帧。`
+        : '没有额外用户参考图，按参考视频中的可见内容完成分析。',
       '除固定 ASCII ID 外，所有给用户阅读的字段必须使用自然、清晰的简体中文，包括人物/造型/场景/区域/道具名称、描述、声音、故事和风格；不得输出整句英文。',
       '资产分析的目标不是识别或照搬原视频中的真人/影视角色，也不是截取分镜画面。请根据剧情功能给出可重新生成的“选角与美术需求”：人物 name 使用功能性中文角色名（如“冷静的主驾驶”），identity 说明年龄段、气质、脸型五官、发型、体型和辨识点；不得使用演员、明星或影视角色真名。',
       '场景 name 使用功能性中文名称，visualDescription 说明空间结构、区域关系、固定构件、材质、色彩、时间与光线；道具 name 使用功能性中文名称，description 说明剧情用途、外形结构、比例、材质、颜色和不可变细节。描述必须足够支持用户直接 AI 生成或改为自己的上传资产。',
@@ -151,7 +155,7 @@ export class GeminiVideoAnalyzer extends VideoAnalyzerProvider {
 
     return this.#runStructured({
       prompt,
-      files: [proxyFile],
+      files: [proxyFile, ...referenceFiles],
       contract: GLOBAL_ANALYSIS_OUTPUT_CONTRACT,
       normalize: raw => normalizeGlobalVideoAnalysis(raw, shots.map(shot => shot.shotId)),
       mode,

@@ -1,9 +1,32 @@
 export const CONNECTION_DROP_SLOP_PX = 28;
+export const CONNECTION_PORT_DROP_SLOP_PX = 24;
 
 const distanceToRect = (point, rect) => {
     const dx = Math.max(rect.left - point.x, 0, point.x - rect.right);
     const dy = Math.max(rect.top - point.y, 0, point.y - rect.bottom);
     return Math.hypot(dx, dy);
+};
+
+/** Resolve a numbered fixed input port before falling back to the node body. */
+export const resolveConnectionInputPortTarget = ({
+    point,
+    sourceNodeId,
+    candidates,
+    slop = CONNECTION_PORT_DROP_SLOP_PX,
+}) => {
+    let best = null;
+    for (const candidate of candidates || []) {
+        if (!candidate || candidate.nodeId === sourceNodeId || !candidate.inputPortId) continue;
+        const distance = distanceToRect(point, candidate.rect);
+        if (distance > slop) continue;
+        if (!best || distance < best.distance) best = { candidate, distance };
+    }
+    if (!best) return null;
+    return {
+        nodeId: best.candidate.nodeId,
+        side: 'left',
+        inputPortId: best.candidate.inputPortId,
+    };
 };
 
 /**

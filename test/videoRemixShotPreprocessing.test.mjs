@@ -147,6 +147,25 @@ test('预处理生成 15fps H.264 代理、自动 Shot 与每镜头五帧', asyn
   assert.equal(manifest.shots[0].analysisFrames[0].file, 'shots/shot_001/frames/start.jpg');
 });
 
+test('FFmpeg 没有实际写出分析帧时拒绝残缺时间线', async (t) => {
+  const { context, source } = makeContext(t);
+  const runProcess = context.runProcessImpl;
+  context.runProcessImpl = async (command, args) => {
+    if (String(args.at(-1)).endsWith('/end.jpg')) return { stdout: '', stderr: '' };
+    return runProcess(command, args);
+  };
+
+  await assert.rejects(
+    preprocessReferenceVideo({
+      workflowId: 'workflow-1',
+      remixId: 'remix_shots',
+      source,
+    }, context),
+    error => error.code === 'SHOT_FRAME_NOT_CREATED'
+  );
+  assert.equal(fs.existsSync(path.join(context.libraryDir, 'projects', '镜头测试项目', 'video-remix', 'remix_shots', 'preprocess', 'current.json')), false);
+});
+
 test('手动拖动、拆分或合并切点会生成新版本并保留可复用 Shot id', async (t) => {
   const { context, source } = makeContext(t);
   const first = await preprocessReferenceVideo({

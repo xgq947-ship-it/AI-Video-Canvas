@@ -27,6 +27,7 @@ import {
   AudioLines,
   Library,
   History,
+  ScanSearch,
 } from 'lucide-react';
 import { ContextMenuState, NodeType } from '../types';
 
@@ -172,7 +173,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           {canUseAsReferenceVideo && (
             <MenuItem
               icon={<Film size={16} />}
-              label="发送到短视频复刻"
+              label="创建视频分析工作流"
               onClick={() => {
                 onUseAsReferenceVideo?.();
                 onClose();
@@ -356,6 +357,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           <AddNodeMenuItem icon={<Type size={19} />} label="文本" onClick={() => onSelectType(NodeType.TEXT)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<ImageIcon size={19} />} label="图片" onClick={() => onSelectType(NodeType.IMAGE)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<Layers size={19} />} label="产品短视频生成" badge="NEW" badgeTone="cyan" onClick={() => onSelectType(NodeType.PRODUCT_SCENE_REPLACE)} canvasTheme={canvasTheme} />
+          <AddNodeMenuItem icon={<ScanSearch size={19} />} label="短视频复刻模板" badge="NEW" badgeTone="cyan" onClick={() => onSelectType(NodeType.VIDEO_ANALYSIS)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<Video size={19} />} label="视频" onClick={() => onSelectType(NodeType.VIDEO)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<Scissors size={19} />} label="视频合成" badge="Beta" onClick={() => onSelectType(NodeType.VIDEO_EDITOR)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem
@@ -454,6 +456,12 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           icon={<Layers size={18} />}
           label="产品短视频生成"
           onClick={() => onSelectType(NodeType.PRODUCT_SCENE_REPLACE)}
+          canvasTheme={canvasTheme}
+        />
+        <MenuItem
+          icon={<ScanSearch size={18} />}
+          label="短视频复刻模板"
+          onClick={() => onSelectType(NodeType.VIDEO_ANALYSIS)}
           canvasTheme={canvasTheme}
         />
         <MenuItem

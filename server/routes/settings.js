@@ -7,6 +7,10 @@ import {
 } from '../services/apiKeyStore.js';
 import { listPromptOptimizerProviders } from '../services/promptOptimizerProviders.js';
 import {
+    getPromptOptimizerModelCatalog,
+    invalidatePromptOptimizerModelCatalogCache
+} from '../services/promptOptimizerModels.js';
+import {
     applyOptimizerPreferenceToApp,
     describeOptimizerSettings,
     loadOptimizerPreference,
@@ -68,6 +72,8 @@ router.post('/api-keys', (req, res) => {
             Array.isArray(req.body?.clear) ? req.body.clear : []
         );
         applyApiKeysToApp(req.app, process.env, next);
+        // 密钥变化后，下次读取目录必须重新探测，不能继续使用无密钥时的兜底缓存。
+        invalidatePromptOptimizerModelCatalogCache();
         res.json({
             success: true,
             fields: describeApiKeySettings(process.env, next)
@@ -111,6 +117,23 @@ router.post('/optimizer', (req, res) => {
     } catch (error) {
         console.error('[优化后端] 保存失败：', error);
         res.status(400).json({ error: error.message || '优化后端保存失败' });
+    }
+});
+
+/** 提示词优化模型目录：设置页打开时自动同步，失败时由服务端返回内置兜底。 */
+router.get('/optimizer/models', async (req, res) => {
+    try {
+        if (req.query.refresh === '1') invalidatePromptOptimizerModelCatalogCache();
+        const catalog = await getPromptOptimizerModelCatalog({
+            refresh: req.query.refresh === '1',
+            apiKeys: {
+                deepseek: req.app.locals.DEEPSEEK_API_KEY || ''
+            }
+        });
+        res.json(catalog);
+    } catch (error) {
+        console.error('[优化模型] 读取模型目录失败：', error);
+        res.status(500).json({ error: error.message || '读取优化模型列表失败' });
     }
 });
 

@@ -22,6 +22,7 @@ import autoSubtitleRoutes from './routes/auto-subtitles.js';
 import codexImageJobRoutes from './routes/codex-image-jobs.js';
 import settingsRoutes from './routes/settings.js';
 import videoRemixRoutes from './routes/video-remix.js';
+import videoAnalysisRoutes from './routes/video-analysis.js';
 import { applyApiKeysToApp, loadApiKeyOverrides } from './services/apiKeyStore.js';
 import { normalizeCharacterAssetMeta } from './services/characterAssets.js';
 import { createUniqueAssetFilename } from './services/assetFilenames.js';
@@ -352,6 +353,9 @@ app.use('/api/auto-subtitles', autoSubtitleRoutes);
 // folder. Local uploads use a streaming body, so this router must not install a
 // second JSON parser on its import endpoint.
 app.use('/api/video-remix', videoRemixRoutes);
+// Canvas-native video analysis reuses the Video Remix HTTP analyzer but writes
+// only the lightweight result consumed by ordinary canvas nodes.
+app.use('/api/video-analysis', videoAnalysisRoutes);
 
 // --- Library Assets API ---
 

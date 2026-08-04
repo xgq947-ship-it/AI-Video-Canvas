@@ -82,8 +82,8 @@ const productSceneContext = appLocals => ({
     codexAutomation: appLocals.CODEX_IMAGE_AUTOMATION,
     arkApiKey: appLocals.ARK_API_KEY,
     recognitionModel: appLocals.PROMPT_OPTIMIZER_PROVIDER === 'codex-cli'
-        ? (appLocals.PROMPT_OPTIMIZER_MODEL || 'gpt-5.6-sol')
-        : 'gpt-5.6-sol'
+        ? (appLocals.PROMPT_OPTIMIZER_MODEL || 'gpt-5.6-luna')
+        : 'gpt-5.6-luna'
 });
 
 router.post('/product-scene-jobs', (req, res) => {
@@ -373,7 +373,7 @@ router.post('/generate-image', async (req, res) => {
 
 router.post('/generate-video', async (req, res) => {
     try {
-        const { nodeId, workflowId, prompt, imageBase64: rawImageBase64, lastFrameBase64: rawLastFrameBase64, referenceImages: rawReferenceImages, referenceImageLabels: rawReferenceImageLabels, referenceAudioUrls: rawReferenceAudioUrls, aspectRatio, resolution, duration, videoModel } = req.body;
+        const { nodeId, workflowId, prompt, imageBase64: rawImageBase64, lastFrameBase64: rawLastFrameBase64, referenceImages: rawReferenceImages, referenceVideo: rawReferenceVideo, referenceImageLabels: rawReferenceImageLabels, referenceAudioUrls: rawReferenceAudioUrls, aspectRatio, resolution, duration, videoModel } = req.body;
         const { GEMINI_API_KEY, ARK_API_KEY, LIBRARY_DIR, WORKFLOWS_DIR, PROJECTS_DIR } = req.app.locals;
         const { targetDir, urlPrefix } = resolveProjectMediaTarget(workflowId, 'videos', {
             workflowsDir: WORKFLOWS_DIR,
@@ -440,9 +440,15 @@ router.post('/generate-video', async (req, res) => {
             videoExtension = workflowResult.extension;
             workflowRunId = workflowResult.runId;
         } else if (isGoogleFlowWorkflowModel) {
+            if (rawReferenceVideo && videoModel !== 'google-flow-omni-flash') {
+                return res.status(400).json({ error: 'Google Flow 参考视频当前只支持 Omni Flash' });
+            }
             // Remix 会给人物/场景/道具参考图附资产标签。带资产标签的单图也必须走
             // Ingredients，不能把人物正面照误当成视频首帧；普通画布的无标签单图仍是首帧。
-            const flowInputs = resolveGoogleFlowWorkflowVideoInputs({
+            const flowInputs = rawReferenceVideo ? {
+                firstFrameInput: null,
+                referenceImageInputs: []
+            } : resolveGoogleFlowWorkflowVideoInputs({
                 firstFrameInput: rawImageBase64,
                 referenceImageInputs: explicitReferences,
                 referenceImageLabels: rawReferenceImageLabels,
@@ -453,6 +459,7 @@ router.post('/generate-video', async (req, res) => {
                 // 无图 = 文生视频；无标签单图 = 首帧；资产标签单图或多图 = Ingredients。
                 firstFrameInput: flowInputs.firstFrameInput,
                 referenceImageInputs: flowInputs.referenceImageInputs,
+                referenceVideoInput: rawReferenceVideo || null,
                 aspectRatio: aspectRatio || '16:9',
                 duration: duration || videoProvider?.supportedDurations?.[0] || 4,
                 modelId: videoModel,

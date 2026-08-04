@@ -6,7 +6,7 @@
  */
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Loader2, Maximize2, ImageIcon as ImageIcon, Film, Upload, Pencil, Video, GripVertical, Download, Expand, Shrink, RotateCcw, CircleAlert } from 'lucide-react';
+import { Loader2, ImageIcon as ImageIcon, Film, Upload, Pencil, Video, Expand, Shrink, RotateCcw, CircleAlert } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { LazyImage } from '../LazyImage';
 import { LazyVideo } from '../LazyVideo';
@@ -15,12 +15,10 @@ interface NodeContentProps {
     data: NodeData;
     inputUrl?: string;
     selected: boolean;
-    isIdle: boolean;
     isLoading: boolean;
     isSuccess: boolean;
     getAspectRatioStyle: () => { aspectRatio: string };
     onUpload?: (nodeId: string, imageDataUrl: string) => void;
-    onExpand?: (imageUrl: string) => void;
     // Text node callbacks
     onWriteContent?: (nodeId: string) => void;
     onTextToVideo?: (nodeId: string) => void;
@@ -36,12 +34,10 @@ export const NodeContent: React.FC<NodeContentProps> = ({
     data,
     inputUrl,
     selected,
-    isIdle,
     isLoading,
     isSuccess,
     getAspectRatioStyle,
     onUpload,
-    onExpand,
     onWriteContent,
     onTextToVideo,
     onTextToImage,
@@ -237,7 +233,16 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                                 {data.subtitleSourceNodeId ? '正在识别并烧录字幕...' : '正在生成...'}
                             </span>
                         </div>
-                    ) : data.status === NodeStatus.ERROR ? (
+                    ) : data.status === NodeStatus.ERROR ? (() => {
+                        // Provider already accepted (and billed) the request: the result
+                        // may sit in the platform's own history, so a naive retry spends
+                        // quota again. The raw message is line-clamped and can hide its
+                        // own "不要直接重新生成" notice, so warn explicitly and downplay
+                        // the retry button.
+                        const quotaConsumed = Boolean(
+                            data.errorSubmitted || data.errorMessage?.includes('不要直接重新生成')
+                        );
+                        return (
                         <div className="relative z-10 flex max-w-[85%] flex-col items-center gap-3 text-center">
                             <div className="flex h-11 w-11 items-center justify-center rounded-full bg-red-500/10 text-red-400">
                                 <CircleAlert size={22} />
@@ -250,6 +255,11 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                                     {data.errorMessage || '生成任务未完成，请重新生成。'}
                                 </div>
                             </div>
+                            {quotaConsumed && (
+                                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-4 text-amber-300">
+                                    本次已消耗生成配额，直接重试会再次扣费。请先到对应平台历史确认是否已有结果。
+                                </div>
+                            )}
                             {onGenerate && !data.subtitleSourceNodeId && (
                                 <button
                                     onClick={(event) => {
@@ -257,14 +267,17 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                                         onGenerate(data.id);
                                     }}
                                     onPointerDown={(event) => event.stopPropagation()}
-                                    className="flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-medium text-neutral-900 transition-colors hover:bg-neutral-200 active:scale-[0.98]"
+                                    className={quotaConsumed
+                                        ? 'flex items-center gap-2 rounded-full border border-neutral-600 bg-transparent px-4 py-2 text-sm font-medium text-neutral-300 transition-colors hover:bg-neutral-800 active:scale-[0.98]'
+                                        : 'flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-medium text-neutral-900 transition-colors hover:bg-neutral-200 active:scale-[0.98]'}
                                 >
                                     <RotateCcw size={15} />
-                                    重新生成
+                                    {quotaConsumed ? '仍要重新生成' : '重新生成'}
                                 </button>
                             )}
                         </div>
-                    ) : (
+                        );
+                    })() : (
                         <div className="relative z-10 flex flex-col items-center gap-3">
                             {/* Upload Button for Image Nodes (including local image models) */}
                             {isImageType && onUpload && (

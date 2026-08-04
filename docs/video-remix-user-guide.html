@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Evan 视频复刻三步简单模式使用教程">
+  <meta name="description" content="Evan 画布内视频分析与短视频复刻使用教程">
   <title>Evan 视频复刻使用教程</title>
   <style>
     :root {
@@ -264,7 +264,7 @@
     <div class="topbar-inner">
       <a class="brand" href="#overview">
         <span class="brand-mark">EV</span>
-        <span><strong>Evan 视频复刻</strong><small>三步简单模式使用教程</small></span>
+        <span><strong>Evan 视频复刻</strong><small>统一画布使用教程</small></span>
       </a>
       <div class="tools">
         <button class="tool-button" id="themeButton" type="button">切换主题</button>
@@ -275,9 +275,9 @@
 
   <main class="page">
     <section class="hero section" id="overview">
-      <div class="eyebrow">当前版本 · 默认简单模式</div>
+      <div class="eyebrow">当前版本 · 统一画布</div>
       <h1>最少三步，完成<br><span>视频复刻</span></h1>
-      <p class="hero-lead">从顶部进入独立“短视频复刻”工作区，导入参考视频，最少准备一名人物的主参考图，就能直接生成成片。场景、道具、多角度设定图和首尾关键帧都可按需补强，不再阻断生成。</p>
+      <p class="hero-lead">在画布中添加“短视频复刻模板”，连接参考视频与产品、人物、场景参考图，点击视频分析节点即可自动创建关键帧、镜头视频和最终成片。场景、道具与额外关键帧都可按需补强。</p>
 
       <div class="hero-note">
         <div class="status-card"><b><span class="dot"></span>未登录 Gemini 不影响应用运行</b><p>画布、项目、导入、自动拆镜和本地处理都可正常使用。</p></div>
@@ -336,8 +336,8 @@
             </div>
             <div class="step-body">
               <ol>
-                <li>点击应用顶部 <span class="button-label">短视频复刻</span>，再点左侧 <span class="button-label">新建复刻任务</span>；保持默认的 <span class="button-label">简单模式</span>。</li>
-                <li>拖入本地视频，或粘贴分享链接；已有画布视频也可右键选择 <span class="button-label">发送到短视频复刻</span>，应用会自动创建任务并切换过去。</li>
+                <li>在画布右键打开“单独添加节点”，选择 <span class="button-label">短视频复刻模板</span>；也可以对已有视频右键选择 <span class="button-label">创建视频分析工作流</span>。</li>
+                <li>连接已有视频结果作为参考视频，再按需连接产品、人物和场景参考图；四类输入分别落到固定端口。</li>
                 <li>Evan 自动复制素材、生成分析代理、拆分镜头并开始理解人物、场景、道具、动作与运镜。</li>
                 <li>如果出现“Gemini 尚未登录”，点击 <span class="button-label">打开 Gemini 登录</span>，在弹出的正式版 Chrome 中完成登录，然后返回重试。</li>
               </ol>
@@ -443,8 +443,8 @@
           <h2>登录、提示词和一致性</h2>
           <p class="intro">几个最常见的问题集中说明。</p>
           <details open><summary>目前没有登录 Gemini，会影响项目运行吗？</summary><p>不会。Evan 本身、画布、项目、本地视频导入、自动拆镜、素材编辑和本地渲染都能运行。只有简单模式自动进入视频理解阶段时需要登录 Gemini。</p></details>
-          <details><summary>为什么画布里找不到“视频复刻”节点？</summary><p>视频复刻已经是独立工作区。请点击顶部“短视频复刻”，同一项目可新建多个任务；切回“AI 画布”不会丢失任务进度。</p></details>
-          <details><summary>成片会自动出现在画布吗？</summary><p>不会。成片默认只保存在复刻任务中，避免打乱画布。只有点击“发送到 AI 画布”后，才创建或更新一个普通视频节点。</p></details>
+          <details><summary>为什么画布里找不到“视频复刻”节点？</summary><p>当前入口是“短视频复刻模板”对应的 Video Analysis 节点，不再创建旧版容器；它会在分析后自动生成关键帧、镜头视频和 Render 成片节点。</p></details>
+          <details><summary>成片会自动出现在画布吗？</summary><p>会。视频分析完成后会自动创建普通的关键帧、视频和最终 Render 节点，用户可以逐个生成并继续编辑。</p></details>
           <details><summary>人物、场景和道具提示词在哪里？</summary><p>步骤 2 的每张资产卡都会直接显示“AI 对剧情的资产要求”和中文生成提示词，不需要先看视频截图或展开隐藏面板。三张一致性设定图也各自保留对应提示词与复制按钮。</p></details>
           <details><summary>场景、道具和三图参考包必须全部生成吗？</summary><p>不需要。有角色时，至少准备一名人物的主参考图即可；场景和道具可完全使用中文提示词，多角度或三图参考包只用于增强一致性。没有人物的原片还可以直接文生视频。</p></details>
           <details><summary>不同镜头会不会乱用参考图？</summary><p>Evan 会结合景别、人物 / 产品交互、模型可接收的参考图数量来排序：人物近景优先正脸和多角度，人物全身优先全身板，产品特写优先产品三图，场景镜头优先主场景和布局图。</p></details>
@@ -459,7 +459,7 @@
       </article>
     </div>
 
-    <footer><span>Evan 视频复刻使用教程 · 对应当前实现 · 2026-08-02</span><a href="#top">返回顶部 ↑</a></footer>
+    <footer><span>Evan 视频复刻使用教程 · 对应当前实现 · 2026-08-03</span><a href="#top">返回顶部 ↑</a></footer>
   </main>
 
   <script>

@@ -5,7 +5,6 @@ import {
   Boxes,
   ChevronDown,
   ChevronRight,
-  ChevronUp,
   CirclePlus,
   Film,
   Filter,

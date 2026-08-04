@@ -226,7 +226,7 @@ async function generateProductVideo(job, imageUrl, index, context, signal) {
 }
 
 async function executeJob(job, context) {
-  const { dirs, libraryDir, recognitionModel = 'gpt-5.6-sol' } = context;
+  const { dirs, libraryDir, recognitionModel = 'gpt-5.6-luna' } = context;
   if (activeJobs.has(job.id)) return;
   const controller = new AbortController();
   const { signal } = controller;
@@ -261,7 +261,7 @@ async function executeJob(job, context) {
           userPrompt: '严格按图片顺序识别，并返回指定 JSON。',
           imageDataUrls: [sceneDataUrl, productDataUrl],
           model: recognitionModel,
-          effort: provider.defaultEffort || 'medium',
+          effort: provider.defaultEffort || 'xhigh',
           temperature: 0.1,
           maxTokens: 3500,
           libraryDir,
@@ -606,7 +606,7 @@ export function createProductSceneJob(payload, context) {
     imageResolution,
     aspectRatio,
     recognitionProvider,
-    recognitionModel: recognitionProvider === 'gemini-web' ? 'Gemini Web' : (context.recognitionModel || 'gpt-5.6-sol'),
+    recognitionModel: recognitionProvider === 'gemini-web' ? 'Gemini Web' : (context.recognitionModel || 'gpt-5.6-luna'),
     videoPrompt: String(payload.videoPrompt || '').trim(),
     videoPromptSourceId: String(payload.videoPromptSourceId || ''),
     videoModel,

@@ -8,6 +8,8 @@
 import React from 'react';
 import { NodeData, NodeStatus, NodeType, Viewport } from '../../types';
 import { calculateConnectionPath } from '../../utils/connectionHelpers';
+import { VIDEO_ANALYSIS_INPUT_PORTS } from '../../../shared/videoAnalysis.js';
+import { VIDEO_ANALYSIS_NODE_HEIGHT } from '../../features/video-analysis/VideoAnalysisNode';
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -59,6 +61,7 @@ export const getNodeWidth = (node: NodeData, parentNode?: NodeData): number => {
     if (node.type === NodeType.CAMERA_ANGLE) return 340;
     if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 460;
     if (node.type === NodeType.VIDEO_REMIX) return 420;
+    if (node.type === NodeType.VIDEO_ANALYSIS) return 420;
     // Image and other nodes
     return 365;
 };
@@ -130,6 +133,7 @@ export const getNodeHeight = (node: NodeData, parentNode?: NodeData): number => 
     // 716 是浏览器里实测的卡片高度，改动节点表单后要重新量，否则连线端点会偏。
     if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 716;
     if (node.type === NodeType.VIDEO_REMIX) return 306;
+    if (node.type === NodeType.VIDEO_ANALYSIS) return VIDEO_ANALYSIS_NODE_HEIGHT;
 
     // Parse aspect ratio to calculate content height for Image/Video nodes
     let aspectRatio: number;
@@ -169,7 +173,7 @@ interface ConnectionsLayerProps {
     viewport: Viewport;
     // Connection dragging state
     isDraggingConnection: boolean;
-    connectionStart: { nodeId: string; handle: 'left' | 'right' } | null;
+    connectionStart: { nodeId: string; handle: 'left' | 'right'; portId?: string } | null;
     tempConnectionEnd: { x: number; y: number } | null;
     canvasOffset?: { left: number; top: number };
     // Selection
@@ -177,6 +181,11 @@ interface ConnectionsLayerProps {
     onEdgeClick: (e: React.MouseEvent, parentId: string, childId: string) => void;
     canvasTheme?: 'dark' | 'light';
 }
+
+const videoAnalysisPortCenterY = (node: NodeData, portId?: string) => {
+    const index = VIDEO_ANALYSIS_INPUT_PORTS.indexOf(String(portId || '') as typeof VIDEO_ANALYSIS_INPUT_PORTS[number]);
+    return index >= 0 ? node.y + 90 + index * 36 : undefined;
+};
 
 export const ConnectionsLayer: React.FC<ConnectionsLayerProps> = ({
     nodes,
@@ -202,7 +211,10 @@ export const ConnectionsLayer: React.FC<ConnectionsLayerProps> = ({
             const startX = parent.x + getNodeWidth(parent);
             const startY = parent.y + getNodeHeight(parent) / 2;
             const endX = node.x;
-            const endY = node.y + getNodeHeight(node, parent) / 2;
+            const endY = node.type === NodeType.VIDEO_ANALYSIS
+                ? videoAnalysisPortCenterY(node, node.inputPortByParentId?.[parentId])
+                    || node.y + getNodeHeight(node, parent) / 2
+                : node.y + getNodeHeight(node, parent) / 2;
 
             const path = calculateConnectionPath(startX, startY, endX, endY, 'right');
             const isSelected = selectedConnection?.parentId === parentId && selectedConnection?.childId === node.id;
@@ -251,7 +263,10 @@ export const ConnectionsLayer: React.FC<ConnectionsLayerProps> = ({
         const startNode = nodes.find(n => n.id === connectionStart.nodeId);
         if (startNode) {
             const startX = connectionStart.handle === 'right' ? startNode.x + getNodeWidth(startNode) : startNode.x;
-            const startY = startNode.y + getNodeHeight(startNode) / 2;
+            const startY = startNode.type === NodeType.VIDEO_ANALYSIS && connectionStart.handle === 'left'
+                ? videoAnalysisPortCenterY(startNode, connectionStart.portId)
+                    || startNode.y + getNodeHeight(startNode) / 2
+                : startNode.y + getNodeHeight(startNode) / 2;
             const endX = (tempConnectionEnd.x - canvasOffset.left - viewport.x) / viewport.zoom;
             const endY = (tempConnectionEnd.y - canvasOffset.top - viewport.y) / viewport.zoom;
 

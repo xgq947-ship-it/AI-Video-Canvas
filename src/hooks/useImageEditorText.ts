@@ -13,7 +13,6 @@ import { TextElement, EditorElement, PRESET_COLORS } from '../components/modals/
 // ============================================================================
 
 interface UseImageEditorTextProps {
-    imageRef: React.RefObject<HTMLImageElement | null>;
     saveState: () => void;
     setElements: React.Dispatch<React.SetStateAction<EditorElement[]>>;
 }
@@ -50,7 +49,6 @@ const DEFAULT_FONT_FAMILY = 'Arial, sans-serif';
 // ============================================================================
 
 export const useImageEditorText = ({
-    imageRef,
     saveState,
     setElements
 }: UseImageEditorTextProps): UseImageEditorTextReturn => {

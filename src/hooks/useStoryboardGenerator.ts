@@ -158,10 +158,6 @@ export const useStoryboardGenerator = ({ onCreateNodes, viewport }: UseStoryboar
         setState(prev => ({ ...prev, story }));
     }, []);
 
-    const setSelectedImageModel = useCallback((model: string) => {
-        setState(prev => ({ ...prev, selectedImageModel: model }));
-    }, []);
-
     const updateScript = useCallback((index: number, updates: Partial<SceneScript>) => {
         setState(prev => ({
             ...prev,

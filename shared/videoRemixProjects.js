@@ -57,6 +57,12 @@ export function createVideoRemixProject(overrides = {}, now = new Date().toISOSt
     ...(compact(overrides.finalCanvasNodeId)
       ? { finalCanvasNodeId: compact(overrides.finalCanvasNodeId) }
       : {}),
+    ...(Number.isFinite(Number(overrides.canvasMigrationVersion))
+      ? { canvasMigrationVersion: Number(overrides.canvasMigrationVersion) }
+      : {}),
+    ...(compact(overrides.canvasAnalysisNodeId)
+      ? { canvasAnalysisNodeId: compact(overrides.canvasAnalysisNodeId) }
+      : {}),
   };
 }
 

@@ -384,14 +384,6 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
         setEditingCoverFor(null);
     };
 
-    const formatDate = (dateStr: string) => {
-        const date = new Date(dateStr);
-        return date.toLocaleDateString('en-US', {
-            month: 'short',
-            day: 'numeric'
-        });
-    };
-
     if (!isOpen) return null;
 
     return (

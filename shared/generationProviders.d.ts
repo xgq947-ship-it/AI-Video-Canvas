@@ -6,7 +6,7 @@ export interface ImageGenerationProvider {
 }
 export interface VideoGenerationProvider {
   id: string; name: string; provider: string; browserProvider: string | null;
-  supportsTextToVideo: boolean; supportsImageToVideo: boolean; supportsMultipleReferenceImages: boolean;
+  supportsTextToVideo: boolean; supportsImageToVideo: boolean; supportsVideoReference?: boolean; supportsMultipleReferenceImages: boolean;
   maxReferenceImages: number; supportsNativeAudio: boolean; supportsExtend: boolean;
   supportedDurations: number[]; resolutions: string[]; defaultResolution?: string; supportedAspectRatios: string[];
 }

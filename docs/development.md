@@ -36,6 +36,24 @@ npm run build
 开发服务器使用前端 `5173`、后端 `3001`。桌面版后端由 Electron 分配随机 loopback
 端口，不使用这两个固定端口。
 
+## 统一画布短视频复刻
+
+短视频复刻的当前入口是画布内 `Video Analysis` 节点，不再通过独立工作区渲染。修改这条链路时，
+必须同时考虑以下边界：
+
+- 四个输入端口由 `inputPortByParentId` 表示：`source-video`、`product-reference`、
+  `character-reference`、`scene-reference`；不得依赖 `parentIds` 顺序。
+- `server/services/videoAnalysisService.js` 只负责把现有 Video Remix 拆镜/分析能力适配成
+  轻量 `global + shots[]` 结果；图片、视频、Render 和队列仍走普通画布生成链路。
+- 自动生成节点通过 `origin` 与 `inheritedReferences` 绑定到分析节点。用户编辑提示词后必须保留
+  `promptSource: "user"` / `promptLocked: true`；上游变化只标记 `needsUpdate`，不得自动重复计费。
+- 旧项目加载路径必须保持幂等：先处理旧 `Video Remix` 容器，再把未迁移的 `videoRemixes[]`
+  转为画布节点，并保存 `canvasMigrationVersion` 标记。
+
+相关纯函数位于 `shared/videoAnalysis.js`，画布图构建位于
+`src/features/video-analysis/remixGraphBuilder.ts`。改动运行时或持久化逻辑后，至少运行
+`npm run typecheck`、相关回归测试和完整 `npm test`。
+
 > **不要同时运行 `npm run dev` 和已安装的桌面应用。**
 > 两者通过 AI Browser Hub 共用同一份登录 Profile 和 Chrome 实例。Hub 能保护浏览器
 > 生命周期，但生成调度器和业务页面队列仍只在单个

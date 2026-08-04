@@ -89,3 +89,16 @@ test('项目级记录可适配现有工作台但不携带画布坐标', () => {
   assert.equal(adapter.x, 0);
   assert.equal(adapter.y, 0);
 });
+
+test('统一画布迁移标记在项目记录规范化时保留', () => {
+  const project = normalizeVideoRemixProjects([{
+    id: 'remix_migrated',
+    title: '已迁移复刻',
+    state: createVideoRemixState({ remixId: 'remix_migrated' }),
+    canvasMigrationVersion: 1,
+    canvasAnalysisNodeId: 'video-analysis-remix_migrated',
+  }], NOW)[0];
+
+  assert.equal(project.canvasMigrationVersion, 1);
+  assert.equal(project.canvasAnalysisNodeId, 'video-analysis-remix_migrated');
+});

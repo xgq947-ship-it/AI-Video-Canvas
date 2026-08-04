@@ -8,6 +8,7 @@
 import { useCallback, useState } from 'react';
 import { NodeData, NodeType, NodeStatus, Viewport } from '../types';
 import { DEFAULT_NODE_WIDTH, paneToCanvas } from '@/shared/canvasCoords.js';
+import { assignVideoAnalysisInputPort, createVideoAnalysisNodeData } from '../../shared/videoAnalysis.js';
 
 export const useNodeManagement = () => {
     // ============================================================================
@@ -73,6 +74,15 @@ export const useNodeManagement = () => {
             newNode.productSceneVideoAspectRatio = '9:16';
             newNode.productSceneVideoDuration = 10;
             newNode.productSceneVideoGenerateAudio = true;
+        }
+        if (type === NodeType.VIDEO_ANALYSIS) {
+            newNode.title = '视频分析';
+            newNode.model = 'video-analysis';
+            newNode.videoAnalysis = createVideoAnalysisNodeData({
+                status: 'idle',
+                inputRefs: { productNodeIds: [], characterNodeIds: [], sceneNodeIds: [] },
+            });
+            newNode.outputPortId = 'analysis-output';
         }
 
         setNodes(prev => [...prev, newNode]);
@@ -200,6 +210,20 @@ export const useNodeManagement = () => {
                     newNode.productSceneVideoAspectRatio = '9:16';
                     newNode.productSceneVideoDuration = 10;
                     newNode.productSceneVideoGenerateAudio = true;
+                }
+                if (type === NodeType.VIDEO_ANALYSIS) {
+                    newNode.title = '视频分析';
+                    newNode.model = 'video-analysis';
+                    newNode.videoAnalysis = createVideoAnalysisNodeData({
+                        status: 'idle',
+                        inputRefs: { productNodeIds: [], characterNodeIds: [], sceneNodeIds: [] },
+                    });
+                    newNode.outputPortId = 'analysis-output';
+                    if (sourceNode) {
+                        const mapped = assignVideoAnalysisInputPort(newNode, sourceNode);
+                        newNode.inputPortByParentId = mapped.inputPortByParentId;
+                        newNode.videoAnalysis = mapped.videoAnalysis;
+                    }
                 }
 
                 setNodes(prev => [...prev, newNode]);

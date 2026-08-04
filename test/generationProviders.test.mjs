@@ -60,6 +60,7 @@ test('Flow 能力表覆盖文本、首帧、多参考图，且只展示可路由
   const omni = getVideoGenerationProvider('google-flow-omni-flash');
   assert.equal(omni.supportsTextToVideo, true);
   assert.equal(omni.supportsImageToVideo, true);
+  assert.equal(omni.supportsVideoReference, true);
   assert.equal(omni.maxReferenceImages, 7);
   assert.equal(omni.supportsNativeAudio, true);
 
@@ -69,6 +70,7 @@ test('Flow 能力表覆盖文本、首帧、多参考图，且只展示可路由
   assert.equal(fast.supportsMultipleReferenceImages, true);
   assert.equal(fast.maxReferenceImages, 3);
   assert.equal(fast.supportsNativeAudio, true);
+  assert.equal(fast.supportsVideoReference, undefined);
 
   const quality = getVideoGenerationProvider('google-flow-veo-3-1-quality');
   assert.equal(quality.supportsImageToVideo, true);

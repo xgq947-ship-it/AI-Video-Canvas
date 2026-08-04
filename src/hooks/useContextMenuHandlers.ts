@@ -1,8 +1,7 @@
 /**
  * useContextMenuHandlers.ts
  * 
- * Handles context menu operations: double-click, right-click,
- * node context menu, toolbar add button.
+ * Handles context menu operations: double-click, right-click and node actions.
  */
 
 import React, { useCallback } from 'react';
@@ -139,18 +138,6 @@ export const useContextMenuHandlers = ({
         );
     }, [handleSelectTypeFromMenu, contextMenu, viewport, setContextMenu, onDeleteNodes]);
 
-    const handleToolbarAdd = useCallback((e: React.MouseEvent) => {
-        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        setContextMenu({
-            isOpen: true,
-            x: rect.right + 12,
-            y: 76,
-            type: 'global',
-            canvasX: window.innerWidth / 2,
-            canvasY: window.innerHeight / 2
-        });
-    }, [setContextMenu]);
-
     // ============================================================================
     // RETURN
     // ============================================================================
@@ -161,7 +148,6 @@ export const useContextMenuHandlers = ({
         handleAddNext,
         handleNodeContextMenu,
         handleContextMenuCreateAsset,
-        handleContextMenuSelect,
-        handleToolbarAdd
+        handleContextMenuSelect
     };
 };

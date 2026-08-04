@@ -4,6 +4,11 @@ import type {
   VideoAnalysisInputPort,
   VideoAnalysisNodeData,
 } from '../shared/videoAnalysis.js';
+import type {
+  StickmanDirectorOutput,
+  StickmanDirectorSettings,
+  StickmanShot,
+} from '../shared/stickmanDirector.js';
 
 export enum NodeType {
   TEXT = 'Text',
@@ -11,12 +16,17 @@ export enum NodeType {
   VIDEO = 'Video',
   AUDIO = 'Audio',
   IMAGE_EDITOR = 'Image Editor',
-  VIDEO_EDITOR = 'Video Editor',
-  STORYBOARD = 'Storyboard Manager',
   CAMERA_ANGLE = 'Camera Angle',
   PRODUCT_SCENE_REPLACE = 'Product Scene Replace',
   VIDEO_ANALYSIS = 'Video Analysis',
   VIDEO_REMIX = 'Video Remix',
+  REFERENCE_VIDEO = 'Reference Video',
+  SCRIPT_INPUT = 'Script Input',
+  STICKMAN_DIRECTOR = 'Stickman Director',
+  STORYBOARD = 'Storyboard',
+  STORYBOARD_COMPARE = 'Storyboard Compare',
+  FLOW_BATCH_VIDEO = 'Flow Batch Video',
+  VIDEO_MERGE = 'Video Merge',
   // Local open-source model nodes
   // AI 漫剧 0-1 生产节点（取值需与 shared/manifest.js 的 MANGA_NODE_TYPES 一致）
   SFX = 'SFX',            // 音效
@@ -34,6 +44,93 @@ export const MANGA_NODE_TYPES_SET = new Set<NodeType>([
   NodeType.RENDER,
 ]);
 export const isMangaNode = (t: NodeType) => MANGA_NODE_TYPES_SET.has(t);
+
+export interface StickmanScriptInput {
+  title: string;
+  content: string;
+  notes?: string;
+  platform: string;
+  aspectRatio: string;
+  width: number;
+  height: number;
+  totalDuration: number;
+  shotCount: number;
+  durationPerShot: number;
+}
+
+export interface StickmanReferenceVideoInput {
+  assetId?: string;
+  url?: string;
+  title?: string;
+  duration?: number;
+  width?: number;
+  height?: number;
+  aspectRatio?: string;
+  fps?: number;
+  sizeBytes?: number;
+  sourceType?: 'upload' | 'url' | 'library' | 'canvas';
+}
+
+export interface StickmanDirectorNodeState extends StickmanDirectorSettings {
+  provider: 'auto' | 'gemini' | 'codex' | 'deepseek';
+  modelId?: string;
+  status: 'idle' | 'running' | 'completed' | 'failed';
+  sourceType?: 'script' | 'reference_video';
+  /** 新流程把参考视频分析保存在导演节点内部，不再创建独立分析节点。 */
+  analysis?: VideoAnalysisNodeData;
+  /** 视频分析完成后生成的剧本草案，交给导演 Skill 重新推导分镜。 */
+  scriptInput?: StickmanScriptInput;
+  output?: StickmanDirectorOutput;
+  error?: string;
+  repaired?: boolean;
+  fallback?: boolean;
+}
+
+export interface StickmanStoryboardState {
+  shots: StickmanShot[];
+  expanded: boolean;
+  compareMode?: boolean;
+  status: 'idle' | 'ready' | 'generating' | 'completed' | 'failed';
+  error?: string;
+}
+
+export interface StickmanFlowBatchTask {
+  shotId: string;
+  taskId: string;
+  status: 'waiting' | 'generating' | 'success' | 'failed' | 'cancelled';
+  progress?: number;
+  retryCount: number;
+  resultUrl?: string;
+  error?: string;
+}
+
+export interface StickmanFlowBatchState {
+  modelId?: string;
+  resolution?: string;
+  concurrency: 1 | 2 | 3 | 4;
+  aspectRatio: string;
+  width: number;
+  height: number;
+  duration?: number;
+  nativeAudio: boolean;
+  autoRetry: boolean;
+  maxRetries: number;
+  continueOnFailure: boolean;
+  autoMerge: boolean;
+  status: 'idle' | 'queued' | 'running' | 'paused' | 'completed' | 'partial_failed' | 'failed' | 'cancelled';
+  tasks: StickmanFlowBatchTask[];
+  error?: string;
+}
+
+export interface StickmanVideoMergeState {
+  jobId?: string;
+  status: 'idle' | 'queued' | 'rendering' | 'success' | 'failed' | 'cancelled';
+  outputUrl?: string;
+  outputFormat: 'mp4' | 'mov' | 'webm';
+  fps: number;
+  skipFailed: boolean;
+  error?: string;
+}
 
 export enum NodeStatus {
   IDLE = 'idle',
@@ -74,7 +171,7 @@ export interface NodeData {
   generateAudio?: boolean; // 是否生成原生音频（如 Seedance）
   inputUrl?: string; // Input URL for video generation (image-to-video)
   // 参考视频链接导入后保留来源元数据，节点可直接连接到视频分析。
-  videoSourceType?: 'url' | 'upload' | 'canvas' | 'generated';
+  videoSourceType?: 'url' | 'upload' | 'canvas' | 'library' | 'generated';
   videoSourceUrl?: string;
   videoSourceLocalUrl?: string;
   videoSourceId?: string;
@@ -87,7 +184,7 @@ export interface NodeData {
   subtitleJobProgress?: number;
   subtitleSegments?: Array<{ id: string; text: string; start: number; end: number }>;
 
-  // Video Editor specific
+  // Video timing/edit metadata
   trimStart?: number; // Trim start time in seconds
   trimEnd?: number; // Trim end time in seconds
 
@@ -146,8 +243,8 @@ export interface NodeData {
   localModelType?: 'diffusion' | 'controlnet' | 'lora' | 'camera-control';
   localModelArchitecture?: string; // Model architecture (e.g., 'sd15', 'sdxl', 'qwen')
 
-  // Storyboard Generator specific
-  characterReferenceUrls?: string[]; // URLs of character images for reference in generation
+  // Character identity references used by the asset library and downstream generation.
+  characterReferenceUrls?: string[];
 
   // Character identity + wardrobe pack metadata
   characterId?: string;
@@ -226,6 +323,14 @@ export interface NodeData {
 
   // 统一画布中的视频分析工作流节点。
   videoAnalysis?: VideoAnalysisNodeData;
+
+  // 内部「火柴人视频导演」工作流节点。
+  scriptInput?: StickmanScriptInput;
+  referenceVideo?: StickmanReferenceVideoInput;
+  director?: StickmanDirectorNodeState;
+  storyboard?: StickmanStoryboardState;
+  flowBatch?: StickmanFlowBatchState;
+  videoMerge?: StickmanVideoMergeState;
   /** parentId -> 固定目标端口，连接语义不能依赖 parentIds 数组顺序。 */
   inputPortByParentId?: Record<string, VideoAnalysisInputPort | string>;
   outputPortId?: string;
@@ -337,13 +442,4 @@ export interface NodeGroup {
   id: string;
   nodeIds: string[];
   label: string;
-  storyContext?: {
-    story: string;
-    scripts: any[];
-    selectedCharacters?: any[]; // CharacterAsset[]
-    sceneCount?: number;
-    styleAnchor?: string;
-    characterDNA?: Record<string, string>;
-    compositeImageUrl?: string | null;
-  };
 }

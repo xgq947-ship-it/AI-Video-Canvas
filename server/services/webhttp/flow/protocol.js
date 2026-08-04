@@ -46,8 +46,8 @@ export function fromFlowImageAspectRatio(value) {
 }
 
 /** Seeds are user-invisible but must vary per request. */
-export function randomSeed(random = Math.random) {
-    return Math.floor(random() * 1_000_000) + 1;
+export function randomSeed(random = Math.random, maximum = 1_000_000) {
+    return Math.floor(random() * maximum) + 1;
 }
 
 function clientContext({ projectId, sessionId, recaptchaToken, userPaygateTier }) {
@@ -467,11 +467,12 @@ export function buildGenerateVideoRequest({
         : resolveFlowVideoVariant({ modelFamily, mode, duration, aspectRatio });
 
     const requests = Array.from({ length: Math.max(1, count) }, (unused, index) => {
+        const seedMaximum = referenceVideo ? 0x7fff : 1_000_000;
         const request = {
             aspectRatio: toFlowVideoAspectRatio(aspectRatio),
             textInput: { structuredPrompt: { parts: [{ text: String(prompt || '') }] } },
             videoModelKey: variant.modelKey,
-            seed: (seed || randomSeed()) + index,
+            seed: (seed ?? randomSeed(Math.random, seedMaximum)) + index,
             metadata: {}
         };
         if (firstFrameMediaId) request.startImage = { mediaId: firstFrameMediaId };
@@ -482,12 +483,19 @@ export function buildGenerateVideoRequest({
             }));
         }
         if (referenceVideo) {
-            request.metadata.workflowId = referenceVideo.workflowId;
-            request.videoInput = {
-                mediaId: referenceVideo.mediaId,
-                startFrameIndex: Number(referenceVideo.startFrameIndex) || 0,
-                endFrameIndex: Number(referenceVideo.endFrameIndex)
-            };
+            if (referenceVideo.workflowId) request.metadata.workflowId = referenceVideo.workflowId;
+            if (referenceVideo.collectionId) request.metadata.collectionId = referenceVideo.collectionId;
+            if (referenceVideo.sceneId) request.metadata.sceneId = referenceVideo.sceneId;
+            request.videoInput = { mediaId: referenceVideo.mediaId };
+            // Flow's page only sends trim indices when the user explicitly trims the
+            // source. Sending fabricated indices for a full-video edit can leave the
+            // request accepted but never materialize in project history.
+            if (referenceVideo.startFrameIndex !== undefined) {
+                request.videoInput.startFrameIndex = Number(referenceVideo.startFrameIndex);
+            }
+            if (referenceVideo.endFrameIndex !== undefined) {
+                request.videoInput.endFrameIndex = Number(referenceVideo.endFrameIndex);
+            }
         }
         return request;
     });
@@ -500,7 +508,12 @@ export function buildGenerateVideoRequest({
             'content-type': 'text/plain;charset=UTF-8'
         },
         body: JSON.stringify({
-            mediaGenerationContext: { batchId, audioFailurePreference: 'BLOCK_SILENCED_VIDEOS' },
+            mediaGenerationContext: {
+                batchId,
+                // Flow 页面的视频编辑默认不发送音频失败策略；编辑模型可能自然产出静音，
+                // 固定 BLOCK_SILENCED_VIDEOS 会让请求接受后不生成成片。
+                ...(!referenceVideo ? { audioFailurePreference: 'BLOCK_SILENCED_VIDEOS' } : {})
+            },
             clientContext: context,
             requests,
             ...(referenceVideo ? {} : { useV2ModelConfig: true })
@@ -516,6 +529,8 @@ const FLOW_VIDEO_STATUS_FAILED = new Set([
 ]);
 
 export function parseFlowVideoMedia(media) {
+    const videoInputs = media?.mediaMetadata?.requestData?.videoGenerationRequestData
+        ?.videoGenerationVideoInputs;
     return {
         mediaId: media?.name || media?.video?.operation?.name || '',
         workflowId: media?.workflowId || '',
@@ -527,6 +542,9 @@ export function parseFlowVideoMedia(media) {
         duration: media?.video?.dimensions?.length || '',
         resolution: media?.mediaMetadata?.requestData?.videoGenerationRequestData
             ?.videoModelControlInput?.videoResolution || '',
+        videoInputMediaIds: Array.isArray(videoInputs)
+            ? videoInputs.map(input => input?.mediaId).filter(Boolean)
+            : [],
         generationMode: media?.mediaMetadata?.requestData?.videoGenerationRequestData
             ?.videoModelControlInput?.videoGenerationMode || '',
         size: Number(media?.mediaMetadata?.mediaBlobSize || 0),
@@ -541,6 +559,26 @@ export function parseGenerateVideoResponse(payload) {
 
 export function isFlowVideoCompleted(media) {
     return media?.status === FLOW_VIDEO_STATUS_SUCCESS;
+}
+
+/**
+ * 从项目 media 列表里挑出「参考视频编辑」的结果条目。
+ *
+ * 编辑结果的最终 name 由 Flow 在提交之后才分配，提交响应里拿不到，所以不能只按提交
+ * mediaId 轮询。大多数结果会继承参考视频的 workflowId，但真实历史里也存在 workflowId
+ * 变化、只在 requestData 里保留输入视频 mediaId 的结果，因此两种字段都要支持。
+ */
+export function selectEditResultMedia(parsedMedia, { workflowId, referenceMediaId } = {}) {
+    if (!workflowId && !referenceMediaId) return [];
+    return (parsedMedia || [])
+        .filter(item => item?.mediaId && item.mediaId !== referenceMediaId)
+        .filter(item => {
+            const sameWorkflow = Boolean(workflowId && item.workflowId === workflowId);
+            const usesReferenceVideo = Boolean(
+                referenceMediaId && item.videoInputMediaIds?.includes(referenceMediaId)
+            );
+            return sameWorkflow || usesReferenceVideo;
+        });
 }
 
 export function isFlowVideoFailed(media) {
@@ -568,7 +606,9 @@ export function buildProjectMediaRequest({ auth, mediaIds = [] }) {
         method: 'GET',
         headers: {
             accept: 'application/json',
-            cookie: auth.labsCookie
+            cookie: auth.labsCookie,
+            'cache-control': 'no-cache',
+            pragma: 'no-cache'
         },
         mediaIds: mediaIds.filter(Boolean)
     };

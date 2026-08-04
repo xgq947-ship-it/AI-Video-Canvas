@@ -6,7 +6,6 @@ import {
   Film,
   Music,
   PenTool,
-  Layout,
   Upload,
   Trash2,
   Plus,
@@ -23,11 +22,9 @@ import {
   Clapperboard,
   ArrowLeft,
   SlidersHorizontal,
-  Scissors,
   AudioLines,
   Library,
   History,
-  ScanSearch,
 } from 'lucide-react';
 import { ContextMenuState, NodeType } from '../types';
 
@@ -42,10 +39,10 @@ interface ContextMenuProps {
   onCopy?: () => void;
   onDuplicate?: () => void;
   onCreateAsset?: () => void;
+  onCreateStickmanWorkflow?: (mode: 'script' | 'reference_video') => void;
   onUseAsReferenceVideo?: () => void;
   canUseAsReferenceVideo?: boolean;
   onAddAssets?: () => void;
-  onOpenStoryboard?: () => void;
   onOpenHistory?: () => void;
   canUndo?: boolean;
   canRedo?: boolean;
@@ -63,10 +60,10 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onCopy,
   onDuplicate,
   onCreateAsset,
+  onCreateStickmanWorkflow,
   onUseAsReferenceVideo,
   canUseAsReferenceVideo = false,
   onAddAssets,
-  onOpenStoryboard,
   onOpenHistory,
   canUndo = false,
   canRedo = false,
@@ -171,9 +168,9 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
             canvasTheme={canvasTheme}
           />
           {canUseAsReferenceVideo && (
-            <MenuItem
-              icon={<Film size={16} />}
-              label="创建视频分析工作流"
+          <MenuItem
+            icon={<Film size={16} />}
+            label="用此视频创建火柴人工作流"
               onClick={() => {
                 onUseAsReferenceVideo?.();
                 onClose();
@@ -249,18 +246,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         />
         <div className="p-2 flex flex-col gap-1">
           <MenuItem
-            icon={<Film size={16} />}
-            label="AI 生成分镜"
-            onClick={() => {
-              onOpenStoryboard?.();
-              onClose();
-            }}
-            canvasTheme={canvasTheme}
-          />
-
-          <div className={`my-1 border-t mx-1 ${canvasTheme === 'dark' ? 'border-neutral-800' : 'border-neutral-100'}`} />
-
-          <MenuItem
             icon={<Upload size={16} />}
             label="上传本地素材"
             onClick={handleUploadClick}
@@ -283,6 +268,29 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
             rightSlot={<ChevronRight size={14} className={canvasTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-400'} />}
             onClick={() => setView('add-nodes')}
             active={false}
+            canvasTheme={canvasTheme}
+          />
+
+          <div className={`my-1 border-t mx-1 ${canvasTheme === 'dark' ? 'border-neutral-800' : 'border-neutral-100'}`} />
+          <div className={`px-2 pb-1 pt-0.5 text-[11px] font-medium ${canvasTheme === 'dark' ? 'text-neutral-500' : 'text-neutral-400'}`}>
+            一键工作流
+          </div>
+          <MenuItem
+            icon={<Clapperboard size={16} />}
+            label="火柴人剧本工作流"
+            onClick={() => {
+              onCreateStickmanWorkflow?.('script');
+              onClose();
+            }}
+            canvasTheme={canvasTheme}
+          />
+          <MenuItem
+            icon={<Film size={16} />}
+            label="火柴人参考视频工作流"
+            onClick={() => {
+              onCreateStickmanWorkflow?.('reference_video');
+              onClose();
+            }}
             canvasTheme={canvasTheme}
           />
 
@@ -351,26 +359,26 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
 
         <div className="overflow-y-auto px-3 py-3">
           <div className={`mb-1 px-2 py-1 text-sm font-semibold ${canvasTheme === 'dark' ? 'text-neutral-400' : 'text-neutral-500'}`}>
-            添加节点
+            一键工作流
+          </div>
+
+          <AddNodeMenuItem icon={<Clapperboard size={19} />} label="火柴人剧本工作流" badge="快捷" badgeTone="cyan" onClick={() => {
+            onCreateStickmanWorkflow?.('script');
+            onClose();
+          }} canvasTheme={canvasTheme} />
+          <AddNodeMenuItem icon={<Film size={19} />} label="火柴人参考视频工作流" badge="快捷" badgeTone="cyan" onClick={() => {
+            onCreateStickmanWorkflow?.('reference_video');
+            onClose();
+          }} canvasTheme={canvasTheme} />
+
+          <div className={`mb-1 mt-2 px-2 py-1 text-sm font-semibold ${canvasTheme === 'dark' ? 'text-neutral-400' : 'text-neutral-500'}`}>
+            单独添加节点
           </div>
 
           <AddNodeMenuItem icon={<Type size={19} />} label="文本" onClick={() => onSelectType(NodeType.TEXT)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<ImageIcon size={19} />} label="图片" onClick={() => onSelectType(NodeType.IMAGE)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<Layers size={19} />} label="产品短视频生成" badge="NEW" badgeTone="cyan" onClick={() => onSelectType(NodeType.PRODUCT_SCENE_REPLACE)} canvasTheme={canvasTheme} />
-          <AddNodeMenuItem icon={<ScanSearch size={19} />} label="短视频复刻模板" badge="NEW" badgeTone="cyan" onClick={() => onSelectType(NodeType.VIDEO_ANALYSIS)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<Video size={19} />} label="视频" onClick={() => onSelectType(NodeType.VIDEO)} canvasTheme={canvasTheme} />
-          <AddNodeMenuItem icon={<Scissors size={19} />} label="视频合成" badge="Beta" onClick={() => onSelectType(NodeType.VIDEO_EDITOR)} canvasTheme={canvasTheme} />
-          <AddNodeMenuItem
-            icon={<Layout size={19} />}
-            label="导演台"
-            badge="NEW"
-            badgeTone="cyan"
-            onClick={() => {
-              onOpenStoryboard?.();
-              onClose();
-            }}
-            canvasTheme={canvasTheme}
-          />
           <AddNodeMenuItem icon={<AudioLines size={19} />} label="音频" onClick={() => onSelectType(NodeType.AUDIO)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<Film size={19} />} label="脚本" rightSlot={<ChevronRight size={16} />} onClick={() => onSelectType(NodeType.TEXT)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem
@@ -459,12 +467,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           canvasTheme={canvasTheme}
         />
         <MenuItem
-          icon={<ScanSearch size={18} />}
-          label="短视频复刻模板"
-          onClick={() => onSelectType(NodeType.VIDEO_ANALYSIS)}
-          canvasTheme={canvasTheme}
-        />
-        <MenuItem
           icon={<Video size={18} />}
           label="视频镜头"
           onClick={() => onSelectType(NodeType.VIDEO)}
@@ -514,7 +516,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
             </summary>
             <div className={`border-t p-1 ${canvasTheme === 'dark' ? 'border-neutral-800' : 'border-neutral-100'}`}>
               <MenuItem icon={<PenTool size={16} />} label="图片编辑器" onClick={() => onSelectType(NodeType.IMAGE_EDITOR)} canvasTheme={canvasTheme} />
-              <MenuItem icon={<Film size={16} />} label="视频编辑器" onClick={() => onSelectType(NodeType.VIDEO_EDITOR)} canvasTheme={canvasTheme} />
             </div>
           </details>
         )}

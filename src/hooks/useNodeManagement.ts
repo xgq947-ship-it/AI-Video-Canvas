@@ -9,6 +9,101 @@ import { useCallback, useState } from 'react';
 import { NodeData, NodeType, NodeStatus, Viewport } from '../types';
 import { DEFAULT_NODE_WIDTH, paneToCanvas } from '@/shared/canvasCoords.js';
 import { assignVideoAnalysisInputPort, createVideoAnalysisNodeData } from '../../shared/videoAnalysis.js';
+import { listVideoGenerationProviders } from '../../shared/generationProviders.js';
+import { normalizeStickmanSettings } from '../../shared/stickmanDirector.js';
+
+const applyStickmanNodeDefaults = (node: NodeData): NodeData => {
+    if (node.type === NodeType.SCRIPT_INPUT) {
+        const settings = normalizeStickmanSettings({});
+        node.title = '剧本输入';
+        node.prompt = '';
+        node.scriptInput = {
+            title: '未命名剧本', content: '', notes: '', platform: settings.platform,
+            aspectRatio: settings.aspectRatio, width: settings.width, height: settings.height,
+            totalDuration: settings.totalDuration, shotCount: settings.shotCount, durationPerShot: settings.durationPerShot,
+        };
+    }
+    if (node.type === NodeType.REFERENCE_VIDEO) {
+        node.title = '参考视频';
+        node.model = 'Upload';
+        node.aspectRatio = '16:9';
+        node.referenceVideo = { sourceType: 'upload' };
+    }
+    if (node.type === NodeType.STICKMAN_DIRECTOR) {
+        node.title = '火柴人视频导演';
+        node.director = { ...normalizeStickmanSettings({}), provider: 'auto', status: 'idle' };
+    }
+    if (node.type === NodeType.STORYBOARD || node.type === NodeType.STORYBOARD_COMPARE) {
+        node.title = node.type === NodeType.STORYBOARD_COMPARE ? '分镜对照组' : '分镜列表';
+        node.storyboard = { shots: [], expanded: false, compareMode: node.type === NodeType.STORYBOARD_COMPARE, status: 'idle' };
+    }
+    if (node.type === NodeType.FLOW_BATCH_VIDEO) {
+        const model = listVideoGenerationProviders()[0];
+        node.title = 'Flow 视频生成';
+        node.flowBatch = {
+            modelId: model?.id,
+            resolution: model?.resolutions?.[0] || 'Auto',
+            concurrency: 2,
+            aspectRatio: '9:16', width: 1080, height: 1920, duration: 8,
+            nativeAudio: true, autoRetry: true, maxRetries: 1, continueOnFailure: true, autoMerge: false,
+            status: 'idle', tasks: [],
+        };
+    }
+    if (node.type === NodeType.VIDEO_MERGE) {
+        node.title = '视频拼接';
+        node.videoMerge = { status: 'idle', outputFormat: 'mp4', fps: 30, skipFailed: true };
+    }
+    return node;
+};
+
+const createNodeData = (
+    type: NodeType,
+    x: number,
+    y: number,
+    parentIds: string[] = [],
+): NodeData => {
+    const node: NodeData = {
+        id: crypto.randomUUID(),
+        type,
+        x,
+        y,
+        prompt: '',
+        status: NodeStatus.IDLE,
+        model: 'Banana Pro',
+        aspectRatio: 'Auto',
+        resolution: 'Auto',
+        parentIds: [...parentIds],
+    };
+
+    if (type === NodeType.PRODUCT_SCENE_REPLACE) {
+        node.title = '产品短视频生成';
+        node.productSceneInputMapping = { version: 1 };
+        node.imageModel = 'google-flow-nano-banana-pro';
+        node.resolution = '2K';
+        // 产品短视频以竖版投放为主；这一个比例同时决定替换图和短视频。
+        node.aspectRatio = '9:16';
+        node.productDimensions = { length: 0, width: 0, height: 0, unit: 'cm' };
+        node.preserveProductMarkings = true;
+        node.productSceneRecognitionProvider = 'codex-cli';
+        node.productSceneImageCount = 1;
+        node.productSceneAutoGenerateVideo = false;
+        node.productSceneVideoModel = 'gemini-web-video';
+        node.productSceneVideoAspectRatio = '9:16';
+        node.productSceneVideoDuration = 10;
+        node.productSceneVideoGenerateAudio = true;
+    }
+    if (type === NodeType.VIDEO_ANALYSIS) {
+        node.title = '视频分析';
+        node.model = 'video-analysis';
+        node.videoAnalysis = createVideoAnalysisNodeData({
+            status: 'idle',
+            inputRefs: { productNodeIds: [], characterNodeIds: [], sceneNodeIds: [] },
+        });
+        node.outputPortId = 'analysis-output';
+    }
+
+    return applyStickmanNodeDefaults(node);
+};
 
 export const useNodeManagement = () => {
     // ============================================================================
@@ -45,51 +140,150 @@ export const useNodeManagement = () => {
         // 纵向沿用历史常量 100 —— 节点高度随类型与内容变化（待生成 ~214、出图后 auto），无统一值。
         const halfWidth = DEFAULT_NODE_WIDTH / 2;
 
-        const newNode: NodeData = {
-            id: crypto.randomUUID(),
+        const newNode = createNodeData(
             type,
-            x: parentId ? canvasX : canvasX - halfWidth,
-            y: parentId ? canvasY : canvasY - 100,
-            prompt: '',
-            status: NodeStatus.IDLE,
-            model: 'Banana Pro',
-            aspectRatio: 'Auto',
-            resolution: 'Auto',
-            parentIds: parentId ? [parentId] : []
-        };
-
-        if (type === NodeType.PRODUCT_SCENE_REPLACE) {
-            newNode.title = '产品短视频生成';
-            newNode.productSceneInputMapping = { version: 1 };
-            newNode.imageModel = 'google-flow-nano-banana-pro';
-            newNode.resolution = '2K';
-            // 产品短视频以竖版投放为主；这一个比例同时决定替换图和短视频。
-            newNode.aspectRatio = '9:16';
-            newNode.productDimensions = { length: 0, width: 0, height: 0, unit: 'cm' };
-            newNode.preserveProductMarkings = true;
-            newNode.productSceneRecognitionProvider = 'codex-cli';
-            newNode.productSceneImageCount = 1;
-            newNode.productSceneAutoGenerateVideo = false;
-            newNode.productSceneVideoModel = 'gemini-web-video';
-            newNode.productSceneVideoAspectRatio = '9:16';
-            newNode.productSceneVideoDuration = 10;
-            newNode.productSceneVideoGenerateAudio = true;
-        }
-        if (type === NodeType.VIDEO_ANALYSIS) {
-            newNode.title = '视频分析';
-            newNode.model = 'video-analysis';
-            newNode.videoAnalysis = createVideoAnalysisNodeData({
-                status: 'idle',
-                inputRefs: { productNodeIds: [], characterNodeIds: [], sceneNodeIds: [] },
-            });
-            newNode.outputPortId = 'analysis-output';
-        }
+            parentId ? canvasX : canvasX - halfWidth,
+            parentId ? canvasY : canvasY - 100,
+            parentId ? [parentId] : [],
+        );
 
         setNodes(prev => [...prev, newNode]);
         setSelectedNodeIds([newNode.id]);
 
         return newNode.id;
     };
+
+    /**
+     * Creates the complete stickman workflow at once. Reference-video
+     * analysis is owned by the director node; no standalone analysis node is
+     * inserted into new workflows.
+     */
+    const addStickmanWorkflow = useCallback((
+        mode: 'script' | 'reference_video',
+        paneX: number,
+        paneY: number,
+        viewport: Viewport,
+    ) => {
+        const { x: anchorX, y: anchorY } = paneToCanvas(paneX, paneY, viewport);
+        const halfWidth = DEFAULT_NODE_WIDTH / 2;
+        const topY = anchorY - 100;
+        const step = 520;
+        const isReference = mode === 'reference_video';
+
+        const source = createNodeData(
+            isReference ? NodeType.REFERENCE_VIDEO : NodeType.SCRIPT_INPUT,
+            anchorX - halfWidth,
+            topY,
+        );
+        const scriptNode = isReference
+            ? createNodeData(NodeType.SCRIPT_INPUT, anchorX + step, topY, [source.id])
+            : undefined;
+        if (scriptNode) {
+            scriptNode.title = '视频分析剧本';
+            scriptNode.scriptInput = {
+                ...scriptNode.scriptInput!,
+                title: '视频分析剧本',
+                content: '',
+                notes: '执行导演时先由视频分析生成剧本，再交给火柴人导演 Skill 重新推导分镜。',
+            };
+        }
+        const directorX = anchorX + step * (isReference ? 2 : 1);
+        const director = createNodeData(
+            NodeType.STICKMAN_DIRECTOR,
+            directorX,
+            topY,
+            [scriptNode?.id || source.id],
+        );
+        director.director = {
+            ...(director.director || { ...normalizeStickmanSettings({}), provider: 'auto' as const, status: 'idle' as const }),
+            sourceType: isReference ? 'reference_video' : 'script',
+        };
+        const storyboard = createNodeData(
+            NodeType.STORYBOARD,
+            directorX + step,
+            topY,
+            [director.id],
+        );
+        const batch = createNodeData(
+            NodeType.FLOW_BATCH_VIDEO,
+            directorX + step * 2,
+            topY,
+            [storyboard.id],
+        );
+        const merge = createNodeData(
+            NodeType.VIDEO_MERGE,
+            directorX + step * 3,
+            topY,
+            [batch.id],
+        );
+
+        const workflowNodes = [source, ...(scriptNode ? [scriptNode] : []), director, storyboard, batch, merge];
+
+        setNodes(previous => [...previous, ...workflowNodes]);
+        setSelectedNodeIds([director.id]);
+        return {
+            sourceId: source.id,
+            scriptId: scriptNode?.id,
+            directorId: director.id,
+            storyboardId: storyboard.id,
+            batchId: batch.id,
+            mergeId: merge.id,
+        };
+    }, []);
+
+    const addStickmanWorkflowFromParent = useCallback((parentNode: NodeData) => {
+        const step = 520;
+        const scriptNode = createNodeData(
+            NodeType.SCRIPT_INPUT,
+            parentNode.x + step,
+            parentNode.y,
+            [parentNode.id],
+        );
+        scriptNode.title = '视频分析剧本';
+        scriptNode.scriptInput = {
+            ...scriptNode.scriptInput!,
+            title: '视频分析剧本',
+            content: '',
+            notes: '执行导演时先由视频分析生成剧本，再交给火柴人导演 Skill 重新推导分镜。',
+        };
+        const director = createNodeData(
+            NodeType.STICKMAN_DIRECTOR,
+            parentNode.x + step * 2,
+            parentNode.y,
+            [scriptNode.id],
+        );
+        director.director = {
+            ...(director.director || { ...normalizeStickmanSettings({}), provider: 'auto' as const, status: 'idle' as const }),
+            sourceType: 'reference_video',
+        };
+        const storyboard = createNodeData(
+            NodeType.STORYBOARD,
+            parentNode.x + step * 3,
+            parentNode.y,
+            [director.id],
+        );
+        const batch = createNodeData(
+            NodeType.FLOW_BATCH_VIDEO,
+            parentNode.x + step * 4,
+            parentNode.y,
+            [storyboard.id],
+        );
+        const merge = createNodeData(
+            NodeType.VIDEO_MERGE,
+            parentNode.x + step * 5,
+            parentNode.y,
+            [batch.id],
+        );
+        setNodes(previous => [...previous, scriptNode, director, storyboard, batch, merge]);
+        setSelectedNodeIds([director.id]);
+        return {
+            scriptId: scriptNode.id,
+            directorId: director.id,
+            storyboardId: storyboard.id,
+            batchId: batch.id,
+            mergeId: merge.id,
+        };
+    }, []);
 
     /**
      * Updates a node with partial data
@@ -156,7 +350,6 @@ export const useNodeManagement = () => {
             const sourceNode = nodes.find(n => n.id === contextMenu.sourceNodeId);
             if (sourceNode) {
                 const direction = contextMenu.connectorSide || 'right';
-                const newNodeId = crypto.randomUUID();
                 const GAP = 100;
                 const NODE_WIDTH = 340;
 
@@ -164,70 +357,29 @@ export const useNodeManagement = () => {
 
                 if (direction === 'right') {
                     // Append: Source -> New
-                    newNode = {
-                        id: newNodeId,
+                    newNode = createNodeData(
                         type,
-                        x: sourceNode.x + NODE_WIDTH + GAP,
-                        y: sourceNode.y,
-                        prompt: '',
-                        status: NodeStatus.IDLE,
-                        model: 'Banana Pro',
-                        aspectRatio: 'Auto',
-                        resolution: 'Auto',
-                        parentIds: contextMenu.sourceNodeId ? [contextMenu.sourceNodeId] : []
-                    };
+                        sourceNode.x + NODE_WIDTH + GAP,
+                        sourceNode.y,
+                        contextMenu.sourceNodeId ? [contextMenu.sourceNodeId] : [],
+                    );
                 } else {
                     // Prepend: New -> Source
-                    newNode = {
-                        id: newNodeId,
-                        type,
-                        x: sourceNode.x - NODE_WIDTH - GAP,
-                        y: sourceNode.y,
-                        prompt: '',
-                        status: NodeStatus.IDLE,
-                        model: 'Banana Pro',
-                        aspectRatio: 'Auto',
-                        resolution: 'Auto',
-                        parentIds: []
-                    };
+                    newNode = createNodeData(type, sourceNode.x - NODE_WIDTH - GAP, sourceNode.y);
                     // Update source to add new node as parent
                     const existingParentIds = sourceNode.parentIds || [];
-                    updateNode(contextMenu.sourceNodeId, { parentIds: [...existingParentIds, newNodeId] });
+                    updateNode(contextMenu.sourceNodeId, { parentIds: [...existingParentIds, newNode.id] });
                 }
 
-                if (type === NodeType.PRODUCT_SCENE_REPLACE) {
-                    newNode.title = '产品短视频生成';
-                    newNode.productSceneInputMapping = { version: 1 };
-                    newNode.imageModel = 'google-flow-nano-banana-pro';
-                    newNode.resolution = '2K';
-                    newNode.aspectRatio = '9:16';
-                    newNode.productDimensions = { length: 0, width: 0, height: 0, unit: 'cm' };
-                    newNode.preserveProductMarkings = true;
-                    newNode.productSceneRecognitionProvider = 'codex-cli';
-                    newNode.productSceneImageCount = 1;
-                    newNode.productSceneAutoGenerateVideo = false;
-                    newNode.productSceneVideoModel = 'gemini-web-video';
-                    newNode.productSceneVideoAspectRatio = '9:16';
-                    newNode.productSceneVideoDuration = 10;
-                    newNode.productSceneVideoGenerateAudio = true;
-                }
                 if (type === NodeType.VIDEO_ANALYSIS) {
-                    newNode.title = '视频分析';
-                    newNode.model = 'video-analysis';
-                    newNode.videoAnalysis = createVideoAnalysisNodeData({
-                        status: 'idle',
-                        inputRefs: { productNodeIds: [], characterNodeIds: [], sceneNodeIds: [] },
-                    });
-                    newNode.outputPortId = 'analysis-output';
                     if (sourceNode) {
                         const mapped = assignVideoAnalysisInputPort(newNode, sourceNode);
-                        newNode.inputPortByParentId = mapped.inputPortByParentId;
-                        newNode.videoAnalysis = mapped.videoAnalysis;
+                        newNode = mapped;
                     }
                 }
 
                 setNodes(prev => [...prev, newNode]);
-                setSelectedNodeIds([newNodeId]);
+                setSelectedNodeIds([newNode.id]);
             }
         } else {
             // Global menu - add at click position
@@ -253,6 +405,8 @@ export const useNodeManagement = () => {
         selectedNodeIds,
         setSelectedNodeIds,
         addNode,
+        addStickmanWorkflow,
+        addStickmanWorkflowFromParent,
         updateNode,
         deleteNode,
         deleteNodes,

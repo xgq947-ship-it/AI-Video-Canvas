@@ -83,6 +83,7 @@
       "electron/**/*",
       "server/**/*",
       "shared/**/*",
+      "src/skills/stickman-video-director/**/*",
       "remotion/**/*",
       "scripts/codex-image-queue.mjs",
       "integrations/skills/twitcanva-codex-images/**/*",

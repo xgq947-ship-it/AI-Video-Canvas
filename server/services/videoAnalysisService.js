@@ -157,7 +157,12 @@ export async function analyzeVideoAnalysisNode({
       mode: 'fast',
       analysisKey: global.analysisKey,
     }, context);
-    analyzedShots.push(result.shot);
+    const keyframe = shot.analysisFrames?.find(frame => frame.position === 0)?.url
+      || shot.analysisFrames?.[0]?.url;
+    analyzedShots.push({
+      ...result.shot,
+      ...(keyframe ? { sourceKeyframeUrl: keyframe } : {}),
+    });
   }
 
   return {

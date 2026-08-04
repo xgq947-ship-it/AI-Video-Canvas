@@ -41,20 +41,6 @@ export const getNodeWidth = (node: NodeData, parentNode?: NodeData): number => {
         return 340;
     }
 
-    // Video Editor with input: uses 16:9 aspect ratio with maxWidth 500px
-    if (node.type === NodeType.VIDEO_EDITOR) {
-        const hasInput = parentNode && parentNode.status === NodeStatus.SUCCESS && parentNode.resultUrl;
-        if (hasInput) {
-            // Video uses 16:9, and width is capped at 500px
-            // height = width / (16/9), maxHeight = 500px
-            // So width = min(500, height * 16/9) where height is capped at 500
-            // Result: width = min(500, 500 * 16/9) = min(500, 888) = 500
-            return 500;
-        }
-        // Empty: width 340px
-        return 340;
-    }
-
     // Video nodes are wider
     if (node.type === NodeType.VIDEO) return 385;
     // Camera Angle nodes have fixed width
@@ -62,6 +48,7 @@ export const getNodeWidth = (node: NodeData, parentNode?: NodeData): number => {
     if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 460;
     if (node.type === NodeType.VIDEO_REMIX) return 420;
     if (node.type === NodeType.VIDEO_ANALYSIS) return 420;
+    if ([NodeType.REFERENCE_VIDEO, NodeType.SCRIPT_INPUT, NodeType.STICKMAN_DIRECTOR, NodeType.STORYBOARD, NodeType.STORYBOARD_COMPARE, NodeType.FLOW_BATCH_VIDEO, NodeType.VIDEO_MERGE].includes(node.type)) return 430;
     // Image and other nodes
     return 365;
 };
@@ -102,18 +89,6 @@ export const getNodeHeight = (node: NodeData, parentNode?: NodeData): number => 
         return 380;
     }
 
-    // Handle Video Editor nodes
-    if (node.type === NodeType.VIDEO_EDITOR) {
-        // Check if has input from parent
-        const hasInput = parentNode && parentNode.status === NodeStatus.SUCCESS && parentNode.resultUrl;
-        if (hasInput) {
-            // Video editor shows 16:9 when has content (line 301 in CanvasNode.tsx)
-            return Math.min(baseWidth / (16 / 9), 500);
-        }
-        // Empty: minHeight 380px
-        return 380;
-    }
-
     // Handle Camera Angle nodes
     if (node.type === NodeType.CAMERA_ANGLE) {
         const hasContent = node.status === NodeStatus.SUCCESS && node.resultUrl;
@@ -134,6 +109,12 @@ export const getNodeHeight = (node: NodeData, parentNode?: NodeData): number => 
     if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 716;
     if (node.type === NodeType.VIDEO_REMIX) return 306;
     if (node.type === NodeType.VIDEO_ANALYSIS) return VIDEO_ANALYSIS_NODE_HEIGHT;
+    if (node.type === NodeType.REFERENCE_VIDEO) return 300;
+    if (node.type === NodeType.SCRIPT_INPUT) return 500;
+    if (node.type === NodeType.STICKMAN_DIRECTOR) return 600;
+    if (node.type === NodeType.STORYBOARD || node.type === NodeType.STORYBOARD_COMPARE) return Math.max(430, node.storyboard?.expanded ? 470 + (node.storyboard.shots.length * 180) : 310);
+    if (node.type === NodeType.FLOW_BATCH_VIDEO) return 420;
+    if (node.type === NodeType.VIDEO_MERGE) return 300;
 
     // Parse aspect ratio to calculate content height for Image/Video nodes
     let aspectRatio: number;

@@ -238,7 +238,7 @@ export function syncVideoAnalysisInputRefs(node, inputPortByParentId = {}) {
 }
 
 export function inferVideoAnalysisInputPort(parentType, currentMapping = {}) {
-  if (parentType === 'Video') return 'source-video';
+  if (parentType === 'Video' || parentType === 'Reference Video') return 'source-video';
   const used = new Set(Object.values(currentMapping || {}));
   if (!used.has('product-reference')) return 'product-reference';
   if (!used.has('character-reference')) return 'character-reference';
@@ -255,7 +255,7 @@ export function assignVideoAnalysisInputPort(node, parent, targetPortId) {
   // The source slot is the only slot that accepts a video. Image-like parents
   // may be dropped on any reference row, but never become the source video;
   // conversely a second video always replaces the source slot.
-  const port = parent.type === 'Video'
+  const port = (parent.type === 'Video' || parent.type === 'Reference Video')
     ? 'source-video'
     : requestedPort === 'source-video'
       ? inferVideoAnalysisInputPort(parent.type, mapping)
@@ -291,6 +291,7 @@ export function normalizeVideoAnalysisResult(value = {}) {
       summary: text(item.summary) || `镜头 ${index + 1}`,
       imagePrompt: text(item.imagePrompt),
       videoPrompt: text(item.videoPrompt),
+      ...(text(item.sourceKeyframeUrl) ? { sourceKeyframeUrl: text(item.sourceKeyframeUrl) } : {}),
       ...(text(item.dialogue) ? { dialogue: text(item.dialogue) } : {}),
       ...(text(item.soundPrompt) ? { soundPrompt: text(item.soundPrompt) } : {}),
     };

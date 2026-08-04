@@ -1,7 +1,7 @@
 // 产品场景替换的控制节点自身不持有 resultUrl（成图落在它自动创建的子 Image 节点上），
 // 因此不能算作参考素材，否则会占掉一个「参考图N」编号却拿不到图。
 const IMAGE_TYPES = new Set(['Image', 'Image Editor']);
-const VIDEO_TYPES = new Set(['Video', 'Video Editor']);
+const VIDEO_TYPES = new Set(['Video']);
 const AUDIO_TYPES = new Set(['Audio']);
 
 const KIND_LABELS = {

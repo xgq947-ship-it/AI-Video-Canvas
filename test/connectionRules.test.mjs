@@ -8,7 +8,6 @@ test('AI 漫剧节点可连向成片(RENDER)', () => {
   assert.equal(isValidNodeConnection(NODE.BGM, NODE.RENDER), true);
   assert.equal(isValidNodeConnection(NODE.SUBTITLE, NODE.RENDER), true);
   assert.equal(isValidNodeConnection(NODE.VIDEO, NODE.RENDER), true);
-  assert.equal(isValidNodeConnection(NODE.VIDEO_EDITOR, NODE.RENDER), true);
 });
 
 test('AUDIO 连接不再被禁止（修复点）', () => {
@@ -42,7 +41,6 @@ test('保留原有图片/视频链式规则（无回归）', () => {
   assert.equal(isValidNodeConnection(NODE.IMAGE, NODE.IMAGE_EDITOR), true);
   assert.equal(isValidNodeConnection(NODE.VIDEO, NODE.VIDEO), true);
   assert.equal(isValidNodeConnection(NODE.VIDEO, NODE.IMAGE), false);
-  assert.equal(isValidNodeConnection(NODE.VIDEO_EDITOR, NODE.VIDEO), true);
   assert.equal(isValidNodeConnection(NODE.IMAGE, NODE.TEXT), false);
 });
 

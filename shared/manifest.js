@@ -165,7 +165,6 @@ export const AUDIO_TRACK_TYPES = AUDIO_TYPES;
 // 画布节点类型字符串常量（与 src/types.ts 的 NodeType 枚举取值保持一致）
 export const MANGA_NODE_TYPES = {
   VIDEO: 'Video',
-  VIDEO_EDITOR: 'Video Editor',
   AUDIO: 'Audio',        // 配音 / dialogue
   SFX: 'SFX',            // 音效
   BGM: 'BGM',            // 背景音乐
@@ -178,7 +177,7 @@ const num = (v, d) => (v == null || Number.isNaN(Number(v)) ? d : Number(v));
 /**
  * 从画布节点图，围绕某个「成片(Render)」节点，构建统一项目清单。
  * 语义：成片节点的直接父节点（parentIds）按类型分桶：
- *   - Video / Video Editor（有素材）  -> shots（源裁剪点 start/end，按 order/x 排序）
+ *   - Video（有素材）  -> shots（源裁剪点 start/end，按 order/x 排序）
  *   - Audio / SFX / BGM               -> audioTracks（时间轴绝对 start/end）
  *   - Subtitle                        -> subtitles（时间轴绝对 start/end）
  * 纯函数，节点用鸭子类型读取字段，便于测试。
@@ -212,7 +211,7 @@ export const buildManifestFromNodes = (renderNodeId, nodes, opts = {}) => {
 
   // 镜头
   const shotNodes = parents.filter(
-    (n) => (n.type === T.VIDEO || n.type === T.VIDEO_EDITOR) && (n.resultUrl || n.mediaUrl)
+    (n) => n.type === T.VIDEO && (n.resultUrl || n.mediaUrl)
   );
   shotNodes
     .map((n, i) => ({ n, i }))

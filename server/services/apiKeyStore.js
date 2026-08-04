@@ -8,7 +8,7 @@ import path from 'path';
 
 export const API_KEY_FIELDS = [
     { name: 'DEEPSEEK_API_KEY', provider: 'DeepSeek', label: 'DeepSeek API Key（提示词优化）', secret: true },
-    // 仅保留旧故事板/旧项目运行兼容，不再暴露给设置页；新生成能力统一走 Gemini Web / Codex。
+    // 仅保留旧项目运行兼容，不再暴露给设置页；新生成能力统一走 Gemini Web / Codex。
     { name: 'GEMINI_API_KEY', provider: 'Google', label: 'Gemini legacy', secret: true, exposed: false },
     { name: 'OPENAI_API_KEY', provider: 'OpenAI', label: 'OpenAI legacy', secret: true, exposed: false },
     { name: 'ARK_API_KEY', provider: 'Seedance 2.0', label: '火山方舟 ARK API Key（中国区）', secret: true }

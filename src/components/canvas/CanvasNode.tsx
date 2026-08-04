@@ -19,6 +19,14 @@ import type { NodeReference } from '../../utils/nodeReferences.js';
 import { ProductSceneReplaceNode } from './ProductSceneReplaceNode';
 import { VideoRemixNode } from '../../features/video-remix/VideoRemixNode';
 import { VideoAnalysisNode } from '../../features/video-analysis/VideoAnalysisNode';
+import {
+  FlowBatchVideoNode,
+  ReferenceVideoNode,
+  ScriptInputNode,
+  StickmanDirectorNode,
+  StoryboardNode,
+  VideoMergeNode,
+} from '../../features/stickman-director/StickmanWorkflowNodes';
 
 interface CanvasNodeProps {
   workflowId?: string;
@@ -51,6 +59,12 @@ interface CanvasNodeProps {
   onAnalyzeVideo?: (nodeId: string) => void;
   onGenerateVideoAnalysisAssets?: (nodeId: string) => void;
   onLockVideoAnalysisAssetMain?: (nodeId: string) => void;
+  onAnalyzeStickmanScript?: (nodeId: string) => void;
+  onRunStickmanDirector?: (nodeId: string) => void;
+  onGenerateStickmanShot?: (storyboardId: string, shotId: string) => void;
+  onBatchGenerateStickman?: (nodeId: string) => void;
+  onRetryStickmanFailed?: (nodeId: string) => void;
+  onMergeStickmanVideos?: (nodeId: string) => void;
   zoom: number;
   // 悬停回调带上 nodeId，调用方才能传稳定的引用（否则每次 render 都是新箭头函数，
   // React.memo 会全部失效）。
@@ -66,12 +80,17 @@ const NODE_TYPE_LABELS: Record<NodeType, string> = {
   [NodeType.VIDEO]: '视频',
   [NodeType.AUDIO]: '配音',
   [NodeType.IMAGE_EDITOR]: '图片编辑器',
-  [NodeType.VIDEO_EDITOR]: '视频编辑器',
-  [NodeType.STORYBOARD]: '分镜管理',
   [NodeType.CAMERA_ANGLE]: '镜头角度',
   [NodeType.PRODUCT_SCENE_REPLACE]: '产品短视频生成',
   [NodeType.VIDEO_ANALYSIS]: '视频分析',
   [NodeType.VIDEO_REMIX]: '视频复刻',
+  [NodeType.REFERENCE_VIDEO]: '参考视频',
+  [NodeType.SCRIPT_INPUT]: '剧本输入',
+  [NodeType.STICKMAN_DIRECTOR]: '火柴人视频导演',
+  [NodeType.STORYBOARD]: '分镜列表',
+  [NodeType.STORYBOARD_COMPARE]: '分镜对照组',
+  [NodeType.FLOW_BATCH_VIDEO]: 'Flow 视频生成',
+  [NodeType.VIDEO_MERGE]: '视频拼接',
   [NodeType.SFX]: '音效',
   [NodeType.BGM]: '背景音乐',
   [NodeType.SUBTITLE]: '字幕',
@@ -107,6 +126,12 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   onAnalyzeVideo,
   onGenerateVideoAnalysisAssets,
   onLockVideoAnalysisAssetMain,
+  onAnalyzeStickmanScript,
+  onRunStickmanDirector,
+  onGenerateStickmanShot,
+  onBatchGenerateStickman,
+  onRetryStickmanFailed,
+  onMergeStickmanVideos,
   zoom,
   onMouseEnter,
   onMouseLeave,
@@ -137,9 +162,9 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
     'download',
   ];
   const imageToolbarActions: NodeHoverToolbarAction[] = [
-    ...(!(data.prompt && data.prompt.startsWith('Extract panel #'))
-      ? ['changeAngle' as const, 'separator' as const, 'upload' as const]
-      : []),
+    'changeAngle',
+    'separator',
+    'upload',
     'expand',
     'download',
   ];
@@ -267,6 +292,30 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
         onConnectorDown={onConnectorDown}
       />
     );
+  }
+
+  if (data.type === NodeType.SCRIPT_INPUT) {
+    return <ScriptInputNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onGenerate, onAnalyzeReference: onAnalyzeStickmanScript, onNodePointerDown, onContextMenu, onConnectorDown } as any)} />;
+  }
+
+  if (data.type === NodeType.REFERENCE_VIDEO) {
+    return <ReferenceVideoNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onGenerate, onNodePointerDown, onContextMenu, onConnectorDown, workflowId } as any)} />;
+  }
+
+  if (data.type === NodeType.STICKMAN_DIRECTOR) {
+    return <StickmanDirectorNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onGenerate, onNodePointerDown, onContextMenu, onConnectorDown, onRun: onRunStickmanDirector || (() => undefined) } as any)} />;
+  }
+
+  if (data.type === NodeType.STORYBOARD || data.type === NodeType.STORYBOARD_COMPARE) {
+    return <StoryboardNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onGenerate, onNodePointerDown, onContextMenu, onConnectorDown, onGenerateShot: onGenerateStickmanShot || (() => undefined), onBatchGenerate: onBatchGenerateStickman || (() => undefined), onRetryFailed: onRetryStickmanFailed || (() => undefined) } as any)} />;
+  }
+
+  if (data.type === NodeType.FLOW_BATCH_VIDEO) {
+    return <FlowBatchVideoNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onGenerate, onNodePointerDown, onContextMenu, onConnectorDown, onBatchGenerate: onBatchGenerateStickman || (() => undefined), onRetryFailed: onRetryStickmanFailed || (() => undefined) } as any)} />;
+  }
+
+  if (data.type === NodeType.VIDEO_MERGE) {
+    return <VideoMergeNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onGenerate, onNodePointerDown, onContextMenu, onConnectorDown, onMerge: onMergeStickmanVideos || (() => undefined) } as any)} />;
   }
 
   // 产品场景替换使用独立的双图角色与尺寸参数界面。
@@ -454,7 +503,6 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
     );
   }
 
-  // Special rendering for Video Editor node
   // AI 漫剧生产节点（配音/音效/BGM/字幕/成片）—— 自包含渲染
   if (isMangaNode(data.type)) {
     return (
@@ -470,82 +518,6 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
         onConnectorDown={onConnectorDown}
         onExpand={onExpand}
       />
-    );
-  }
-
-  if (data.type === NodeType.VIDEO_EDITOR) {
-    // Get video URL from parent node or own resultUrl
-    const videoUrl = inputUrl || data.resultUrl;
-
-    return (
-      <div
-        data-node-id={data.id}
-        className={`absolute flex items-center group/node touch-none pointer-events-auto`}
-        style={{
-          transform: `translate(${data.x}px, ${data.y}px)`,
-          transition: 'box-shadow 0.2s',
-          zIndex: selected ? 50 : 10
-        }}
-        onPointerDown={(e) => onNodePointerDown(e, data.id)}
-        onContextMenu={(e) => onContextMenu(e, data.id)}
-      >
-        <NodeConnectors nodeId={data.id} onConnectorDown={onConnectorDown} canvasTheme={canvasTheme} />
-
-        {/* Video Editor Node Card */}
-        <div
-          className={`relative rounded-2xl transition-all duration-200 flex flex-col ${videoUrl ? '' : isDark ? 'bg-[#0f0f0f] border border-neutral-700 shadow-2xl' : 'bg-white border border-neutral-200 shadow-lg'} ${selected ? 'ring-1 ring-purple-500/30' : ''}`}
-          style={{
-            width: videoUrl ? 'auto' : '340px',
-            maxWidth: videoUrl ? '500px' : 'none'
-          }}
-          onDoubleClick={(e) => {
-            e.stopPropagation();
-            if (onOpenEditor) {
-              onOpenEditor(data.id);
-            }
-          }}
-        >
-          {/* Header */}
-          <div className="absolute -top-8 left-0 text-sm px-2 py-0.5 rounded font-medium text-purple-400">
-            视频编辑器
-          </div>
-
-          {/* Content Area */}
-          <div
-            className={`flex flex-col items-center justify-center ${videoUrl ? 'p-0' : 'p-6'}`}
-            style={{ minHeight: videoUrl ? 'auto' : '380px' }}
-          >
-            {videoUrl ? (
-              <video
-                src={videoUrl}
-                preload="metadata"
-                className={`rounded-xl w-full h-auto object-cover ${selected ? 'ring-2 ring-purple-500 shadow-2xl' : ''}`}
-                style={{ maxHeight: '500px', aspectRatio: '16/9' }}
-                muted
-                playsInline
-                onMouseEnter={(e) => (e.currentTarget as HTMLVideoElement).play()}
-                onMouseLeave={(e) => {
-                  const video = e.currentTarget as HTMLVideoElement;
-                  video.pause();
-                  video.currentTime = 0;
-                }}
-              />
-            ) : (
-              <div className="text-neutral-500 text-center text-sm">
-                <p>请连接视频节点</p>
-                <p className="text-xs mt-1 text-neutral-600">双击打开编辑器</p>
-              </div>
-            )}
-          </div>
-
-          {/* Trim indicator (if trimmed) */}
-          {data.trimStart !== undefined && data.trimEnd !== undefined && (
-            <div className="absolute bottom-2 left-2 right-2 bg-black/70 rounded-lg px-2 py-1 text-xs text-purple-300 flex justify-between">
-              <span>Trimmed: {data.trimStart.toFixed(1)}s - {data.trimEnd.toFixed(1)}s</span>
-            </div>
-          )}
-        </div>
-      </div>
     );
   }
 
@@ -675,8 +647,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
         </div>
 
         {/* Control Panel - Only show when single node is selected (not in group selection) */}
-        {/* Hide controls for storyboard-generated scenes */}
-        {selected && showControls && data.type !== NodeType.TEXT && !data.subtitleSourceNodeId && !(data.prompt && data.prompt.startsWith('Extract panel #')) && (
+        {selected && showControls && data.type !== NodeType.TEXT && !data.subtitleSourceNodeId && (
           <div className="absolute top-[calc(100%+12px)] left-1/2 -translate-x-1/2 w-[600px] flex justify-center z-[100]">
             <NodeControls
               workflowId={workflowId}

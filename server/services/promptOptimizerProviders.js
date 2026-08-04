@@ -231,7 +231,7 @@ export const PROMPT_OPTIMIZER_PROVIDERS = {
         label: 'DeepSeek（云端 API）',
         supportsImage: false,
         apiKeyField: 'DEEPSEEK_API_KEY',
-        defaultModel: 'deepseek-v4-pro',
+        defaultModel: 'deepseek-v4-flash',
         defaultEffort: '',          // v4 走 thinking:disabled，不用推理档位
         run: runDeepSeek
     },

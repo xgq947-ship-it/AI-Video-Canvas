@@ -30,7 +30,6 @@ import { useHistory } from './hooks/useHistory';
 import { useCanvasTitle } from './hooks/useCanvasTitle';
 import { useWorkflow } from './hooks/useWorkflow';
 import { useImageEditor } from './hooks/useImageEditor';
-import { useVideoEditor } from './hooks/useVideoEditor';
 import { usePanelState } from './hooks/usePanelState';
 import { useAssetHandlers } from './hooks/useAssetHandlers';
 import { useTextNodeHandlers } from './hooks/useTextNodeHandlers';
@@ -52,16 +51,12 @@ import { SelectionBoundingBox } from './components/canvas/SelectionBoundingBox';
 import { WorkflowPanel } from './components/WorkflowPanel';
 import { HistoryPanel } from './components/HistoryPanel';
 import { ImageEditorModal } from './components/modals/ImageEditorModal';
-import { VideoEditorModal } from './components/modals/VideoEditorModal';
 import { ExpandedMediaModal } from './components/modals/ExpandedMediaModal';
 import { CreateAssetModal } from './components/modals/CreateAssetModal';
 import { CreateProjectModal } from './components/modals/CreateProjectModal';
 import { TikTokImportModal } from './components/modals/TikTokImportModal';
 import { AssetLibraryPanel, type LibraryAsset } from './components/AssetLibraryPanel';
 import { useTikTokImport } from './hooks/useTikTokImport';
-import { useStoryboardGenerator } from './hooks/useStoryboardGenerator';
-import { StoryboardGeneratorModal } from './components/modals/StoryboardGeneratorModal';
-import { StoryboardVideoModal } from './components/modals/StoryboardVideoModal';
 import { isValidNodeConnection } from '@/shared/connectionRules.js';
 import { canvasViewCenter, centerNodeAt, computeFitViewport, screenToCanvas, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT } from '@/shared/canvasCoords.js';
 import { ZOOM_MIN, ZOOM_MAX } from '@/shared/zoom.js';
@@ -72,6 +67,7 @@ import { CanvasZoomControl } from './components/canvas/CanvasZoomControl';
 import { collectNodeReferences, type NodeReference } from './utils/nodeReferences.js';
 import { upsertProductSceneResultNode } from './utils/productSceneResult.js';
 import { getImageGenerationProvider } from '@/shared/generationProviders.js';
+import { listVideoGenerationProviders } from '@/shared/generationProviders.js';
 import { assignProductSceneInputOnConnect } from './utils/productSceneInputMapping.js';
 import {
   normalizeVideoRemixProjects,
@@ -84,6 +80,15 @@ import {
   createVideoAnalysisNodeData,
   markVideoAnalysisDependentsStale,
 } from '../shared/videoAnalysis.js';
+import type { VideoAnalysisNodeData } from '../shared/videoAnalysis.js';
+import {
+  generateStickmanShotVideo,
+  getStickmanMergeJob,
+  runStickmanDirector,
+  submitStickmanMerge,
+} from './features/stickman-director/stickmanDirectorService';
+import { createStickmanScriptFromAnalysis, mergeStickmanShotsPreservingGeneration, normalizeStickmanSettings, rollupStickmanGenerationStatus } from '../shared/stickmanDirector.js';
+import type { StickmanDirectorOutput, StickmanShot } from '../shared/stickmanDirector.js';
 
 // ============================================================================
 // MAIN COMPONENT
@@ -94,6 +99,13 @@ import {
 const NODE_TYPES_NEEDING_ALL_NODES = new Set<NodeType>([
   NodeType.PRODUCT_SCENE_REPLACE,
   NodeType.VIDEO_ANALYSIS,
+  NodeType.REFERENCE_VIDEO,
+  NodeType.SCRIPT_INPUT,
+  NodeType.STICKMAN_DIRECTOR,
+  NodeType.STORYBOARD,
+  NodeType.STORYBOARD_COMPARE,
+  NodeType.FLOW_BATCH_VIDEO,
+  NodeType.VIDEO_MERGE,
   ...Object.values(NodeType).filter(isMangaNode)
 ]);
 
@@ -204,6 +216,8 @@ export default function App() {
     setNodes,
     selectedNodeIds,
     setSelectedNodeIds,
+    addStickmanWorkflow,
+    addStickmanWorkflowFromParent,
     updateNode,
     deleteNodes,
     clearSelection,
@@ -693,27 +707,12 @@ export default function App() {
     handleUpload
   } = useImageEditor({ nodes, updateNode });
 
-  // Video editor modal
-  const {
-    videoEditorModal,
-    handleOpenVideoEditor,
-    handleCloseVideoEditor,
-    handleExportTrimmedVideo
-  } = useVideoEditor({ nodes, updateNode });
-
   /**
-   * Routes editor open to the correct handler based on node type
+   * Opens the image editor for image editor nodes.
    */
   const handleOpenEditor = React.useCallback((nodeId: string) => {
-    const node = nodes.find(n => n.id === nodeId);
-    if (!node) return;
-
-    if (node.type === NodeType.VIDEO_EDITOR) {
-      handleOpenVideoEditor(nodeId);
-    } else {
-      handleOpenImageEditor(nodeId);
-    }
-  }, [nodes, handleOpenVideoEditor, handleOpenImageEditor]);
+    handleOpenImageEditor(nodeId);
+  }, [handleOpenImageEditor]);
 
   // Text node handlers
   const {
@@ -1010,187 +1009,6 @@ export default function App() {
     viewport
   });
 
-  // Storyboard Generator Tool
-  const handleCreateStoryboardNodes = React.useCallback((
-    newNodeData: Partial<NodeData>[],
-    groupInfo?: { groupId: string; groupLabel: string }
-  ) => {
-    console.log('[Storyboard] handleCreateStoryboardNodes called with', newNodeData.length, 'nodes, groupInfo:', !!groupInfo);
-    const newNodes: NodeData[] = newNodeData.map(data => ({
-      id: data.id || crypto.randomUUID(),
-      type: data.type || NodeType.IMAGE,
-      x: data.x || 0,
-      y: data.y || 0,
-      prompt: data.prompt || '',
-      status: data.status || NodeStatus.IDLE,
-      model: data.model || 'codex-imagegen',
-      imageModel: data.imageModel,
-      aspectRatio: data.aspectRatio || '16:9',
-      resolution: data.resolution || '1K',
-      title: data.title,
-      parentIds: data.parentIds || [],
-      groupId: data.groupId,
-      characterReferenceUrls: data.characterReferenceUrls
-    }));
-
-    setNodes(prev => [...prev, ...newNodes]);
-
-    // Auto-group the storyboard nodes
-    if (groupInfo && newNodes.length > 0) {
-      const newGroup = {
-        id: groupInfo.groupId,
-        nodeIds: newNodes.map(n => n.id),
-        label: groupInfo.groupLabel,
-        // Save story context if available to help AI understand the full narrative later
-        storyContext: (groupInfo as any).storyContext
-      };
-      setGroups(prev => [...prev, newGroup]);
-    }
-
-    if (newNodes.length > 0) {
-      setSelectedNodeIds(newNodes.map(n => n.id));
-    }
-
-    // Auto-trigger generation for each storyboard node with a small delay
-    // to ensure state is updated before generation starts
-    if (groupInfo) {
-      setTimeout(() => {
-        console.log('[Storyboard] Auto-triggering generation for', newNodes.length, 'nodes');
-        newNodes.forEach((node, index) => {
-          // Stagger generation calls slightly to avoid overwhelming the API
-          setTimeout(() => {
-            console.log(`[Storyboard] Starting generation for node ${index + 1}:`, node.id);
-            // Use ref to get the latest handleGenerate function
-            handleGenerateRef.current(node.id);
-          }, index * 500); // 500ms delay between each node
-        });
-      }, 100); // Initial delay to let state settle
-    }
-  }, [setNodes, setSelectedNodeIds, setGroups]);
-
-  const storyboardGenerator = useStoryboardGenerator({
-    onCreateNodes: handleCreateStoryboardNodes,
-    viewport
-  });
-
-  const handleEditStoryboard = React.useCallback((groupId: string) => {
-    const group = groups.find(g => g.id === groupId);
-    if (group?.storyContext) {
-      console.log('[App] Editing storyboard:', groupId);
-      storyboardGenerator.editStoryboard(group.storyContext);
-    }
-  }, [groups, storyboardGenerator]);
-
-  // Storyboard Video Modal State
-  const [storyboardVideoModal, setStoryboardVideoModal] = useState<{
-    isOpen: boolean;
-    nodes: NodeData[];
-    storyContext?: { story: string; scripts: any[] };
-  }>({ isOpen: false, nodes: [] });
-
-  const handleCreateStoryboardVideo = React.useCallback((targetNodeIds?: string[]) => {
-    // Determine which nodes to use: explicit list or current selection
-    const nodeIdsToCheck = targetNodeIds || selectedNodeIds;
-
-    // Filter for Image nodes only (can't make video from text/video directly in this flow)
-    const selectedImageNodes = nodes.filter(n => nodeIdsToCheck.includes(n.id) && n.type === NodeType.IMAGE);
-
-    if (selectedImageNodes.length === 0) {
-      console.warn("No image nodes selected for video generation. Checked IDs:", nodeIdsToCheck);
-      return;
-    }
-
-    // Check if nodes belong to a group with story context
-    const firstNode = selectedImageNodes[0];
-    const group = firstNode.groupId ? groups.find(g => g.id === firstNode.groupId) : undefined;
-    const storyContext = group?.storyContext;
-
-    if (storyContext) {
-      console.log('[App] Found Story Context for Video Modal:', {
-        storyLength: storyContext.story.length,
-        scriptsCount: storyContext.scripts.length
-      });
-    }
-
-    setStoryboardVideoModal({
-      isOpen: true,
-      nodes: selectedImageNodes,
-      storyContext
-    });
-  }, [nodes, selectedNodeIds, groups]);
-
-  const handleGenerateStoryVideos = React.useCallback((
-    prompts: Record<string, string>,
-    settings: { model: string; duration: number; resolution: string; },
-    activeNodeIds?: string[]
-  ) => {
-    // Close modal
-    setStoryboardVideoModal(prev => ({ ...prev, isOpen: false }));
-
-    const newNodes: NodeData[] = [];
-    // Use activeNodeIds to filter source nodes if provided, otherwise use all
-    const sourceNodes = activeNodeIds
-      ? storyboardVideoModal.nodes.filter(n => activeNodeIds.includes(n.id))
-      : storyboardVideoModal.nodes;
-
-    // Calculate layout bounds of the ENTIRE storyboard to position videos to the RIGHT
-    // Use all storyboard nodes to properly calculate the bounding box
-    const allStoryboardNodes = storyboardVideoModal.nodes;
-
-    // Assume a default width if not present (though images usually have it)
-    const DEFAULT_WIDTH = 400;
-
-    // Find the rightmost edge of the entire group
-    const groupMaxX = Math.max(...allStoryboardNodes.map(n => n.x + ((n as any).width || DEFAULT_WIDTH)));
-
-    // Calculate the left edge of the group to maintain relative offsets
-    const groupMinX = Math.min(...allStoryboardNodes.map(n => n.x));
-
-    // Shift Amount: Move everything to the right of the group with a gap
-    const GAP_X = 100;
-    const xOffset = groupMaxX + GAP_X - groupMinX;
-
-    sourceNodes.forEach((sourceNode) => {
-      // Create a new Video node for each image
-      const newNodeId = crypto.randomUUID();
-      const PROMPT = prompts[sourceNode.id] || sourceNode.prompt || 'Animated video';
-
-      const newVideoNode: NodeData = {
-        id: newNodeId,
-        type: NodeType.VIDEO,
-        // Clone the layout pattern but shifted to the right
-        x: sourceNode.x + xOffset,
-        y: sourceNode.y,
-        prompt: PROMPT,
-        status: NodeStatus.IDLE, // Will switch to LOADING when generated
-        model: settings.model,
-        videoModel: settings.model, // Explicitly set video model
-        videoDuration: settings.duration,
-        aspectRatio: sourceNode.aspectRatio || '16:9',
-        resolution: settings.resolution,
-        parentIds: [sourceNode.id], // Connect to source image
-        // groupId: undefined, // Explicitly NOT in the group
-        videoMode: 'frame-to-frame', // Important for image-to-video
-        inputUrl: sourceNode.resultUrl, // Pass image as input
-      };
-
-      newNodes.push(newVideoNode);
-    });
-
-    // added new nodes to state
-    setNodes(prev => [...prev, ...newNodes]);
-
-    // Auto-trigger generation (staggered)
-    setTimeout(() => {
-      newNodes.forEach((node, index) => {
-        setTimeout(() => {
-          handleGenerateRef.current(node.id);
-        }, index * 1000); // 1s delay between each to avoid rate limits
-      });
-    }, 500);
-
-  }, [storyboardVideoModal.nodes, setNodes]);
-
   // Context menu handlers
   const {
     handleDoubleClick,
@@ -1229,6 +1047,19 @@ export default function App() {
     setSidebarAssetPreview(null);
     openHistoryPanel(contextMenu.y, closeWorkflowPanel);
   };
+
+  const handleCreateStickmanWorkflow = React.useCallback((mode: 'script' | 'reference_video') => {
+    if (!canvasEditLock.guard()) return;
+    const rect = getCanvasRect();
+    const paneX = contextMenu.canvasX ?? contextMenu.x - rect.left;
+    const paneY = contextMenu.canvasY ?? contextMenu.y - rect.top;
+    addStickmanWorkflow(mode, paneX, paneY, viewport);
+    showToast(
+      mode === 'reference_video'
+        ? '已创建参考视频工作流：上传参考视频后执行导演，会先生成剧本再推导分镜'
+        : '已创建剧本工作流：填写“剧本输入”后，点击“执行火柴人导演 Skill”',
+    );
+  }, [addStickmanWorkflow, canvasEditLock, contextMenu.canvasX, contextMenu.canvasY, contextMenu.x, contextMenu.y, showToast, viewport]);
 
   const handleSidebarAssetPreview = (asset: SidebarAssetPreview, anchor: HTMLElement) => {
     const rect = anchor.getBoundingClientRect();
@@ -1685,57 +1516,21 @@ export default function App() {
     }
   }, [nodes, setNodes, updateNode]);
 
-  const handleUseCanvasVideoAsReference = React.useCallback(async () => {
+  const handleUseCanvasVideoAsReference = React.useCallback(() => {
     if (!canvasEditLock.guard()) return;
     const sourceNode = nodes.find(node => node.id === contextMenu.sourceNodeId);
-    if (!sourceNode || sourceNode.type !== NodeType.VIDEO || !sourceNode.resultUrl) {
+    if (!sourceNode || (sourceNode.type !== NodeType.VIDEO && sourceNode.type !== NodeType.REFERENCE_VIDEO) || !sourceNode.resultUrl) {
       showToast('当前节点没有可用的视频结果', { tone: 'error' });
       return;
     }
-    if (!workflowId) {
-      showToast('请先新建或打开项目', { tone: 'error' });
-      return;
-    }
-    const sourceTitle = sourceNode.displayName
-      || sourceNode.resultName
-      || sourceNode.title
-      || '画布视频';
-    const analysisNodeId = crypto.randomUUID();
-    const targetX = sourceNode.x + 480;
-    let targetY = sourceNode.y;
-    while (nodes.some(node => Math.abs(node.x - targetX) < 420 && Math.abs(node.y - targetY) < 360)) {
-      targetY += 390;
-    }
-    const analysisNode: NodeData = {
-      id: analysisNodeId,
-      type: NodeType.VIDEO_ANALYSIS,
-      title: `${sourceTitle} · 视频分析`,
-      x: targetX,
-      y: targetY,
-      prompt: '',
-      status: NodeStatus.IDLE,
-      model: 'video-analysis',
-      aspectRatio: '9:16',
-      resolution: 'Auto',
-      parentIds: [],
-      outputPortId: 'analysis-output',
-      videoAnalysis: createVideoAnalysisNodeData({
-        status: 'idle',
-        inputRefs: { productNodeIds: [], characterNodeIds: [], sceneNodeIds: [] },
-      }),
-    };
-    const mapped = assignVideoAnalysisInputPort(analysisNode, sourceNode, 'source-video');
-    setNodes(current => [...current, mapped]);
-    setSelectedNodeIds([analysisNodeId]);
-    showToast('已创建视频分析节点，可补充参考图后开始分析');
+    addStickmanWorkflowFromParent(sourceNode);
+    showToast('已创建火柴人参考视频工作流，执行导演时会先生成视频分析剧本，再交给导演 Skill');
   }, [
+    addStickmanWorkflowFromParent,
     canvasEditLock,
     contextMenu.sourceNodeId,
     nodes,
-    setNodes,
-    setSelectedNodeIds,
     showToast,
-    workflowId,
   ]);
 
   const handleAnalyzeVideoNode = React.useCallback(async (analysisNodeId: string) => {
@@ -1854,6 +1649,163 @@ export default function App() {
     }
   }, [canvasEditLock, groups, handleSaveWithTracking, nodes, setGroups, setNodes, setSelectedNodeIds, showToast, workflowId]);
 
+  const analyzeStickmanReferenceVideo = React.useCallback(async (
+    directorNodeId: string,
+    sourceNode: NodeData,
+    inputRefs: {
+      productNodeIds?: string[];
+      characterNodeIds?: string[];
+      sceneNodeIds?: string[];
+    } = {},
+    scriptNodeId?: string,
+  ) => {
+    if (!workflowId) throw new Error('请先新建或打开项目');
+    if (!sourceNode.resultUrl) throw new Error('请先准备好参考视频');
+
+    try {
+      await handleSaveWithTracking();
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : '分析前保存项目失败');
+    }
+
+    const persistedNodes = nodesRef.current;
+    const persistedSourceNode = persistedNodes.find(node => node.id === sourceNode.id) || sourceNode;
+    const persistedSourceUrl = persistedSourceNode.resultUrl;
+    if (!persistedSourceUrl) throw new Error('参考视频保存后不可用，请重新生成或导入');
+
+    const referenceEntries: Array<{ url: string; label: string }> = [];
+    const addReferenceNodes = (ids: string[] | undefined, label: string) => {
+      (ids || []).forEach(id => {
+        const node = persistedNodes.find(item => item.id === id);
+        const url = node?.resultUrl || node?.editorBackgroundUrl;
+        if (!url) return;
+        referenceEntries.push({
+          url,
+          label: node?.displayName || node?.title || label,
+        });
+      });
+    };
+    addReferenceNodes(inputRefs.productNodeIds, '产品参考图');
+    addReferenceNodes(inputRefs.characterNodeIds, '人物参考图');
+    addReferenceNodes(inputRefs.sceneNodeIds, '场景参考图');
+
+    const analyzingState = createVideoAnalysisNodeData({
+      inputRefs: {
+        videoNodeId: persistedSourceNode.id,
+        productNodeIds: inputRefs.productNodeIds || [],
+        characterNodeIds: inputRefs.characterNodeIds || [],
+        sceneNodeIds: inputRefs.sceneNodeIds || [],
+      },
+      status: 'analyzing',
+    });
+    setNodes(current => current.map(node => {
+      if (node.id === scriptNodeId) return { ...node, status: NodeStatus.LOADING };
+      if (node.id !== directorNodeId) return node;
+      return {
+        ...node,
+        director: {
+          ...(node.director || { ...normalizeStickmanSettings({}), provider: 'auto' as const, status: 'idle' as const }),
+          sourceType: 'reference_video',
+          analysis: analyzingState,
+          error: undefined,
+        },
+      };
+    }));
+
+    try {
+      const payload = await analyzeVideoAnalysisNode({
+        workflowId,
+        nodeId: directorNodeId,
+        sourceUrl: persistedSourceUrl,
+        title: persistedSourceNode.title || '参考视频',
+        referenceImages: referenceEntries,
+      });
+      const completedState = createVideoAnalysisNodeData({
+        ...analyzingState,
+        status: 'completed',
+        result: payload.result,
+      });
+      const currentDirector = nodesRef.current.find(node => node.id === directorNodeId);
+      const scriptInput = createStickmanScriptFromAnalysis(payload.result, {
+        settings: currentDirector?.director || { ...normalizeStickmanSettings({}), provider: 'auto' as const, status: 'idle' as const },
+        title: persistedSourceNode.title || '参考视频分析剧本',
+      });
+      setNodes(current => current.map(node => {
+        if (node.id === scriptNodeId) {
+          const existing = node.scriptInput || scriptInput;
+          return {
+            ...node,
+            title: node.title || '视频分析剧本',
+            prompt: scriptInput.content,
+            status: NodeStatus.SUCCESS,
+            scriptInput: { ...existing, ...scriptInput },
+          };
+        }
+        if (node.id !== directorNodeId) return node;
+        return {
+          ...node,
+          director: {
+            ...(node.director || { ...normalizeStickmanSettings({}), provider: 'auto' as const, status: 'idle' as const }),
+            sourceType: 'script',
+            analysis: completedState,
+            scriptInput,
+            error: undefined,
+          },
+        };
+      }));
+      return { result: payload.result, scriptInput, analysis: completedState };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '参考视频分析失败';
+      setNodes(current => current.map(node => {
+        if (node.id === scriptNodeId) return { ...node, status: NodeStatus.ERROR, errorMessage: message };
+        if (node.id !== directorNodeId) return node;
+        return {
+          ...node,
+          director: {
+            ...(node.director || { ...normalizeStickmanSettings({}), provider: 'auto' as const, status: 'idle' as const }),
+            sourceType: 'reference_video',
+            analysis: createVideoAnalysisNodeData({ ...analyzingState, status: 'error', errorMessage: message }),
+            error: message,
+          },
+        };
+      }));
+      throw error;
+    }
+  }, [handleSaveWithTracking, setNodes, workflowId]);
+
+  const handleAnalyzeStickmanScript = React.useCallback(async (scriptNodeId: string) => {
+    if (!canvasEditLock.guard()) return;
+    if (!workflowId) {
+      showToast('请先新建或打开项目', { tone: 'error' });
+      return;
+    }
+    const current = nodesRef.current;
+    const scriptNode = current.find(node => node.id === scriptNodeId && node.type === NodeType.SCRIPT_INPUT);
+    const directorNode = current.find(node => node.type === NodeType.STICKMAN_DIRECTOR && node.parentIds?.includes(scriptNodeId));
+    const sourceNode = scriptNode?.parentIds
+      ?.map(id => current.find(node => node.id === id))
+      .find((node): node is NodeData => Boolean(node && (node.type === NodeType.VIDEO || node.type === NodeType.REFERENCE_VIDEO)));
+    if (!scriptNode || !directorNode) {
+      showToast('请将视频分析剧本节点连接到火柴人视频导演', { tone: 'error' });
+      return;
+    }
+    if (!sourceNode?.resultUrl) {
+      showToast('请先在参考视频节点准备好可用的视频', { tone: 'error' });
+      return;
+    }
+    try {
+      await analyzeStickmanReferenceVideo(
+        directorNode.id,
+        sourceNode,
+        directorNode.director?.analysis?.inputRefs || {},
+        scriptNode.id,
+      );
+      showToast('已根据参考视频生成剧本，请检查内容后执行火柴人导演 Skill');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '参考视频分析失败', { tone: 'error', duration: 6500 });
+    }
+  }, [analyzeStickmanReferenceVideo, canvasEditLock, showToast, workflowId]);
+
   const handleGenerateVideoAnalysisAssets = React.useCallback((analysisNodeId: string) => {
     if (!canvasEditLock.guard()) return;
     const currentNodes = nodesRef.current;
@@ -1883,6 +1835,437 @@ export default function App() {
       showToast(error instanceof Error ? error.message : '资产参考节点创建失败', { tone: 'error' });
     }
   }, [canvasEditLock, groups, setGroups, setNodes, setSelectedNodeIds, showToast]);
+
+  const ensureStickmanPipeline = React.useCallback((directorNodeId: string, output: StickmanDirectorOutput, referenceDerived = false) => {
+    const current = nodesRef.current;
+    const director = current.find(node => node.id === directorNodeId);
+    if (!director) throw new Error('找不到火柴人导演节点');
+    // The backend intentionally normalizes reference-video runs to
+    // sourceType === 'script' (analysis is only script material), so the
+    // comparison view must be driven by the caller's topology flag, not by
+    // output.sourceType, or the "对照组" branch is unreachable.
+    const storyboardType = referenceDerived ? NodeType.STORYBOARD_COMPARE : NodeType.STORYBOARD;
+    const storyboard = current.find(node => node.parentIds?.includes(directorNodeId)
+      && [NodeType.STORYBOARD, NodeType.STORYBOARD_COMPARE].includes(node.type));
+    const storyboardId = storyboard?.id || crypto.randomUUID();
+    const batch = current.find(node => node.parentIds?.includes(storyboardId) && node.type === NodeType.FLOW_BATCH_VIDEO);
+    const batchId = batch?.id || crypto.randomUUID();
+    const merge = current.find(node => node.parentIds?.includes(batchId) && node.type === NodeType.VIDEO_MERGE);
+    const mergeId = merge?.id || crypto.randomUUID();
+    const defaultModel = listVideoGenerationProviders()[0]?.id;
+    const defaultResolution = listVideoGenerationProviders()[0]?.resolutions?.[0] || 'Auto';
+    const existingStoryboard = storyboard?.storyboard || { shots: [], expanded: false, status: 'idle' as const };
+    // Carry over already-generated (already-paid-for) videos for shots whose
+    // id and prompt are unchanged; reset the rest so re-planning never attaches
+    // a stale video to changed content.
+    const plannedShots = mergeStickmanShotsPreservingGeneration(existingStoryboard.shots, output.shots);
+    const existingBatch = batch?.flowBatch || {
+      modelId: defaultModel, resolution: defaultResolution, concurrency: 2 as const,
+      aspectRatio: output.global.aspectRatio, width: output.global.width, height: output.global.height,
+      duration: output.shots[0]?.duration || 8, nativeAudio: output.global.audioEnabled,
+      autoRetry: true, maxRetries: 1, continueOnFailure: true, autoMerge: false,
+      status: 'idle' as const, tasks: [],
+    };
+    const tasks = plannedShots.map(shot => ({
+      shotId: shot.id,
+      taskId: shot.generation.taskId || crypto.randomUUID(),
+      status: shot.generation.status === 'completed' ? 'success' as const : 'waiting' as const,
+      retryCount: shot.generation.retryCount || 0,
+      ...(shot.generation.videoUrl ? { resultUrl: shot.generation.videoUrl } : {}),
+    }));
+    const additions: NodeData[] = [];
+    if (!storyboard) additions.push({
+      id: storyboardId,
+      type: storyboardType,
+      title: referenceDerived ? '分镜对照组' : '分镜列表',
+      x: director.x + 520,
+      y: director.y,
+      prompt: '', status: NodeStatus.IDLE, model: 'stickman-director',
+      aspectRatio: output.global.aspectRatio, resolution: 'Auto', parentIds: [directorNodeId],
+      storyboard: { shots: plannedShots, expanded: false, compareMode: referenceDerived, status: 'ready' },
+    });
+    if (!batch) additions.push({
+      id: batchId,
+      type: NodeType.FLOW_BATCH_VIDEO,
+      title: 'Flow 视频生成', x: (storyboard?.x || director.x + 520) + 520, y: storyboard?.y || director.y,
+      prompt: '', status: NodeStatus.IDLE, model: defaultModel || 'flow', aspectRatio: output.global.aspectRatio,
+      resolution: 'Auto', parentIds: [storyboardId],
+      flowBatch: {
+        modelId: defaultModel, resolution: defaultResolution, concurrency: 2, aspectRatio: output.global.aspectRatio,
+        width: output.global.width, height: output.global.height, duration: output.shots[0]?.duration || 8,
+        nativeAudio: output.global.audioEnabled, autoRetry: true, maxRetries: 1,
+        continueOnFailure: true, autoMerge: false, status: 'idle', tasks,
+      },
+    });
+    if (!merge) additions.push({
+      id: mergeId,
+      type: NodeType.VIDEO_MERGE,
+      title: '视频拼接', x: (batch?.x || (storyboard?.x || director.x + 520) + 520) + 520, y: batch?.y || storyboard?.y || director.y,
+      prompt: '', status: NodeStatus.IDLE, model: 'remotion', aspectRatio: output.global.aspectRatio,
+      resolution: 'Auto', parentIds: [batchId],
+      videoMerge: { status: 'idle', outputFormat: 'mp4', fps: 30, skipFailed: true },
+    });
+
+    setNodes(previous => {
+      const next = previous.map(node => {
+        if (node.id === storyboardId) {
+          return {
+            ...node,
+            type: storyboardType,
+            title: referenceDerived ? '分镜对照组' : (node.title || '分镜列表'),
+            storyboard: { ...existingStoryboard, shots: plannedShots, compareMode: referenceDerived, status: 'ready' as const, error: undefined },
+          };
+        }
+        if (node.id === batchId) {
+          return {
+            ...node,
+            flowBatch: {
+              ...existingBatch,
+              aspectRatio: output.global.aspectRatio,
+              width: output.global.width,
+              height: output.global.height,
+              duration: output.shots[0]?.duration || existingBatch.duration,
+              tasks,
+              error: undefined,
+            },
+          };
+        }
+        if (node.id === mergeId && !node.videoMerge) {
+          return { ...node, videoMerge: { status: 'idle' as const, outputFormat: 'mp4' as const, fps: 30, skipFailed: true } };
+        }
+        return node;
+      });
+      return [...next, ...additions.filter(node => !next.some(item => item.id === node.id))];
+    });
+    return { storyboardId, batchId, mergeId };
+  }, [setNodes]);
+
+  const handleRunStickmanDirector = React.useCallback(async (directorNodeId: string) => {
+    if (!canvasEditLock.guard()) return;
+    if (!workflowId) {
+      showToast('请先新建或打开项目', { tone: 'error' });
+      return;
+    }
+    const current = nodesRef.current;
+    const directorNode = current.find(node => node.id === directorNodeId && node.type === NodeType.STICKMAN_DIRECTOR);
+    if (!directorNode) return;
+    const parents = (directorNode.parentIds || [])
+      .map(id => current.find(node => node.id === id))
+      .filter((node): node is NodeData => Boolean(node));
+    const analysisNode = parents.find(node => node.type === NodeType.VIDEO_ANALYSIS);
+    const scriptNode = parents.find(node => node.type === NodeType.SCRIPT_INPUT);
+    const parentOf = (node: NodeData | undefined, types: NodeType[]) => (node?.parentIds || [])
+      .map(id => current.find(item => item.id === id))
+      .find(item => item && types.includes(item.type));
+    const analysisInputRefs: Partial<VideoAnalysisNodeData['inputRefs']> = analysisNode?.videoAnalysis?.inputRefs || {};
+    const sourceNode = parents.find(node => node.type === NodeType.VIDEO || node.type === NodeType.REFERENCE_VIDEO)
+      || parentOf(scriptNode, [NodeType.VIDEO, NodeType.REFERENCE_VIDEO])
+      || (analysisInputRefs.videoNodeId ? current.find(node => node.id === analysisInputRefs.videoNodeId) : undefined)
+      || parentOf(analysisNode, [NodeType.VIDEO, NodeType.REFERENCE_VIDEO]);
+
+    let scriptInput = directorNode.director?.scriptInput;
+    let analysisState = directorNode.director?.analysis;
+    if (!scriptInput?.content && analysisNode?.videoAnalysis?.result) {
+      scriptInput = createStickmanScriptFromAnalysis(analysisNode.videoAnalysis.result, {
+        settings: directorNode.director || { ...normalizeStickmanSettings({}), provider: 'auto' as const, status: 'idle' as const },
+        title: sourceNode?.title || '参考视频分析剧本',
+      });
+      analysisState = analysisNode.videoAnalysis;
+    }
+    if (!scriptInput?.content && (scriptNode?.scriptInput?.content || scriptNode?.prompt)) {
+      const sourceScript = scriptNode.scriptInput;
+      const scriptSettings = normalizeStickmanSettings({
+        aspectRatio: sourceScript?.aspectRatio,
+        width: sourceScript?.width,
+        height: sourceScript?.height,
+        totalDuration: sourceScript?.totalDuration,
+        shotCount: sourceScript?.shotCount,
+        durationPerShot: sourceScript?.durationPerShot,
+      });
+      scriptInput = {
+        title: sourceScript?.title || scriptNode.title || '未命名剧本',
+        content: sourceScript?.content || scriptNode.prompt || '',
+        notes: sourceScript?.notes || '',
+        platform: sourceScript?.platform || scriptSettings.platform,
+        aspectRatio: sourceScript?.aspectRatio || scriptSettings.aspectRatio,
+        width: sourceScript?.width || scriptSettings.width,
+        height: sourceScript?.height || scriptSettings.height,
+        totalDuration: sourceScript?.totalDuration || scriptSettings.totalDuration,
+        shotCount: sourceScript?.shotCount || scriptSettings.shotCount,
+        durationPerShot: sourceScript?.durationPerShot || scriptSettings.durationPerShot,
+      };
+    }
+    if (!scriptInput?.content && sourceNode?.resultUrl) {
+      try {
+        const analyzed = await analyzeStickmanReferenceVideo(
+          directorNodeId,
+          sourceNode,
+          analysisInputRefs,
+          scriptNode?.id,
+        );
+        scriptInput = analyzed.scriptInput;
+        analysisState = analyzed.analysis;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '参考视频分析失败';
+        showToast(message, { tone: 'error', duration: 6500 });
+        return;
+      }
+    }
+    if (!scriptInput?.content) {
+      showToast('请填写剧本，或准备参考视频供视频分析生成剧本', { tone: 'error' });
+      return;
+    }
+
+    const refreshedDirector = nodesRef.current.find(node => node.id === directorNodeId);
+    const baseDirectorState = refreshedDirector?.director || directorNode.director || { ...normalizeStickmanSettings({}), provider: 'auto' as const, status: 'idle' as const };
+    const scriptDefaults = scriptNode?.scriptInput?.content ? scriptNode.scriptInput : scriptInput;
+    const directorState = scriptDefaults && !baseDirectorState.output
+      ? {
+        ...baseDirectorState,
+        platform: scriptDefaults.platform || baseDirectorState.platform,
+        aspectRatio: scriptDefaults.aspectRatio || baseDirectorState.aspectRatio,
+        width: scriptDefaults.width || baseDirectorState.width,
+        height: scriptDefaults.height || baseDirectorState.height,
+        totalDuration: scriptDefaults.totalDuration || baseDirectorState.totalDuration,
+        shotCount: scriptDefaults.shotCount || baseDirectorState.shotCount,
+        durationPerShot: scriptDefaults.durationPerShot || baseDirectorState.durationPerShot,
+      }
+      : baseDirectorState;
+    const sourceType = 'script' as const;
+    const input = {
+      title: scriptInput.title,
+      content: scriptInput.content,
+      notes: scriptInput.notes || '',
+    };
+    setNodes(previous => previous.map(node => node.id === directorNodeId
+      ? { ...node, status: NodeStatus.LOADING, director: { ...directorState, sourceType, scriptInput, analysis: analysisState, status: 'running', error: undefined } }
+      : node));
+    try {
+      const result = await runStickmanDirector({
+        sourceType,
+        input,
+        settings: directorState,
+        provider: directorState.provider,
+        allowFallback: true,
+      });
+      setNodes(previous => previous.map(node => node.id === directorNodeId
+        ? { ...node, status: NodeStatus.SUCCESS, prompt: JSON.stringify(result.output), director: { ...directorState, sourceType, scriptInput, analysis: analysisState, status: 'completed', output: result.output, repaired: result.repaired, fallback: result.fallback, error: undefined } }
+        : node));
+      // Reference-derived runs come from a connected video / analysis node even
+      // though the backend reports sourceType 'script'; this drives the 对照组 view.
+      const referenceDerived = Boolean(analysisNode || sourceNode || analysisState);
+      const pipeline = ensureStickmanPipeline(directorNodeId, result.output, referenceDerived);
+      setSelectedNodeIds([pipeline.storyboardId]);
+      showToast(`已生成 ${result.output.shots.length} 个火柴人分镜`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '火柴人导演执行失败';
+      setNodes(previous => previous.map(node => node.id === directorNodeId
+        ? { ...node, status: NodeStatus.ERROR, director: { ...directorState, sourceType, scriptInput, analysis: analysisState, status: 'failed', error: message } }
+        : node));
+      showToast(message, { tone: 'error', duration: 6500 });
+    }
+  }, [analyzeStickmanReferenceVideo, canvasEditLock, ensureStickmanPipeline, setNodes, setSelectedNodeIds, showToast, workflowId]);
+
+  const ensureStickmanBatchNode = React.useCallback((storyboardId: string) => {
+    const current = nodesRef.current;
+    const storyboard = current.find(node => node.id === storyboardId);
+    if (!storyboard) return null;
+    const existing = current.find(node => node.type === NodeType.FLOW_BATCH_VIDEO && node.parentIds?.includes(storyboardId));
+    if (existing) return existing;
+    const id = crypto.randomUUID();
+    const modelId = listVideoGenerationProviders()[0]?.id;
+    const resolution = listVideoGenerationProviders()[0]?.resolutions?.[0] || 'Auto';
+    const shots = storyboard.storyboard?.shots || [];
+    const node: NodeData = {
+      id, type: NodeType.FLOW_BATCH_VIDEO, title: 'Flow 视频生成', x: storyboard.x + 520, y: storyboard.y,
+      prompt: '', status: NodeStatus.IDLE, model: modelId || 'flow', aspectRatio: shots[0]?.aspectRatio || '9:16', resolution: 'Auto', parentIds: [storyboardId],
+      flowBatch: { modelId, resolution, concurrency: 2, aspectRatio: shots[0]?.aspectRatio || '9:16', width: shots[0]?.width || 1080, height: shots[0]?.height || 1920, duration: shots[0]?.duration || 8, nativeAudio: true, autoRetry: true, maxRetries: 1, continueOnFailure: true, autoMerge: false, status: 'idle', tasks: [] },
+    };
+    setNodes(previous => [...previous, node]);
+    return node;
+  }, [setNodes]);
+
+  const generateStickmanShots = React.useCallback(async (storyboardId: string, shotIds?: string[]) => {
+    if (!canvasEditLock.guard()) return;
+    if (!workflowId) {
+      showToast('请先新建或打开项目', { tone: 'error' });
+      return;
+    }
+    const current = nodesRef.current;
+    const storyboardNode = current.find(node => node.id === storyboardId && [NodeType.STORYBOARD, NodeType.STORYBOARD_COMPARE].includes(node.type));
+    if (!storyboardNode?.storyboard?.shots.length) {
+      showToast('当前没有可生成的分镜', { tone: 'error' });
+      return;
+    }
+    const batchNode = ensureStickmanBatchNode(storyboardId) || nodesRef.current.find(node => node.type === NodeType.FLOW_BATCH_VIDEO && node.parentIds?.includes(storyboardId));
+    if (!batchNode) return;
+    const batchState = batchNode.flowBatch || {
+      modelId: listVideoGenerationProviders()[0]?.id,
+      concurrency: 2, aspectRatio: storyboardNode.storyboard.shots[0].aspectRatio,
+      width: storyboardNode.storyboard.shots[0].width, height: storyboardNode.storyboard.shots[0].height,
+      duration: storyboardNode.storyboard.shots[0].duration, nativeAudio: true, autoRetry: true, maxRetries: 1,
+      continueOnFailure: true, autoMerge: false, status: 'idle' as const, tasks: [],
+    };
+    const shotIdSet = shotIds ? new Set(shotIds) : null;
+    const targets = storyboardNode.storyboard.shots.filter(shot => shotIdSet
+      ? shotIdSet.has(shot.id)
+      : shot.generation.status !== 'completed');
+    if (!targets.length) {
+      showToast('没有待生成镜头；已完成镜头不会自动重复扣费');
+      return;
+    }
+    const taskSeed = targets.map(shot => {
+      const existing = batchState.tasks?.find(task => task.shotId === shot.id);
+      return { shotId: shot.id, taskId: existing?.taskId || crypto.randomUUID(), status: 'waiting' as const, retryCount: existing?.retryCount || 0 };
+    });
+    setNodes(previous => previous.map(node => {
+      if (node.id === batchNode.id) return { ...node, flowBatch: { ...batchState, status: 'running', error: undefined, tasks: [...(batchState.tasks || []).filter(task => !targets.some(shot => shot.id === task.shotId)), ...taskSeed] } };
+      if (node.id === storyboardId && node.storyboard) return { ...node, storyboard: { ...node.storyboard, status: 'generating', error: undefined, shots: node.storyboard.shots.map(shot => targets.some(item => item.id === shot.id) ? { ...shot, generation: { ...shot.generation, status: 'queued', error: undefined } } : shot) } };
+      return node;
+    }));
+
+    let cursor = 0;
+    const results: Array<'success' | 'failed' | 'cancelled'> = [];
+    const outcomes = new Map<string, StickmanShot['generation']['status']>();
+    const updateProgress = (shotId: string, generation: Partial<StickmanShot['generation']>, taskPatch: Partial<NonNullable<typeof batchState.tasks>[number]>) => {
+      setNodes(previous => previous.map(node => {
+        if (node.id === batchNode.id && node.flowBatch) {
+          return { ...node, flowBatch: { ...node.flowBatch, tasks: node.flowBatch.tasks.map(task => task.shotId === shotId ? { ...task, ...taskPatch } : task) } };
+        }
+        if (node.id === storyboardId && node.storyboard) {
+          return { ...node, storyboard: { ...node.storyboard, shots: node.storyboard.shots.map(shot => shot.id === shotId ? { ...shot, generation: { ...shot.generation, ...generation } } : shot) } };
+        }
+        return node;
+      }));
+    };
+    const process = async (shot: StickmanShot) => {
+      const seed = taskSeed.find(task => task.shotId === shot.id)!;
+      let retryCount = seed.retryCount;
+      while (true) {
+        updateProgress(shot.id, { status: 'generating', progress: 0, retryCount, error: undefined }, { status: 'generating', retryCount, progress: 0 });
+        try {
+          const resultUrl = await generateStickmanShotVideo({
+            workflowId,
+            shot,
+            modelId: batchState.modelId || listVideoGenerationProviders()[0]?.id || 'google-flow-omni-flash',
+            nodeId: seed.taskId,
+            nativeAudio: batchState.nativeAudio,
+            resolution: batchState.resolution,
+          });
+          updateProgress(shot.id, { status: 'completed', progress: 1, videoUrl: `${resultUrl}?t=${Date.now()}`, taskId: seed.taskId, error: undefined }, { status: 'success', retryCount, progress: 1, resultUrl: `${resultUrl}?t=${Date.now()}`, error: undefined });
+          results.push('success');
+          outcomes.set(shot.id, 'completed');
+          return;
+        } catch (error) {
+          const submitted = Boolean((error as { submitted?: boolean })?.submitted);
+          if (batchState.autoRetry && !submitted && retryCount < batchState.maxRetries) {
+            retryCount += 1;
+            continue;
+          }
+          const message = error instanceof Error ? error.message : '镜头生成失败';
+          updateProgress(shot.id, { status: 'failed', error: message, retryCount }, { status: 'failed', retryCount, error: message });
+          results.push('failed');
+          outcomes.set(shot.id, 'failed');
+          return;
+        }
+      }
+    };
+    const worker = async () => {
+      while (true) {
+        const index = cursor++;
+        if (index >= targets.length) return;
+        await process(targets[index]);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(batchState.concurrency || 2, targets.length) }, () => worker()));
+    // Roll up from the full shot list (this round's outcomes layered over the
+    // shots that were already generated / still pending) so a partial run never
+    // reports "全部完成" while other shots remain unfinished.
+    const finalShots = (storyboardNode.storyboard?.shots || []).map(shot => {
+      const outcome = outcomes.get(shot.id);
+      return outcome ? { ...shot, generation: { ...shot.generation, status: outcome } } : shot;
+    });
+    const rollup = rollupStickmanGenerationStatus(finalShots);
+    setNodes(previous => previous.map(node => {
+      if (node.id === batchNode.id && node.flowBatch) return { ...node, flowBatch: { ...node.flowBatch, status: rollup.batchStatus === 'ready' ? 'idle' : rollup.batchStatus, tasks: node.flowBatch.tasks } };
+      if (node.id === storyboardId && node.storyboard) return { ...node, storyboard: { ...node.storyboard, status: rollup.storyboardStatus } };
+      return node;
+    }));
+    const roundFailures = results.filter(result => result === 'failed').length;
+    showToast(
+      rollup.batchStatus === 'completed'
+        ? `已完成全部 ${rollup.total} 个镜头`
+        : `本轮完成，成功 ${results.filter(result => result === 'success').length} 个${roundFailures ? `，失败 ${roundFailures} 个` : ''}（共 ${rollup.total}，已生成 ${rollup.completed}）`,
+      { tone: roundFailures ? 'error' : 'info' },
+    );
+  }, [canvasEditLock, ensureStickmanBatchNode, setNodes, showToast, workflowId]);
+
+  const handleGenerateStickmanShot = React.useCallback((storyboardId: string, shotId: string) => {
+    void generateStickmanShots(storyboardId, [shotId]);
+  }, [generateStickmanShots]);
+
+  const handleBatchGenerateStickman = React.useCallback((nodeId: string) => {
+    const current = nodesRef.current.find(node => node.id === nodeId);
+    const storyboardId = current?.type === NodeType.FLOW_BATCH_VIDEO
+      ? current.parentIds?.find(parentId => nodesRef.current.some(node => node.id === parentId && [NodeType.STORYBOARD, NodeType.STORYBOARD_COMPARE].includes(node.type)))
+      : current?.type === NodeType.STORYBOARD || current?.type === NodeType.STORYBOARD_COMPARE ? nodeId : undefined;
+    if (storyboardId) void generateStickmanShots(storyboardId);
+  }, [generateStickmanShots]);
+
+  const handleRetryStickmanFailed = React.useCallback((nodeId: string) => {
+    const current = nodesRef.current.find(node => node.id === nodeId);
+    const storyboardId = current?.type === NodeType.FLOW_BATCH_VIDEO
+      ? current.parentIds?.find(parentId => nodesRef.current.some(node => node.id === parentId && [NodeType.STORYBOARD, NodeType.STORYBOARD_COMPARE].includes(node.type)))
+      : current?.type === NodeType.STORYBOARD || current?.type === NodeType.STORYBOARD_COMPARE ? nodeId : undefined;
+    const storyboard = storyboardId ? nodesRef.current.find(node => node.id === storyboardId) : undefined;
+    const failed = storyboard?.storyboard?.shots.filter(shot => shot.generation.status === 'failed').map(shot => shot.id) || [];
+    if (storyboardId && failed.length) void generateStickmanShots(storyboardId, failed);
+  }, [generateStickmanShots]);
+
+  const handleMergeStickmanVideos = React.useCallback(async (mergeNodeId: string) => {
+    if (!canvasEditLock.guard()) return;
+    if (!workflowId) {
+      showToast('请先新建或打开项目', { tone: 'error' });
+      return;
+    }
+    const current = nodesRef.current;
+    const mergeNode = current.find(node => node.id === mergeNodeId && node.type === NodeType.VIDEO_MERGE);
+    const batchNode = mergeNode?.parentIds?.map(id => current.find(node => node.id === id)).find(node => node?.type === NodeType.FLOW_BATCH_VIDEO);
+    const storyboardNode = batchNode?.parentIds?.map(id => current.find(node => node.id === id)).find(node => node && [NodeType.STORYBOARD, NodeType.STORYBOARD_COMPARE].includes(node.type));
+    const shots = storyboardNode?.storyboard?.shots || [];
+    const directorNode = storyboardNode?.parentIds?.map(id => current.find(node => node.id === id)).find(node => node?.type === NodeType.STICKMAN_DIRECTOR);
+    if (!mergeNode || !batchNode || !storyboardNode || !shots.some(shot => shot.generation.status === 'completed' && shot.generation.videoUrl)) {
+      showToast('请先完成至少一个镜头生成', { tone: 'error' });
+      return;
+    }
+    const mergeState = mergeNode.videoMerge || { status: 'idle' as const, outputFormat: 'mp4' as const, fps: 30, skipFailed: true };
+    const output = directorNode?.director?.output;
+    setNodes(previous => previous.map(node => node.id === mergeNodeId ? { ...node, videoMerge: { ...mergeState, status: 'queued', error: undefined } } : node));
+    try {
+      const job = await submitStickmanMerge({
+        workflowId,
+        title: directorNode?.title || '火柴人视频成片',
+        shots: shots.map(shot => ({ id: shot.id, order: shot.order, title: shot.title, duration: shot.duration, videoUrl: shot.generation.videoUrl, status: shot.generation.status, transition: shot.visual.transition })),
+        width: output?.global.width || shots[0].width,
+        height: output?.global.height || shots[0].height,
+        fps: mergeState.fps,
+        skipFailed: mergeState.skipFailed,
+      });
+      setNodes(previous => previous.map(node => node.id === mergeNodeId ? { ...node, videoMerge: { ...mergeState, status: job.status === 'success' ? 'success' : 'rendering', jobId: job.jobId } } : node));
+      let status = job;
+      while (['queued', 'rendering'].includes(status.status)) {
+        await new Promise(resolve => window.setTimeout(resolve, 1500));
+        status = await getStickmanMergeJob(job.jobId);
+        setNodes(previous => previous.map(node => node.id === mergeNodeId ? { ...node, videoMerge: { ...mergeState, status: status.status === 'success' ? 'success' : status.status === 'failed' ? 'failed' : status.status === 'cancelled' ? 'cancelled' : 'rendering', jobId: job.jobId, outputUrl: status.output || undefined, error: status.error || undefined } } : node));
+      }
+      if (status.status !== 'success') throw new Error(status.error || '视频拼接失败');
+      showToast('最终视频已拼接完成');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '视频拼接失败';
+      setNodes(previous => previous.map(node => node.id === mergeNodeId ? { ...node, videoMerge: { ...mergeState, status: 'failed', error: message } } : node));
+      showToast(message, { tone: 'error', duration: 6500 });
+    }
+  }, [canvasEditLock, setNodes, showToast, workflowId]);
 
   const handleLockVideoAnalysisAssetMain = React.useCallback((nodeId: string) => {
     if (!canvasEditLock.guard()) return;
@@ -2164,9 +2547,6 @@ export default function App() {
       const parent = parentId ? byId.get(parentId) : undefined;
       if (!parent) {
         map.set(node.id, undefined);
-      } else if (node.type === NodeType.VIDEO_EDITOR && parent.type === NodeType.VIDEO) {
-        // VIDEO_EDITOR nodes need the actual video URL from parent Video node
-        map.set(node.id, parent.resultUrl);
       } else if (parent.type === NodeType.VIDEO && parent.lastFrame) {
         // For other nodes, if parent is video, use lastFrame for image preview
         map.set(node.id, parent.lastFrame);
@@ -2217,6 +2597,7 @@ export default function App() {
     handleAnalyzeVideoNode,
     handleGenerateVideoAnalysisAssets,
     handleLockVideoAnalysisAssetMain,
+    handleAnalyzeStickmanScript,
     handleNodeContextMenu,
     handleConnectorPointerDown,
     handleOpenEditor,
@@ -2230,6 +2611,11 @@ export default function App() {
     handleChangeAngleGenerate,
     handleExtractLastFrame,
     handleAutoSubtitle,
+    handleRunStickmanDirector,
+    handleGenerateStickmanShot,
+    handleBatchGenerateStickman,
+    handleRetryStickmanFailed,
+    handleMergeStickmanVideos,
     handleDuplicate,
     handleNodePointerDown,
     setSelectedNodeIds,
@@ -2254,6 +2640,7 @@ export default function App() {
     onAnalyzeVideo: (id: string) => nodeCallbacksRef.current.handleAnalyzeVideoNode(id),
     onGenerateVideoAnalysisAssets: (id: string) => nodeCallbacksRef.current.handleGenerateVideoAnalysisAssets(id),
     onLockVideoAnalysisAssetMain: (id: string) => nodeCallbacksRef.current.handleLockVideoAnalysisAssetMain(id),
+    onAnalyzeStickmanScript: (id: string) => nodeCallbacksRef.current.handleAnalyzeStickmanScript(id),
     onSelect: (id: string) => {
       setSelectedConnection(null);
       nodeCallbacksRef.current.setSelectedNodeIds([id]);
@@ -2271,6 +2658,11 @@ export default function App() {
       nodeCallbacksRef.current.handleChangeAngleGenerate(id),
     onExtractLastFrame: (id: string) => nodeCallbacksRef.current.handleExtractLastFrame(id),
     onAutoSubtitle: (id: string) => nodeCallbacksRef.current.handleAutoSubtitle(id),
+    onRunStickmanDirector: (id: string) => nodeCallbacksRef.current.handleRunStickmanDirector(id),
+    onGenerateStickmanShot: (storyboardId: string, shotId: string) => nodeCallbacksRef.current.handleGenerateStickmanShot(storyboardId, shotId),
+    onBatchGenerateStickman: (id: string) => nodeCallbacksRef.current.handleBatchGenerateStickman(id),
+    onRetryStickmanFailed: (id: string) => nodeCallbacksRef.current.handleRetryStickmanFailed(id),
+    onMergeStickmanVideos: (id: string) => nodeCallbacksRef.current.handleMergeStickmanVideos(id),
     onNodePointerDown: (e: React.PointerEvent, id: string) => {
       setSelectedConnection(null);
       const current = nodeCallbacksRef.current;
@@ -2302,7 +2694,7 @@ export default function App() {
 
   return (
     <div className={`w-screen h-screen ${canvasTheme === 'dark' ? 'bg-[#050505] text-white' : 'bg-neutral-50 text-neutral-900'} overflow-hidden select-none font-sans transition-colors duration-300`}>
-      {!storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
+      {!isTikTokModalOpen && (
         <ProjectSidebar
           nodes={nodes}
           groups={groups}
@@ -2319,7 +2711,6 @@ export default function App() {
           onOpenHistory={handleHistoryClick}
           onOpenAssets={handleAssetsClick}
           onPreviewAsset={handleSidebarAssetPreview}
-          onOpenStoryboard={storyboardGenerator.openModal}
           onCreateProject={handleRequestNewProject}
           onDeleteProject={handleDeleteCurrentProject}
           onRevealProject={revealCurrentProject}
@@ -2401,27 +2792,9 @@ export default function App() {
         onVideoImported={handleTikTokVideoImported}
       />
 
-      {/* Storyboard Generator Modal */}
-      <StoryboardGeneratorModal
-        isOpen={storyboardGenerator.isModalOpen}
-        onClose={storyboardGenerator.closeModal}
-        state={storyboardGenerator.state}
-        onSetStep={storyboardGenerator.setStep}
-        onToggleCharacter={storyboardGenerator.toggleCharacter}
-        onSetSceneCount={storyboardGenerator.setSceneCount}
-        onSetStory={storyboardGenerator.setStory}
-        onUpdateScript={storyboardGenerator.updateScript}
-        onGenerateScripts={storyboardGenerator.generateScripts}
-        onBrainstormStory={storyboardGenerator.brainstormStory}
-        onOptimizeStory={storyboardGenerator.optimizeStory}
-        onGenerateComposite={storyboardGenerator.generateComposite}
-        onRegenerateComposite={storyboardGenerator.regenerateComposite}
-        onCreateNodes={storyboardGenerator.createStoryboardNodes}
-      />
-
       {/* Top Bar */}
       {/* Top Bar */}
-      {!storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
+      {!isTikTokModalOpen && (
         <TopBar
           canvasTitle={canvasTitle}
           isEditingTitle={isEditingTitle}
@@ -2546,6 +2919,7 @@ export default function App() {
                 onAnalyzeVideo={stableNodeHandlers.onAnalyzeVideo}
                 onGenerateVideoAnalysisAssets={stableNodeHandlers.onGenerateVideoAnalysisAssets}
                 onLockVideoAnalysisAssetMain={stableNodeHandlers.onLockVideoAnalysisAssetMain}
+                onAnalyzeStickmanScript={stableNodeHandlers.onAnalyzeStickmanScript}
                 onOpenEditor={stableNodeHandlers.onOpenEditor}
                 onUpload={stableNodeHandlers.onUpload}
                 onExpand={stableNodeHandlers.onExpand}
@@ -2557,6 +2931,11 @@ export default function App() {
                 onChangeAngleGenerate={stableNodeHandlers.onChangeAngleGenerate}
                 onExtractLastFrame={stableNodeHandlers.onExtractLastFrame}
                 onAutoSubtitle={stableNodeHandlers.onAutoSubtitle}
+                onRunStickmanDirector={stableNodeHandlers.onRunStickmanDirector}
+                onGenerateStickmanShot={stableNodeHandlers.onGenerateStickmanShot}
+                onBatchGenerateStickman={stableNodeHandlers.onBatchGenerateStickman}
+                onRetryStickmanFailed={stableNodeHandlers.onRetryStickmanFailed}
+                onMergeStickmanVideos={stableNodeHandlers.onMergeStickmanVideos}
                 zoom={viewport.zoom}
                 onMouseEnter={handleNodeMouseEnter}
                 onMouseLeave={handleNodeMouseLeave}
@@ -2590,7 +2969,6 @@ export default function App() {
                 const group = getCommonGroup(selectedNodeIds);
                 if (group) sortGroupNodes(group.id, direction, nodes, setNodes);
               }}
-              onEditStoryboard={handleEditStoryboard}
             />
           )}
 
@@ -2625,12 +3003,6 @@ export default function App() {
                 }}
                 onRenameGroup={renameGroup}
                 onSortNodes={(direction) => sortGroupNodes(group.id, direction, nodes, setNodes)}
-                onCreateVideo={() => {
-                  // Pass group nodes directly to avoid selection state race conditions
-                  const groupNodeIds = nodes.filter(n => n.groupId === group.id).map(n => n.id);
-                  handleCreateStoryboardVideo(groupNodeIds);
-                }}
-                onEditStoryboard={handleEditStoryboard}
               />
             );
           })}
@@ -2669,11 +3041,11 @@ export default function App() {
         onUseAsReferenceVideo={() => void handleUseCanvasVideoAsReference()}
         canUseAsReferenceVideo={nodes.some(node =>
           node.id === contextMenu.sourceNodeId
-          && node.type === NodeType.VIDEO
+          && (node.type === NodeType.VIDEO || node.type === NodeType.REFERENCE_VIDEO)
           && Boolean(node.resultUrl)
         )}
+        onCreateStickmanWorkflow={handleCreateStickmanWorkflow}
         onAddAssets={handleContextMenuAddAssets}
-        onOpenStoryboard={storyboardGenerator.openModal}
         onOpenHistory={handleContextMenuOpenHistory}
         canUndo={canUndo}
         canRedo={canRedo}
@@ -2681,7 +3053,7 @@ export default function App() {
       />
 
       {/* Canvas navigation controls */}
-      {!storyboardGenerator.isModalOpen && !isTikTokModalOpen && (
+      {!isTikTokModalOpen && (
         <div
           className="fixed bottom-6 z-50 flex flex-col items-start gap-2 transition-all duration-300"
           style={{ left: (sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH) + 24 }}
@@ -2896,26 +3268,6 @@ export default function App() {
           });
         }}
         onUpdate={updateNode}
-      />
-
-      {/* Storyboard Video Generation Modal */}
-      <StoryboardVideoModal
-        isOpen={storyboardVideoModal.isOpen}
-        onClose={() => setStoryboardVideoModal(prev => ({ ...prev, isOpen: false }))}
-        scenes={storyboardVideoModal.nodes}
-        storyContext={storyboardVideoModal.storyContext}
-        onCreateVideos={handleGenerateStoryVideos}
-      />
-
-      {/* Video Editor Modal */}
-      <VideoEditorModal
-        isOpen={videoEditorModal.isOpen}
-        nodeId={videoEditorModal.nodeId}
-        videoUrl={videoEditorModal.videoUrl}
-        initialTrimStart={nodes.find(n => n.id === videoEditorModal.nodeId)?.trimStart}
-        initialTrimEnd={nodes.find(n => n.id === videoEditorModal.nodeId)?.trimEnd}
-        onClose={handleCloseVideoEditor}
-        onExport={handleExportTrimmedVideo}
       />
 
       {/* Fullscreen Media Preview Modal */}

@@ -12,10 +12,8 @@ import fsp from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
-import { spawn } from 'child_process';
 import generationRoutes from './routes/generation.js';
 import { processTikTokVideo, isValidTikTokUrl } from './tools/tiktok.js';
-import storyboardRoutes from './routes/storyboard.js';
 import audioRoutes from './routes/audio.js';
 import renderRoutes from './routes/render.js';
 import autoSubtitleRoutes from './routes/auto-subtitles.js';
@@ -23,12 +21,12 @@ import codexImageJobRoutes from './routes/codex-image-jobs.js';
 import settingsRoutes from './routes/settings.js';
 import videoRemixRoutes from './routes/video-remix.js';
 import videoAnalysisRoutes from './routes/video-analysis.js';
+import stickmanDirectorRoutes from './routes/stickman-director.js';
 import { applyApiKeysToApp, loadApiKeyOverrides } from './services/apiKeyStore.js';
 import { normalizeCharacterAssetMeta } from './services/characterAssets.js';
 import { createUniqueAssetFilename } from './services/assetFilenames.js';
 import { createCodexImageAutomation } from './services/codexImageAutomation.js';
 import { createCodexIntegration } from './services/codexIntegration.js';
-import { decodeProcessOutput } from './utils/processOutput.js';
 import { scanAssetLibrary } from './utils/scanAssetLibrary.js';
 import {
     organizeWorkflowAssets,
@@ -89,7 +87,6 @@ import {
 } from './utils/workflowVideoRemixMigration.js';
 import { MASSAGE_EQUIPMENT_NAMES } from '../shared/massageEquipmentCategories.js';
 import { RUNTIME_PATHS } from './runtime/paths.js';
-import { FFMPEG_PATH } from './runtime/mediaTools.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -337,9 +334,6 @@ app.use('/api/settings', settingsRoutes);
 
 // Mount Local Models routes (local open-source model discovery)
 
-// Mount Storyboard routes (AI script generation)
-app.use('/api/storyboard', storyboardRoutes);
-
 // Mount Audio routes (外部平台或本地音频导入)
 app.use('/api/audio', audioRoutes);
 
@@ -356,6 +350,8 @@ app.use('/api/video-remix', videoRemixRoutes);
 // Canvas-native video analysis reuses the Video Remix HTTP analyzer but writes
 // only the lightweight result consumed by ordinary canvas nodes.
 app.use('/api/video-analysis', videoAnalysisRoutes);
+// Internal Stickman Video Director skill, Flow batch orchestration and merge jobs.
+app.use('/api', stickmanDirectorRoutes);
 
 // --- Library Assets API ---
 
@@ -1694,7 +1690,6 @@ app.post('/api/prompt/describe-image', async (req, res) => {
 // System instruction is model-agnostic (shared/promptOptimizationProfiles.js); the backend is
 // chosen by PROMPT_OPTIMIZER_PROVIDER (default DeepSeek). Adding Claude / Codex = register a
 // provider in services/promptOptimizerProviders.js — this handler stays unchanged.
-// The old Gemini-named route remains as a compatibility alias for StoryboardVideoModal.
 const optimizePromptHandler = async (req, res) => {
     try {
         const { prompt, profileId = 'video', context = {} } = req.body;
@@ -2038,160 +2033,6 @@ app.post('/api/tiktok/validate', async (req, res) => {
         res.json({ valid, url });
     } catch (error) {
         res.status(500).json({ valid: false, error: error.message });
-    }
-});
-
-// ============================================================================
-// VIDEO TRIM API
-// ============================================================================
-
-/**
- * Check if FFmpeg is available on the system
- */
-async function isFFmpegAvailable() {
-    return new Promise((resolve) => {
-        const proc = spawn(FFMPEG_PATH, ['-version']);
-        proc.on('close', (code) => resolve(code === 0));
-        proc.on('error', () => resolve(false));
-    });
-}
-
-/**
- * Trim a video using FFmpeg
- * @param {string} inputPath - Input video path
- * @param {string} outputPath - Output video path
- * @param {number} startTime - Start time in seconds
- * @param {number} endTime - End time in seconds
- */
-async function trimVideoWithFFmpeg(inputPath, outputPath, startTime, endTime) {
-    return new Promise((resolve, reject) => {
-        const duration = endTime - startTime;
-
-        if (duration <= 0) {
-            reject(new Error('Invalid trim range: end time must be greater than start time'));
-            return;
-        }
-
-        const args = [
-            '-y',                           // Overwrite output
-            '-i', inputPath,                // Input file
-            '-ss', startTime.toString(),    // Start time
-            '-t', duration.toString(),      // Duration
-            '-c:v', 'libx264',              // Video codec
-            '-c:a', 'aac',                  // Audio codec
-            '-preset', 'fast',              // Encoding speed
-            '-crf', '23',                   // Quality (lower = better)
-            outputPath                       // Output file
-        ];
-
-        console.log(`[Video Trim] Running FFmpeg with args:`, args.join(' '));
-
-        const proc = spawn(FFMPEG_PATH, args);
-
-        const stderrChunks = [];
-        proc.stderr.on('data', (data) => {
-            stderrChunks.push(Buffer.from(data));
-        });
-
-        proc.on('close', (code) => {
-            if (code === 0) {
-                console.log(`[Video Trim] Successfully trimmed video`);
-                resolve();
-            } else {
-                const stderr = decodeProcessOutput(stderrChunks);
-                reject(new Error(`FFmpeg failed with code ${code}: ${stderr.slice(-500)}`));
-            }
-        });
-
-        proc.on('error', (err) => {
-            reject(new Error(`FFmpeg error: ${err.message}`));
-        });
-    });
-}
-
-/**
- * Trim a video and save to library
- * Accepts video URL (from library), start/end times, and saves trimmed video
- */
-app.post('/api/trim-video', async (req, res) => {
-    try {
-        const { videoUrl, startTime, endTime, nodeId } = req.body;
-
-        if (!videoUrl || startTime === undefined || endTime === undefined) {
-            return res.status(400).json({ error: 'videoUrl, startTime, and endTime are required' });
-        }
-
-        console.log(`[Video Trim] Request: ${videoUrl}, ${startTime}s to ${endTime}s`);
-
-        // Check if FFmpeg is available
-        const ffmpegAvailable = await isFFmpegAvailable();
-        if (!ffmpegAvailable) {
-            return res.status(500).json({
-                error: 'Evan 内置 FFmpeg 不可用，请重新安装或重新执行 npm install。'
-            });
-        }
-
-        // Strip query string from URL (e.g., ?t=123456 cache busters)
-        const cleanVideoUrl = videoUrl.split('?')[0];
-
-        // Resolve video path from URL
-        let inputPath;
-        if (cleanVideoUrl.startsWith('/library/videos/')) {
-            inputPath = path.join(VIDEOS_DIR, cleanVideoUrl.replace('/library/videos/', ''));
-        } else if (cleanVideoUrl.startsWith('http')) {
-            // For remote URLs, we'd need to download first - for now, only local library videos
-            return res.status(400).json({ error: 'Only local library videos can be trimmed' });
-        } else {
-            return res.status(400).json({ error: 'Invalid video URL format' });
-        }
-
-        // Check if input file exists
-        if (!fs.existsSync(inputPath)) {
-            console.error(`[Video Trim] Input file not found: ${inputPath}`);
-            return res.status(404).json({ error: 'Source video not found' });
-        }
-
-        // Generate unique output filename
-        const timestamp = Date.now();
-        const hash = crypto.randomBytes(4).toString('hex');
-        const outputFilename = `trimmed_${timestamp}_${hash}.mp4`;
-        const outputPath = path.join(VIDEOS_DIR, outputFilename);
-
-        // Trim the video
-        await trimVideoWithFFmpeg(inputPath, outputPath, startTime, endTime);
-
-        // Save metadata for history panel
-        const id = `${timestamp}_${hash}`;
-        const metaFilename = `${id}.json`;
-        const metadata = {
-            id,
-            filename: outputFilename,
-            prompt: `Trimmed video (${startTime.toFixed(1)}s - ${endTime.toFixed(1)}s)`,
-            model: 'video-editor',
-            sourceUrl: videoUrl,
-            trimStart: startTime,
-            trimEnd: endTime,
-            createdAt: new Date().toISOString(),
-            type: 'videos'
-        };
-        fs.writeFileSync(path.join(VIDEOS_DIR, metaFilename), JSON.stringify(metadata, null, 2));
-
-        const resultUrl = `/library/videos/${outputFilename}`;
-        console.log(`[Video Trim] Saved: ${resultUrl}`);
-
-        res.json({
-            success: true,
-            url: resultUrl,
-            filename: outputFilename,
-            duration: endTime - startTime
-        });
-
-    } catch (error) {
-        console.error('[Video Trim] Error:', error);
-        res.status(500).json({
-            error: error.message || 'Failed to trim video',
-            details: error.toString()
-        });
     }
 });
 

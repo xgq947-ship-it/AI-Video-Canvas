@@ -18,8 +18,6 @@ interface SelectionBoundingBoxProps {
     onBoundingBoxPointerDown: (e: React.PointerEvent) => void;
     onRenameGroup?: (groupId: string, newLabel: string) => void;
     onSortNodes?: (direction: 'horizontal' | 'vertical' | 'grid') => void;
-    onCreateVideo?: () => void;
-    onEditStoryboard?: (groupId: string) => void;
 }
 
 // ============================================================================
@@ -54,22 +52,11 @@ const getNodeWidth = (node: NodeData, allNodes?: NodeData[]): number => {
         return 340;
     }
 
-    // Video Editor with input: uses 16:9 aspect ratio with maxWidth 500px
-    if (node.type === NodeType.VIDEO_EDITOR) {
-        // Find parent node in the selection
-        const parentId = node.parentIds?.[0];
-        const parentNode = parentId ? allNodes?.find(n => n.id === parentId) : undefined;
-        if (parentNode?.resultUrl) {
-            return 500;
-        }
-        // Empty: width 340px
-        return 340;
-    }
-
     if (node.type === NodeType.VIDEO) return 385;
     if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 460;
     if (node.type === NodeType.VIDEO_REMIX) return 420;
     if (node.type === NodeType.VIDEO_ANALYSIS) return 420;
+    if ([NodeType.REFERENCE_VIDEO, NodeType.SCRIPT_INPUT, NodeType.STICKMAN_DIRECTOR, NodeType.STORYBOARD, NodeType.STORYBOARD_COMPARE, NodeType.FLOW_BATCH_VIDEO, NodeType.VIDEO_MERGE].includes(node.type)) return 430;
     return 365;
 };
 
@@ -85,6 +72,12 @@ const getNodeHeight = (node: NodeData, allNodes?: NodeData[]): number => {
     if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 716;
     if (node.type === NodeType.VIDEO_REMIX) return 306;
     if (node.type === NodeType.VIDEO_ANALYSIS) return VIDEO_ANALYSIS_NODE_HEIGHT;
+    if (node.type === NodeType.REFERENCE_VIDEO) return 300;
+    if (node.type === NodeType.SCRIPT_INPUT) return 500;
+    if (node.type === NodeType.STICKMAN_DIRECTOR) return 600;
+    if (node.type === NodeType.STORYBOARD || node.type === NodeType.STORYBOARD_COMPARE) return Math.max(430, node.storyboard?.expanded ? 470 + (node.storyboard.shots.length * 180) : 310);
+    if (node.type === NodeType.FLOW_BATCH_VIDEO) return 420;
+    if (node.type === NodeType.VIDEO_MERGE) return 300;
     const baseWidth = getNodeWidth(node, allNodes);
 
     // Handle Image Editor nodes
@@ -104,19 +97,6 @@ const getNodeHeight = (node: NodeData, allNodes?: NodeData[]): number => {
                     return 500 / aspectRatio;
                 }
             }
-        }
-        // Empty: minHeight 380px
-        return 380;
-    }
-
-    // Handle Video Editor nodes
-    if (node.type === NodeType.VIDEO_EDITOR) {
-        // Find parent node in the selection
-        const parentId = node.parentIds?.[0];
-        const parentNode = parentId ? allNodes?.find(n => n.id === parentId) : undefined;
-        if (parentNode?.resultUrl) {
-            // Video editor shows 16:9 when has content
-            return 500 / (16 / 9);
         }
         // Empty: minHeight 380px
         return 380;
@@ -154,9 +134,7 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
     onUngroup,
     onBoundingBoxPointerDown,
     onRenameGroup,
-    onSortNodes,
-    onCreateVideo,
-    onEditStoryboard
+    onSortNodes
 }) => {
     // ============================================================================
     // STATE
@@ -474,37 +452,8 @@ export const SelectionBoundingBox: React.FC<SelectionBoundingBoxProps> = ({
                         取消分组
                     </button>
 
-                    {/* Edit Storyboard Button (only for storyboards) */}
-                    {group.storyContext && (
-                        <button
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                if (onEditStoryboard) onEditStoryboard(group.id);
-                            }}
-                            className="shrink-0 whitespace-nowrap bg-neutral-800 hover:bg-neutral-700 border border-neutral-600 text-white text-xs px-3 py-1.5 rounded flex items-center gap-1.5 transition-colors mr-1.5"
-                        >
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                            </svg>
-                            编辑分镜
-                        </button>
-                    )}
 
-                    {/* Create Video Button */}
-                    <button
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            if (onCreateVideo) onCreateVideo();
-                        }}
-                        className="shrink-0 whitespace-nowrap bg-purple-600 hover:bg-purple-500 text-white text-xs px-3 py-1.5 rounded flex items-center gap-1.5 transition-colors shadow-lg shadow-purple-600/20"
-                    >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M15 10l5 5-5 5" />
-                            <path d="M4 4v16" />
-                        </svg>
-                        创建视频
-                    </button>
+
                 </div>
             )}
         </div>

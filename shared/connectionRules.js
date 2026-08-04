@@ -11,10 +11,16 @@ export const NODE = {
   VIDEO: 'Video',
   AUDIO: 'Audio',
   IMAGE_EDITOR: 'Image Editor',
-  VIDEO_EDITOR: 'Video Editor',
   PRODUCT_SCENE_REPLACE: 'Product Scene Replace',
   VIDEO_ANALYSIS: 'Video Analysis',
   VIDEO_REMIX: 'Video Remix',
+  REFERENCE_VIDEO: 'Reference Video',
+  SCRIPT_INPUT: 'Script Input',
+  STICKMAN_DIRECTOR: 'Stickman Director',
+  STORYBOARD: 'Storyboard',
+  STORYBOARD_COMPARE: 'Storyboard Compare',
+  FLOW_BATCH_VIDEO: 'Flow Batch Video',
+  VIDEO_MERGE: 'Video Merge',
   SFX: 'SFX',
   BGM: 'BGM',
   SUBTITLE: 'Subtitle',
@@ -35,25 +41,39 @@ export const isValidNodeConnection = (parentType, childType) => {
   // 任何节点都不能连向 TEXT（文本不接收输入）
   if (childType === NODE.TEXT) return false;
 
+  // Stickman Video Director workflow ports.
+  if (childType === NODE.STICKMAN_DIRECTOR) {
+    return parentType === NODE.SCRIPT_INPUT || parentType === NODE.VIDEO_ANALYSIS || parentType === NODE.VIDEO || parentType === NODE.REFERENCE_VIDEO;
+  }
+  if (childType === NODE.STORYBOARD || childType === NODE.STORYBOARD_COMPARE) {
+    return parentType === NODE.STICKMAN_DIRECTOR;
+  }
+  if (childType === NODE.FLOW_BATCH_VIDEO) {
+    return parentType === NODE.STORYBOARD || parentType === NODE.STORYBOARD_COMPARE;
+  }
+  if (childType === NODE.VIDEO_MERGE) return parentType === NODE.FLOW_BATCH_VIDEO;
+  if (childType === NODE.SCRIPT_INPUT) return parentType === NODE.VIDEO || parentType === NODE.REFERENCE_VIDEO;
+  if (childType === NODE.REFERENCE_VIDEO) return false;
+  if (parentType === NODE.VIDEO_MERGE) return false;
+
   // Video Analysis only accepts media references on its fixed input ports.
   // Port assignment is handled by the canvas connection layer; this rule only
   // guards the node-level type boundary.
   if (childType === NODE.VIDEO_ANALYSIS) {
-    return parentType === NODE.VIDEO || parentType === NODE.IMAGE || parentType === NODE.IMAGE_EDITOR;
+    return parentType === NODE.VIDEO || parentType === NODE.REFERENCE_VIDEO || parentType === NODE.IMAGE || parentType === NODE.IMAGE_EDITOR;
   }
 
   // The analysis result is a workflow source for ordinary image/video nodes
   // and for the final render node. Reference images are inherited through the
   // analysis node instead of being connected to every shot node.
   if (parentType === NODE.VIDEO_ANALYSIS) {
-    return childType === NODE.IMAGE || childType === NODE.VIDEO || childType === NODE.RENDER;
+    return childType === NODE.IMAGE || childType === NODE.VIDEO || childType === NODE.RENDER || childType === NODE.STICKMAN_DIRECTOR;
   }
 
-  // RENDER 可接收：视频镜头 / 视频编辑 / 音轨(配音·音效·BGM) / 字幕
+  // RENDER 可接收：视频镜头 / 音轨(配音·音效·BGM) / 字幕
   if (childType === NODE.RENDER) {
     return (
       parentType === NODE.VIDEO ||
-      parentType === NODE.VIDEO_EDITOR ||
       AUDIO_KINDS.includes(parentType) ||
       parentType === NODE.SUBTITLE
     );
@@ -87,12 +107,10 @@ export const isValidNodeConnection = (parentType, childType) => {
   }
 
   if (parentType === NODE.VIDEO) {
-    return childType === NODE.VIDEO || childType === NODE.VIDEO_EDITOR;
+    return childType === NODE.VIDEO;
   }
   if (parentType === NODE.IMAGE) return childType === NODE.IMAGE || childType === NODE.VIDEO || childType === NODE.IMAGE_EDITOR;
   if (parentType === NODE.IMAGE_EDITOR) return childType === NODE.IMAGE || childType === NODE.VIDEO || childType === NODE.IMAGE_EDITOR;
   if (parentType === NODE.PRODUCT_SCENE_REPLACE) return childType === NODE.IMAGE || childType === NODE.VIDEO || childType === NODE.IMAGE_EDITOR;
-  if (parentType === NODE.VIDEO_EDITOR) return childType === NODE.VIDEO;
-
   return true;
 };

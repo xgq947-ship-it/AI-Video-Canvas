@@ -13,8 +13,8 @@ const MODEL_CATALOG_CACHE_TTL_MS = 10 * 60_000;
 const MODEL_CATALOG_TIMEOUT_MS = 6_000;
 
 const DEEPSEEK_FALLBACK_MODELS = Object.freeze([
-    { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
-    { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash' }
+    { id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
+    { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' }
 ]);
 
 const BUILTIN_MODEL_CATALOGS = Object.freeze({

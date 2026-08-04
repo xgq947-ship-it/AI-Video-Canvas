@@ -56,7 +56,7 @@ export const createCanvasEditService = ({ rootDir = path.resolve(process.cwd()) 
       title: workflow.title,
       updatedAt: workflow.updatedAt,
       nodeCount: workflow.nodes?.length || 0,
-      videoCount: workflow.nodes?.filter((node) => node.type === 'Video' || node.type === 'Video Editor').length || 0,
+      videoCount: workflow.nodes?.filter((node) => node.type === 'Video').length || 0,
     }))
     .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
 
@@ -69,7 +69,7 @@ export const createCanvasEditService = ({ rootDir = path.resolve(process.cwd()) 
         id: workflow.id,
         title: workflow.title,
         nodeCount: nodes.length,
-        videos: nodes.filter((node) => ['Video', 'Video Editor'].includes(node.type)).map((node) => ({
+        videos: nodes.filter((node) => node.type === 'Video').map((node) => ({
           id: node.id,
           title: node.title || '视频',
           file: node.resultUrl || node.mediaUrl,

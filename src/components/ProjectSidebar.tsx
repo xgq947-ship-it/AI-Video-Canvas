@@ -20,7 +20,6 @@ import {
   MoreHorizontal,
   Pencil,
   Search,
-  SlidersHorizontal,
   Sparkles,
   Trash2,
   Volume2,
@@ -75,7 +74,6 @@ interface ProjectSidebarProps {
   onOpenHistory: (e: React.MouseEvent) => void;
   onOpenAssets: (e: React.MouseEvent) => void;
   onPreviewAsset: (asset: SidebarAssetPreview, anchor: HTMLElement) => void;
-  onOpenStoryboard: () => void;
   onCreateProject: () => void;
   onDeleteProject: () => void;
   onRevealProject: () => void | Promise<void>;
@@ -90,11 +88,16 @@ const typeLabel: Record<string, string> = {
   [NodeType.VIDEO]: '视频',
   [NodeType.AUDIO]: '配音',
   [NodeType.IMAGE_EDITOR]: '图片编辑',
-  [NodeType.VIDEO_EDITOR]: '视频剪辑',
-  [NodeType.STORYBOARD]: '分镜',
   [NodeType.CAMERA_ANGLE]: '镜头角度',
   [NodeType.PRODUCT_SCENE_REPLACE]: '产品短视频生成',
   [NodeType.VIDEO_REMIX]: '视频复刻',
+  [NodeType.REFERENCE_VIDEO]: '参考视频',
+  [NodeType.SCRIPT_INPUT]: '剧本输入',
+  [NodeType.STICKMAN_DIRECTOR]: '火柴人视频导演',
+  [NodeType.STORYBOARD]: '分镜列表',
+  [NodeType.STORYBOARD_COMPARE]: '分镜对照组',
+  [NodeType.FLOW_BATCH_VIDEO]: 'Flow 视频生成',
+  [NodeType.VIDEO_MERGE]: '视频拼接',
   [NodeType.SFX]: '音效',
   [NodeType.BGM]: '背景音乐',
   [NodeType.SUBTITLE]: '字幕',
@@ -119,7 +122,6 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   onOpenHistory,
   onOpenAssets,
   onPreviewAsset,
-  onOpenStoryboard,
   onCreateProject,
   onDeleteProject,
   onRevealProject,
@@ -810,7 +812,6 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
         <span className={`ml-auto text-sm ${muted}`}>共 {nodes.length} 节点</span>
         <div className="ml-4 flex gap-1">
           <SidebarIcon title="工作流" onClick={onOpenWorkflows}><Grid2X2 size={19} /></SidebarIcon>
-          <SidebarIcon title="AI 分镜" onClick={onOpenStoryboard}><SlidersHorizontal size={19} /></SidebarIcon>
         </div>
       </footer>
     </aside>

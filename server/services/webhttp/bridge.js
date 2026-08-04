@@ -22,7 +22,7 @@ import {
     noteBillableRequestSettled,
     noteBillableRequestStart
 } from '../generationRuntime/scheduler.js';
-import { asWebProviderError, classifyHttpFailure, WebProviderError } from './errors.js';
+import { asWebProviderError, classifyHttpFailure, redactSecrets, WebProviderError } from './errors.js';
 import { isSharedBrowserReady } from '../browserHubClient.js';
 
 export const WEB_HTTP_PROVIDERS = Object.freeze(['gemini-web', 'jimeng', 'google-flow']);
@@ -345,9 +345,18 @@ export async function webFetchOk(provider, spec, { submitted = false, what = '�
     // submitted 同时传给 webFetch：传输层失败也要按调用方的计费语义归类。
     const response = await webFetch(provider, spec, { ...options, submitted });
     if (!response.ok) {
+        const responseText = response.text;
         throw new WebProviderError(
             `${provider} ${what}失败：HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`,
-            { provider, code: classifyHttpFailure(response.status, response.text), submitted }
+            {
+                provider,
+                code: classifyHttpFailure(response.status, responseText),
+                submitted,
+                details: {
+                    httpStatus: response.status,
+                    responseBody: redactSecrets(responseText).slice(0, 2000)
+                }
+            }
         );
     }
     return response;

@@ -62,7 +62,6 @@ npm run desktop:dist:win   # 必须在 Windows x64 上运行
 - [AI 漫剧 0—1 工作流](docs/AI漫剧0-1工作流.md)
 - [Remotion 渲染说明](docs/Remotion渲染说明.md)
 - [项目数据格式](docs/项目数据格式.md)
-- [视频剪辑节点](docs/video-editor-node.md)
 - [视频复刻使用教程（HTML）](docs/video-remix-user-guide.html)
 - [视频复刻 MVP 验收说明](docs/video-remix-mvp-acceptance.md)
 - [Modal 相机角度服务](docs/modal-camera-integration.md)

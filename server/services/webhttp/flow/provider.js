@@ -47,6 +47,7 @@ import {
     parseUploadImageResponse,
     parseStartVideoUploadResponse,
     parseVideoUploadResponse,
+    selectEditResultMedia,
     validateFlowImageDimensions
 } from './protocol.js';
 import { probeReferenceVideo } from '../../videoRemix/referenceVideo.js';
@@ -473,6 +474,7 @@ export async function generateFlowImageHttp({
 }
 
 const VIDEO_POLL_INTERVAL_MS = 10_000;
+const REFERENCE_VIDEO_READY_TIMEOUT_MS = 90_000;
 
 function videoMimeType(filePath) {
     const extension = path.extname(filePath).toLowerCase();
@@ -559,6 +561,37 @@ async function uploadReferenceVideo(auth, filePath, { signal }) {
 }
 
 /**
+ * Flow 的视频上传完成响应不代表生成服务已经能读取该 mediaId。
+ * 页面会先等上传媒体进入项目状态，再提交编辑请求；HTTP 通道也必须保留这个顺序，
+ * 否则生成请求虽然返回 200，任务却可能永远不落到项目历史。
+ */
+async function waitForReferenceVideoReady(uploadedVideo, auth, { signal }) {
+    const deadline = Date.now() + REFERENCE_VIDEO_READY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+        if (signal?.aborted) {
+            throw new WebProviderError('任务已取消', { provider: PROVIDER, code: 'UNKNOWN', submitted: false });
+        }
+        try {
+            const payload = await fetchFlowProjectMedia(
+                buildProjectMediaRequest({ auth, mediaIds: [uploadedVideo.mediaId] }),
+                { signal }
+            );
+            const ready = collectMediaEntries(payload)
+                .map(parseFlowVideoMedia)
+                .find(item => item.mediaId === uploadedVideo.mediaId);
+            if (ready?.status === 'MEDIA_GENERATION_STATUS_SUCCESSFUL') return ready;
+        } catch (error) {
+            if (error?.code === 'AUTH_EXPIRED') throw error;
+        }
+        await sleep(VIDEO_POLL_INTERVAL_MS, signal);
+    }
+    throw new WebProviderError(
+        `${PROVIDER_NAME} 参考视频上传完成但 Flow 尚未准备好读取，未提交生成请求，请稍后重试。`,
+        { provider: PROVIDER, code: 'GENERATION_FAILED', submitted: false }
+    );
+}
+
+/**
  * Text-to-video and image-to-video.
  *
  * The submit call returns media entries that may already be SUCCESSFUL (the
@@ -605,6 +638,7 @@ export async function generateFlowVideoHttp({
     const uploadedVideo = referenceVideoPath
         ? await uploadReferenceVideo(uploadAuth, referenceVideoPath, { signal })
         : null;
+    if (uploadedVideo) await waitForReferenceVideoReady(uploadedVideo, uploadAuth, { signal });
     const auth = await getFlowAuth({ signal, forceRefresh: true, recaptchaAction: 'VIDEO_GENERATION' });
 
     const batchId = randomUUID();
@@ -621,9 +655,7 @@ export async function generateFlowVideoHttp({
         referenceMediaIds: firstFrameInput ? mediaIds.slice(1) : mediaIds,
         referenceVideo: uploadedVideo ? {
             mediaId: uploadedVideo.mediaId,
-            workflowId: uploadedVideo.workflowId,
-            startFrameIndex: 0,
-            endFrameIndex: Math.max(1, Math.round(probe.duration * 30))
+            workflowId: uploadedVideo.workflowId
         } : null
     });
     const response = await webFetchOk(PROVIDER, buildRequestSpec(spec), {
@@ -633,7 +665,8 @@ export async function generateFlowVideoHttp({
         timeoutSeconds: 600
     });
 
-    let media = parseGenerateVideoResponse(response.json());
+    const submitJson = response.json();
+    let media = parseGenerateVideoResponse(submitJson);
     if (media.length === 0) {
         throw new WebProviderError(
             `${PROVIDER_NAME} 视频任务已提交但没有返回媒体条目，请到 Flow 项目历史中确认，不要直接重新生成。`,
@@ -645,7 +678,14 @@ export async function generateFlowVideoHttp({
         mediaIds: media.map(item => item.mediaId).filter(Boolean)
     });
 
-    media = await waitForFlowVideos(media, auth, { timeoutMinutes, signal });
+    media = await waitForFlowVideos(media, auth, {
+        timeoutMinutes,
+        signal,
+        // 参考视频编辑走 workflowId 匹配，绕开「提交 mediaId ≠ 最终结果 name」。
+        editMatch: uploadedVideo
+            ? { workflowId: uploadedVideo.workflowId, referenceMediaId: uploadedVideo.mediaId }
+            : null
+    });
 
     const videos = await Promise.all(media.map(item => runProviderDownload(PROVIDER, async () => {
         const downloaded = await downloadResultMedia(buildFlowMediaUrl(item.mediaId), {
@@ -670,8 +710,10 @@ export async function generateFlowVideoHttp({
  * A poll failure is never fatal on its own: the generation is already paid for,
  * so transient errors keep retrying until the deadline and only then surface.
  */
-async function waitForFlowVideos(media, auth, { timeoutMinutes, signal }) {
-    if (media.every(isFlowVideoCompleted)) return media;
+async function waitForFlowVideos(media, auth, { timeoutMinutes, signal, editMatch = null }) {
+    // 参考视频编辑的结果 name 由 Flow 在提交后才分配，提交响应里没有，所以不能提前
+    // 判定「已完成」。只有非编辑路径能走这条快速返回。
+    if (!editMatch && media.every(isFlowVideoCompleted)) return media;
 
     const deadline = Date.now() + timeoutMinutes * 60_000;
     let current = media;
@@ -702,7 +744,15 @@ async function waitForFlowVideos(media, auth, { timeoutMinutes, signal }) {
             );
             const refreshed = collectMediaEntries(payload).map(parseFlowVideoMedia).filter(item => item.mediaId);
             const wanted = new Set(wantedIds);
-            const matches = refreshed.filter(item => wanted.has(item.mediaId));
+            let matches = refreshed.filter(item => wanted.has(item.mediaId));
+
+            // 参考视频编辑：结果 media 的最终 name 由 Flow 在提交之后分配，提交响应里
+            // 拿不到，按提交 mediaId 轮询永远匹配不上（正是 15 分钟超时的根因）。但结果
+            // 会继承参考视频的 workflowId——我们每轮都新上传参考视频，该 id 每次唯一，
+            // 且同一 workflowId 下除参考视频本身外只有这一个生成结果，据此稳定定位。
+            const editMatches = editMatch ? selectEditResultMedia(refreshed, editMatch) : [];
+            if (editMatches.length > 0) matches = editMatches;
+
             if (matches.length > 0) current = matches;
         } catch (error) {
             // Poll endpoints change shape more often than generate endpoints do;

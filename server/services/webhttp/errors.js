@@ -117,7 +117,12 @@ export function classifyHttpFailure(status, bodyText = '') {
     }
     if (status === 429) return 'RATE_LIMIT';
     if (text.includes('quota') || text.includes('credit') || text.includes('积分不足')) return 'QUOTA_EXHAUSTED';
-    if (text.includes('policy') || text.includes('violat') || text.includes('违规') || text.includes('敏感')) {
+    const contentPolicyViolation = text.includes('policy')
+        || text.includes('违规')
+        || text.includes('敏感')
+        || /\bviolat(?:e|ed|es|ion|ions|ing)\b/.test(text)
+            && /\b(?:safety|content|prompt|guideline|policy)\b/.test(text);
+    if (contentPolicyViolation) {
         return 'CONTENT_POLICY';
     }
     if (status >= 500) return 'GENERATION_FAILED';

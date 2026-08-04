@@ -61,7 +61,7 @@ test('未配置 DeepSeek 密钥时使用安全的内置目录，不发起外部�
     assert.equal(catalog.providers.deepseek.discovered, false);
     assert.deepEqual(
         catalog.providers.deepseek.models.map(model => model.id),
-        ['deepseek-v4-pro', 'deepseek-v4-flash']
+        ['deepseek-v4-flash', 'deepseek-v4-pro']
     );
 });
 

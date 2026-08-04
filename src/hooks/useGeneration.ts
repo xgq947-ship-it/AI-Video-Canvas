@@ -278,7 +278,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId, notify 
                     }
                 }
 
-                // Add character reference URLs from storyboard nodes (for maintaining character consistency)
+                // Add character reference URLs from character asset nodes for maintaining identity consistency.
                 if (node.characterReferenceUrls && node.characterReferenceUrls.length > 0) {
                     for (const charUrl of node.characterReferenceUrls) {
                         if (
@@ -437,7 +437,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId, notify 
                     const parent = nodes.find(n => n.id === pid);
                     // 产品场景替换的控制节点没有 resultUrl，成图在它的子 Image 节点上，
                     // 计入这里会让「图片 + 控制节点」被误判成首尾帧插值且尾帧为空。
-                    return parent && [NodeType.IMAGE, NodeType.IMAGE_EDITOR, NodeType.VIDEO, NodeType.VIDEO_EDITOR].includes(parent.type);
+                    return parent && [NodeType.IMAGE, NodeType.IMAGE_EDITOR, NodeType.VIDEO].includes(parent.type);
                 }) || [];
 
                 // Check for frame-to-frame mode (explicit or auto-detected from 2+ image parents)

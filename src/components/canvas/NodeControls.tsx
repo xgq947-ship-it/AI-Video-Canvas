@@ -895,9 +895,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                 </div>
             )}
 
-            {/* Prompt Textarea with Expand Button - Hidden for storyboard-generated scenes */}
-            {!(data.prompt && data.prompt.startsWith('Extract panel #')) && (
-                <div className="relative mb-3">
+            <div className="relative mb-3">
                     <div className="mb-3 flex min-h-[38px] items-start gap-3">
                         <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1" aria-label="已连接参考素材">
                             {connectedReferences.map(reference => (
@@ -1130,7 +1128,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                         </button>
                     </div>
                 </div>
-            )}
 
             {data.errorMessage && (
                 <div className="text-red-400 text-xs mb-2 p-1 bg-red-900/20 rounded border border-red-900/50">
@@ -1138,9 +1135,7 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                 </div>
             )}
 
-            {/* Controls - Hidden for storyboard-generated scenes */}
-            {!(data.prompt && data.prompt.startsWith('Extract panel #')) && (
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-2 relative">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 relative">
                     <div className="flex min-w-0 items-center gap-2">
                         {/* Model Selector - Local, Video, and Image nodes get different dropdowns */}
                         {data.type === NodeType.VIDEO ? (
@@ -1572,7 +1567,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
             )}
                     </div>
                 </div>
-            )}
 
             {/* Advanced Settings Drawer - Only for Video nodes */}
             {

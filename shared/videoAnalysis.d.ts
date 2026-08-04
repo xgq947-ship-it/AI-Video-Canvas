@@ -21,6 +21,7 @@ export interface VideoAnalysisShot {
   summary: string;
   imagePrompt: string;
   videoPrompt: string;
+  sourceKeyframeUrl?: string;
   dialogue?: string;
   soundPrompt?: string;
 }

@@ -67,6 +67,8 @@ import {
     parseUploadImageResponse,
     parseStartVideoUploadResponse,
     parseVideoUploadResponse,
+    parseFlowVideoMedia,
+    selectEditResultMedia,
     resolveFlowVideoVariant,
     toFlowImageAspectRatio,
     validateFlowImageDimensions
@@ -911,18 +913,28 @@ test('Flow 参考视频使用分片上传和 Omni Flash 视频编辑协议', () 
     const spec = buildGenerateVideoRequest({
         auth, prompt: '保持运动，改为电影灯光', batchId: 'batch-1', modelFamily: 'abra',
         aspectRatio: '16:9', referenceVideo: {
-            mediaId: 'media-video', workflowId: 'workflow-video',
-            startFrameIndex: 0, endFrameIndex: 90
+            mediaId: 'media-video', workflowId: 'workflow-video'
         }
     });
     const body = JSON.parse(spec.body);
     assert.match(spec.url, /video:batchAsyncGenerateVideoEditVideo$/);
     assert.equal(body.requests[0].videoModelKey, 'abra_edit');
     assert.deepEqual(body.requests[0].metadata, { workflowId: 'workflow-video' });
-    assert.deepEqual(body.requests[0].videoInput, {
-        mediaId: 'media-video', startFrameIndex: 0, endFrameIndex: 90
-    });
+    assert.deepEqual(body.requests[0].videoInput, { mediaId: 'media-video' });
+    assert.ok(body.requests[0].seed >= 1 && body.requests[0].seed <= 0x7fff);
+    assert.deepEqual(body.mediaGenerationContext, { batchId: 'batch-1' });
     assert.equal(body.useV2ModelConfig, undefined);
+
+    const trimmedSpec = buildGenerateVideoRequest({
+        auth, prompt: '保持运动', batchId: 'batch-2', modelFamily: 'abra',
+        aspectRatio: '16:9', referenceVideo: {
+            mediaId: 'media-video', workflowId: 'workflow-video',
+            startFrameIndex: 12, endFrameIndex: 84
+        }
+    });
+    assert.deepEqual(JSON.parse(trimmedSpec.body).requests[0].videoInput, {
+        mediaId: 'media-video', startFrameIndex: 12, endFrameIndex: 84
+    });
     assert.throws(() => buildGenerateVideoRequest({
         auth, prompt: 'p', batchId: 'b', modelFamily: 'veo_3_1_fast',
         referenceVideo: { mediaId: 'm', workflowId: 'w', endFrameIndex: 30 }
@@ -1335,6 +1347,7 @@ test('HTTP 状态码分类', () => {
     assert.equal(classifyHttpFailure(429, ''), 'RATE_LIMIT');
     assert.equal(classifyHttpFailure(400, '积分不足'), 'QUOTA_EXHAUSTED');
     assert.equal(classifyHttpFailure(400, 'content policy violation'), 'CONTENT_POLICY');
+    assert.equal(classifyHttpFailure(400, '{"fieldViolations":[{"description":"Unknown field"}]}'), 'PROTOCOL_CHANGED');
     assert.equal(classifyHttpFailure(500, ''), 'GENERATION_FAILED');
 });
 
@@ -1366,4 +1379,91 @@ test('旧画布模型 id 能映射到协议模型，未知 id 回落基线而不
     ]) {
         assert.ok(CANVAS_MODEL_PROTOCOL_IDS[id], `缺少 ${id} 的协议映射`);
     }
+});
+
+// 用从真实 Flow projectInitialData 抓到的形状（参考视频上传 + 编辑结果共享
+// workflowId；结果的最终 name 是提交后才分配的，提交响应里没有）验证：
+// 参考视频编辑的轮询必须按 workflowId 命中结果，而不是提交返回的 mediaId。
+test('参考视频编辑：按 workflowId 从项目 media 里挑出结果，排除参考视频本身', () => {
+    const WF = 'a18ca9f7-f8ab-4d07-a6c7-d3754b92ffea';
+    const REF_MEDIA = 'f2ce5b98-fd48-4ebd-9a06-0a8bc0c72c6e';
+    const RESULT_NAME = '63bd1908-a22b-4f94-ae16-a36c90d31aed';
+    // 参考视频上传条目：同一个 workflowId，但没有 generatedVideo。
+    const refUpload = {
+        name: REF_MEDIA, workflowId: WF,
+        mediaMetadata: { mediaStatus: { mediaGenerationStatus: 'MEDIA_GENERATION_STATUS_SUCCESSFUL' } },
+        video: {}
+    };
+    // 编辑结果条目：Flow 提交后分配的新 name，继承参考视频 workflowId。
+    const editResult = {
+        name: RESULT_NAME, workflowId: WF,
+        mediaMetadata: {
+            mediaStatus: { mediaGenerationStatus: 'MEDIA_GENERATION_STATUS_SUCCESSFUL' },
+            requestData: { videoGenerationRequestData: { videoModelControlInput: { videoGenerationMode: 'VIDEO_GENERATION_MODE_VIDEO_TO_VIDEO' } } }
+        },
+        video: { generatedVideo: { model: 'abra_edit' }, operation: { name: RESULT_NAME } }
+    };
+    // 另一条无关视频（不同 workflowId），确保不会误伤。
+    const unrelated = {
+        name: 'zzz', workflowId: 'other-wf',
+        mediaMetadata: { mediaStatus: { mediaGenerationStatus: 'MEDIA_GENERATION_STATUS_SUCCESSFUL' } },
+        video: { generatedVideo: { model: 'abra_t2v_8s' } }
+    };
+
+    const parsed = [refUpload, editResult, unrelated].map(parseFlowVideoMedia);
+    const hits = selectEditResultMedia(parsed, { workflowId: WF, referenceMediaId: REF_MEDIA });
+
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].mediaId, RESULT_NAME);
+    assert.equal(isFlowVideoCompleted(hits[0]), true);
+});
+
+test('参考视频编辑：结果尚未出现时按 workflowId 匹配为空（继续等待，不误判完成）', () => {
+    const WF = 'wf-1';
+    const refUpload = { name: 'ref-1', workflowId: WF, video: {},
+        mediaMetadata: { mediaStatus: { mediaGenerationStatus: 'MEDIA_GENERATION_STATUS_SUCCESSFUL' } } };
+    const parsed = [refUpload].map(parseFlowVideoMedia);
+    const hits = selectEditResultMedia(parsed, { workflowId: WF, referenceMediaId: 'ref-1' });
+    assert.equal(hits.length, 0);
+});
+
+test('参考视频编辑：PENDING 的结果也会被 workflowId 命中，以便后续轮询到 SUCCESSFUL', () => {
+    const WF = 'wf-2';
+    const refUpload = { name: 'ref-2', workflowId: WF, video: {},
+        mediaMetadata: { mediaStatus: { mediaGenerationStatus: 'MEDIA_GENERATION_STATUS_SUCCESSFUL' } } };
+    const pendingResult = { name: 'res-2', workflowId: WF,
+        mediaMetadata: { mediaStatus: { mediaGenerationStatus: 'MEDIA_GENERATION_STATUS_PENDING' } },
+        video: { operation: { name: 'res-2' } } };
+    const parsed = [refUpload, pendingResult].map(parseFlowVideoMedia);
+    const hits = selectEditResultMedia(parsed, { workflowId: WF, referenceMediaId: 'ref-2' });
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].mediaId, 'res-2');
+    assert.equal(isFlowVideoCompleted(hits[0]), false);
+});
+
+test('参考视频编辑：workflowId 变化时按最终成片记录里的输入视频 mediaId 命中', () => {
+    const parsed = [parseFlowVideoMedia({
+        name: 'result-with-new-workflow',
+        workflowId: 'generated-workflow',
+        mediaMetadata: {
+            mediaStatus: { mediaGenerationStatus: 'MEDIA_GENERATION_STATUS_SUCCESSFUL' },
+            requestData: {
+                videoGenerationRequestData: {
+                    videoModelControlInput: {
+                        videoModelName: 'abra_edit',
+                        videoGenerationMode: 'VIDEO_GENERATION_MODE_VIDEO_TO_VIDEO'
+                    },
+                    videoGenerationVideoInputs: [{ mediaId: 'uploaded-reference' }]
+                }
+            }
+        },
+        video: { generatedVideo: { model: 'abra_edit' } }
+    })];
+
+    const hits = selectEditResultMedia(parsed, {
+        workflowId: 'upload-workflow',
+        referenceMediaId: 'uploaded-reference'
+    });
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].mediaId, 'result-with-new-workflow');
 });

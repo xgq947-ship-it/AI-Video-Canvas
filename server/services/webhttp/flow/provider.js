@@ -21,7 +21,7 @@ import {
     runProviderPoll
 } from '../../generationRuntime/scheduler.js';
 import { webContext, webFetchOk, cookieHeaderFor, buildRequestSpec } from '../bridge.js';
-import { WebProviderError } from '../errors.js';
+import { parseRetryAfterMs, WebProviderError } from '../errors.js';
 import { downloadResultMedia, loadReferenceImageFiles, requireNonEmptyPrompt } from '../media.js';
 import {
     FLOW_BASELINE_IMAGE_MODEL,
@@ -105,13 +105,18 @@ export async function getFlowAuth({ signal, forceRefresh = false, recaptchaActio
             { provider: PROVIDER, code: 'AUTH_EXPIRED', submitted: false }
         );
     }
+    // Flow 的 /fx/api/auth/session 会返回真实 expires（web-context 透传为 context.expires）。
+    // 记下它，长轮询就能在会话临近过期时**主动**续期，而不是干等下一次 401（借鉴 gflow-cli
+    // 把真实过期时间接入长任务的做法）。解析失败则留空，退回纯反应式续期。
+    const expiresAt = context.expires ? Date.parse(context.expires) : NaN;
     const baseAuth = {
         accessToken: context.accessToken,
         projectId: context.projectId,
         sessionId: context.sessionId || `;${Date.now()}`,
         userPaygateTier: context.userPaygateTier || 'PAYGATE_TIER_ONE',
         labsCookie: cookieHeaderFor(context, ['labs.google', 'google.com']),
-        rawModelConfig: context.modelConfig || null
+        rawModelConfig: context.modelConfig || null,
+        expiresAt: Number.isFinite(expiresAt) ? expiresAt : null
     };
     // Never cache a reCAPTCHA token. Flow binds it to an action and rejects
     // reuse; the caller receives it only for the immediately following submit.
@@ -125,6 +130,77 @@ export async function getFlowAuth({ signal, forceRefresh = false, recaptchaActio
     return recaptchaAction
         ? { ...baseAuth, recaptchaToken: context.recaptchaToken }
         : baseAuth;
+}
+
+/** 会话剩余寿命低于这个阈值就提前续期，避免下一次请求 / 轮询正好撞上 401。 */
+const AUTH_PROACTIVE_REFRESH_MS = 5 * 60_000;
+/** 主动续期失败后的冷却窗：过期后每 10s 一次 bridge 往返会把浏览器队列打满，这里踩刹车。 */
+const AUTH_PROACTIVE_REFRESH_COOLDOWN_MS = 60_000;
+
+/** 上次主动续期尝试失败后的冷却截止时间（成功则不设，靠新 expiresAt 天然错开）。 */
+let proactiveRefreshCooldownUntil = 0;
+
+/**
+ * 会话临近过期时主动换一份新的 auth（借鉴 gflow-cli 把真实 expires 接入长任务）。
+ *
+ * 续期失败不致命：老 auth 也许还能再撑一会，真撞上 401 时反应式续期会再兜一次。
+ * 没有 expiresAt（解析失败 / 老缓存）时原样返回，退回纯反应式续期。
+ *
+ * 续期失败会设一个冷却窗：否则会话一过期，这个函数会在每一轮（约 10s）轮询前都发起一次
+ * 注定失败的 bridge 往返，把共享 Chrome 队列压满。冷却让它退化成「每分钟最多试一次」。
+ */
+async function ensureFreshFlowAuth(auth, { signal } = {}) {
+    if (!auth?.expiresAt) return auth;
+    if (Date.now() < auth.expiresAt - AUTH_PROACTIVE_REFRESH_MS) return auth;
+    if (Date.now() < proactiveRefreshCooldownUntil) return auth;
+    try {
+        const refreshed = await getFlowAuth({ signal, forceRefresh: true });
+        // 成功拿到新 expiresAt，上面的阈值判断会天然错开下一次，无需再设冷却。
+        proactiveRefreshCooldownUntil = 0;
+        return refreshed;
+    } catch (error) {
+        proactiveRefreshCooldownUntil = Date.now() + AUTH_PROACTIVE_REFRESH_COOLDOWN_MS;
+        console.warn(`[Flow HTTP] 会话主动续期失败，${AUTH_PROACTIVE_REFRESH_COOLDOWN_MS / 1000}s 内不再重试，暂时沿用现有登录态：${error.message}`);
+        return auth;
+    }
+}
+
+/**
+ * 对「不含 reCAPTCHA、非计费」的 Flow 请求做一次静默重认证重试。
+ *
+ * 对照 gflow-cli 的 `_run_with_aisandbox_retry`：401 时清缓存、强制刷新一份 Bearer/cookie，
+ * 用**重新构建**的请求重发一次，仍失败才把 AUTH_EXPIRED 冒泡。这样长任务里会话中途过期能被
+ * 一次静默续期吃掉，不必惊动用户去重新登录。
+ *
+ * ⚠️ 硬约束（勿扩展到生成 / 高清）：buildSpec 每次都用最新 auth 现构请求；但生成、高清请求
+ * 内嵌**单次即用的 reCAPTCHA token**（见上方 getFlowAuth 注释），重放已消费的 token 必然失败。
+ * 因此本函数只接受 builder 不带 recaptchaAction 的请求：参考图上传、项目媒体轮询。
+ *
+ * @param {(auth: object) => object} buildSpec 用给定 auth 现构请求 spec（每次尝试都重建）
+ * @returns {Promise<{ response: object, auth: object }>} 响应与（可能已刷新的）auth
+ */
+async function flowFetchOkWithReauth(buildSpec, { auth, signal, submitted = false, what }) {
+    let currentAuth = auth;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+            const response = await webFetchOk(PROVIDER, buildRequestSpec(buildSpec(currentAuth)), {
+                signal, submitted, what
+            });
+            return { response, auth: currentAuth };
+        } catch (error) {
+            if (attempt === 1 && error?.code === 'AUTH_EXPIRED' && !signal?.aborted) {
+                console.warn(`[Flow HTTP] ${what} 认证失效，静默刷新令牌后重试一次（不触发重新生成）`);
+                clearFlowAuthCache();
+                currentAuth = await getFlowAuth({ signal, forceRefresh: true });
+                continue;
+            }
+            throw error;
+        }
+    }
+    // 不可达：上面的循环要么 return 要么 throw。保留显式抛出让控制流对静态分析闭合。
+    throw new WebProviderError(`${PROVIDER_NAME} ${what} 重试逻辑异常`, {
+        provider: PROVIDER, code: 'UNKNOWN', submitted
+    });
 }
 
 
@@ -168,18 +244,19 @@ export async function discoverFlowModels({ signal } = {}) {
 
 async function uploadReferenceImages(auth, files, { signal }) {
     const mediaIds = [];
+    // 上传不含 reCAPTCHA、不计费，可安全走静默重认证；一旦某张触发续期，后续几张沿用新 auth。
+    let currentAuth = auth;
     for (const file of files) {
-        const spec = buildUploadImageRequest({
-            auth,
-            buffer: file.buffer,
-            fileName: file.fileName,
-            mimeType: file.mimeType
-        });
-        const response = await webFetchOk(PROVIDER, buildRequestSpec(spec), {
-            signal,
-            submitted: false,
-            what: '参考图上传'
-        });
+        const { response, auth: refreshed } = await flowFetchOkWithReauth(
+            uploadAuth => buildUploadImageRequest({
+                auth: uploadAuth,
+                buffer: file.buffer,
+                fileName: file.fileName,
+                mimeType: file.mimeType
+            }),
+            { auth: currentAuth, signal, submitted: false, what: '参考图上传' }
+        );
+        currentAuth = refreshed;
         const uploaded = parseUploadImageResponse(response.json());
         if (!uploaded?.mediaId) {
             throw new WebProviderError(`${PROVIDER_NAME} 参考图上传未返回 mediaId`, {
@@ -249,7 +326,8 @@ async function verifyFlowImageBytes(buffer, item, requestedResolution) {
 async function downloadFlowOriginalImage(item, {
     requestedResolution,
     generationAuth,
-    fallbackReason
+    fallbackReason,
+    signal
 }) {
     const downloaded = await downloadResultMedia(buildFlowMediaUrl(item.mediaId), {
         providerName: fallbackReason
@@ -257,7 +335,8 @@ async function downloadFlowOriginalImage(item, {
             : `${PROVIDER_NAME} 文生图 1K`,
         expectedType: 'image',
         cookieHeader: generationAuth.labsCookie,
-        recoveryHint: '请先到 Flow 项目历史中下载本次原图，不要直接重新生成。'
+        recoveryHint: '请先到 Flow 项目历史中下载本次原图，不要直接重新生成。',
+        signal
     });
     const verified = await verifyFlowImageBytes(downloaded.buffer, item, '1K');
     return {
@@ -298,7 +377,8 @@ async function downloadFlowImage(item, {
     if (requestedResolution === '1K') {
         return downloadFlowOriginalImage(item, {
             requestedResolution,
-            generationAuth
+            generationAuth,
+            signal
         });
     }
 
@@ -348,7 +428,8 @@ async function downloadFlowImage(item, {
                 return downloadFlowOriginalImage(item, {
                     requestedResolution,
                     generationAuth,
-                    fallbackReason: error?.code || 'UNKNOWN'
+                    fallbackReason: error?.code || 'UNKNOWN',
+                    signal
                 });
             }
             throw error;
@@ -566,14 +647,17 @@ async function uploadReferenceVideo(auth, filePath, { signal }) {
  * 否则生成请求虽然返回 200，任务却可能永远不落到项目历史。
  */
 async function waitForReferenceVideoReady(uploadedVideo, auth, { signal }) {
-    const deadline = Date.now() + REFERENCE_VIDEO_READY_TIMEOUT_MS;
-    while (Date.now() < deadline) {
+    // 单调时钟算超时预算，避免系统睡眠 / NTP 校时把 90s 窗口算错（借鉴 gflow-cli 的 time.monotonic）。
+    const deadline = performance.now() + REFERENCE_VIDEO_READY_TIMEOUT_MS;
+    let pollAuth = auth;
+    while (performance.now() < deadline) {
         if (signal?.aborted) {
             throw new WebProviderError('任务已取消', { provider: PROVIDER, code: 'UNKNOWN', submitted: false });
         }
         try {
+            pollAuth = await ensureFreshFlowAuth(pollAuth, { signal });
             const payload = await fetchFlowProjectMedia(
-                buildProjectMediaRequest({ auth, mediaIds: [uploadedVideo.mediaId] }),
+                buildProjectMediaRequest({ auth: pollAuth, mediaIds: [uploadedVideo.mediaId] }),
                 { signal }
             );
             const ready = collectMediaEntries(payload)
@@ -581,7 +665,16 @@ async function waitForReferenceVideoReady(uploadedVideo, auth, { signal }) {
                 .find(item => item.mediaId === uploadedVideo.mediaId);
             if (ready?.status === 'MEDIA_GENERATION_STATUS_SUCCESSFUL') return ready;
         } catch (error) {
-            if (error?.code === 'AUTH_EXPIRED') throw error;
+            // 与主轮询一致：认证失效时静默续期一次后继续等，而不是直接抛断整个任务。
+            // 参考视频就绪检查发生在**提交前**，中途续期完全安全（借鉴 6 的一致性收口）。
+            if (error?.code === 'AUTH_EXPIRED') {
+                try {
+                    pollAuth = await getFlowAuth({ signal, forceRefresh: true });
+                    console.warn('[Flow HTTP] 参考视频就绪轮询遇认证失效，已静默续期后继续等待');
+                } catch (refreshError) {
+                    console.warn(`[Flow HTTP] 参考视频就绪轮询续期失败，继续等待：${refreshError.message}`);
+                }
+            }
         }
         await sleep(VIDEO_POLL_INTERVAL_MS, signal);
     }
@@ -692,7 +785,8 @@ export async function generateFlowVideoHttp({
             providerName: PROVIDER_NAME,
             expectedType: 'video',
             cookieHeader: auth.labsCookie,
-            recoveryHint: '请先到 Flow 项目历史中下载本次结果，不要直接重新生成。'
+            recoveryHint: '请先到 Flow 项目历史中下载本次结果，不要直接重新生成。',
+            signal
         });
         return { ...downloaded, metadata: item };
     }, { signal, label: `${PROVIDER_NAME} 视频下载` })));
@@ -715,9 +809,14 @@ async function waitForFlowVideos(media, auth, { timeoutMinutes, signal, editMatc
     // 判定「已完成」。只有非编辑路径能走这条快速返回。
     if (!editMatch && media.every(isFlowVideoCompleted)) return media;
 
-    const deadline = Date.now() + timeoutMinutes * 60_000;
+    // 单调时钟算超时预算（借鉴 gflow-cli 的 time.monotonic）；auth 设为可变，长视频轮询
+    // 中途可静默续期，扛过 session 过期而不是干等到 15 分钟超时。
+    const deadline = performance.now() + timeoutMinutes * 60_000;
     let current = media;
-    while (Date.now() < deadline) {
+    let pollAuth = auth;
+    // 下一轮轮询前的等待；命中 429 时按服务端 Retry-After 覆盖（借鉴 gflow-cli 尊重 Retry-After）。
+    let nextPollDelayMs = VIDEO_POLL_INTERVAL_MS;
+    while (performance.now() < deadline) {
         if (signal?.aborted) throw new WebProviderError('任务已取消', { provider: PROVIDER, code: 'UNKNOWN', submitted: true });
 
         const failed = current.filter(isFlowVideoFailed);
@@ -732,11 +831,14 @@ async function waitForFlowVideos(media, auth, { timeoutMinutes, signal, editMatc
             if (done.length > 0) return done;
         }
 
-        await sleep(VIDEO_POLL_INTERVAL_MS, signal);
+        await sleep(nextPollDelayMs, signal);
+        nextPollDelayMs = VIDEO_POLL_INTERVAL_MS;
 
         try {
+            // 会话临近过期先主动续期，避免这次轮询正好撞上 401。
+            pollAuth = await ensureFreshFlowAuth(pollAuth, { signal });
             const wantedIds = current.map(item => item.mediaId);
-            const spec = buildProjectMediaRequest({ auth, mediaIds: wantedIds });
+            const spec = buildProjectMediaRequest({ auth: pollAuth, mediaIds: wantedIds });
             const payload = await runProviderPoll(
                 PROVIDER,
                 () => fetchFlowProjectMedia(spec, { signal }),
@@ -757,7 +859,22 @@ async function waitForFlowVideos(media, auth, { timeoutMinutes, signal, editMatc
         } catch (error) {
             // Poll endpoints change shape more often than generate endpoints do;
             // a lookup failure must not discard an already-billed generation.
-            console.warn(`[Flow HTTP] 视频状态查询失败，继续等待：${error.message}`);
+            // 认证失效（401）：轮询中途静默续期一次后继续等，让长视频扛过 session 过期
+            // （借鉴 gflow-cli 的 401→refresh→retry）。403 是墙、续期解不开，只记日志继续等。
+            if (error?.code === 'AUTH_EXPIRED') {
+                try {
+                    pollAuth = await getFlowAuth({ signal, forceRefresh: true });
+                    console.warn('[Flow HTTP] 视频轮询遇认证失效，已静默刷新登录态后继续等待');
+                } catch (refreshError) {
+                    console.warn(`[Flow HTTP] 视频轮询续期失败，继续等待：${refreshError.message}`);
+                }
+            } else {
+                // 限流：按服务端 Retry-After 拉长下一轮等待（不短于常规轮询间隔）。
+                if (error?.code === 'RATE_LIMIT' && error?.details?.retryAfterMs > 0) {
+                    nextPollDelayMs = Math.max(VIDEO_POLL_INTERVAL_MS, error.details.retryAfterMs);
+                }
+                console.warn(`[Flow HTTP] 视频状态查询失败，继续等待：${error.message}`);
+            }
         }
     }
 
@@ -792,10 +909,18 @@ async function fetchFlowProjectMedia(spec, { signal } = {}) {
             signal: controller.signal
         });
         if (!response.ok) {
+            // 401 = 登录过期（可续期解），403 = 墙（续期解不开），429 = 限流（尊重 Retry-After）。
+            // 分开归类，让轮询只对 401 触发续期、对 429 按服务端指示退避。
+            const code = response.status === 401 ? 'AUTH_EXPIRED'
+                : response.status === 403 ? 'WAF_BLOCKED'
+                    : response.status === 429 ? 'RATE_LIMIT'
+                        : 'GENERATION_FAILED';
+            const retryAfterMs = code === 'RATE_LIMIT' ? parseRetryAfterMs(response.headers) : null;
             throw new WebProviderError(`${PROVIDER_NAME} 视频状态查询失败：HTTP ${response.status}`, {
                 provider: PROVIDER,
-                code: response.status === 401 || response.status === 403 ? 'AUTH_EXPIRED' : 'GENERATION_FAILED',
-                submitted: true
+                code,
+                submitted: true,
+                ...(retryAfterMs !== null ? { details: { retryAfterMs } } : {})
             });
         }
         return response.json();

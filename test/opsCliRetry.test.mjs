@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
-import { runOpsCli, shouldRetryOpsFailure } from '../server/services/opsCliRunner.js';
+import { jitterBackoffMs, runOpsCli, shouldRetryOpsFailure } from '../server/services/opsCliRunner.js';
 
 /**
  * 浏览器自动化的自动重试。
@@ -202,4 +202,15 @@ test('重试退避期间取消也会释放任务并恢复原登录状态', async
     await assert.rejects(promise, error => error.code === 'OPERATION_CANCELLED');
     assert.equal(attempts.length, 1);
     assert.deepEqual(states, ['checking', 'authenticated']);
+});
+
+test('退避抖动：基准为 0 不抖，正基准落在 ±25% 内', () => {
+    // 借鉴 gflow-cli 的 jittered backoff：把因同一次冷启动同时失败的多路重试打散，
+    // 避免它们在同一瞬间再次压垮刚起来的 Chrome。
+    assert.equal(jitterBackoffMs(0), 0);
+    assert.equal(jitterBackoffMs(-5), 0, '非正基准一律归零');
+    for (let i = 0; i < 200; i += 1) {
+        const value = jitterBackoffMs(4_000);
+        assert.ok(value >= 3_000 && value <= 5_000, `抖动越界：${value}`);
+    }
 });

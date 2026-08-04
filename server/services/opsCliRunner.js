@@ -166,6 +166,18 @@ const MAX_OPS_ATTEMPTS = Math.max(1, Number(process.env.EVAN_OPS_MAX_ATTEMPTS) |
 const RETRY_BACKOFF_MS = [4_000, 12_000];
 
 /**
+ * 给退避加 ±25% 抖动（借鉴 gflow-cli 的 jittered backoff）。
+ *
+ * 没有抖动时，多路任务因同一次冷启动同时失败，会在同一时刻整齐地一起重试，反而再次
+ * 把刚起来的 Chrome 压垮。抖动把这些重试打散开。基准为 0 时抖动也是 0，测试注入的
+ * NO_BACKOFF 不受影响。
+ */
+export function jitterBackoffMs(baseMs) {
+    if (!(baseMs > 0)) return 0;
+    return Math.max(0, Math.round(baseMs + baseMs * 0.25 * (2 * Math.random() - 1)));
+}
+
+/**
  * 这次失败能不能安全地自动重试。
  *
  * submitted 是硬闸门：生成请求一旦提交出去，平台就已经开始扣配额了。这时重试
@@ -369,7 +381,9 @@ export function runOpsCli({
                 );
                 try {
                     await abortableDelay(
-                        retryBackoffMs[attempt - 1] ?? retryBackoffMs[retryBackoffMs.length - 1] ?? 0,
+                        jitterBackoffMs(
+                            retryBackoffMs[attempt - 1] ?? retryBackoffMs[retryBackoffMs.length - 1] ?? 0
+                        ),
                         signal,
                         label
                     );

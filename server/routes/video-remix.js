@@ -41,6 +41,7 @@ function sendError(res, error) {
   const statusByCode = {
     AUTH_EXPIRED: 401,
     RECAPTCHA_REQUIRED: 401,
+    WAF_BLOCKED: 403,
     RATE_LIMIT: 429,
     QUOTA_EXHAUSTED: 402,
     CONTENT_POLICY: 422,

@@ -22,7 +22,7 @@ import {
     noteBillableRequestSettled,
     noteBillableRequestStart
 } from '../generationRuntime/scheduler.js';
-import { asWebProviderError, classifyHttpFailure, redactSecrets, WebProviderError } from './errors.js';
+import { asWebProviderError, classifyHttpFailure, parseRetryAfterMs, redactSecrets, WebProviderError } from './errors.js';
 import { isSharedBrowserReady } from '../browserHubClient.js';
 
 export const WEB_HTTP_PROVIDERS = Object.freeze(['gemini-web', 'jimeng', 'google-flow']);
@@ -346,15 +346,24 @@ export async function webFetchOk(provider, spec, { submitted = false, what = '�
     const response = await webFetch(provider, spec, { ...options, submitted });
     if (!response.ok) {
         const responseText = response.text;
+        const code = classifyHttpFailure(response.status, responseText);
+        // 403 墙给一句可执行的提示：重新登录解不开，需要在共享 Chrome 里刷新 Flow 页面
+        // 让 reCAPTCHA/指纹重新过一遍。避免用户被引导去做无用的重新登录。
+        const wafHint = code === 'WAF_BLOCKED'
+            ? '（可能触发了 reCAPTCHA / 风控墙，请在系统共享 Chrome 中刷新对应平台页面后重试，重新登录通常无效）'
+            : '';
+        // 限流时把服务端给的 Retry-After 透出，调用方的退避可据此更礼貌地等待。
+        const retryAfterMs = code === 'RATE_LIMIT' ? parseRetryAfterMs(response.headers) : null;
         throw new WebProviderError(
-            `${provider} ${what}失败：HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`,
+            `${provider} ${what}失败：HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}${wafHint}`,
             {
                 provider,
-                code: classifyHttpFailure(response.status, responseText),
+                code,
                 submitted,
                 details: {
                     httpStatus: response.status,
-                    responseBody: redactSecrets(responseText).slice(0, 2000)
+                    responseBody: redactSecrets(responseText).slice(0, 2000),
+                    ...(retryAfterMs !== null ? { retryAfterMs } : {})
                 }
             }
         );

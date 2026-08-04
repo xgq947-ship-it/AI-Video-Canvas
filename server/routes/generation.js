@@ -60,9 +60,10 @@ function sendGenerationError(res, error, fallbackMessage) {
     const code = typeof error?.code === 'string' ? error.code : undefined;
     const status = code === 'INVALID_INPUT' ? 400
         : code === 'AUTH_EXPIRED' ? 401
-            : code === 'RATE_LIMIT' || code === 'QUOTA_EXHAUSTED' ? 429
-                : code === 'CONTENT_POLICY' ? 422
-                    : 500;
+            : code === 'WAF_BLOCKED' ? 403
+                : code === 'RATE_LIMIT' || code === 'QUOTA_EXHAUSTED' ? 429
+                    : code === 'CONTENT_POLICY' ? 422
+                        : 500;
     return res.status(status).json({
         error: error?.message || fallbackMessage,
         ...(code ? { code } : {}),

@@ -85,7 +85,7 @@ import {
 } from '../server/services/webhttp/gemini/provider.js';
 
 import { crc32Hex, parseApplyUploadResponse, signImageXRequest } from '../server/services/webhttp/jimeng/imagex.js';
-import { WebProviderError, classifyHttpFailure, redactSecrets } from '../server/services/webhttp/errors.js';
+import { WebProviderError, classifyHttpFailure, parseRetryAfterMs, redactSecrets } from '../server/services/webhttp/errors.js';
 import { runWithExecutionMode } from '../server/services/webhttp/index.js';
 import {
     createBridgeStartupGuard,
@@ -1349,6 +1349,47 @@ test('HTTP 状态码分类', () => {
     assert.equal(classifyHttpFailure(400, 'content policy violation'), 'CONTENT_POLICY');
     assert.equal(classifyHttpFailure(400, '{"fieldViolations":[{"description":"Unknown field"}]}'), 'PROTOCOL_CHANGED');
     assert.equal(classifyHttpFailure(500, ''), 'GENERATION_FAILED');
+});
+
+test('403 是墙不是过期：单独归成 WAF_BLOCKED，绝不当作 AUTH_EXPIRED', () => {
+    // 借鉴 gflow-cli WafRejectionError：401 = 登录过期（可重登解），403 = reCAPTCHA/WAF 墙
+    // （重登解不开）。归错会让 authRecovery 把任务挂起等一个永远解不开的登录。
+    assert.equal(classifyHttpFailure(403, ''), 'WAF_BLOCKED');
+    assert.equal(classifyHttpFailure(403, 'forbidden by security policy'), 'WAF_BLOCKED');
+    // 403 里若明确是 reCAPTCHA / 签名问题，仍走各自的专门分类。
+    assert.equal(classifyHttpFailure(403, 'captcha challenge'), 'RECAPTCHA_REQUIRED');
+    // 401 依旧是过期，不被 403 的改动波及。
+    assert.equal(classifyHttpFailure(401, ''), 'AUTH_EXPIRED');
+
+    // WAF_BLOCKED 属提交前失败：默认 submitted=false（没扣配额），不会被误判成已提交。
+    assert.equal(new WebProviderError('x', { code: 'WAF_BLOCKED' }).submitted, false);
+});
+
+test('内容安全按 reason 码判定，比关键词更准', () => {
+    // 借鉴 gflow-cli _classify_content_safety 的 PUBLIC_ERROR_UNSAFE_* 判定。
+    assert.equal(classifyHttpFailure(400, '{"error":{"details":[{"reason":"PUBLIC_ERROR_UNSAFE_FACE"}]}}'), 'CONTENT_POLICY');
+    assert.equal(classifyHttpFailure(400, 'PUBLIC_ERROR_UNSAFE_GENERATION'), 'CONTENT_POLICY');
+    assert.equal(classifyHttpFailure(400, 'public_error_unsafe_identity'), 'CONTENT_POLICY');
+    // 无 reason 码、无关键词的普通 400 仍是协议变化，不被误判成内容安全。
+    assert.equal(classifyHttpFailure(400, '{"fieldViolations":[{"description":"Unknown field"}]}'), 'PROTOCOL_CHANGED');
+});
+
+test('parseRetryAfterMs 解析秒数、封顶 60s、非法回 null', () => {
+    // 借鉴 gflow-cli parse_retry_after：只认秒数、封顶 60s。
+    assert.equal(parseRetryAfterMs(new Headers({ 'retry-after': '5' })), 5_000);
+    assert.equal(parseRetryAfterMs({ 'retry-after': '30' }), 30_000);
+    assert.equal(parseRetryAfterMs({ 'Retry-After': '2' }), 2_000);
+    assert.equal(parseRetryAfterMs({ 'retry-after': '600' }), 60_000, '超过 60s 必须封顶');
+    assert.equal(parseRetryAfterMs({ 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' }), null, 'HTTP-date 形式不支持，返回 null');
+    assert.equal(parseRetryAfterMs({}), null);
+    assert.equal(parseRetryAfterMs(null), null);
+});
+
+test('WAF 403 在高清阶段不再触发无用重试，而是安全回退原始 1K', () => {
+    // 403 从 AUTH_EXPIRED 拆出后的行为变化：高清 WAF 403 不再走 token 重试
+    // （重登/重铸解不开墙），转而保留已生成内容、回退 1K，避免重复生图。
+    assert.equal(shouldRetryFlowUpsampleError({ code: 'WAF_BLOCKED' }, 1), false);
+    assert.equal(shouldFallbackFlowUpsampleToOriginal({ code: 'WAF_BLOCKED' }), true);
 });
 
 test('日志脱敏覆盖三个平台的凭证形态', () => {

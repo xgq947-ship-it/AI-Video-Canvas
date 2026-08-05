@@ -151,7 +151,10 @@ test('FFmpeg 没有实际写出分析帧时拒绝残缺时间线', async (t) => 
   const { context, source } = makeContext(t);
   const runProcess = context.runProcessImpl;
   context.runProcessImpl = async (command, args) => {
-    if (String(args.at(-1)).endsWith('/end.jpg')) return { stdout: '', stderr: '' };
+    // path.basename 而非 endsWith('/end.jpg')：源码用 path.join 拼输出路径，
+    // Windows 上分隔符是 \，写死 / 会让这条拦截永远不命中，模拟的“帧没写出”
+    // 场景就不会发生，assert.rejects 自然等不到 reject。
+    if (path.basename(String(args.at(-1))) === 'end.jpg') return { stdout: '', stderr: '' };
     return runProcess(command, args);
   };
 

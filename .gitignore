@@ -10,7 +10,11 @@ lerna-debug.log*
 node_modules
 .local-ai-cli/
 codex-home/
-runtime/
+# 仅忽略仓库根目录下的 runtime/（本地会话与任务状态）。
+# 不能写成裸的 "runtime/"：那会匹配任意深度下名为 runtime 的目录，
+# 连带把 server/runtime/（真正的源码目录，如 libraryPaths.js）也一并吞掉——
+# 这正是 v0.2.15 发布时 CI 报 Cannot find module 的原因。
+/runtime/
 # Playwright 调试时存的页面快照，一次性现场，不入库
 .playwright-cli/
 dist

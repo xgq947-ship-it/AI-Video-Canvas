@@ -12,7 +12,7 @@ import {
     runProviderPoll
 } from '../../generationRuntime/scheduler.js';
 import { webContext, webFetch, cookieHeaderFor, buildRequestSpec } from '../bridge.js';
-import { WebProviderError, classifyHttpFailure } from '../errors.js';
+import { WebProviderError, classifyHttpFailure, parseRetryAfterMs } from '../errors.js';
 import { downloadResultMedia, loadReferenceImageFiles, requireNonEmptyPrompt } from '../media.js';
 import {
     GEMINI_MODE,
@@ -314,13 +314,15 @@ async function recoverGeminiTextConversation({
     timeoutSeconds,
 }) {
     if (!conversation?.conversationId) return null;
-    const deadline = Date.now() + Math.max(15, Number(timeoutSeconds) || 120) * 1000;
+    // 单调时钟：deadline 与 refreshedAt 同一时钟域，避免系统睡眠 / NTP 校时算错
+    // 超时与续期节流（借鉴 gflow-cli 的 time.monotonic，与 Flow / waitForGeminiVideo 一致）。
+    const deadline = performance.now() + Math.max(15, Number(timeoutSeconds) || 120) * 1000;
     let activeSession = session;
-    let refreshedAt = Date.now();
-    while (Date.now() < deadline) {
-        if (Date.now() - refreshedAt >= TEXT_RECOVERY_SESSION_REFRESH_MS) {
+    let refreshedAt = performance.now();
+    while (performance.now() < deadline) {
+        if (performance.now() - refreshedAt >= TEXT_RECOVERY_SESSION_REFRESH_MS) {
             activeSession = await getGeminiSession({ signal, forceRefresh: true });
-            refreshedAt = Date.now();
+            refreshedAt = performance.now();
         }
         requestIdSeed = nextRequestId(requestIdSeed);
         const spec = buildBatchRpcRequest({
@@ -565,14 +567,20 @@ const VIDEO_POLL_SESSION_REFRESH_MS = 90_000;
  * request; it never re-submits the prompt and therefore cannot double bill.
  */
 async function waitForGeminiVideo({ session, conversationId, timeoutMinutes, signal }) {
-    const deadline = Date.now() + timeoutMinutes * 60_000;
+    // 单调时钟算超时与续期节流，避免系统睡眠 / NTP 校时把这些窗口算错（借鉴 gflow-cli
+    // 的 time.monotonic，Flow 已用 performance.now）。deadline 与 refreshedAt 必须同一
+    // 时钟域，否则两个时间基准互相比较会错乱。
+    const deadline = performance.now() + timeoutMinutes * 60_000;
     let activeSession = session;
-    let refreshedAt = Date.now();
-    while (Date.now() < deadline) {
-        await sleep(VIDEO_POLL_INTERVAL_MS, signal);
-        if (Date.now() - refreshedAt >= VIDEO_POLL_SESSION_REFRESH_MS) {
+    let refreshedAt = performance.now();
+    // 下一轮轮询前的等待；命中 429 时按服务端 Retry-After 覆盖（只延长、不缩短）。
+    let nextPollDelayMs = VIDEO_POLL_INTERVAL_MS;
+    while (performance.now() < deadline) {
+        await sleep(nextPollDelayMs, signal);
+        nextPollDelayMs = VIDEO_POLL_INTERVAL_MS;
+        if (performance.now() - refreshedAt >= VIDEO_POLL_SESSION_REFRESH_MS) {
             activeSession = await getGeminiSession({ signal, forceRefresh: true });
-            refreshedAt = Date.now();
+            refreshedAt = performance.now();
         }
         requestIdSeed = nextRequestId(requestIdSeed);
         const spec = buildBatchRpcRequest({
@@ -591,10 +599,16 @@ async function waitForGeminiVideo({ session, conversationId, timeoutMinutes, sig
                 { signal, timeoutSeconds: 120, submitted: true }
             ), { signal, label: `${PROVIDER_NAME} 视频轮询` });
             if (!response.ok) {
+                // 401/403 = 会话失效，429 = 限流（尊重 Retry-After），其余按生成失败继续等。
+                const code = response.status === 401 || response.status === 403 ? 'AUTH_EXPIRED'
+                    : response.status === 429 ? 'RATE_LIMIT'
+                        : 'GENERATION_FAILED';
+                const retryAfterMs = code === 'RATE_LIMIT' ? parseRetryAfterMs(response.headers) : null;
                 throw new WebProviderError(`${PROVIDER_NAME} 视频状态查询失败：HTTP ${response.status}`, {
                     provider: PROVIDER,
-                    code: response.status === 401 || response.status === 403 ? 'AUTH_EXPIRED' : 'GENERATION_FAILED',
-                    submitted: true
+                    code,
+                    submitted: true,
+                    ...(retryAfterMs !== null ? { details: { retryAfterMs } } : {})
                 });
             }
             const payloads = extractStreamPayloads(response.text);
@@ -615,10 +629,15 @@ async function waitForGeminiVideo({ session, conversationId, timeoutMinutes, sig
                 throw error;
             }
             // Do not hammer Gemini after a transport/rate-limit failure. The
-            // fixed 60s interval is the backoff; the periodic refresh before a
+            // 60s interval is the baseline backoff; the periodic refresh before a
             // later poll replaces short-lived bl/f.sid/at values.
             // The task is already paid for. A transient lookup failure must not
             // turn into a second generation through auto/browser fallback.
+            // 命中 429 时按服务端 Retry-After 再拉长这一轮等待（只延长、绝不缩短，
+            // 免得把 60s 轮询打成高频；借鉴 gflow-cli，与 Flow 轮询一致）。
+            if (error?.code === 'RATE_LIMIT' && error?.details?.retryAfterMs > 0) {
+                nextPollDelayMs = Math.max(VIDEO_POLL_INTERVAL_MS, error.details.retryAfterMs);
+            }
             console.warn(`[Gemini Web HTTP] 视频状态查询失败，继续等待：${error.message}`);
         }
     }

@@ -18,7 +18,7 @@ import {
     runProviderPoll
 } from '../../generationRuntime/scheduler.js';
 import { buildRequestSpec, webContext, webFetch } from '../bridge.js';
-import { WebProviderError, classifyHttpFailure } from '../errors.js';
+import { WebProviderError, classifyHttpFailure, parseRetryAfterMs } from '../errors.js';
 import { downloadResultMedia, loadReferenceImageFiles, requireNonEmptyPrompt } from '../media.js';
 import { fetchImageXCredentials, uploadReferenceImage } from './imagex.js';
 import {
@@ -74,8 +74,14 @@ async function jimengApi(path, body, { signal, submitted = false, what = '接口
     }), { signal, timeoutSeconds, submitted });
 
     if (!response.ok) {
+        const code = classifyHttpFailure(response.status, response.text);
+        // 限流时把服务端的 Retry-After 带出去，让轮询循环按它退避（借鉴 gflow-cli，
+        // Flow 的 fetchFlowProjectMedia 已这么做，这里补齐即梦）。只对 429 解析：
+        // 其它状态没有这个头，白解一趟。
+        const retryAfterMs = code === 'RATE_LIMIT' ? parseRetryAfterMs(response.headers) : null;
         throw new WebProviderError(`${PROVIDER_NAME}${what}失败：HTTP ${response.status}`, {
-            provider: PROVIDER, code: classifyHttpFailure(response.status, response.text), submitted
+            provider: PROVIDER, code, submitted,
+            ...(retryAfterMs !== null ? { details: { retryAfterMs } } : {})
         });
     }
     const payload = response.json();
@@ -216,11 +222,13 @@ export async function getHistoryByIds(submitIds, { signal } = {}) {
  * empty item list.
  */
 async function waitForTask(task, { isCompleted, parseResults, timeoutMinutes, signal, what }) {
-    const deadline = Date.now() + timeoutMinutes * 60_000;
+    // 单调时钟算超时预算，避免系统睡眠 / NTP 校时把这个窗口算错（借鉴 gflow-cli 的
+    // time.monotonic，Flow 的两处轮询已用 performance.now，这里补齐即梦）。
+    const deadline = performance.now() + timeoutMinutes * 60_000;
     let interval = FIRST_POLL_DELAY_MS;
     let consecutiveErrors = 0;
 
-    while (Date.now() < deadline) {
+    while (performance.now() < deadline) {
         await sleep(interval, signal);
         let payload;
         try {
@@ -234,7 +242,13 @@ async function waitForTask(task, { isCompleted, parseResults, timeoutMinutes, si
             // Quota is already spent; keep waiting through transient failures.
             if (error?.code === 'AUTH_EXPIRED' || ++consecutiveErrors >= 5) throw error;
             console.warn(`[即梦 HTTP] ${what}状态查询失败，继续等待：${error.message}`);
-            interval = FALLBACK_POLL_INTERVAL_MS;
+            // 命中 429 时按服务端 Retry-After 拉长等待，但绝不短于常规回退间隔（尊重
+            // Retry-After 只能「延长」，不能把轮询打成高频）。成功一轮后下面会用
+            // pollingConfigFrom 覆盖回服务端声明的正常节奏，二者互不污染。
+            const retryAfterMs = error?.details?.retryAfterMs;
+            interval = retryAfterMs > 0
+                ? Math.max(FALLBACK_POLL_INTERVAL_MS, retryAfterMs)
+                : FALLBACK_POLL_INTERVAL_MS;
             continue;
         }
 

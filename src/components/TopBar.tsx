@@ -11,6 +11,12 @@ import { ApiKeySettingsModal } from './modals/ApiKeySettingsModal';
 import { StartupSetupGuideModal } from './modals/StartupSetupGuideModal';
 import { TrashModal } from './modals/TrashModal';
 
+/**
+ * 首启配置指南「本机已见过」标记。首次安装时自动弹一次登录/配置指南，
+ * 之后在同一台电脑上不再自动弹出；用户仍可从右上角「设置 → 启动配置指南」手动打开。
+ */
+const SETUP_GUIDE_SEEN_KEY = 'evan.setupGuideSeen';
+
 interface TopBarProps {
     // Title
     canvasTitle: string;
@@ -62,11 +68,33 @@ export const TopBar: React.FC<TopBarProps> = ({
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [showSettingsMenu, setShowSettingsMenu] = useState(false);
     const [showApiSettings, setShowApiSettings] = useState(false);
-    const [showSetupGuide, setShowSetupGuide] = useState(true);
+    const [showSetupGuide, setShowSetupGuide] = useState(() => {
+        // 只有本机从没见过首启指南时才自动弹出。localStorage 在 Electron 渲染进程里
+        // 会持久化到磁盘、跨启动保留，正好满足「装完弹一次，之后本机不再弹」。
+        try {
+            return localStorage.getItem(SETUP_GUIDE_SEEN_KEY) !== '1';
+        } catch {
+            return true;
+        }
+    });
     const [showTrash, setShowTrash] = useState(false);
     const [isOpeningBrowser, setIsOpeningBrowser] = useState(false);
     const [browserOpenError, setBrowserOpenError] = useState<string | null>(null);
     const settingsMenuRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        // 首启指南一旦自动弹出，就立刻标记本机已见过——即便用户直接关掉应用没点「进入画布」，
+        // 下次启动也不会再自动弹。手动从设置菜单重开不受影响（那只改 state、不经过这里）。
+        if (showSetupGuide) {
+            try {
+                localStorage.setItem(SETUP_GUIDE_SEEN_KEY, '1');
+            } catch {
+                /* localStorage 不可用时忽略：最坏情况是每次都弹，不影响功能 */
+            }
+        }
+        // 只在挂载时执行一次。
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     useEffect(() => {
         const handlePointerDown = (event: PointerEvent) => {

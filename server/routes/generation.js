@@ -34,6 +34,8 @@ import {
     normalizeImageResolution
 } from '../../shared/generationProviders.js';
 import { resolveWebExecutionMode } from '../services/webhttp/index.js';
+import { cancelGeneration, isGenerationActive, registerGeneration } from '../services/generationCancellation.js';
+import { generationHasCrossedSubmissionBoundary } from '../services/generationRuntime/scheduler.js';
 
 const router = express.Router();
 
@@ -161,6 +163,9 @@ router.get('/product-scene-jobs/:jobId', (req, res) => {
 // ============================================================================
 
 router.post('/generate-image', async (req, res) => {
+    // 取消登记：视频/图片生成可能跑很久，用户必须能中止。signal 会一路透传到
+    // 调度器和各 provider workflow（它们本来就支持），这里只负责持有 controller。
+    let cancellation = null;
     try {
         const {
             nodeId,
@@ -176,6 +181,13 @@ router.post('/generate-image', async (req, res) => {
         const { targetDir, urlPrefix } = resolveProjectMediaTarget(workflowId, 'images', {
             workflowsDir: WORKFLOWS_DIR,
             projectsDir: PROJECTS_DIR
+        });
+        cancellation = registerGeneration({
+            workflowId,
+            nodeId,
+            label: '图片生成',
+            // 越过提交边界之后，取消已经无法阻止计费，取消端点要据此如实提示用户。
+            submitted: () => generationHasCrossedSubmissionBoundary(getImageGenerationProvider(imageModel)?.id)
         });
 
         if (imageModel?.startsWith('kling-')) {
@@ -254,6 +266,7 @@ router.post('/generate-image', async (req, res) => {
                 count: requestedCount,
                 nodeId,
                 workflowId,
+                signal: cancellation?.signal,
                 executionMode: executionModeFor(req.app, imageModel)
             });
             workflowImages = result.images;
@@ -365,6 +378,8 @@ router.post('/generate-image', async (req, res) => {
     } catch (error) {
         console.error("Server Image Gen Error:", error);
         return sendGenerationError(res, error, 'Image generation failed');
+    } finally {
+        cancellation?.release();
     }
 });
 
@@ -373,12 +388,19 @@ router.post('/generate-image', async (req, res) => {
 // ============================================================================
 
 router.post('/generate-video', async (req, res) => {
+    let cancellation = null;
     try {
         const { nodeId, workflowId, prompt, imageBase64: rawImageBase64, lastFrameBase64: rawLastFrameBase64, referenceImages: rawReferenceImages, referenceVideo: rawReferenceVideo, referenceImageLabels: rawReferenceImageLabels, referenceAudioUrls: rawReferenceAudioUrls, aspectRatio, resolution, duration, videoModel } = req.body;
         const { GEMINI_API_KEY, ARK_API_KEY, LIBRARY_DIR, WORKFLOWS_DIR, PROJECTS_DIR } = req.app.locals;
         const { targetDir, urlPrefix } = resolveProjectMediaTarget(workflowId, 'videos', {
             workflowsDir: WORKFLOWS_DIR,
             projectsDir: PROJECTS_DIR
+        });
+        cancellation = registerGeneration({
+            workflowId,
+            nodeId,
+            label: '视频生成',
+            submitted: () => generationHasCrossedSubmissionBoundary(getVideoGenerationProvider(videoModel)?.id)
         });
 
         // 旧项目里的已下线模型不能静默回落到 Veo，避免误扣其他供应商额度。
@@ -435,6 +457,7 @@ router.post('/generate-video', async (req, res) => {
                 nativeAudio: req.body.generateAudio !== false,
                 nodeId,
                 workflowId,
+                signal: cancellation?.signal,
                 executionMode: executionModeFor(req.app, videoModel)
             });
             videoBuffer = workflowResult.buffer;
@@ -468,6 +491,7 @@ router.post('/generate-video', async (req, res) => {
                 timeoutMinutes: 15,
                 nodeId,
                 workflowId,
+                signal: cancellation?.signal,
                 executionMode: executionModeFor(req.app, videoModel)
             });
             videoBuffer = workflowResult.buffer;
@@ -507,6 +531,7 @@ router.post('/generate-video', async (req, res) => {
                 timeoutMinutes: 15,
                 nodeId,
                 workflowId,
+                signal: cancellation?.signal,
                 executionMode: executionModeFor(req.app, videoModel)
             });
             videoBuffer = workflowResult.buffer;
@@ -585,7 +610,42 @@ router.post('/generate-video', async (req, res) => {
     } catch (error) {
         console.error("Server Video Gen Error:", error);
         return sendGenerationError(res, error, 'Video generation failed');
+    } finally {
+        cancellation?.release();
     }
+});
+
+// ============================================================================
+// GENERATION CANCELLATION
+// ============================================================================
+
+/**
+ * 取消某个节点正在进行的图片/视频生成。
+ *
+ * 响应里的 `submitted` 是关键：为 true 表示请求可能已被平台受理，**本次仍可能
+ * 计费**，结果也可能出现在平台历史里。前端必须原样转述，不能一律显示「已取消」——
+ * 这与节点错误 UI 里「已扣费就藏掉重试按钮」是同一条原则。
+ */
+router.post('/generations/:nodeId/cancel', (req, res) => {
+    const { nodeId } = req.params;
+    const workflowId = req.body?.workflowId || req.query?.workflowId || '';
+    const result = cancelGeneration(workflowId, nodeId);
+    if (!result.cancelled) {
+        return res.status(404).json({ error: '没有找到进行中的生成任务', cancelled: false });
+    }
+    return res.json({
+        cancelled: true,
+        submitted: result.submitted,
+        message: result.submitted
+            ? '已停止等待，但请求可能已被平台受理并计费，请到对应平台历史记录确认'
+            : '生成任务已取消'
+    });
+});
+
+/** 查询某节点是否还有生成在跑（前端恢复流程用）。 */
+router.get('/generations/:nodeId/active', (req, res) => {
+    const workflowId = req.query?.workflowId || '';
+    return res.json({ active: isGenerationActive(workflowId, req.params.nodeId) });
 });
 
 // ============================================================================

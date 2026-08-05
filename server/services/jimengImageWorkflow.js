@@ -21,7 +21,6 @@ export const JIMENG_IMAGE_SUPPORTED_ASPECT_RATIOS = Object.freeze([
 ]);
 export const JIMENG_IMAGE_SUPPORTED_RESOLUTIONS = Object.freeze(['2K', '4K']);
 export const JIMENG_IMAGE_PRO_SUPPORTED_RESOLUTIONS = Object.freeze(['1K', '2K', '4K']);
-export const JIMENG_IMAGE_MAX_REFERENCES = 12;
 export const JIMENG_IMAGE_MAX_COUNT = 8;
 export const JIMENG_IMAGE_PRO_MAX_COUNT = 4;
 
@@ -29,9 +28,6 @@ export function isJimengImageWorkflowModel(modelId) {
     return Object.prototype.hasOwnProperty.call(JIMENG_IMAGE_MODELS, modelId);
 }
 
-export function resolveJimengImageModelLabel(modelId) {
-    return JIMENG_IMAGE_MODELS[modelId] || JIMENG_IMAGE_MODELS[JIMENG_IMAGE_LITE_MODEL_ID];
-}
 
 export function jimengImageSupportedResolutions(modelId = JIMENG_IMAGE_LITE_MODEL_ID) {
     return modelId === JIMENG_IMAGE_PRO_MODEL_ID

@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, CircleHelp, Globe2, Images, KeyRound, LayoutDashboard, Loader2, Plus, RefreshCw, Save, Settings, Trash2 } from 'lucide-react';
+import { ChevronDown, CircleHelp, FolderOpen, Globe2, KeyRound, Loader2, Plus, RefreshCw, Save, Settings, Trash2 } from 'lucide-react';
 import { NodeData } from '../types';
 import { ApiKeySettingsModal } from './modals/ApiKeySettingsModal';
 import { StartupSetupGuideModal } from './modals/StartupSetupGuideModal';
@@ -24,6 +24,7 @@ interface TopBarProps {
     onSave: () => void | Promise<void>;
     onRefresh: () => void | Promise<void>;
     onNew: () => void;
+    onOpenExistingProject: () => void;
     hasUnsavedChanges: boolean;
     lastAutoSaveTime?: number;
     workflowId?: string | null;
@@ -33,8 +34,6 @@ interface TopBarProps {
     onToggleTheme: () => void;
     showBrand?: boolean;
     sidebarOffset?: number;
-    onOpenAssets?: () => void;
-    assetsOpen?: boolean;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -48,6 +47,7 @@ export const TopBar: React.FC<TopBarProps> = ({
     onSave,
     onRefresh,
     onNew,
+    onOpenExistingProject,
     hasUnsavedChanges,
     lastAutoSaveTime,
     workflowId,
@@ -56,8 +56,6 @@ export const TopBar: React.FC<TopBarProps> = ({
     onToggleTheme,
     showBrand = true,
     sidebarOffset = 0,
-    onOpenAssets,
-    assetsOpen = false,
 }) => {
     const [showNewConfirm, setShowNewConfirm] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
@@ -198,37 +196,6 @@ export const TopBar: React.FC<TopBarProps> = ({
                         </span>
                       )}
                     </>}
-                    {onOpenAssets && (
-                      <nav className={`flex items-center rounded-xl border p-1 ${
-                        canvasTheme === 'dark'
-                          ? 'border-white/10 bg-black/30 shadow-inner'
-                          : 'border-neutral-200 bg-neutral-100/90'
-                      }`} aria-label="功能工作区">
-                        <button
-                          type="button"
-                          aria-current="page"
-                          className={`flex h-8 items-center gap-2 rounded-lg px-3.5 text-xs font-medium transition-all ${
-                            canvasTheme === 'dark' ? 'bg-white text-neutral-950 shadow-sm' : 'bg-neutral-900 text-white shadow-sm'
-                          }`}
-                        >
-                          <LayoutDashboard size={14} />
-                          画布
-                        </button>
-                        {onOpenAssets && <button
-                          type="button"
-                          onClick={onOpenAssets}
-                          aria-current={assetsOpen ? 'page' : undefined}
-                          className={`flex h-8 items-center gap-2 rounded-lg px-3.5 text-xs font-medium transition-all ${
-                            assetsOpen
-                              ? canvasTheme === 'dark' ? 'bg-white text-neutral-950 shadow-sm' : 'bg-neutral-900 text-white shadow-sm'
-                              : canvasTheme === 'dark' ? 'text-neutral-400 hover:bg-white/5 hover:text-white' : 'text-neutral-500 hover:bg-white hover:text-neutral-900'
-                          }`}
-                        >
-                          <Images size={14} />
-                          资产
-                        </button>}
-                      </nav>
-                    )}
                 </div>
 
                 {/* Right: Actions */}
@@ -263,6 +230,17 @@ export const TopBar: React.FC<TopBarProps> = ({
                     >
                         <RefreshCw size={16} className={isRefreshing ? 'animate-spin' : ''} />
                         刷新画布
+                    </button>
+                    <button
+                        onClick={onOpenExistingProject}
+                        className={`text-sm px-4 py-2.5 rounded-full flex items-center gap-2 transition-colors font-medium border ${canvasTheme === 'dark'
+                            ? 'bg-neutral-800 hover:bg-neutral-700 text-white border-neutral-600'
+                            : 'bg-neutral-100 hover:bg-neutral-200 text-neutral-900 border-neutral-300 shadow-sm'
+                            }`}
+                        title="打开已有项目"
+                    >
+                        <FolderOpen size={16} />
+                        打开项目
                     </button>
                     <button
                         onClick={handleNewClick}

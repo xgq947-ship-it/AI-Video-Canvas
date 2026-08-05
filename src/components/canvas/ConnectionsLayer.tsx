@@ -10,6 +10,7 @@ import { NodeData, NodeStatus, NodeType, Viewport } from '../../types';
 import { calculateConnectionPath } from '../../utils/connectionHelpers';
 import { VIDEO_ANALYSIS_INPUT_PORTS } from '../../../shared/videoAnalysis.js';
 import { VIDEO_ANALYSIS_NODE_HEIGHT } from '../../features/video-analysis/VideoAnalysisNode';
+import { getFlowBatchVideoNodeHeight, getStickmanStoryboardNodeHeight, SCRIPT_INPUT_NODE_HEIGHT, SCRIPT_INPUT_REFERENCE_NODE_HEIGHT } from '../../features/stickman-director/StickmanWorkflowNodes';
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -110,10 +111,13 @@ export const getNodeHeight = (node: NodeData, parentNode?: NodeData): number => 
     if (node.type === NodeType.VIDEO_REMIX) return 306;
     if (node.type === NodeType.VIDEO_ANALYSIS) return VIDEO_ANALYSIS_NODE_HEIGHT;
     if (node.type === NodeType.REFERENCE_VIDEO) return 300;
-    if (node.type === NodeType.SCRIPT_INPUT) return 500;
+    if (node.type === NodeType.SCRIPT_INPUT) {
+        const isReferenceScript = parentNode?.type === NodeType.VIDEO || parentNode?.type === NodeType.REFERENCE_VIDEO;
+        return isReferenceScript ? SCRIPT_INPUT_REFERENCE_NODE_HEIGHT : SCRIPT_INPUT_NODE_HEIGHT;
+    }
     if (node.type === NodeType.STICKMAN_DIRECTOR) return 600;
-    if (node.type === NodeType.STORYBOARD || node.type === NodeType.STORYBOARD_COMPARE) return Math.max(430, node.storyboard?.expanded ? 470 + (node.storyboard.shots.length * 180) : 310);
-    if (node.type === NodeType.FLOW_BATCH_VIDEO) return 420;
+    if (node.type === NodeType.STORYBOARD || node.type === NodeType.STORYBOARD_COMPARE) return getStickmanStoryboardNodeHeight(node.storyboard);
+    if (node.type === NodeType.FLOW_BATCH_VIDEO) return getFlowBatchVideoNodeHeight(parentNode?.storyboard);
     if (node.type === NodeType.VIDEO_MERGE) return 300;
 
     // Parse aspect ratio to calculate content height for Image/Video nodes

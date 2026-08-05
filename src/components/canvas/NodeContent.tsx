@@ -6,10 +6,44 @@
  */
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Loader2, ImageIcon as ImageIcon, Film, Upload, Pencil, Video, Expand, Shrink, RotateCcw, CircleAlert } from 'lucide-react';
+import { Loader2, ImageIcon as ImageIcon, Film, Upload, Pencil, Video, Expand, Shrink, RotateCcw, CircleAlert, XCircle } from 'lucide-react';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import { LazyImage } from '../LazyImage';
 import { LazyVideo } from '../LazyVideo';
+import { GenerationElapsed } from './GenerationElapsed';
+
+/**
+ * 生成中节点上的取消入口。
+ *
+ * 视频生成动辄几分钟，此前用户选错模型或写错提示词后只能干等，或者删掉节点——
+ * 而后端任务仍在跑、配额照扣。
+ *
+ * 点击后按钮立刻进入禁用态：取消要先问服务端「是否已越过提交边界」再中止本地请求，
+ * 有一次网络往返，不置灰的话用户会以为没生效而连点。
+ */
+const CancelGenerationButton: React.FC<{
+    nodeId: string;
+    onCancel: (nodeId: string) => void;
+    className?: string;
+}> = ({ nodeId, onCancel, className = '' }) => {
+    const [cancelling, setCancelling] = useState(false);
+    return (
+        <button
+            type="button"
+            disabled={cancelling}
+            onPointerDown={event => event.stopPropagation()}
+            onClick={event => {
+                event.stopPropagation();
+                setCancelling(true);
+                onCancel(nodeId);
+            }}
+            className={`flex items-center gap-1 rounded-md border border-neutral-600/70 bg-black/40 px-2 py-1 text-[10px] text-neutral-300 transition-colors hover:border-red-500/60 hover:text-red-300 disabled:opacity-50 ${className}`}
+        >
+            <XCircle size={11} />
+            {cancelling ? '正在取消…' : '取消生成'}
+        </button>
+    );
+};
 
 interface NodeContentProps {
     data: NodeData;
@@ -27,6 +61,7 @@ interface NodeContentProps {
     onImageToImage?: (nodeId: string) => void;
     onImageToVideo?: (nodeId: string) => void;
     onGenerate?: (nodeId: string) => void;
+    onCancelGeneration?: (nodeId: string) => void;
     onUpdate?: (nodeId: string, updates: Partial<NodeData>) => void;
 }
 
@@ -44,6 +79,7 @@ export const NodeContent: React.FC<NodeContentProps> = ({
     onImageToImage,
     onImageToVideo,
     onGenerate,
+    onCancelGeneration,
     onUpdate,
 }) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -138,6 +174,13 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                             <span className="mt-3 text-sm text-white font-medium">
                                 正在重新生成...
                             </span>
+                            <GenerationElapsed
+                                startedAt={data.generationStartTime}
+                                className="mt-1 text-xs text-neutral-400"
+                            />
+                            {onCancelGeneration && (
+                                <CancelGenerationButton nodeId={data.id} onCancel={onCancelGeneration} className="mt-3" />
+                            )}
                         </div>
                     )}
                 </div>
@@ -232,6 +275,13 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                             <span className="text-xs text-neutral-500 font-medium">
                                 {data.subtitleSourceNodeId ? '正在识别并烧录字幕...' : '正在生成...'}
                             </span>
+                            <GenerationElapsed
+                                startedAt={data.generationStartTime}
+                                className="text-[10px] text-neutral-600"
+                            />
+                            {onCancelGeneration && (
+                                <CancelGenerationButton nodeId={data.id} onCancel={onCancelGeneration} className="mt-1" />
+                            )}
                         </div>
                     ) : data.status === NodeStatus.ERROR ? (() => {
                         // Provider already accepted (and billed) the request: the result

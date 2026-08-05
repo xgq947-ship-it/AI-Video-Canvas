@@ -35,27 +35,3 @@ export const calculateConnectionPath = (
     return `M ${startX} ${startY} C ${cp1x} ${startY}, ${cp2x} ${endY}, ${endX} ${endY}`;
 };
 
-/**
- * Gets the connection point coordinates for a node
- * 
- * @param nodeX - Node X position
- * @param nodeY - Node Y position
- * @param side - Which side of the node ('left' or 'right')
- * @param nodeWidth - Width of the node (default: 340)
- * @param nodeHeight - Height of the node (default: 400)
- * @returns Object with x and y coordinates
- */
-export const getNodeConnectionPoint = (
-    nodeX: number,
-    nodeY: number,
-    side: 'left' | 'right',
-    nodeWidth: number = 340,
-    nodeHeight: number = 400
-): { x: number; y: number } => {
-    const midY = nodeY + nodeHeight / 2;
-
-    return {
-        x: side === 'right' ? nodeX + nodeWidth : nodeX,
-        y: midY
-    };
-};

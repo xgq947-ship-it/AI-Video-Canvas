@@ -118,10 +118,4 @@ export function createStickmanScriptFromAnalysis(analysis: unknown, options?: { 
   content: string;
   notes: string;
   platform: string;
-  aspectRatio: string;
-  width: number;
-  height: number;
-  totalDuration: number;
-  shotCount: number;
-  durationPerShot: number;
 };

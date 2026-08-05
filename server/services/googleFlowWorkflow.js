@@ -6,7 +6,6 @@
  */
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { runWithAuthRecovery, runWithExecutionMode } from './webhttp/index.js';
 import { generateFlowVideoHttp } from './webhttp/flow/provider.js';
@@ -24,10 +23,6 @@ export const GOOGLE_FLOW_WORKFLOW_MODELS = {
     [GOOGLE_FLOW_VEO_3_1_QUALITY_WORKFLOW_MODEL_ID]: 'Veo 3.1 - Quality'
 };
 export const GOOGLE_FLOW_SUPPORTED_DURATIONS = [4, 6, 8, 10];
-// 部分 Flow 模型（如 Veo 3.1 - Lite）不提供时长选择，前端也就不会传 duration。
-// CLI 仍要求 --duration 是合法值，这里给个占位——Python 侧发现该模型没有时长
-// tab 时会跳过设置，所以这个值对这类模型不产生影响。
-export const GOOGLE_FLOW_DEFAULT_DURATION = 8;
 export const GOOGLE_FLOW_SUPPORTED_ASPECT_RATIOS = ['16:9', '9:16'];
 
 export function isGoogleFlowWorkflowModelId(modelId) {

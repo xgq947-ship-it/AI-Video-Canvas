@@ -11,13 +11,28 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type ToastTone = 'info' | 'error';
 
+export interface ToastAction {
+    label: string;
+    onClick: () => void;
+}
+
 export interface Toast {
     id: string;
     message: string;
     tone: ToastTone;
+    action?: ToastAction;
 }
 
 const DEFAULT_DURATION_MS = 4200;
+
+/**
+ * duration 传 0 表示常驻，必须由用户手动关闭。
+ *
+ * 后台任务（生成、字幕、导入）失败时用它：这类失败往往发生在用户切走做别的事情
+ * 的时候，几秒后自动消失的提示等于没提示。而"请先打开项目"这类即时校验仍然走
+ * 默认时长——把所有错误都做成常驻只会让用户忙着关提示。
+ */
+export const TOAST_PERSIST = 0;
 
 export const useToasts = () => {
     const [toasts, setToasts] = useState<Toast[]>([]);
@@ -34,20 +49,27 @@ export const useToasts = () => {
 
     const showToast = useCallback((
         message: string,
-        { tone = 'info', duration = DEFAULT_DURATION_MS }: { tone?: ToastTone; duration?: number } = {}
+        { tone = 'info', duration = DEFAULT_DURATION_MS, action }: {
+            tone?: ToastTone;
+            duration?: number;
+            action?: ToastAction;
+        } = {}
     ) => {
         const text = String(message || '').trim();
         if (!text) return '';
 
         const id = crypto.randomUUID();
         // 最多同时显示 4 条，超出的丢最旧的，避免刷屏盖住画布。
-        setToasts(previous => [...previous, { id, message: text, tone }].slice(-4));
+        setToasts(previous => [...previous, { id, message: text, tone, action }].slice(-4));
 
-        const timer = setTimeout(() => {
-            timersRef.current.delete(id);
-            setToasts(previous => previous.filter(toast => toast.id !== id));
-        }, duration);
-        timersRef.current.set(id, timer);
+        // duration <= 0：常驻，不排自动关闭的定时器。
+        if (duration > 0) {
+            const timer = setTimeout(() => {
+                timersRef.current.delete(id);
+                setToasts(previous => previous.filter(toast => toast.id !== id));
+            }, duration);
+            timersRef.current.set(id, timer);
+        }
         return id;
     }, []);
 

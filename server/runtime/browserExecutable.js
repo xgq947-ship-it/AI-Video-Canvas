@@ -230,8 +230,6 @@ export function probeSystemChromeCompatibility(environment = process.env, {
     };
 }
 
-// 兼容旧调用方；运行时已经不再解析 Playwright 下载目录。
-export const resolveBundledBrowserExecutable = resolveSystemChromeExecutable;
 
 // ---------------------------------------------------------------------------
 // 带缓存的探针

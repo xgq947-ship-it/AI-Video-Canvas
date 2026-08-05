@@ -178,9 +178,3 @@ export async function generateCameraAngle(
     }
 }
 
-/**
- * Check if the Modal endpoint is configured
- */
-export function isEndpointConfigured(): boolean {
-    return !!MODAL_ENDPOINT;
-}

@@ -54,8 +54,12 @@ export const useVideoFrameExtraction = ({
     }, [nodes, updateNode]);
 
     // Reset tracked nodes when nodes array changes drastically (new workflow loaded)
+    //
+    // 依赖节点 id 的稳定字符串而非 `nodes`：这个清理只关心"哪些节点还在"，
+    // 而 `nodes` 在拖拽期间每帧都是新数组，会让它每帧白跑一次 Set + 数组拷贝。
+    const nodeIdsKey = nodes.map(node => node.id).join(',');
     useEffect(() => {
-        const currentNodeIds = new Set(nodes.map(n => n.id));
+        const currentNodeIds = new Set(nodeIdsKey ? nodeIdsKey.split(',') : []);
         const trackedIds: string[] = Array.from(extractedNodesRef.current);
 
         // Remove tracked IDs that no longer exist in nodes
@@ -64,5 +68,5 @@ export const useVideoFrameExtraction = ({
                 extractedNodesRef.current.delete(id);
             }
         });
-    }, [nodes]);
+    }, [nodeIdsKey]);
 };

@@ -19,8 +19,6 @@ const applyStickmanNodeDefaults = (node: NodeData): NodeData => {
         node.prompt = '';
         node.scriptInput = {
             title: '未命名剧本', content: '', notes: '', platform: settings.platform,
-            aspectRatio: settings.aspectRatio, width: settings.width, height: settings.height,
-            totalDuration: settings.totalDuration, shotCount: settings.shotCount, durationPerShot: settings.durationPerShot,
         };
     }
     if (node.type === NodeType.REFERENCE_VIDEO) {

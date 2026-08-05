@@ -153,10 +153,11 @@ test('取消错误的形状对四层调用方一致：submitted 必须为 false'
 
 test('检查登录态在拒绝之前不得写入 checking 状态', () => {
   // 顺序反了的话，三个平台会永久停在「检查中」——和探针卡死表现完全一样。
-  const source = fs.readFileSync(new URL('../server/index.js', import.meta.url), 'utf8');
+  // 这几条路由已从 server/index.js 搬到 server/routes/browser.js（行为未变）。
+  const source = fs.readFileSync(new URL('../server/routes/browser.js', import.meta.url), 'utf8');
   const handler = source.slice(
-    source.indexOf("app.post('/api/browser-sessions/check'"),
-    source.indexOf("app.post('/api/browser/open'")
+    source.indexOf("router.post('/browser-sessions/check'"),
+    source.indexOf("router.post('/browser/open'")
   );
   assert.ok(handler.length > 0, '没找到 check-login 路由');
   assert.ok(
@@ -184,7 +185,7 @@ test('生成链路不再占用浏览器串行队列', () => {
 });
 
 test('浏览器队列仍然保护登录 / 打开窗口这类独占操作', () => {
-  const serverMain = fs.readFileSync(new URL('../server/index.js', import.meta.url), 'utf8');
-  assert.match(serverMain, /assertBrowserWorkflowIdle\('打开浏览器窗口'\)/);
-  assert.match(serverMain, /assertBrowserWorkflowIdle\('打开登录窗口'\)/);
+  const browserRoutes = fs.readFileSync(new URL('../server/routes/browser.js', import.meta.url), 'utf8');
+  assert.match(browserRoutes, /assertBrowserWorkflowIdle\('打开浏览器窗口'\)/);
+  assert.match(browserRoutes, /assertBrowserWorkflowIdle\('打开登录窗口'\)/);
 });

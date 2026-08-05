@@ -26,6 +26,8 @@ const hubSyncWorkflow = fs.readFileSync(
 const electronMain = fs.readFileSync(new URL('../electron/main.js', import.meta.url), 'utf8');
 const electronPreload = fs.readFileSync(new URL('../electron/preload.cjs', import.meta.url), 'utf8');
 const serverMain = fs.readFileSync(new URL('../server/index.js', import.meta.url), 'utf8');
+const serverProjectRoutes = fs.readFileSync(new URL('../server/routes/projects.js', import.meta.url), 'utf8');
+const serverProjectImport = fs.readFileSync(new URL('../server/services/projectImport.js', import.meta.url), 'utf8');
 const browserHubClient = fs.readFileSync(
   new URL('../server/services/browserHubClient.js', import.meta.url),
   'utf8'
@@ -151,8 +153,21 @@ test('自定义项目路径只通过 Electron 原生选择器和桌面令牌提�
   assert.match(electronMain, /external:open/);
   assert.match(electronMain, /ALLOWED_EXTERNAL_HOSTS/);
   assert.match(electronMain, /url\.protocol !== 'https:'/);
-  assert.match(serverMain, /EVAN_DESKTOP_TOKEN/);
-  assert.match(serverMain, /自定义项目路径必须通过桌面应用选择/);
+  // 项目相关路由已从 server/index.js 搬到 server/routes/projects.js（行为未变）。
+  assert.match(serverProjectRoutes, /EVAN_DESKTOP_TOKEN/);
+  assert.match(serverProjectRoutes, /自定义项目路径必须通过桌面应用选择/);
+});
+
+test('本地已有项目通过原生文件夹选择器导入并注册', () => {
+  assert.match(electronMain, /project:select-local/);
+  assert.match(electronMain, /project:import-local/);
+  assert.match(electronMain, /api\/projects\/import/);
+  assert.match(electronMain, /X-Evan-Desktop-Token/);
+  assert.match(electronPreload, /selectLocalProject/);
+  assert.match(electronPreload, /importLocalProject/);
+  assert.match(serverProjectRoutes, /importLocalProject/);
+  // project.json 的实际读写在 projectImport 服务里，路由只负责调用它。
+  assert.match(serverProjectImport, /project\.json/);
 });
 
 // ---------------------------------------------------------------------------

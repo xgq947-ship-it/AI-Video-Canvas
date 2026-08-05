@@ -3,6 +3,7 @@ import { Check, Film, FolderOpen, Images, Loader2, Package, Users } from 'lucide
 import { createVideoRemixState, summarizeVideoRemixState } from '../../../shared/videoRemix.js';
 import { NodeData } from '../../types';
 import { NodeConnectors } from '../../components/canvas/NodeConnectors';
+import { LazyVideo } from '../../components/LazyVideo';
 
 interface VideoRemixNodeProps {
   data: NodeData;
@@ -39,7 +40,6 @@ const formatDuration = (seconds: number) => {
   return `${String(minutes).padStart(2, '0')}:${remainder.toFixed(1).padStart(4, '0')}`;
 };
 
-export const VIDEO_REMIX_NODE_WIDTH = 420;
 export const VIDEO_REMIX_NODE_HEIGHT = 306;
 
 export const VideoRemixNode: React.FC<VideoRemixNodeProps> = ({
@@ -129,7 +129,15 @@ export const VideoRemixNode: React.FC<VideoRemixNodeProps> = ({
           }`}>
             {previewUrl ? (
               <>
-                <video src={previewUrl} muted playsInline preload="metadata" className="h-full w-full object-cover" />
+                <LazyVideo
+                  src={previewUrl}
+                  muted
+                  playsInline
+                  controls={false}
+                  loop={false}
+                  className="h-full w-full object-cover"
+                  placeholderClassName="h-full w-full"
+                />
                 {state.source && (
                   <span className="absolute bottom-2 left-2 rounded-md bg-black/65 px-1.5 py-0.5 text-[10px] font-medium text-white">
                     {formatDuration(state.source.duration)}

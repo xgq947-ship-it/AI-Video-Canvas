@@ -487,23 +487,7 @@ export const createStickmanScriptFromAnalysis = (analysis, { settings = {}, titl
   const source = analysis && typeof analysis === 'object' ? analysis : {};
   const sourceShots = Array.isArray(source.shots) ? source.shots : [];
   const global = source.global && typeof source.global === 'object' ? source.global : {};
-  const sourceDuration = sourceShots.reduce((sum, shot) => {
-    const start = Number(shot?.startTime ?? shot?.start ?? 0);
-    const duration = Number(shot?.duration);
-    const explicitEnd = Number(shot?.endTime ?? shot?.end);
-    const end = Number.isFinite(explicitEnd) && explicitEnd > start
-      ? explicitEnd
-      : start + (Number.isFinite(duration) && duration > 0 ? duration : 0);
-    return Math.max(sum, Number.isFinite(end) ? end : 0);
-  }, 0);
-  const normalizedSettings = normalizeStickmanSettings({
-    ...settings,
-    shotCount: sourceShots.length || settings.shotCount,
-    totalDuration: sourceDuration > 0 ? sourceDuration : settings.totalDuration,
-    durationPerShot: sourceShots.length > 0 && sourceDuration > 0
-      ? sourceDuration / sourceShots.length
-      : settings.durationPerShot,
-  });
+  const normalizedSettings = normalizeStickmanSettings(settings);
 
   const entityLines = [
     global.characterConsistency && `人物一致性：${global.characterConsistency}`,
@@ -540,11 +524,5 @@ export const createStickmanScriptFromAnalysis = (analysis, { settings = {}, titl
     content,
     notes: '来源：参考视频分析。分析段落仅作为剧本素材，最终分镜由火柴人视频导演 Skill 重新推导。',
     platform: normalizedSettings.platform,
-    aspectRatio: normalizedSettings.aspectRatio,
-    width: normalizedSettings.width,
-    height: normalizedSettings.height,
-    totalDuration: normalizedSettings.totalDuration,
-    shotCount: normalizedSettings.shotCount,
-    durationPerShot: normalizedSettings.durationPerShot,
   };
 };

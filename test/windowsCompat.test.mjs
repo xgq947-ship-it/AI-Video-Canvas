@@ -6,6 +6,7 @@ const read = (relative) => fs.readFileSync(new URL(relative, import.meta.url), '
 
 const renderRoutes = read('../server/routes/render.js');
 const serverMain = read('../server/index.js');
+const workflowRoutes = read('../server/routes/workflows.js');
 const cliPaths = read('../server/services/cliPaths.js');
 
 test('explorer.exe 的非 0 退出码不算失败', () => {
@@ -13,7 +14,8 @@ test('explorer.exe 的非 0 退出码不算失败', () => {
   // 据此判失败会让用户看到「无法显示成片」，而资源管理器其实已经正常打开了。
   // server/index.js 的「打开素材目录」早有同样的豁免，两处必须保持一致。
   assert.match(renderRoutes, /process\.platform !== 'win32'/);
-  assert.match(serverMain, /explorer\.exe 打开成功时也可能返回非 0 退出码/);
+  // 「打开素材目录」已从 server/index.js 搬到 server/routes/workflows.js（行为未变）。
+  assert.match(workflowRoutes, /explorer\.exe 打开成功时也可能返回非 0 退出码/);
 });
 
 test('任务临时目录清理失败不会盖掉真正的错误', () => {

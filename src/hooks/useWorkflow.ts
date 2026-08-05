@@ -249,6 +249,13 @@ export const useWorkflow = ({
         onPanelOpen?.(); // Close other panels
     }, [onPanelOpen]);
 
+    /** Open the saved-project list from an app-level button without needing a DOM anchor. */
+    const openWorkflowPanel = useCallback((panelY = 72) => {
+        setWorkflowPanelY(panelY);
+        setIsWorkflowPanelOpen(true);
+        onPanelOpen?.();
+    }, [onPanelOpen]);
+
     /**
      * Close workflow panel
      */
@@ -298,6 +305,7 @@ export const useWorkflow = ({
         handleSaveWorkflow,
         handleLoadWorkflow,
         handleWorkflowsClick,
+        openWorkflowPanel,
         closeWorkflowPanel,
         resetWorkflowId,
         handleCreateWorkflow

@@ -31,6 +31,7 @@ const BACKEND_RESTART_WINDOW_MS = 60_000;
 const BACKEND_RESTART_DELAY_MS = 750;
 const desktopApiToken = randomUUID();
 const selectedProjectLocations = new Map();
+const selectedLocalProjects = new Map();
 const ALLOWED_EXTERNAL_HOSTS = new Set([
     'platform.deepseek.com'
 ]);
@@ -232,6 +233,15 @@ function pruneExpiredProjectLocations() {
     }
 }
 
+function pruneExpiredLocalProjects() {
+    const now = Date.now();
+    for (const [id, project] of selectedLocalProjects) {
+        if (now - project.selectedAt > 30 * 60 * 1000) {
+            selectedLocalProjects.delete(id);
+        }
+    }
+}
+
 ipcMain.handle('project:select-location', async () => {
     pruneExpiredProjectLocations();
     const options = {
@@ -285,6 +295,57 @@ ipcMain.handle('project:create', async (_event, { title, locationId } = {}) => {
         return { ok: true, data };
     } catch (error) {
         return { ok: false, error: error.message || '项目创建失败' };
+    }
+});
+
+ipcMain.handle('project:select-local', async () => {
+    pruneExpiredLocalProjects();
+    const options = {
+        title: '选择本地项目文件夹',
+        buttonLabel: '导入此项目',
+        defaultPath: app.getPath('desktop'),
+        properties: ['openDirectory']
+    };
+    const result = mainWindow
+        ? await dialog.showOpenDialog(mainWindow, options)
+        : await dialog.showOpenDialog(options);
+    if (result.canceled || !result.filePaths[0]) return { canceled: true };
+
+    const importId = randomUUID();
+    const selectedPath = path.resolve(result.filePaths[0]);
+    selectedLocalProjects.set(importId, {
+        path: selectedPath,
+        selectedAt: Date.now()
+    });
+    return {
+        canceled: false,
+        importId,
+        name: path.basename(selectedPath)
+    };
+});
+
+ipcMain.handle('project:import-local', async (_event, { importId } = {}) => {
+    try {
+        if (!backendOrigin) return { ok: false, error: '本地后端尚未启动，请稍后重试' };
+        pruneExpiredLocalProjects();
+        const selected = importId ? selectedLocalProjects.get(importId) : null;
+        if (!selected) return { ok: false, error: '所选本地项目已失效，请重新选择文件夹' };
+
+        const response = await fetch(`${backendOrigin}/api/projects/import`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Evan-Desktop-Token': desktopApiToken
+            },
+            body: JSON.stringify({ sourcePath: selected.path })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) return { ok: false, error: data.error || '本地项目导入失败' };
+        return { ok: true, data };
+    } catch (error) {
+        return { ok: false, error: error.message || '本地项目导入失败' };
+    } finally {
+        if (importId) selectedLocalProjects.delete(importId);
     }
 });
 

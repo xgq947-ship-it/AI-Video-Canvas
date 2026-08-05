@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertCircle,
   Check,
+  ChevronLeft,
+  ChevronRight,
   ChevronDown,
   Clipboard,
   Copy,
@@ -11,6 +14,7 @@ import {
   Link2,
   Loader2,
   Merge,
+  Maximize2,
   Play,
   Plus,
   RefreshCw,
@@ -22,8 +26,10 @@ import {
   Trash2,
   Upload,
   Video,
+  X,
 } from 'lucide-react';
 import { NodeConnectors } from '../../components/canvas/NodeConnectors';
+import { LazyVideo } from '../../components/LazyVideo';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import type { StickmanDirectorOutput, StickmanShot } from '../../../shared/stickmanDirector.js';
 import {
@@ -42,6 +48,38 @@ import { useStickmanDirectorModels } from './modelOptions';
 
 export const STICKMAN_NODE_WIDTH = 430;
 export const STICKMAN_NODE_HEIGHT = 520;
+export const SCRIPT_INPUT_NODE_HEIGHT = 420;
+export const SCRIPT_INPUT_REFERENCE_NODE_HEIGHT = 560;
+export const STICKMAN_STORYBOARD_COLLAPSED_HEIGHT = 310;
+export const STICKMAN_STORYBOARD_MAX_LIST_HEIGHT = 620;
+export const FLOW_BATCH_BASE_HEIGHT = 580;
+export const FLOW_BATCH_RESULT_LIST_MAX_HEIGHT = 408;
+
+/**
+ * The storyboard list grows with its real content until the list itself needs
+ * scrolling. Keep this estimate in one place so connectors, minimap and
+ * selection bounds agree with the rendered node instead of using a per-shot
+ * formula that leaves a large empty tail below the cards.
+ */
+export const getStickmanStoryboardNodeHeight = (storyboard?: NodeData['storyboard']): number => {
+  if (!storyboard?.expanded) return STICKMAN_STORYBOARD_COLLAPSED_HEIGHT;
+  const shotCount = storyboard.shots?.length || 0;
+  const listHeight = shotCount
+    ? Math.min(STICKMAN_STORYBOARD_MAX_LIST_HEIGHT, Math.max(120, shotCount * 136))
+    : 120;
+  return Math.max(430, 234 + listHeight);
+};
+
+export const getFlowBatchVideoNodeHeight = (storyboard?: NodeData['storyboard']): number => {
+  const shots = storyboard?.shots || [];
+  const resultCount = shots.filter(shot => Boolean(shot.generation.videoUrl)).length;
+  if (!resultCount) return FLOW_BATCH_BASE_HEIGHT;
+  const resultRows = Math.ceil(resultCount / 2);
+  const hasOutstandingTasks = shots.some(shot => shot.generation.status !== 'completed');
+  // 完成态不再重复展示整块任务队列，因此要扣除队列占用；进行中或失败态仍保留队列。
+  const baseHeight = hasOutstandingTasks ? FLOW_BATCH_BASE_HEIGHT : 430;
+  return baseHeight + 28 + Math.min(FLOW_BATCH_RESULT_LIST_MAX_HEIGHT, resultRows * 160);
+};
 
 type Theme = 'dark' | 'light';
 
@@ -134,9 +172,12 @@ const statusLabel = (status?: string) => ({
 export const ScriptInputNode: React.FC<BaseProps & { onAnalyzeReference?: (id: string) => void }> = props => {
   const { data, onUpdate, onAnalyzeReference, allNodes } = props;
   const dark = (props.canvasTheme || 'dark') === 'dark';
-  const value = data.scriptInput || {
-    title: data.title || '未命名剧本', content: data.prompt || '', notes: '', platform: '抖音',
-    aspectRatio: '9:16', width: 1080, height: 1920, totalDuration: 48, shotCount: 6, durationPerShot: 8,
+  const stored = data.scriptInput;
+  const value = {
+    title: stored?.title || data.title || '未命名剧本',
+    content: stored?.content || data.prompt || '',
+    notes: stored?.notes || '',
+    platform: stored?.platform || '抖音',
   };
   const sourceNode = allNodes.find(node => data.parentIds?.includes(node.id) && (node.type === NodeType.VIDEO || node.type === NodeType.REFERENCE_VIDEO));
   const directorNode = allNodes.find(node => node.type === NodeType.STICKMAN_DIRECTOR && node.parentIds?.includes(data.id));
@@ -153,7 +194,7 @@ export const ScriptInputNode: React.FC<BaseProps & { onAnalyzeReference?: (id: s
     scriptInput: { ...value, ...patch },
   });
   return (
-    <Shell {...props} icon={<FileText size={20} />} label={data.title || '剧本输入'} subtitle={isReferenceScript ? '参考视频 → 剧本 → 火柴人导演' : '剧本 → 火柴人导演'} minHeight={isReferenceScript ? 650 : 500}>
+    <Shell {...props} icon={<FileText size={20} />} label={data.title || '剧本输入'} subtitle={isReferenceScript ? '参考视频 → 剧本 → 火柴人导演' : '剧本 → 火柴人导演'} minHeight={isReferenceScript ? SCRIPT_INPUT_REFERENCE_NODE_HEIGHT : SCRIPT_INPUT_NODE_HEIGHT}>
       <div className="space-y-3 px-5 py-4">
         {isReferenceScript && (
           <div className={`rounded-2xl border p-3 ${dark ? 'border-cyan-400/25 bg-cyan-400/[0.07]' : 'border-cyan-200 bg-cyan-50'}`}>
@@ -189,12 +230,6 @@ export const ScriptInputNode: React.FC<BaseProps & { onAnalyzeReference?: (id: s
         </div>
         <Field dark={dark} label={isReferenceScript ? '分析得到的剧本正文' : '剧本正文'}><TextArea dark={dark} rows={isReferenceScript ? 9 : 7} value={value.content} placeholder={isReferenceScript ? '点击“分析参考视频并生成剧本”，这里会填入可编辑的剧情、动作、对白和声音…' : '输入故事、动作、对白或旁白…'} onChange={e => update({ content: e.target.value })} onPointerDown={stop} /></Field>
         <Field dark={dark} label="补充说明"><Input dark={dark} value={value.notes || ''} placeholder="节奏、禁用元素、角色说明…" onChange={e => update({ notes: e.target.value })} onPointerDown={stop} /></Field>
-        <div className="grid grid-cols-2 gap-2">
-          <Field dark={dark} label="默认比例"><Select dark={dark} value={value.aspectRatio} onChange={e => update({ aspectRatio: e.target.value })} onPointerDown={stop}>{STICKMAN_ASPECT_RATIOS.map(item => <option key={item} value={item}>{item}</option>)}</Select></Field>
-          <Field dark={dark} label="总时长(s)"><Input dark={dark} type="number" min={1} value={value.totalDuration} onChange={e => update({ totalDuration: Number(e.target.value) })} onPointerDown={stop} /></Field>
-          <Field dark={dark} label="镜头数量"><Input dark={dark} type="number" min={1} max={30} value={value.shotCount} onChange={e => update({ shotCount: Number(e.target.value) })} onPointerDown={stop} /></Field>
-          <Field dark={dark} label="单镜头(s)"><Input dark={dark} type="number" min={1} value={value.durationPerShot} onChange={e => update({ durationPerShot: Number(e.target.value) })} onPointerDown={stop} /></Field>
-        </div>
         <div className={`flex items-center gap-2 rounded-xl px-3 py-2 text-[10px] ${dark ? 'bg-white/[0.04] text-neutral-400' : 'bg-neutral-50 text-neutral-500'}`}>
           <Link2 size={12} className="text-cyan-300" />{isReferenceScript ? (analysisReady ? '剧本已生成，可连接导演节点执行分镜规划' : '先完成视频分析，再连接导演节点执行分镜规划') : '连接到“火柴人视频导演”后执行分镜规划'}
         </div>
@@ -304,7 +339,7 @@ export const ReferenceVideoNode: React.FC<BaseProps & { workflowId?: string }> =
   return (
     <Shell {...props} icon={<Video size={20} />} label={data.title || '参考视频'} subtitle="本地上传、URL 或已有素材" minHeight={300}>
       <div className="space-y-3 px-5 py-4">
-        {data.resultUrl ? <video src={data.resultUrl} controls className="max-h-44 w-full rounded-xl bg-black object-contain" onPointerDown={stop} /> : <div className={`flex h-32 items-center justify-center rounded-xl border border-dashed text-xs ${dark ? 'border-white/10 text-neutral-600' : 'border-neutral-200 text-neutral-400'}`}><Film size={18} className="mr-2" />等待视频</div>}
+        {data.resultUrl ? <LazyVideo src={data.resultUrl} loop={false} containerClassName="w-full" className="max-h-44 w-full rounded-xl bg-black object-contain" placeholderClassName="h-44 w-full rounded-xl bg-black" onPointerDown={stop} /> : <div className={`flex h-32 items-center justify-center rounded-xl border border-dashed text-xs ${dark ? 'border-white/10 text-neutral-600' : 'border-neutral-200 text-neutral-400'}`}><Film size={18} className="mr-2" />等待视频</div>}
         <div className="flex gap-2">
           <Input dark={dark} value={url} placeholder="https://… 或 /library/…" onChange={e => setUrl(e.target.value)} onPointerDown={stop} />
           <Button dark={dark} tone="primary" onClick={() => applyUrl()} onPointerDown={stop}>应用</Button>
@@ -411,14 +446,24 @@ const ShotCard: React.FC<{
   dark: boolean;
   compareMode: boolean;
   onChange: (patch: Partial<StickmanShot>) => void;
+  onPreview: () => void;
   onGenerate: () => void;
   onCopy: () => void;
   onDelete: () => void;
   onRecompile: () => void;
   onDragStart: () => void;
   onDrop: () => void;
-}> = ({ shot, dark, compareMode, onChange, onGenerate, onCopy, onDelete, onRecompile, onDragStart, onDrop }) => {
+}> = ({ shot, dark, compareMode, onChange, onPreview, onGenerate, onCopy, onDelete, onRecompile, onDragStart, onDrop }) => {
   const [editing, setEditing] = useState(false);
+  const hasResult = Boolean(shot.generation.videoUrl);
+  const generating = shot.generation.status === 'queued' || shot.generation.status === 'generating';
+  const actionLabel = generating
+    ? '生成中'
+    : hasResult && shot.generation.status === 'completed'
+      ? '重新生成'
+      : shot.generation.status === 'failed' || shot.generation.status === 'cancelled'
+        ? '重试生成'
+        : '生成';
   return (
     <div draggable onDragStart={event => { event.stopPropagation(); onDragStart(); }} onDragOver={event => event.preventDefault()} onDrop={event => { event.stopPropagation(); onDrop(); }} className={`rounded-xl border p-3 ${dark ? 'border-white/8 bg-white/[0.025]' : 'border-neutral-200 bg-neutral-50'}`}>
       <div className="flex items-start gap-2">
@@ -431,8 +476,7 @@ const ShotCard: React.FC<{
           <div className={`mt-1 line-clamp-2 text-[10px] leading-4 ${muted(dark)}`}>{shot.visual.action || shot.visual.scene}</div>
         </div>
       </div>
-      {compareMode && shot.sourceKeyframeUrl && shot.generation.videoUrl && <div className="mt-2 grid grid-cols-2 gap-2"><div><img src={shot.sourceKeyframeUrl} className="h-20 w-full rounded-lg object-cover" alt="原视频关键帧" /><div className={`mt-1 text-[9px] ${muted(dark)}`}>原视频关键帧</div></div><div><video src={shot.generation.videoUrl} className="h-20 w-full rounded-lg object-cover" controls /><div className={`mt-1 text-[9px] ${muted(dark)}`}>火柴人结果</div></div></div>}
-      {compareMode && !shot.sourceKeyframeUrl && shot.generation.videoUrl && <div className="mt-2"><video src={shot.generation.videoUrl} className="h-24 w-full rounded-lg object-cover" controls /><div className={`mt-1 text-[9px] ${muted(dark)}`}>火柴人结果</div></div>}
+      {compareMode && shot.sourceKeyframeUrl && <div className="mt-2 flex items-center gap-2"><img src={shot.sourceKeyframeUrl} className="h-12 w-20 rounded-lg object-cover" alt="原视频关键帧" /><span className={`text-[9px] ${muted(dark)}`}>原视频关键帧 · 预览时可对照结果</span></div>}
       {editing && <div className="mt-2 space-y-2">
         <Field dark={dark} label="镜头标题"><Input dark={dark} value={shot.title} onChange={event => onChange({ title: event.target.value })} onPointerDown={stop} /></Field>
         <Field dark={dark} label="画面描述"><TextArea dark={dark} rows={2} value={shot.visual.scene} onChange={event => onChange({ visual: { ...shot.visual, scene: event.target.value } })} onPointerDown={stop} /></Field>
@@ -443,22 +487,77 @@ const ShotCard: React.FC<{
         <Button dark={dark} onClick={() => setEditing(value => !value)} onPointerDown={stop}>{editing ? <ChevronDown size={12} /> : <Settings2 size={12} />} {editing ? '收起' : '编辑'}</Button>
         <Button dark={dark} onClick={onRecompile} onPointerDown={stop}><RefreshCw size={12} />编译</Button>
         <Button dark={dark} onClick={onCopy} onPointerDown={stop}><Copy size={12} />复制</Button>
-        <Button dark={dark} tone="primary" onClick={onGenerate} onPointerDown={stop}><Play size={12} />生成</Button>
+        {hasResult && <Button dark={dark} onClick={onPreview} onPointerDown={stop}><Maximize2 size={12} />预览</Button>}
+        <Button dark={dark} tone="primary" disabled={generating} onClick={onGenerate} onPointerDown={stop}>{generating ? <Loader2 size={12} className="animate-spin" /> : hasResult ? <RefreshCw size={12} /> : <Play size={12} />}{actionLabel}</Button>
         <Button dark={dark} tone="danger" onClick={onDelete} onPointerDown={stop}><Trash2 size={12} /></Button>
       </div>
     </div>
   );
 };
 
+const ShotPreviewModal: React.FC<{
+  shot: StickmanShot;
+  dark: boolean;
+  compareMode: boolean;
+  index: number;
+  total: number;
+  onClose: () => void;
+  onPrevious: () => void;
+  onNext: () => void;
+  onRegenerate: () => void;
+}> = ({ shot, dark, compareMode, index, total, onClose, onPrevious, onNext, onRegenerate }) => {
+  if (!shot.generation.videoUrl || typeof document === 'undefined') return null;
+  const generating = shot.generation.status === 'queued' || shot.generation.status === 'generating';
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+      role="presentation"
+      onPointerDown={onClose}
+    >
+      <div
+        className={`w-[min(900px,calc(100vw-32px))] max-h-[92vh] overflow-hidden rounded-3xl border shadow-2xl ${surface(dark)}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="stickman-shot-preview-title"
+        onPointerDown={event => event.stopPropagation()}
+      >
+        <div className={`flex items-center justify-between border-b px-5 py-4 ${dark ? 'border-white/8' : 'border-neutral-200'}`}>
+          <div className="min-w-0">
+            <div id="stickman-shot-preview-title" className="truncate text-sm font-semibold">{String(shot.order).padStart(2, '0')} · {shot.title}</div>
+            <div className={`mt-1 text-[10px] ${muted(dark)}`}>{index + 1}/{total} · {shot.duration}s · {shot.width}×{shot.height}</div>
+          </div>
+          <button type="button" aria-label="关闭预览" onClick={onClose} onPointerDown={stop} className={`rounded-xl p-2 ${dark ? 'text-neutral-400 hover:bg-white/10 hover:text-white' : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900'}`}><X size={17} /></button>
+        </div>
+        <div className="grid max-h-[calc(92vh-154px)] gap-3 overflow-y-auto p-5 md:grid-cols-2">
+          {compareMode && shot.sourceKeyframeUrl && <div className={`rounded-2xl border p-3 ${dark ? 'border-white/8 bg-white/[0.025]' : 'border-neutral-200 bg-neutral-50'}`}><div className={`mb-2 text-[10px] ${muted(dark)}`}>原视频关键帧</div><img src={shot.sourceKeyframeUrl} className="max-h-[58vh] w-full rounded-xl bg-black object-contain" alt="原视频关键帧" /></div>}
+          <div className={`${compareMode && shot.sourceKeyframeUrl ? '' : 'md:col-span-2'} relative rounded-2xl border p-3 ${dark ? 'border-cyan-400/25 bg-black/30' : 'border-cyan-200 bg-neutral-50'}`}>
+            <div className={`mb-2 text-[10px] ${dark ? 'text-cyan-200' : 'text-cyan-700'}`}>当前生成结果</div>
+            <video key={shot.generation.videoUrl} src={shot.generation.videoUrl} controls playsInline className="max-h-[58vh] w-full rounded-xl bg-black object-contain" onPointerDown={stop} />
+            {generating && <div className="absolute inset-x-3 bottom-3 rounded-xl bg-black/75 px-3 py-2 text-center text-[10px] text-amber-200">正在重新生成，当前仍保留上一版结果</div>}
+            {shot.generation.error && <div className="mt-2 rounded-xl bg-red-500/10 px-3 py-2 text-[10px] leading-4 text-red-300">{shot.generation.error}</div>}
+          </div>
+        </div>
+        <div className={`flex flex-wrap items-center justify-between gap-2 border-t px-5 py-4 ${dark ? 'border-white/8' : 'border-neutral-200'}`}>
+          <div className="flex items-center gap-1.5">
+            <Button dark={dark} disabled={index <= 0} onClick={onPrevious} onPointerDown={stop}><ChevronLeft size={12} />上一个</Button>
+            <Button dark={dark} disabled={index >= total - 1} onClick={onNext} onPointerDown={stop}>下一个<ChevronRight size={12} /></Button>
+          </div>
+          <Button dark={dark} tone="primary" disabled={generating} onClick={onRegenerate} onPointerDown={stop}>{generating ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} {generating ? '重新生成中' : '重新生成此镜头'}</Button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+};
+
 export const StoryboardNode: React.FC<BaseProps & {
   onGenerateShot: (storyboardId: string, shotId: string) => void;
-  onBatchGenerate: (storyboardId: string) => void;
-  onRetryFailed: (storyboardId: string) => void;
 }> = props => {
-  const { data, onUpdate, allNodes, onGenerateShot, onBatchGenerate, onRetryFailed } = props;
+  const { data, onUpdate, allNodes, onGenerateShot } = props;
   const dark = (props.canvasTheme || 'dark') === 'dark';
   const state = data.storyboard || { shots: [], expanded: false, status: 'idle' as const };
   const [dragId, setDragId] = useState<string | null>(null);
+  const [previewShotId, setPreviewShotId] = useState<string | null>(null);
   const director = allNodes.find(node => data.parentIds?.includes(node.id) && node.type === NodeType.STICKMAN_DIRECTOR)?.director;
   const settings = normalizeStickmanSettings(director || {});
   const updateShots = (shots: StickmanShot[]) => onUpdate(data.id, { storyboard: { ...state, shots, status: shots.length ? 'ready' : state.status } });
@@ -492,25 +591,48 @@ export const StoryboardNode: React.FC<BaseProps & {
     updateShots([...state.shots, shot]);
   };
   const completed = state.shots.filter(shot => shot.generation.status === 'completed').length;
-  const failed = state.shots.filter(shot => shot.generation.status === 'failed').length;
+  const previewableShots = state.shots.filter(shot => Boolean(shot.generation.videoUrl));
+  const previewShot = previewableShots.find(shot => shot.id === previewShotId);
+  const previewIndex = previewShot ? previewableShots.findIndex(shot => shot.id === previewShot.id) : -1;
+  const movePreview = (offset: number) => {
+    if (previewIndex < 0) return;
+    const next = previewableShots[previewIndex + offset];
+    if (next) setPreviewShotId(next.id);
+  };
+  useEffect(() => {
+    if (!previewShotId) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPreviewShotId(null);
+      if (event.key === 'ArrowLeft') movePreview(-1);
+      if (event.key === 'ArrowRight') movePreview(1);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [previewShotId, state.shots]);
   return (
-    <Shell {...props} icon={<Film size={20} />} label={data.title || (state.compareMode ? '分镜对照组' : '分镜列表')} subtitle={`${state.shots.length} 个镜头 · ${completed} 已生成`} minHeight={Math.max(430, state.expanded ? 470 + state.shots.length * 180 : 310)}>
-      <div className="space-y-3 px-5 py-4">
-        <div className="flex items-center justify-between"><div className="flex items-center gap-1.5 text-[10px] text-cyan-300"><span className="flex gap-1">{state.shots.map(shot => <span key={shot.id} className={`h-2.5 w-2.5 rounded-full ${shot.generation.status === 'completed' ? 'bg-emerald-400' : shot.generation.status === 'failed' ? 'bg-red-400' : shot.generation.status === 'generating' ? 'bg-amber-300' : dark ? 'bg-neutral-700' : 'bg-neutral-300'}`} />)}</span>{completed}/{state.shots.length}</div><Button dark={dark} onClick={() => onUpdate(data.id, { storyboard: { ...state, expanded: !state.expanded } })} onPointerDown={stop}>{state.expanded ? '收起' : '展开'}</Button></div>
-        {!state.expanded && <div className={`rounded-xl border px-3 py-3 text-[11px] ${dark ? 'border-white/8 bg-white/[0.025] text-neutral-300' : 'border-neutral-200 bg-neutral-50 text-neutral-600'}`}>{state.shots.length ? state.shots.slice(0, 6).map(shot => <div key={shot.id} className="flex items-center justify-between py-1"><span className="truncate pr-2">{String(shot.order).padStart(2, '0')} · {shot.title}</span><span className={`text-[10px] ${muted(dark)}`}>{statusLabel(shot.generation.status)}</span></div>) : '等待导演节点生成分镜'}</div>}
-        {state.expanded && <div className="max-h-[620px] space-y-2 overflow-y-auto pr-1">{state.shots.map(shot => <ShotCard key={shot.id} shot={shot} dark={dark} compareMode={Boolean(state.compareMode)} onDragStart={() => setDragId(shot.id)} onDrop={() => reorder(shot.id)} onChange={patch => updateShot(shot.id, patch)} onGenerate={() => onGenerateShot(data.id, shot.id)} onCopy={() => void navigator.clipboard?.writeText(shot.prompt)} onRecompile={() => updateShot(shot.id, { prompt: compileFlowPrompt(shot, settings) })} onDelete={() => updateShots(state.shots.filter(item => item.id !== shot.id).map((item, index) => ({ ...item, order: index + 1 })))} />)}</div>}
-        <div className="flex flex-wrap gap-1.5"><Button dark={dark} onClick={addShot} onPointerDown={stop}><Plus size={12} />新增</Button><Button dark={dark} onClick={() => void navigator.clipboard?.writeText(state.shots.map(shot => shot.prompt).join('\n\n'))} onPointerDown={stop}><Clipboard size={12} />复制全部</Button><Button dark={dark} onClick={() => void navigator.clipboard?.writeText(JSON.stringify(state.shots, null, 2))} onPointerDown={stop}><Save size={12} />导出 JSON</Button><Button dark={dark} tone="primary" disabled={!state.shots.length} onClick={() => onBatchGenerate(data.id)} onPointerDown={stop}><Play size={12} />批量生成</Button>{failed > 0 && <Button dark={dark} onClick={() => onRetryFailed(data.id)} onPointerDown={stop}><RotateCcw size={12} />重试失败 {failed}</Button>}</div>
-      </div>
-    </Shell>
+    <>
+      <Shell {...props} icon={<Film size={20} />} label={data.title || (state.compareMode ? '分镜对照组' : '分镜列表')} subtitle={`${state.shots.length} 个镜头 · ${completed} 已生成`} minHeight={state.expanded ? undefined : STICKMAN_STORYBOARD_COLLAPSED_HEIGHT}>
+        <div className="space-y-3 px-5 py-4">
+          <div className="flex items-center justify-between"><div className="flex items-center gap-1.5 text-[10px] text-cyan-300"><span className="flex gap-1">{state.shots.map(shot => <span key={shot.id} className={`h-2.5 w-2.5 rounded-full ${shot.generation.status === 'completed' ? 'bg-emerald-400' : shot.generation.status === 'failed' ? 'bg-red-400' : shot.generation.status === 'generating' ? 'bg-amber-300' : dark ? 'bg-neutral-700' : 'bg-neutral-300'}`} />)}</span>{completed}/{state.shots.length}</div><Button dark={dark} onClick={() => onUpdate(data.id, { storyboard: { ...state, expanded: !state.expanded } })} onPointerDown={stop}>{state.expanded ? '收起' : '展开'}</Button></div>
+          {!state.expanded && <div className={`rounded-xl border px-3 py-3 text-[11px] ${dark ? 'border-white/8 bg-white/[0.025] text-neutral-300' : 'border-neutral-200 bg-neutral-50 text-neutral-600'}`}>{state.shots.length ? state.shots.slice(0, 6).map(shot => <div key={shot.id} className="flex items-center justify-between py-1"><span className="truncate pr-2">{String(shot.order).padStart(2, '0')} · {shot.title}</span><span className={`text-[10px] ${muted(dark)}`}>{statusLabel(shot.generation.status)}</span></div>) : '等待导演节点生成分镜'}</div>}
+          {state.expanded && <div className="space-y-2 overflow-y-auto pr-1" style={{ maxHeight: STICKMAN_STORYBOARD_MAX_LIST_HEIGHT }}>{state.shots.map(shot => <ShotCard key={shot.id} shot={shot} dark={dark} compareMode={Boolean(state.compareMode)} onDragStart={() => setDragId(shot.id)} onDrop={() => reorder(shot.id)} onChange={patch => updateShot(shot.id, patch)} onPreview={() => setPreviewShotId(shot.id)} onGenerate={() => onGenerateShot(data.id, shot.id)} onCopy={() => void navigator.clipboard?.writeText(shot.prompt)} onRecompile={() => updateShot(shot.id, { prompt: compileFlowPrompt(shot, settings) })} onDelete={() => updateShots(state.shots.filter(item => item.id !== shot.id).map((item, index) => ({ ...item, order: index + 1 })))} />)}</div>}
+          <div className="flex flex-wrap gap-1.5"><Button dark={dark} onClick={addShot} onPointerDown={stop}><Plus size={12} />新增</Button><Button dark={dark} onClick={() => void navigator.clipboard?.writeText(state.shots.map(shot => shot.prompt).join('\n\n'))} onPointerDown={stop}><Clipboard size={12} />复制全部</Button><Button dark={dark} onClick={() => void navigator.clipboard?.writeText(JSON.stringify(state.shots, null, 2))} onPointerDown={stop}><Save size={12} />导出 JSON</Button></div>
+        </div>
+      </Shell>
+      {previewShot && <ShotPreviewModal shot={previewShot} dark={dark} compareMode={Boolean(state.compareMode)} index={previewIndex} total={previewableShots.length} onClose={() => setPreviewShotId(null)} onPrevious={() => movePreview(-1)} onNext={() => movePreview(1)} onRegenerate={() => onGenerateShot(data.id, previewShot.id)} />}
+    </>
   );
 };
 
-export const FlowBatchVideoNode: React.FC<BaseProps & { onBatchGenerate: (id: string) => void; onRetryFailed: (id: string) => void }> = props => {
-  const { data, onUpdate, allNodes, onBatchGenerate, onRetryFailed } = props;
+export const FlowBatchVideoNode: React.FC<BaseProps & { onBatchGenerate: (id: string) => void; onRetryFailed: (id: string) => void; onGenerateShot: (storyboardId: string, shotId: string) => void }> = props => {
+  const { data, onUpdate, allNodes, onBatchGenerate, onRetryFailed, onGenerateShot } = props;
   const dark = (props.canvasTheme || 'dark') === 'dark';
+  const [previewShotId, setPreviewShotId] = useState<string | null>(null);
   useGenerationModelRegistry();
   const models = listVideoGenerationProviders();
-  const storyboard = allNodes.find(node => data.parentIds?.includes(node.id) && (node.type === NodeType.STORYBOARD || node.type === NodeType.STORYBOARD_COMPARE))?.storyboard;
+  const storyboardNode = allNodes.find(node => data.parentIds?.includes(node.id) && (node.type === NodeType.STORYBOARD || node.type === NodeType.STORYBOARD_COMPARE));
+  const storyboard = storyboardNode?.storyboard;
+  const director = storyboardNode && allNodes.find(node => storyboardNode.parentIds?.includes(node.id) && node.type === NodeType.STICKMAN_DIRECTOR)?.director;
   const state = data.flowBatch || {
     modelId: models[0]?.id,
     concurrency: 2 as const,
@@ -533,18 +655,65 @@ export const FlowBatchVideoNode: React.FC<BaseProps & { onBatchGenerate: (id: st
   const success = tasks.filter(task => task.status === 'success').length;
   const failed = tasks.filter(task => task.status === 'failed').length;
   const running = tasks.filter(task => task.status === 'generating').length;
+  const firstShot = storyboard?.shots[0];
+  const directorOutput = director?.output?.global;
+  const inheritedAspectRatio = firstShot?.aspectRatio || directorOutput?.aspectRatio || state.aspectRatio;
+  const inheritedWidth = firstShot?.width || directorOutput?.width || state.width;
+  const inheritedHeight = firstShot?.height || directorOutput?.height || state.height;
+  const durations = Array.from(new Set((storyboard?.shots || []).map(shot => shot.duration).filter(value => Number.isFinite(value))));
+  const inheritedDuration = durations.length === 1 ? `${durations[0]} 秒/镜头` : durations.length > 1 ? '按分镜设置' : `${state.duration || 8} 秒/镜头`;
+  const waiting = (storyboard?.shots || []).filter(shot => shot.generation.status !== 'completed').length;
+  const batchButtonLabel = state.status === 'running' ? '生成中…' : waiting > 0 ? `生成待处理镜头（${waiting}）` : '全部镜头已生成';
+  const generatedShots = (storyboard?.shots || []).filter(shot => Boolean(shot.generation.videoUrl));
+  const previewShot = generatedShots.find(shot => shot.id === previewShotId);
+  const previewIndex = previewShot ? generatedShots.findIndex(shot => shot.id === previewShot.id) : -1;
+  const movePreview = (offset: number) => {
+    if (previewIndex < 0) return;
+    const next = generatedShots[previewIndex + offset];
+    if (next) setPreviewShotId(next.id);
+  };
+  useEffect(() => {
+    if (!previewShotId) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPreviewShotId(null);
+      if (event.key === 'ArrowLeft') movePreview(-1);
+      if (event.key === 'ArrowRight') movePreview(1);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [previewShotId, generatedShots]);
+  const showTaskQueue = generatedShots.length === 0 || running > 0 || failed > 0 || waiting > 0;
   return (
-    <Shell {...props} icon={<Play size={20} />} label={data.title || 'Flow 视频生成'} subtitle={`${success}/${tasks.length || storyboard?.shots.length || 0} 已完成 · 并发 ${state.concurrency}`} minHeight={420}>
-      <div className="space-y-3 px-5 py-4">
-        <div className="grid grid-cols-3 gap-2"><Field dark={dark} label="Flow 视频模型"><Select dark={dark} value={state.modelId || ''} onChange={event => { const modelId = event.target.value; update({ modelId, resolution: getVideoGenerationProvider(modelId)?.resolutions?.[0] || 'Auto' }); }} onPointerDown={stop}>{models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field><Field dark={dark} label="分辨率"><Select dark={dark} value={state.resolution || selectedModel?.resolutions?.[0] || 'Auto'} onChange={event => update({ resolution: event.target.value })} onPointerDown={stop}>{(selectedModel?.resolutions || ['Auto']).map(value => <option key={value} value={value}>{value}</option>)}</Select></Field><Field dark={dark} label="并发数量"><Select dark={dark} value={String(state.concurrency)} onChange={event => update({ concurrency: Number(event.target.value) as 1 | 2 | 3 | 4 })} onPointerDown={stop}>{[1, 2, 3, 4].map(value => <option key={value} value={value}>并发 {value}</option>)}</Select></Field></div>
-        <div className="grid grid-cols-3 gap-2"><Field dark={dark} label="比例"><Input dark={dark} value={state.aspectRatio} readOnly /></Field><Field dark={dark} label="尺寸"><Input dark={dark} value={`${state.width} × ${state.height}`} readOnly /></Field><Field dark={dark} label="时长(s)"><Input dark={dark} type="number" min={1} value={state.duration || ''} onChange={event => update({ duration: Number(event.target.value) })} onPointerDown={stop} /></Field></div>
-        <div className={`text-[10px] ${muted(dark)}`}>能力：{selectedModel?.supportedAspectRatios?.join(' / ') || '比例自动'} · {selectedModel?.resolutions?.join(' / ') || '分辨率自动'} · {selectedModel?.supportsNativeAudio ? '支持原生音频' : '无原生音频'}</div>
+    <>
+      <Shell {...props} icon={<Play size={20} />} label={data.title || 'Flow 视频生成'} subtitle={`${generatedShots.length || success}/${storyboard?.shots.length || tasks.length || 0} 已完成 · 并发 ${state.concurrency}`} minHeight={FLOW_BATCH_BASE_HEIGHT}>
+        <div className="space-y-3 px-5 py-4">
+        <div className="grid grid-cols-3 gap-2"><Field dark={dark} label="Flow 视频模型"><Select dark={dark} value={state.modelId || ''} onChange={event => { const modelId = event.target.value; update({ modelId, resolution: getVideoGenerationProvider(modelId)?.resolutions?.[0] || 'Auto' }); }} onPointerDown={stop}>{models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field><Field dark={dark} label="模型档位"><Select dark={dark} value={state.resolution || selectedModel?.resolutions?.[0] || 'Auto'} onChange={event => update({ resolution: event.target.value })} onPointerDown={stop}>{(selectedModel?.resolutions || ['Auto']).map(value => <option key={value} value={value}>{value}</option>)}</Select></Field><Field dark={dark} label="并发数量"><Select dark={dark} value={String(state.concurrency)} onChange={event => update({ concurrency: Number(event.target.value) as 1 | 2 | 3 | 4 })} onPointerDown={stop}>{[1, 2, 3, 4].map(value => <option key={value} value={value}>并发 {value}</option>)}</Select></Field></div>
+        <div className={`rounded-xl border px-3 py-2.5 ${dark ? 'border-cyan-400/20 bg-cyan-400/[0.06]' : 'border-cyan-200 bg-cyan-50'}`}><div className={`mb-2 flex items-center gap-1.5 text-[10px] ${dark ? 'text-cyan-200' : 'text-cyan-700'}`}><Settings2 size={12} />继承自火柴人导演的生成规格</div><div className="grid grid-cols-3 gap-2 text-[10px]"><div><div className={muted(dark)}>比例</div><div className="mt-1 font-medium">{inheritedAspectRatio}</div></div><div><div className={muted(dark)}>尺寸</div><div className="mt-1 font-medium">{inheritedWidth} × {inheritedHeight}</div></div><div><div className={muted(dark)}>时长</div><div className="mt-1 font-medium">{inheritedDuration}</div></div></div><div className={`mt-2 text-[9px] ${muted(dark)}`}>这里不再修改画幅和时长；修改请回到火柴人导演节点后重新规划分镜。</div></div>
+        <div className={`text-[10px] ${muted(dark)}`}>模型能力：{selectedModel?.supportedAspectRatios?.join(' / ') || '比例自动'} · {selectedModel?.resolutions?.join(' / ') || '档位自动'} · {selectedModel?.supportsNativeAudio ? '支持原生音频' : '无原生音频'}</div>
         <div className={`grid grid-cols-3 gap-1 rounded-xl p-2 text-[10px] ${dark ? 'bg-white/[0.035] text-neutral-400' : 'bg-neutral-50 text-neutral-500'}`}><label className="flex items-center gap-1.5"><input type="checkbox" checked={state.nativeAudio} onChange={event => update({ nativeAudio: event.target.checked })} onPointerDown={stop} className="accent-cyan-400" />原生音频</label><label className="flex items-center gap-1.5"><input type="checkbox" checked={state.autoRetry} onChange={event => update({ autoRetry: event.target.checked })} onPointerDown={stop} className="accent-cyan-400" />自动重试</label><label className="flex items-center gap-1.5"><input type="checkbox" checked={state.continueOnFailure} onChange={event => update({ continueOnFailure: event.target.checked })} onPointerDown={stop} className="accent-cyan-400" />失败后继续</label></div>
-        <div className={`rounded-xl border px-3 py-2 text-[10px] ${dark ? 'border-white/8 bg-white/[0.025]' : 'border-neutral-200 bg-neutral-50'}`}><div className="mb-1 flex items-center justify-between"><span className={muted(dark)}>任务队列</span><span className={running ? 'text-amber-300' : failed ? 'text-red-300' : 'text-emerald-300'}>{running ? `生成中 ${running}` : failed ? `失败 ${failed}` : state.status === 'completed' ? '全部完成' : '待执行'}</span></div>{(tasks.length ? tasks : (storyboard?.shots || []).map(shot => ({ shotId: shot.id, taskId: '', status: 'waiting' as const, retryCount: 0 }))).slice(0, 10).map(task => <div key={task.shotId} className="flex items-center justify-between py-1"><span className="truncate pr-2">{String(storyboard?.shots.find(shot => shot.id === task.shotId)?.order || '')} · {storyboard?.shots.find(shot => shot.id === task.shotId)?.title || task.shotId}</span><span className={task.status === 'success' ? 'text-emerald-400' : task.status === 'failed' ? 'text-red-400' : muted(dark)}>{task.status === 'success' ? '✓' : statusLabel(task.status)}</span></div>)}</div>
+        {generatedShots.length > 0 && <div className={`rounded-xl border p-3 ${dark ? 'border-emerald-400/20 bg-emerald-400/[0.045]' : 'border-emerald-200 bg-emerald-50'}`}>
+          <div className="mb-2 flex items-center justify-between"><span className={`flex items-center gap-1.5 text-[10px] font-medium ${dark ? 'text-emerald-300' : 'text-emerald-700'}`}><Video size={12} />生成结果</span><span className={`text-[10px] ${muted(dark)}`}>{generatedShots.length}/{storyboard?.shots.length || generatedShots.length}</span></div>
+          <div className="grid grid-cols-2 gap-2 overflow-y-auto pr-1" style={{ maxHeight: FLOW_BATCH_RESULT_LIST_MAX_HEIGHT }}>
+            {generatedShots.map(shot => {
+              const generating = shot.generation.status === 'queued' || shot.generation.status === 'generating';
+              return <div key={shot.id} className={`overflow-hidden rounded-xl border ${dark ? 'border-white/10 bg-black/25' : 'border-neutral-200 bg-white'}`}>
+                <button type="button" className="relative block h-24 w-full overflow-hidden bg-black" onClick={() => setPreviewShotId(shot.id)} onPointerDown={stop} aria-label={`预览 ${shot.title}`}>
+                  <LazyVideo src={shot.generation.videoUrl} muted playsInline controls={false} loop={false} className="h-full w-full object-cover" placeholderClassName="h-full w-full bg-black" />
+                  <span className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition-opacity hover:opacity-100"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white"><Play size={14} /></span></span>
+                  {generating && <span className="absolute inset-x-1.5 bottom-1.5 rounded-md bg-amber-500/85 px-1.5 py-1 text-[9px] text-black">正在重新生成</span>}
+                </button>
+                <div className="p-2"><div className="truncate text-[10px] font-medium">{String(shot.order).padStart(2, '0')} · {shot.title}</div><div className="mt-2 flex gap-1"><Button dark={dark} className="flex-1 justify-center" onClick={() => setPreviewShotId(shot.id)} onPointerDown={stop}><Maximize2 size={11} />预览</Button><Button dark={dark} className="flex-1 justify-center" disabled={generating} onClick={() => storyboardNode && onGenerateShot(storyboardNode.id, shot.id)} onPointerDown={stop}>{generating ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}重生成</Button></div></div>
+              </div>;
+            })}
+          </div>
+        </div>}
+        {showTaskQueue && <div className={`rounded-xl border px-3 py-2 text-[10px] ${dark ? 'border-white/8 bg-white/[0.025]' : 'border-neutral-200 bg-neutral-50'}`}><div className="mb-1 flex items-center justify-between"><span className={muted(dark)}>任务队列</span><span className={running ? 'text-amber-300' : failed ? 'text-red-300' : 'text-emerald-300'}>{running ? `生成中 ${running}` : failed ? `失败 ${failed}` : state.status === 'completed' ? '全部完成' : '待执行'}</span></div>{(tasks.length ? tasks : (storyboard?.shots || []).map(shot => ({ shotId: shot.id, taskId: '', status: 'waiting' as const, retryCount: 0 }))).slice(0, 10).map(task => <div key={task.shotId} className="flex items-center justify-between py-1"><span className="truncate pr-2">{String(storyboard?.shots.find(shot => shot.id === task.shotId)?.order || '')} · {storyboard?.shots.find(shot => shot.id === task.shotId)?.title || task.shotId}</span><span className={task.status === 'success' ? 'text-emerald-400' : task.status === 'failed' ? 'text-red-400' : muted(dark)}>{task.status === 'success' ? '✓' : statusLabel(task.status)}</span></div>)}</div>}
         {state.error && <div className="flex items-start gap-1.5 rounded-xl bg-red-500/10 px-3 py-2 text-[10px] text-red-300"><AlertCircle size={12} />{state.error}</div>}
-        <div className="flex flex-wrap gap-1.5"><Button dark={dark} tone="primary" disabled={!storyboard?.shots.length || state.status === 'running'} onClick={() => onBatchGenerate(data.id)} onPointerDown={stop}>{state.status === 'running' ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}批量生成</Button>{failed > 0 && <Button dark={dark} onClick={() => onRetryFailed(data.id)} onPointerDown={stop}><RotateCcw size={12} />只重试失败项</Button>}</div>
-      </div>
-    </Shell>
+        <div className="flex flex-wrap gap-1.5"><Button dark={dark} tone="primary" disabled={!storyboard?.shots.length || state.status === 'running' || waiting === 0} onClick={() => onBatchGenerate(data.id)} onPointerDown={stop}>{state.status === 'running' ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}{batchButtonLabel}</Button>{failed > 0 && <Button dark={dark} onClick={() => onRetryFailed(data.id)} onPointerDown={stop}><RotateCcw size={12} />只重试失败项（{failed}）</Button>}</div>
+        </div>
+      </Shell>
+      {previewShot && <ShotPreviewModal shot={previewShot} dark={dark} compareMode={Boolean(storyboard?.compareMode)} index={previewIndex} total={generatedShots.length} onClose={() => setPreviewShotId(null)} onPrevious={() => movePreview(-1)} onNext={() => movePreview(1)} onRegenerate={() => storyboardNode && onGenerateShot(storyboardNode.id, previewShot.id)} />}
+    </>
   );
 };
 
@@ -558,7 +727,7 @@ export const VideoMergeNode: React.FC<BaseProps & { onMerge: (id: string) => voi
   const completed = storyboard?.shots.filter(shot => shot.generation.status === 'completed' && shot.generation.videoUrl).length || 0;
   return (
     <Shell {...props} icon={<Merge size={20} />} label={data.title || '视频拼接'} subtitle={`${completed} 个已完成镜头 · Remotion / FFmpeg`} minHeight={300}>
-      <div className="space-y-3 px-5 py-4"><div className="grid grid-cols-2 gap-2"><Field dark={dark} label="输出格式"><Select dark={dark} value={state.outputFormat} onChange={event => update({ outputFormat: event.target.value as 'mp4' | 'mov' | 'webm' })} onPointerDown={stop}><option value="mp4">MP4 · H.264 + AAC</option><option value="mov">MOV</option><option value="webm">WebM</option></Select></Field><Field dark={dark} label="帧率"><Select dark={dark} value={String(state.fps)} onChange={event => update({ fps: Number(event.target.value) })} onPointerDown={stop}><option value="24">24 fps</option><option value="30">30 fps</option><option value="60">60 fps</option></Select></Field></div><label className={`flex items-center gap-2 text-[10px] ${muted(dark)}`}><input type="checkbox" checked={state.skipFailed} onChange={event => update({ skipFailed: event.target.checked })} onPointerDown={stop} className="accent-cyan-400" />跳过失败镜头继续拼接</label>{state.outputUrl && <video src={state.outputUrl} controls className="max-h-48 w-full rounded-xl bg-black object-contain" onPointerDown={stop} />}{state.error && <div className="flex items-start gap-1.5 rounded-xl bg-red-500/10 px-3 py-2 text-[10px] text-red-300"><AlertCircle size={12} />{state.error}</div>}<Button dark={dark} tone="primary" className="w-full" disabled={completed === 0 || state.status === 'queued' || state.status === 'rendering'} onClick={() => onMerge(data.id)} onPointerDown={stop}>{state.status === 'queued' || state.status === 'rendering' ? <Loader2 size={13} className="animate-spin" /> : <Merge size={13} />} {state.status === 'success' ? '重新拼接' : '拼接最终视频'}</Button><div className={`text-[10px] ${muted(dark)}`}>{state.status === 'success' ? '成片已保存到当前项目' : state.status === 'failed' ? '拼接失败，可修复镜头后重试' : '按分镜顺序统一输出尺寸、帧率与音频'}</div></div>
+      <div className="space-y-3 px-5 py-4"><div className="grid grid-cols-2 gap-2"><Field dark={dark} label="输出格式"><Select dark={dark} value={state.outputFormat} onChange={event => update({ outputFormat: event.target.value as 'mp4' | 'mov' | 'webm' })} onPointerDown={stop}><option value="mp4">MP4 · H.264 + AAC</option><option value="mov">MOV</option><option value="webm">WebM</option></Select></Field><Field dark={dark} label="帧率"><Select dark={dark} value={String(state.fps)} onChange={event => update({ fps: Number(event.target.value) })} onPointerDown={stop}><option value="24">24 fps</option><option value="30">30 fps</option><option value="60">60 fps</option></Select></Field></div><label className={`flex items-center gap-2 text-[10px] ${muted(dark)}`}><input type="checkbox" checked={state.skipFailed} onChange={event => update({ skipFailed: event.target.checked })} onPointerDown={stop} className="accent-cyan-400" />跳过失败镜头继续拼接</label>{state.outputUrl && <LazyVideo src={state.outputUrl} loop={false} containerClassName="w-full" className="max-h-48 w-full rounded-xl bg-black object-contain" placeholderClassName="h-48 w-full rounded-xl bg-black" onPointerDown={stop} />}{state.error && <div className="flex items-start gap-1.5 rounded-xl bg-red-500/10 px-3 py-2 text-[10px] text-red-300"><AlertCircle size={12} />{state.error}</div>}<Button dark={dark} tone="primary" className="w-full" disabled={completed === 0 || state.status === 'queued' || state.status === 'rendering'} onClick={() => onMerge(data.id)} onPointerDown={stop}>{state.status === 'queued' || state.status === 'rendering' ? <Loader2 size={13} className="animate-spin" /> : <Merge size={13} />} {state.status === 'success' ? '重新拼接' : '拼接最终视频'}</Button><div className={`text-[10px] ${muted(dark)}`}>{state.status === 'success' ? '成片已保存到当前项目' : state.status === 'failed' ? '拼接失败，可修复镜头后重试' : '按分镜顺序统一输出尺寸、帧率与音频'}</div></div>
     </Shell>
   );
 };

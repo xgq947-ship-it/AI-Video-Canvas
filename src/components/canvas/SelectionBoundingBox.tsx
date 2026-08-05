@@ -8,6 +8,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { NodeData, NodeGroup, NodeType } from '../../types';
 import { VIDEO_ANALYSIS_NODE_HEIGHT } from '../../features/video-analysis/VideoAnalysisNode';
+import { getFlowBatchVideoNodeHeight, getStickmanStoryboardNodeHeight, SCRIPT_INPUT_NODE_HEIGHT, SCRIPT_INPUT_REFERENCE_NODE_HEIGHT } from '../../features/stickman-director/StickmanWorkflowNodes';
 
 interface SelectionBoundingBoxProps {
     selectedNodes: NodeData[];
@@ -73,10 +74,17 @@ const getNodeHeight = (node: NodeData, allNodes?: NodeData[]): number => {
     if (node.type === NodeType.VIDEO_REMIX) return 306;
     if (node.type === NodeType.VIDEO_ANALYSIS) return VIDEO_ANALYSIS_NODE_HEIGHT;
     if (node.type === NodeType.REFERENCE_VIDEO) return 300;
-    if (node.type === NodeType.SCRIPT_INPUT) return 500;
+    if (node.type === NodeType.SCRIPT_INPUT) {
+        const parent = node.parentIds?.map(id => allNodes?.find(item => item.id === id)).find(Boolean);
+        const isReferenceScript = parent?.type === NodeType.VIDEO || parent?.type === NodeType.REFERENCE_VIDEO;
+        return isReferenceScript ? SCRIPT_INPUT_REFERENCE_NODE_HEIGHT : SCRIPT_INPUT_NODE_HEIGHT;
+    }
     if (node.type === NodeType.STICKMAN_DIRECTOR) return 600;
-    if (node.type === NodeType.STORYBOARD || node.type === NodeType.STORYBOARD_COMPARE) return Math.max(430, node.storyboard?.expanded ? 470 + (node.storyboard.shots.length * 180) : 310);
-    if (node.type === NodeType.FLOW_BATCH_VIDEO) return 420;
+    if (node.type === NodeType.STORYBOARD || node.type === NodeType.STORYBOARD_COMPARE) return getStickmanStoryboardNodeHeight(node.storyboard);
+    if (node.type === NodeType.FLOW_BATCH_VIDEO) {
+        const parent = node.parentIds?.map(id => allNodes?.find(item => item.id === id)).find(Boolean);
+        return getFlowBatchVideoNodeHeight(parent?.storyboard);
+    }
     if (node.type === NodeType.VIDEO_MERGE) return 300;
     const baseWidth = getNodeWidth(node, allNodes);
 

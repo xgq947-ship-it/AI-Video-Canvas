@@ -43,6 +43,10 @@ declare global {
         | { canceled: true }
         | { canceled: false; locationId: string; path: string }
       >;
+      selectLocalProject: () => Promise<
+        | { canceled: true }
+        | { canceled: false; importId: string; name: string }
+      >;
       selectCodexCli: () => Promise<
         | { canceled: true }
         | { canceled: false; path: string }
@@ -56,6 +60,14 @@ declare global {
         title: string;
         projectDirName?: string;
         projectPath?: string;
+        nodes: unknown[];
+        groups: unknown[];
+        viewport: { x: number; y: number; zoom: number };
+      }>;
+      importLocalProject: (importId: string) => Promise<{
+        id: string;
+        title: string;
+        projectDirName?: string;
         nodes: unknown[];
         groups: unknown[];
         viewport: { x: number; y: number; zoom: number };

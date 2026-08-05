@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('evanDesktop', {
     selectProjectLocation: () => ipcRenderer.invoke('project:select-location'),
+    selectLocalProject: () => ipcRenderer.invoke('project:select-local'),
     selectCodexCli: () => ipcRenderer.invoke('codex:select-cli'),
     openExternal: async (url) => {
         const result = await ipcRenderer.invoke('external:open', url);
@@ -10,6 +11,11 @@ contextBridge.exposeInMainWorld('evanDesktop', {
     createProject: async (input) => {
         const result = await ipcRenderer.invoke('project:create', input);
         if (!result?.ok) throw new Error(result?.error || '项目创建失败');
+        return result.data;
+    },
+    importLocalProject: async (importId) => {
+        const result = await ipcRenderer.invoke('project:import-local', { importId });
+        if (!result?.ok) throw new Error(result?.error || '本地项目导入失败');
         return result.data;
     },
     revealProject: async (workflowId) => {

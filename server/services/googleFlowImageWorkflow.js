@@ -6,7 +6,6 @@
  */
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fetchWorkflowMedia } from '../utils/workflowMedia.js';
 import { runWithAuthRecovery, runWithExecutionMode } from './webhttp/index.js';
@@ -14,7 +13,6 @@ import { generateFlowImageHttp } from './webhttp/flow/provider.js';
 import { resolveProtocolModelId } from './webhttp/registry.js';
 import { FLOW_BASELINE_IMAGE_MODEL } from './webhttp/flow/protocol.js';
 
-export const GOOGLE_FLOW_IMAGE_WORKFLOW_MODEL_ID = 'google-flow-nano-banana-2';
 // 画布模型 id → Ops-Cli text_to_image --model 值（Flow Image 模式下拉里的模型名）。
 export const GOOGLE_FLOW_IMAGE_WORKFLOW_MODELS = {
     'google-flow-nano-banana-pro': 'Nano Banana Pro',
@@ -126,9 +124,6 @@ export async function resolveBrowserReferenceImages(
     return references;
 }
 
-export function resolveGoogleFlowReferenceImages(inputs, libraryDir, taskDir) {
-    return resolveBrowserReferenceImages(inputs, libraryDir, taskDir, { providerName: 'Google Flow' });
-}
 
 async function loadBrowserImageEntry(image, fallbackPath, providerName) {
     const imagePath = image?.path || fallbackPath;
@@ -185,9 +180,6 @@ export async function loadBrowserImageResult(outputs, options = {}) {
     return results[0];
 }
 
-export function loadGoogleFlowImageResult(outputs) {
-    return loadBrowserImageResult(outputs, { providerName: 'Google Flow 文生图' });
-}
 
 export function generateGoogleFlowWorkflowImage(options) {
     return runWithAuthRecovery({

@@ -32,6 +32,14 @@ export const normalizeAssetPath = (file) => {
   else if (p.startsWith('library/')) p = p.slice('library/'.length);
   // 去掉任何残留的开头斜杠
   p = p.replace(/^\/+/, '');
+  // 资产 URL 里的路径段是百分号编码的（中文/空格项目名等），磁盘查找需要解码后的真实名称。
+  if (p.includes('%')) {
+    try {
+      p = decodeURIComponent(p);
+    } catch {
+      // 保留原始字符串：极少数情况下含有非法转义序列，交给上层按原样匹配。
+    }
+  }
   return p;
 };
 

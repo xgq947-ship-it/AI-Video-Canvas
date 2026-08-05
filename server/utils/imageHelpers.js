@@ -131,44 +131,11 @@ export function resolveAudioToBase64(input) {
     }
 }
 
-/**
- * Extract raw base64 from data URL (removes data:image/xxx;base64, prefix)
- * @param {string} dataUrl - Base64 data URL
- * @returns {string|null} Raw base64 string
- */
-export function extractRawBase64(dataUrl) {
-    if (!dataUrl) return null;
-    if (dataUrl.startsWith('data:')) {
-        return dataUrl.replace(/^data:[^;]+;base64,/, '');
-    }
-    return dataUrl;
-}
 
 // ============================================================================
 // ASPECT RATIO MAPPING
 // ============================================================================
 
-/**
- * Map frontend aspect ratio to API-compatible format
- * @param {string} ratio - Frontend aspect ratio string
- * @returns {string} API-compatible aspect ratio
- */
-export function mapAspectRatio(ratio) {
-    const mapping = {
-        'Auto': '1:1',
-        '1:1': '1:1',
-        '16:9': '16:9',
-        '9:16': '9:16',
-        '4:3': '4:3',
-        '3:4': '3:4',
-        '3:2': '3:2',
-        '2:3': '2:3',
-        '21:9': '21:9',
-        '5:4': '5:4',
-        '4:5': '4:5'
-    };
-    return mapping[ratio] || '1:1';
-}
 
 // ============================================================================
 // FILE SAVING

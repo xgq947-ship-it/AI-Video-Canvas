@@ -36,6 +36,7 @@ interface CanvasNodeProps {
   connectedReferences?: NodeReference[];
   onUpdate: (id: string, updates: Partial<NodeData>) => void;
   onGenerate: (id: string) => void;
+  onCancelGeneration?: (id: string) => void;
   selected: boolean;
   showControls?: boolean; // Only show controls when single node is selected (not in group selection)
   onSelect: (id: string) => void;
@@ -105,6 +106,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   connectedReferences,
   onUpdate,
   onGenerate,
+  onCancelGeneration,
   selected,
   showControls = true, // Default to true for backward compatibility
   onSelect,
@@ -307,11 +309,11 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   }
 
   if (data.type === NodeType.STORYBOARD || data.type === NodeType.STORYBOARD_COMPARE) {
-    return <StoryboardNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onGenerate, onNodePointerDown, onContextMenu, onConnectorDown, onGenerateShot: onGenerateStickmanShot || (() => undefined), onBatchGenerate: onBatchGenerateStickman || (() => undefined), onRetryFailed: onRetryStickmanFailed || (() => undefined) } as any)} />;
+    return <StoryboardNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onGenerate, onNodePointerDown, onContextMenu, onConnectorDown, onGenerateShot: onGenerateStickmanShot || (() => undefined) } as any)} />;
   }
 
   if (data.type === NodeType.FLOW_BATCH_VIDEO) {
-    return <FlowBatchVideoNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onGenerate, onNodePointerDown, onContextMenu, onConnectorDown, onBatchGenerate: onBatchGenerateStickman || (() => undefined), onRetryFailed: onRetryStickmanFailed || (() => undefined) } as any)} />;
+    return <FlowBatchVideoNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onGenerate, onNodePointerDown, onContextMenu, onConnectorDown, onBatchGenerate: onBatchGenerateStickman || (() => undefined), onRetryFailed: onRetryStickmanFailed || (() => undefined), onGenerateShot: onGenerateStickmanShot || (() => undefined) } as any)} />;
   }
 
   if (data.type === NodeType.VIDEO_MERGE) {
@@ -642,6 +644,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
             onImageToImage={onImageToImage}
             onImageToVideo={onImageToVideo}
             onGenerate={onGenerate}
+            onCancelGeneration={onCancelGeneration}
             onUpdate={onUpdate}
           />
         </div>

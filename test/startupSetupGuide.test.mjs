@@ -7,7 +7,8 @@ const guide = fs.readFileSync(
   new URL('../src/components/modals/StartupSetupGuideModal.tsx', import.meta.url),
   'utf8'
 );
-const server = fs.readFileSync(new URL('../server/index.js', import.meta.url), 'utf8');
+// 浏览器登录态相关路由已搬到 server/routes/browser.js（行为未变）。
+const server = fs.readFileSync(new URL('../server/routes/browser.js', import.meta.url), 'utf8');
 
 test('每次桌面界面启动时主动显示服务连接指南，并可从设置再次打开', () => {
   assert.match(topBar, /useState\(true\)/);

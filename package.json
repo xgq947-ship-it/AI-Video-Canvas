@@ -39,7 +39,6 @@
   },
   "dependencies": {
     "@google/genai": "^1.32.0",
-    "@google/generative-ai": "^0.24.1",
     "@remotion/bundler": "^4.0.489",
     "@remotion/renderer": "^4.0.489",
     "cors": "^2.8.6",

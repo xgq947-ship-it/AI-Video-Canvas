@@ -15,6 +15,7 @@ import {
     MASSAGE_EQUIPMENT_CATEGORY,
     MASSAGE_EQUIPMENT_SECTIONS,
 } from '../../shared/massageEquipmentCategories.js';
+import { LazyVideo } from './LazyVideo';
 
 export interface LibraryAsset {
     id: string;
@@ -631,7 +632,17 @@ const AssetLibraryContent: React.FC<AssetLibraryContentProps> = ({
                             >
                                 <ImageOff size={22} className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-neutral-700" />
                                 {asset.type === 'video' ? (
-                                    <video src={asset.url} muted playsInline preload="metadata" className="relative h-full w-full object-cover" />
+                                    <LazyVideo
+                                        src={asset.url}
+                                        muted
+                                        playsInline
+                                        controls={false}
+                                        loop={false}
+                                        containerClassName="relative h-full w-full"
+                                        className="h-full w-full object-cover"
+                                        // 占位保持透明：背后的 ImageOff 图标本来就是这一格的兜底显示。
+                                        placeholderClassName="h-full w-full"
+                                    />
                                 ) : (
                                     <img src={asset.url} alt={asset.name} className="relative h-full w-full object-cover" />
                                 )}

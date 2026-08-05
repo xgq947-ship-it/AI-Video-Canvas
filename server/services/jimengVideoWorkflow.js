@@ -41,7 +41,6 @@ export function resolveJimengModelLabel(videoModel) {
 export const JIMENG_SUPPORTED_DURATIONS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 export const JIMENG_SUPPORTED_ASPECT_RATIOS = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'];
 export const JIMENG_SUPPORTED_RESOLUTIONS = ['720P', '1080P', '4K'];
-export const JIMENG_MAX_REFERENCE_IMAGES = 9;
 
 export function normalizeJimengResolution(input) {
     const value = String(input || '').trim().toUpperCase();

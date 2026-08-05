@@ -7,12 +7,14 @@
 
 import { NodeData, NodeType, NodeStatus } from '../types';
 import {
+    cancelGeneration as requestCancelGeneration,
     createProductSceneJob,
     generateImage,
     generateImageBatch,
     generateVideo,
     queueCodexImage
 } from '../services/generationService';
+import { useCallback, useRef } from 'react';
 import { extractVideoLastFrame } from '../utils/videoHelpers';
 import { createAdditionalImagePlacements } from '../utils/imageBatchLayout.js';
 import { minimumReferenceImages, shouldUseReferenceImages } from '../utils/videoModelCapabilities.js';
@@ -33,10 +35,15 @@ interface UseGenerationProps {
     // Surfaced feedback for failures the node itself cannot show — chiefly a
     // regeneration that fails while we keep the previous result (status stays
     // SUCCESS, so the node's error UI never renders and the user sees nothing).
-    notify?: (message: string) => void;
+    // `action` lets that toast carry a retry button, since there is no node-level
+    // error UI to host one.
+    notify?: (message: string, options?: { action?: { label: string; onClick: () => void } }) => void;
 }
 
 export const useGeneration = ({ nodes, updateNode, addNodes, workflowId, notify }: UseGenerationProps) => {
+    // nodeId -> 该次生成的 AbortController。生成结束（成功或失败）时清理。
+    const abortControllersRef = useRef(new Map<string, AbortController>());
+
     // ============================================================================
     // HELPERS
     // ============================================================================
@@ -110,6 +117,13 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId, notify 
         }
         const node = nodes.find(n => n.id === id);
         if (!node) return;
+
+        // 每次生成配一个 AbortController，供「取消」中断本地等待。
+        // 真正叫停服务端要靠 cancelGeneration() 打的那个请求——中止 fetch 只是
+        // 断开我们这一侧，后端任务不会因此消失。
+        abortControllersRef.current.get(id)?.abort();
+        const abortController = new AbortController();
+        abortControllersRef.current.set(id, abortController);
 
         // Get prompts from connected TEXT nodes (if any)
         const getTextNodePrompts = (): string[] => {
@@ -332,6 +346,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId, notify 
                         imageBase64: imageBase64s.length > 0 ? imageBase64s : undefined,
                         imageModel: node.imageModel,
                         nodeId: id,
+                        signal: abortController.signal,
                         count: generationCount
                     });
                     const generatedAt = Date.now();
@@ -390,6 +405,7 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId, notify 
                     imageBase64: imageBase64s.length > 0 ? imageBase64s : undefined,
                     imageModel: node.imageModel,
                     nodeId: id,
+                    signal: abortController.signal
                 });
 
                 // Add cache-busting parameter to force browser to fetch new image
@@ -546,7 +562,8 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId, notify 
                     videoModel: node.videoModel,
                     referenceAudioUrls,
                     generateAudio: node.generateAudio !== false,
-                    nodeId: id
+                    nodeId: id,
+                    signal: abortController.signal
                 });
 
                 // Add cache-busting parameter to force browser to fetch new video
@@ -594,6 +611,24 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId, notify 
 
             }
         } catch (error: any) {
+            // 用户主动取消不是失败：不要标红、不要提示「生成失败」，也不要给重试按钮
+            // （取消的语义已经由 cancelNodeGeneration 那边的 toast 交代过了）。
+            // 判定同时看 AbortError 和 signal.aborted：不同浏览器/环境抛的形状不一致。
+            if (error?.name === 'AbortError' || abortController.signal.aborted) {
+                updateNode(id, {
+                    status: node.resultUrl ? NodeStatus.SUCCESS : NodeStatus.IDLE,
+                    productSceneStage: undefined,
+                    productSceneJobStatus: undefined,
+                    productSceneStageLabel: undefined,
+                    codexJobId: undefined,
+                    codexJobStatus: undefined,
+                    generationStartTime: undefined,
+                    errorMessage: undefined,
+                    errorSubmitted: undefined
+                });
+                return;
+            }
+
             // Handle errors
             const msg = error.toString().toLowerCase();
             let errorMessage = error.message || 'Generation failed';
@@ -629,17 +664,55 @@ export const useGeneration = ({ nodes, updateNode, addNodes, workflowId, notify 
             // 保留上次结果的节点会停在 SUCCESS，错误 UI 不渲染 → 用户点了重新生成却毫无反馈。
             // 用 toast 补一条提示，让「重试失败、仍是旧结果」这件事看得见。
             if (node.resultUrl) {
-                notify?.(`重新生成失败，已保留上次结果：${errorMessage}`);
+                // 重试按钮只在「平台未受理」时给。errorSubmitted 意味着这次请求已经
+                // 扣过费、结果可能就躺在平台历史里，直接重试会再扣一次——节点内的错误
+                // UI 正是这样处理的（NodeContent 会藏掉重试按钮），toast 必须保持一致，
+                // 否则等于绕开那道保护重新引入重复扣费。
+                notify?.(
+                    `重新生成失败，已保留上次结果：${errorMessage}`,
+                    errorSubmitted ? undefined : { action: { label: '重试', onClick: () => void handleGenerate(id) } }
+                );
             }
             console.error('Generation failed:', error);
+        } finally {
+            // 只清自己那条：期间可能已经有新的一次生成把这个 id 占了。
+            if (abortControllersRef.current.get(id) === abortController) {
+                abortControllersRef.current.delete(id);
+            }
         }
     };
+
+    /**
+     * 取消某个节点正在进行的生成。
+     *
+     * 顺序很重要：先让服务端停（cancelGeneration），拿到「是否已越过提交边界」的
+     * 结论后再中止本地 fetch。反过来先 abort 的话，请求一断就再也问不到那个结论，
+     * 也就没法如实告诉用户这次到底扣没扣费。
+     */
+    const cancelNodeGeneration = useCallback(async (id: string) => {
+        let result: Awaited<ReturnType<typeof requestCancelGeneration>> | null = null;
+        try {
+            result = await requestCancelGeneration(id, workflowId);
+        } catch (error) {
+            console.error('[Generation] 取消请求失败：', error);
+        } finally {
+            abortControllersRef.current.get(id)?.abort();
+            abortControllersRef.current.delete(id);
+        }
+
+        if (result?.submitted) {
+            // 已受理 = 可能已计费。必须说清楚，不能一句「已取消」把用户送去重复生成。
+            notify?.(result.message);
+        }
+        return result;
+    }, [workflowId, notify]);
 
     // ============================================================================
     // RETURN
     // ============================================================================
 
     return {
-        handleGenerate
+        handleGenerate,
+        cancelNodeGeneration
     };
 };

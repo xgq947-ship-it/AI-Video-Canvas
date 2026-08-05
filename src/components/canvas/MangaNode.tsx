@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { NodeData, NodeType } from '../../types';
 import { NodeConnectors } from './NodeConnectors';
+import { LazyVideo } from '../LazyVideo';
 // @ts-ignore — 纯 JS 共享模块，类型由 shared/manifest.d.ts 提供
 import { buildManifestFromNodes } from '@/shared/manifest.js';
 // @ts-ignore — 纯 JS 共享模块，类型由 shared/ttsProviders.d.ts 提供
@@ -453,8 +454,17 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
               {data.renderStatus === 'success' && data.renderOutputUrl && (
                 <div className="flex flex-col gap-1.5">
                   <div className="flex items-center gap-1 text-[11px] text-emerald-400"><CheckCircle2 size={13} /> 渲染成功</div>
-                  <video src={data.renderOutputUrl} controls preload="metadata" className="w-full rounded" style={{ aspectRatio: '16/9' }}
-                    onPointerDown={stop} onDoubleClick={() => onExpand?.(data.renderOutputUrl!)} />
+                  {/* aspectRatio 放在容器上：占位块和视频同尺寸，挂载时不会把下方按钮顶下去。 */}
+                  <LazyVideo
+                    src={data.renderOutputUrl}
+                    loop={false}
+                    containerClassName="w-full"
+                    containerStyle={{ aspectRatio: '16/9' }}
+                    className="h-full w-full rounded"
+                    placeholderClassName="h-full w-full rounded bg-neutral-900"
+                    onPointerDown={stop}
+                    onDoubleClick={() => onExpand?.(data.renderOutputUrl!)}
+                  />
                   <div className="flex gap-1.5">
                     <a href={data.renderOutputUrl} download onPointerDown={stop}
                       className="flex-1 flex items-center justify-center gap-1 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-white text-[11px]">

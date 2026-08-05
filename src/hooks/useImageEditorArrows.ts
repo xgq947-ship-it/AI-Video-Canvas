@@ -36,47 +36,6 @@ interface UseImageEditorArrowsReturn {
 // HELPER FUNCTIONS
 // ============================================================================
 
-/**
- * Draw an arrow on the given canvas context
- */
-export const drawArrow = (
-    ctx: CanvasRenderingContext2D,
-    fromX: number,
-    fromY: number,
-    toX: number,
-    toY: number
-) => {
-    const headLength = 15;
-    const headAngle = Math.PI / 6;
-    const angle = Math.atan2(toY - fromY, toX - fromX);
-
-    ctx.strokeStyle = '#ff0000';
-    ctx.fillStyle = '#ff0000';
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.globalCompositeOperation = 'source-over';
-
-    // Draw the line
-    ctx.beginPath();
-    ctx.moveTo(fromX, fromY);
-    ctx.lineTo(toX, toY);
-    ctx.stroke();
-
-    // Draw the arrowhead
-    ctx.beginPath();
-    ctx.moveTo(toX, toY);
-    ctx.lineTo(
-        toX - headLength * Math.cos(angle - headAngle),
-        toY - headLength * Math.sin(angle - headAngle)
-    );
-    ctx.lineTo(
-        toX - headLength * Math.cos(angle + headAngle),
-        toY - headLength * Math.sin(angle + headAngle)
-    );
-    ctx.closePath();
-    ctx.fill();
-};
 
 /**
  * Draw an arrow with custom color and line width

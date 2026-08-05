@@ -11,7 +11,7 @@ import {
     runProviderDownload,
     runProviderPoll
 } from '../../generationRuntime/scheduler.js';
-import { webContext, webFetch, webFetchOk, cookieHeaderFor, buildRequestSpec } from '../bridge.js';
+import { webContext, webFetch, cookieHeaderFor, buildRequestSpec } from '../bridge.js';
 import { WebProviderError, classifyHttpFailure } from '../errors.js';
 import { downloadResultMedia, loadReferenceImageFiles, requireNonEmptyPrompt } from '../media.js';
 import {

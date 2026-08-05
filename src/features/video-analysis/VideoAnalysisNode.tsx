@@ -19,7 +19,6 @@ import {
   type VideoAnalysisInputPort,
 } from '../../../shared/videoAnalysis.js';
 
-export const VIDEO_ANALYSIS_NODE_WIDTH = 420;
 export const VIDEO_ANALYSIS_NODE_HEIGHT = 560;
 
 type AssetKind = 'characters' | 'scenes' | 'props';

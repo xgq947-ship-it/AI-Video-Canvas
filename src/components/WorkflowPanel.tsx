@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Trash2, Loader2, Maximize2, Pencil, Check, FolderOpen } from 'lucide-react';
+import { X, Trash2, Loader2, Maximize2, Pencil, Check, FolderOpen, FolderPlus } from 'lucide-react';
 import { LazyImage } from './LazyImage';
 import { NodeData, NodeStatus, NodeType } from '../types';
 import { getNodeHeight, getNodeWidth } from './canvas/ConnectionsLayer';
@@ -41,6 +41,8 @@ interface WorkflowPanelProps {
     isOpen: boolean;
     onClose: () => void;
     onLoadWorkflow: (workflowId: string) => void;
+    onImportLocalProject: () => void | Promise<void>;
+    isImportingLocalProject?: boolean;
     onRenameWorkflow?: (
         workflowId: string,
         title: string,
@@ -168,6 +170,8 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
     isOpen,
     onClose,
     onLoadWorkflow,
+    onImportLocalProject,
+    isImportingLocalProject = false,
     onRenameWorkflow,
     currentWorkflowId,
     panelY = 200,
@@ -398,14 +402,32 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
                 }}
             >
                 {/* Header */}
-                <div className={`flex items-center justify-between px-5 py-4 border-b ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}>
-                    <h2 className={`font-medium ${isDark ? 'text-white' : 'text-neutral-900'}`}>我的工作流</h2>
-                    <button
-                        onClick={onClose}
-                        className={`transition-colors ${isDark ? 'text-neutral-500 hover:text-white' : 'text-neutral-400 hover:text-neutral-900'}`}
-                    >
-                        <Maximize2 size={18} />
-                    </button>
+                <div className={`flex items-center justify-between gap-3 px-5 py-4 border-b ${isDark ? 'border-neutral-800' : 'border-neutral-200'}`}>
+                    <h2 className={`font-medium ${isDark ? 'text-white' : 'text-neutral-900'}`}>打开已有项目</h2>
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => { void onImportLocalProject(); }}
+                            disabled={isImportingLocalProject}
+                            className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors disabled:cursor-wait disabled:opacity-60 ${isDark
+                                ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20'
+                                : 'border-cyan-200 bg-cyan-50 text-cyan-700 hover:bg-cyan-100'}`}
+                            title="从本地项目文件夹添加"
+                        >
+                            {isImportingLocalProject
+                                ? <Loader2 size={14} className="animate-spin" />
+                                : <FolderPlus size={14} />}
+                            选择本地项目
+                        </button>
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className={`transition-colors ${isDark ? 'text-neutral-500 hover:text-white' : 'text-neutral-400 hover:text-neutral-900'}`}
+                            title="关闭"
+                        >
+                            <Maximize2 size={18} />
+                        </button>
+                    </div>
                 </div>
 
                 {/* Content */}
@@ -423,7 +445,7 @@ export const WorkflowPanel: React.FC<WorkflowPanelProps> = ({
                     ) : (
                         workflows.length === 0 ? (
                             <div className="flex items-center justify-center h-40 text-neutral-500">
-                                暂无工作流
+                                暂无已保存项目
                             </div>
                         ) : (
                             <div className="grid grid-cols-3 gap-4">

@@ -7,6 +7,16 @@
 import React, { useCallback, useRef, useEffect } from 'react';
 import { NodeData, ContextMenuState, Viewport } from '../types';
 import { canvasHistoryShortcut, isTextEditingTarget } from '../utils/keyboardShortcuts.js';
+import { computeFitViewport, DEFAULT_NODE_WIDTH } from '@/shared/canvasCoords.js';
+import { ZOOM_MIN, ZOOM_MAX } from '@/shared/zoom.js';
+import { getCanvasRect } from '../utils/canvasRect';
+
+/**
+ * fit 时用来估算节点占位高度。
+ * 不用 DEFAULT_NODE_HEIGHT(300)：那是新建节点的初始高度，带结果预览的节点远高于此，
+ * 用它会让 fit 之后画布底部被截掉。480 沿用原实现，是偏保守（宁可多留白）的估计。
+ */
+const FIT_NODE_HEIGHT = 480;
 
 interface UseKeyboardShortcutsOptions {
     nodes: NodeData[];
@@ -27,6 +37,7 @@ interface UseKeyboardShortcutsOptions {
     generateSelected: () => void;
     openNewNodeMenu: () => void;
     arrangeCanvas: () => void;
+    toggleShortcutHelp: () => void;
     setViewport: React.Dispatch<React.SetStateAction<Viewport>>;
     onPasteImageFiles?: (files: File[]) => void | Promise<void>;
 }
@@ -50,6 +61,7 @@ export const useKeyboardShortcuts = ({
     generateSelected,
     openNewNodeMenu,
     arrangeCanvas,
+    toggleShortcutHelp,
     setViewport,
     onPasteImageFiles
 }: UseKeyboardShortcutsOptions) => {
@@ -73,7 +85,9 @@ export const useKeyboardShortcuts = ({
             const pasteOffset = 50;
             const newNodes: NodeData[] = clipboardRef.current.map(node => ({
                 ...node,
-                id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+                // 与 handleDuplicate 保持一致：Date.now()+Math.random() 在同一毫秒内
+                // 批量粘贴时有碰撞风险，crypto.randomUUID 没有。
+                id: crypto.randomUUID(),
                 x: node.x + pasteOffset,
                 y: node.y + pasteOffset,
                 parentIds: undefined,
@@ -125,29 +139,30 @@ export const useKeyboardShortcuts = ({
         });
     }, [setViewport]);
 
+    // 收敛到 shared/canvasCoords 的 computeFitViewport。
+    //
+    // 这里原本是第三套手写的 fit 实现：自己算 padding、把节点尺寸硬编码成
+    // 365 × 480，而 App.tsx 的「适合选中节点」和 useWorkflow 的加载后 fit 用的都是
+    // computeFitViewport（有 6 条单测覆盖）。三套逻辑各算各的，结果自然对不上。
+    //
+    // 节点高度按 FIT_NODE_HEIGHT 估算而不是用 DEFAULT_NODE_HEIGHT(300)：后者是
+    // 「新建节点时的初始高度」，带结果预览的节点实际要高得多，用 300 去 fit 会把
+    // 画布底部截掉。这里沿用原实现的 480，是贴近真实渲染高度的保守估计。
     const fitCanvas = useCallback(() => {
         if (nodes.length === 0) {
             setViewport({ x: 0, y: 0, zoom: 1 });
             return;
         }
-        const nodeWidth = 365;
-        const nodeHeight = 480;
         const minX = Math.min(...nodes.map(node => node.x));
         const minY = Math.min(...nodes.map(node => node.y));
-        const maxX = Math.max(...nodes.map(node => node.x + nodeWidth));
-        const maxY = Math.max(...nodes.map(node => node.y + nodeHeight));
-        const padding = 80;
-        const availableWidth = Math.max(1, window.innerWidth - padding * 2);
-        const availableHeight = Math.max(1, window.innerHeight - padding * 2 - 60);
-        const zoom = Math.min(1, Math.max(0.1, Math.min(
-            availableWidth / Math.max(1, maxX - minX),
-            availableHeight / Math.max(1, maxY - minY)
-        )));
-        setViewport({
-            zoom,
-            x: (window.innerWidth - (maxX - minX) * zoom) / 2 - minX * zoom,
-            y: 60 + (availableHeight - (maxY - minY) * zoom) / 2 - minY * zoom
-        });
+        const maxX = Math.max(...nodes.map(node => node.x + DEFAULT_NODE_WIDTH));
+        const maxY = Math.max(...nodes.map(node => node.y + FIT_NODE_HEIGHT));
+        setViewport(computeFitViewport(getCanvasRect(), {
+            x: minX,
+            y: minY,
+            width: maxX - minX,
+            height: maxY - minY,
+        }, { minZoom: ZOOM_MIN, maxZoom: Math.min(1, ZOOM_MAX) }));
     }, [nodes, setViewport]);
 
     // ============================================================================
@@ -164,6 +179,14 @@ export const useKeyboardShortcuts = ({
             if (e.code === 'Space' && !mod && !e.altKey) {
                 e.preventDefault();
                 isSpacePressedRef.current = true;
+                return;
+            }
+
+            // `?` 唤出快捷键速查表。不判 Shift：不同键盘布局下 `?` 的组合不一样，
+            // 直接认最终字符最稳。
+            if (e.key === '?' && !mod && !e.altKey) {
+                e.preventDefault();
+                toggleShortcutHelp();
                 return;
             }
 
@@ -316,6 +339,7 @@ export const useKeyboardShortcuts = ({
         generateSelected,
         openNewNodeMenu,
         arrangeCanvas,
+        toggleShortcutHelp,
         zoomFromCenter,
         fitCanvas,
         handlePaste,

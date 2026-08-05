@@ -37,9 +37,10 @@ import { useImageNodeHandlers } from './hooks/useImageNodeHandlers';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { isSupportedImageFile, useCanvasImageImport } from './hooks/useCanvasImageImport';
 import { useContextMenuHandlers } from './hooks/useContextMenuHandlers';
-import { useToasts } from './hooks/useToasts';
+import { TOAST_PERSIST, useToasts } from './hooks/useToasts';
 import { useCanvasEditLock } from './hooks/useCanvasEditLock';
 import { ToastStack } from './components/ToastStack';
+import { ShortcutHelpModal } from './components/modals/ShortcutHelpModal';
 import { useAutoSave } from './hooks/useAutoSave';
 import { useGenerationRecovery } from './hooks/useGenerationRecovery';
 import { useVideoFrameExtraction } from './hooks/useVideoFrameExtraction';
@@ -47,6 +48,7 @@ import { useAutoSubtitleRecovery } from './hooks/useAutoSubtitleRecovery';
 import { extractVideoLastFrame } from './utils/videoHelpers';
 import { createAdditionalImagePlacements } from './utils/imageBatchLayout';
 import { readApiResponse } from './utils/apiResponse';
+import { createCanvasSaveScheduler, type CanvasSaveScheduler } from './utils/canvasSaveScheduler.js';
 import { SelectionBoundingBox } from './components/canvas/SelectionBoundingBox';
 import { WorkflowPanel } from './components/WorkflowPanel';
 import { HistoryPanel } from './components/HistoryPanel';
@@ -61,6 +63,7 @@ import { isValidNodeConnection } from '@/shared/connectionRules.js';
 import { canvasViewCenter, centerNodeAt, computeFitViewport, screenToCanvas, DEFAULT_NODE_WIDTH, DEFAULT_NODE_HEIGHT } from '@/shared/canvasCoords.js';
 import { ZOOM_MIN, ZOOM_MAX } from '@/shared/zoom.js';
 import { getCanvasRect } from './utils/canvasRect';
+import { visibleNodeIds } from './utils/viewportCulling.js';
 import { MapPinned } from 'lucide-react';
 import { CanvasMinimap } from './components/canvas/CanvasMinimap';
 import { CanvasZoomControl } from './components/canvas/CanvasZoomControl';
@@ -111,6 +114,39 @@ const NODE_TYPES_NEEDING_ALL_NODES = new Set<NodeType>([
 
 type CanvasHistoryState = { nodes: NodeData[]; groups: ReturnType<typeof useGroupManagement>['groups'] };
 
+type StickmanScriptDraft = Pick<NonNullable<NodeData['scriptInput']>, 'title' | 'content' | 'notes' | 'platform'>;
+
+const pickStickmanScriptInput = (
+  source: Partial<StickmanScriptDraft> | undefined,
+  fallbackTitle = '未命名剧本',
+  fallbackPlatform = '抖音',
+): StickmanScriptDraft => ({
+  title: String(source?.title || fallbackTitle),
+  content: String(source?.content || ''),
+  notes: String(source?.notes || ''),
+  platform: String(source?.platform || fallbackPlatform),
+});
+
+// 单个节点的媒体指纹。**只在节点对象引用变化时**才需要重算，见下方 useEffect。
+const nodeMediaSignature = (node: NodeData) => [
+  node.resultUrl || '',
+  node.lastFrame || '',
+  node.mediaUrl || '',
+  node.renderOutputUrl || '',
+  node.videoMerge?.outputUrl || '',
+  (node.storyboard?.shots || []).map(shot => [
+    shot.id,
+    shot.generation?.status || '',
+    shot.generation?.videoUrl || '',
+  ].join(':')).join(','),
+].join('|');
+
+type MediaEntry = { node: NodeData; sig: string };
+
+// 媒体产物/LOADING 变化后的落盘延迟。够短，崩溃时丢的内容有限；
+// 够长，能把批量生成里密集到达的变化合并成一次写盘。
+const CANVAS_SAVE_DEBOUNCE_MS = 1200;
+
 // Nodes and groups are always updated immutably. Reference equality therefore
 // preserves the existing history semantics without serializing every media URL.
 const isSameCanvasHistoryState = (left: CanvasHistoryState, right: CanvasHistoryState) =>
@@ -151,6 +187,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarAssetPreview, setSidebarAssetPreview] = useState<(SidebarAssetPreview & { panelY: number }) | null>(null);
   const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
+  const [isImportingLocalProject, setIsImportingLocalProject] = useState(false);
   const [isMinimapOpen, setIsMinimapOpen] = useState(false);
   const [videoRemixes, setVideoRemixes] = useState<VideoRemixProject[]>([]);
 
@@ -173,6 +210,8 @@ export default function App() {
   } = usePanelState();
 
   const { toasts, showToast, dismissToast } = useToasts();
+  const [isShortcutHelpOpen, setIsShortcutHelpOpen] = useState(false);
+  const toggleShortcutHelp = React.useCallback(() => setIsShortcutHelpOpen(open => !open), []);
 
   // 悬停节点只被滚轮缩放用来定位光标下的节点，没有任何 UI 依赖它。
   // 放在 state 里意味着"鼠标划过画布"就会重渲染整个 App 和全部节点，
@@ -282,6 +321,9 @@ export default function App() {
   const isInitialMount = React.useRef(true);
   const lastLoadingCountRef = React.useRef(0);
   const ignoreNextChange = React.useRef(false);
+  // null 表示"还没建立基线"：首次运行只记录，不触发保存。
+  const mediaEntriesRef = React.useRef<Map<string, MediaEntry> | null>(null);
+  const saveSchedulerRef = React.useRef<CanvasSaveScheduler | null>(null);
   const canvasChangeVersionRef = React.useRef(0);
 
   // Workflow management
@@ -293,6 +335,7 @@ export default function App() {
     handleSaveWorkflow,
     handleLoadWorkflow,
     handleWorkflowsClick,
+    openWorkflowPanel,
     closeWorkflowPanel,
     resetWorkflowId,
     handleCreateWorkflow
@@ -449,11 +492,12 @@ export default function App() {
     canvasChangeVersionRef.current += 1;
     setIsDirty(true);
 
-    // Trigger immediate save if any node JUST entered LOADING state
+    // 有节点新进入 LOADING：排一次保存做崩溃恢复保护。
+    // 以前这里是同步直接调用 handleSaveWithTracking()，批量生成时 N 个分镜进入
+    // LOADING 就是 N 次全量写盘。改走统一调度器后窗口内合并成一次。
     const currentLoadingCount = nodes.filter(n => n.status === NodeStatus.LOADING).length;
     if (currentLoadingCount > lastLoadingCountRef.current) {
-      console.log('[App] New loading node detected, triggering immediate save for recovery protection');
-      handleSaveWithTracking();
+      saveSchedulerRef.current?.request();
     }
     lastLoadingCountRef.current = currentLoadingCount;
   }, [nodes, canvasTitle, videoRemixes]);
@@ -461,6 +505,9 @@ export default function App() {
   // Update saved state after workflow save
   const handleSaveWithTracking = async () => {
     const savingVersion = canvasChangeVersionRef.current;
+    // 这一次保存已经把当前状态写下去了，排在后面的那次就没必要了。
+    // （调度器自己触发时 timer 已经是空的，cancel 是空操作。）
+    saveSchedulerRef.current?.cancel();
     await handleSaveWorkflow();
     // A loading snapshot can finish saving after generation has already
     // produced new nodes. Do not mark those newer canvas changes as saved.
@@ -468,6 +515,70 @@ export default function App() {
       setIsDirty(false);
     }
   };
+
+  // Generated media is written to disk before the corresponding React state
+  // becomes stable. Persist the canvas as soon as a result URL or storyboard
+  // shot video appears, instead of waiting for the 60-second periodic save.
+  //
+  // 这个 effect 依赖 `nodes`，所以拖拽期间每帧都会跑。以前它每帧都把全画布
+  // （每个节点 6 个字段 + 每个分镜 3 个字段）拼成一个巨型字符串再比较，代价随
+  // 项目规模线性增长，而它要检测的"是否出现新媒体产物"跟节点坐标毫无关系。
+  //
+  // 现在改成按节点比对：节点都是不可变更新的，**引用没变就意味着媒体字段没变**，
+  // 可以整个跳过。拖拽时只有被拖的那一两个节点引用会变，于是每帧只算 1~2 个
+  // 指纹，也不再产生那个大字符串。
+  //
+  // 与旧实现的一处差异：旧的大字符串按数组顺序拼接，所以**节点重排也会触发一次
+  // 保存**；这里用 id 作键，与顺序无关。这是有意的——排序没有产生任何媒体产物，
+  // 那次写盘是多余的，排序本身仍会走 setIsDirty + 60 秒自动保存。
+  React.useEffect(() => {
+    const previous = mediaEntriesRef.current;
+    const next = new Map<string, MediaEntry>();
+    // 节点数变化即为增/删；数量相同但 id 变了会在循环里被 `!prev` 抓到。
+    let changed = previous === null || previous.size !== nodes.length;
+
+    for (const node of nodes) {
+      const prev = previous?.get(node.id);
+      if (prev && prev.node === node) {
+        next.set(node.id, prev);
+        continue;
+      }
+      const sig = nodeMediaSignature(node);
+      if (!prev || prev.sig !== sig) changed = true;
+      next.set(node.id, { node, sig });
+    }
+
+    mediaEntriesRef.current = next;
+    if (previous === null || !changed || !workflowId) return;
+
+    saveSchedulerRef.current?.request();
+  }, [nodes, workflowId]);
+
+  // 保存调度器：媒体产物与 LOADING 两条路径共用，窗口内合并成一次写盘。
+  const handleSaveWithTrackingRef = React.useRef(handleSaveWithTracking);
+  handleSaveWithTrackingRef.current = handleSaveWithTracking;
+
+  React.useEffect(() => {
+    const scheduler = createCanvasSaveScheduler({
+      delayMs: CANVAS_SAVE_DEBOUNCE_MS,
+      save: () => handleSaveWithTrackingRef.current(),
+      onError: error => console.error('[Canvas Persistence] 自动落盘失败：', error),
+    });
+    saveSchedulerRef.current = scheduler;
+
+    // 关窗/刷新前把待写的那一次发出去。注意这是**尽力而为**：flush 只保证 fetch
+    // 被发起（没有用 keepalive），浏览器不一定等它完成再卸载。
+    const flushBeforeUnload = () => { scheduler.flush(); };
+    window.addEventListener('beforeunload', flushBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', flushBeforeUnload);
+      // 卸载前同样先 flush 再停，不能直接丢掉排期。
+      scheduler.flush();
+      scheduler.stop();
+      saveSchedulerRef.current = null;
+    };
+  }, []);
 
   // Load workflow and update tracking
   const handleLoadWithTracking = async (id: string) => {
@@ -479,6 +590,7 @@ export default function App() {
     } else {
       setIsDirty(false);
     }
+    return loaded;
   };
 
   const handleRefreshCurrentCanvas = async () => {
@@ -494,12 +606,16 @@ export default function App() {
     nodesRef.current = nodes;
   }, [nodes]);
 
-  const { handleGenerate: handleGenerateNow } = useGeneration({
+  const { handleGenerate: handleGenerateNow, cancelNodeGeneration } = useGeneration({
     nodes,
     updateNode,
     addNodes: newNodes => setNodes(previous => [...previous, ...newNodes]),
     workflowId,
-    notify: message => showToast(message, { tone: 'error', duration: 6500 })
+    notify: (message, options) => showToast(message, {
+      tone: 'error',
+      duration: TOAST_PERSIST,
+      action: options?.action,
+    })
   });
 
   // Keep the low-level generator current. Dependency orchestration below always
@@ -510,6 +626,15 @@ export default function App() {
   }, [handleGenerateNow]);
 
   const generationPromisesRef = React.useRef(new Map<string, Promise<NodeData>>());
+
+  // 取消生成：先叫停服务端，再清掉本地那条等待中的 promise，
+  // 否则 waitForNodeResult 会一直挂到一小时超时，之后点重新生成没有任何反应。
+  const handleCancelGeneration = React.useCallback(async (nodeId: string) => {
+    const result = await cancelNodeGeneration(nodeId);
+    generationPromisesRef.current.delete(nodeId);
+    if (result && !result.submitted) showToast('生成任务已取消');
+    return result;
+  }, [cancelNodeGeneration, showToast]);
 
   const waitForNodeResult = React.useCallback((
     nodeId: string,
@@ -675,6 +800,31 @@ export default function App() {
   const handleRequestNewProject = React.useCallback(() => {
     setIsCreateProjectModalOpen(true);
   }, []);
+
+  const handleOpenExistingProject = React.useCallback(() => {
+    openWorkflowPanel(72);
+  }, [openWorkflowPanel]);
+
+  const handleImportLocalProject = React.useCallback(async () => {
+    if (!window.evanDesktop?.selectLocalProject || !window.evanDesktop.importLocalProject) {
+      showToast('选择本地项目仅在 Evan 桌面应用中可用', { tone: 'error' });
+      return;
+    }
+
+    setIsImportingLocalProject(true);
+    try {
+      const selection = await window.evanDesktop.selectLocalProject();
+      if (selection.canceled) return;
+      const workflow = await window.evanDesktop.importLocalProject(selection.importId);
+      const loaded = await handleLoadWithTracking(workflow.id);
+      if (!loaded) throw new Error('本地项目已添加，但打开项目失败，请重试');
+      showToast(`已添加并打开本地项目：${workflow.title || selection.name}`);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '本地项目导入失败', { tone: 'error', duration: TOAST_PERSIST });
+    } finally {
+      setIsImportingLocalProject(false);
+    }
+  }, [handleLoadWithTracking, showToast]);
 
   const handleCreateProject = React.useCallback(async (title: string, locationId?: string | null) => {
     const workflow = await handleCreateWorkflow(title, locationId);
@@ -952,6 +1102,7 @@ export default function App() {
     generateSelected,
     openNewNodeMenu,
     arrangeCanvas,
+    toggleShortcutHelp,
     setViewport,
     onPasteImageFiles: importImageFiles
   });
@@ -982,7 +1133,7 @@ export default function App() {
     showToast('带字幕视频已生成');
   }, [showToast]);
   const handleSubtitleFailed = React.useCallback((message: string) => {
-    showToast(message, { tone: 'error', duration: 6500 });
+    showToast(message, { tone: 'error', duration: TOAST_PERSIST });
   }, [showToast]);
 
   useAutoSubtitleRecovery({
@@ -1645,7 +1796,7 @@ export default function App() {
             }),
           }
         : node));
-      showToast(message, { tone: 'error', duration: 6500 });
+      showToast(message, { tone: 'error', duration: TOAST_PERSIST });
     }
   }, [canvasEditLock, groups, handleSaveWithTracking, nodes, setGroups, setNodes, setSelectedNodeIds, showToast, workflowId]);
 
@@ -1732,13 +1883,12 @@ export default function App() {
       });
       setNodes(current => current.map(node => {
         if (node.id === scriptNodeId) {
-          const existing = node.scriptInput || scriptInput;
           return {
             ...node,
             title: node.title || '视频分析剧本',
             prompt: scriptInput.content,
             status: NodeStatus.SUCCESS,
-            scriptInput: { ...existing, ...scriptInput },
+            scriptInput: pickStickmanScriptInput(scriptInput, node.title || '视频分析剧本'),
           };
         }
         if (node.id !== directorNodeId) return node;
@@ -1802,7 +1952,7 @@ export default function App() {
       );
       showToast('已根据参考视频生成剧本，请检查内容后执行火柴人导演 Skill');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '参考视频分析失败', { tone: 'error', duration: 6500 });
+      showToast(error instanceof Error ? error.message : '参考视频分析失败', { tone: 'error', duration: TOAST_PERSIST });
     }
   }, [analyzeStickmanReferenceVideo, canvasEditLock, showToast, workflowId]);
 
@@ -1963,7 +2113,15 @@ export default function App() {
       || (analysisInputRefs.videoNodeId ? current.find(node => node.id === analysisInputRefs.videoNodeId) : undefined)
       || parentOf(analysisNode, [NodeType.VIDEO, NodeType.REFERENCE_VIDEO]);
 
-    let scriptInput = directorNode.director?.scriptInput;
+    const directorDefaults = normalizeStickmanSettings(directorNode.director || {});
+    let scriptInput = scriptNode?.scriptInput?.content || scriptNode?.prompt
+      ? pickStickmanScriptInput({
+        ...(scriptNode.scriptInput || {}),
+        content: scriptNode.scriptInput?.content || scriptNode.prompt || '',
+      }, scriptNode.scriptInput?.title || scriptNode.title || '未命名剧本', directorDefaults.platform)
+      : directorNode.director?.scriptInput?.content
+        ? pickStickmanScriptInput(directorNode.director.scriptInput, '未命名剧本', directorDefaults.platform)
+        : undefined;
     let analysisState = directorNode.director?.analysis;
     if (!scriptInput?.content && analysisNode?.videoAnalysis?.result) {
       scriptInput = createStickmanScriptFromAnalysis(analysisNode.videoAnalysis.result, {
@@ -1973,27 +2131,10 @@ export default function App() {
       analysisState = analysisNode.videoAnalysis;
     }
     if (!scriptInput?.content && (scriptNode?.scriptInput?.content || scriptNode?.prompt)) {
-      const sourceScript = scriptNode.scriptInput;
-      const scriptSettings = normalizeStickmanSettings({
-        aspectRatio: sourceScript?.aspectRatio,
-        width: sourceScript?.width,
-        height: sourceScript?.height,
-        totalDuration: sourceScript?.totalDuration,
-        shotCount: sourceScript?.shotCount,
-        durationPerShot: sourceScript?.durationPerShot,
-      });
-      scriptInput = {
-        title: sourceScript?.title || scriptNode.title || '未命名剧本',
-        content: sourceScript?.content || scriptNode.prompt || '',
-        notes: sourceScript?.notes || '',
-        platform: sourceScript?.platform || scriptSettings.platform,
-        aspectRatio: sourceScript?.aspectRatio || scriptSettings.aspectRatio,
-        width: sourceScript?.width || scriptSettings.width,
-        height: sourceScript?.height || scriptSettings.height,
-        totalDuration: sourceScript?.totalDuration || scriptSettings.totalDuration,
-        shotCount: sourceScript?.shotCount || scriptSettings.shotCount,
-        durationPerShot: sourceScript?.durationPerShot || scriptSettings.durationPerShot,
-      };
+      scriptInput = pickStickmanScriptInput({
+        ...(scriptNode.scriptInput || {}),
+        content: scriptNode.scriptInput?.content || scriptNode.prompt || '',
+      }, scriptNode.scriptInput?.title || scriptNode.title || '未命名剧本', directorDefaults.platform);
     }
     if (!scriptInput?.content && sourceNode?.resultUrl) {
       try {
@@ -2007,7 +2148,7 @@ export default function App() {
         analysisState = analyzed.analysis;
       } catch (error) {
         const message = error instanceof Error ? error.message : '参考视频分析失败';
-        showToast(message, { tone: 'error', duration: 6500 });
+        showToast(message, { tone: 'error', duration: TOAST_PERSIST });
         return;
       }
     }
@@ -2018,18 +2159,14 @@ export default function App() {
 
     const refreshedDirector = nodesRef.current.find(node => node.id === directorNodeId);
     const baseDirectorState = refreshedDirector?.director || directorNode.director || { ...normalizeStickmanSettings({}), provider: 'auto' as const, status: 'idle' as const };
-    const scriptDefaults = scriptNode?.scriptInput?.content ? scriptNode.scriptInput : scriptInput;
-    const directorState = scriptDefaults && !baseDirectorState.output
-      ? {
-        ...baseDirectorState,
-        platform: scriptDefaults.platform || baseDirectorState.platform,
-        aspectRatio: scriptDefaults.aspectRatio || baseDirectorState.aspectRatio,
-        width: scriptDefaults.width || baseDirectorState.width,
-        height: scriptDefaults.height || baseDirectorState.height,
-        totalDuration: scriptDefaults.totalDuration || baseDirectorState.totalDuration,
-        shotCount: scriptDefaults.shotCount || baseDirectorState.shotCount,
-        durationPerShot: scriptDefaults.durationPerShot || baseDirectorState.durationPerShot,
-      }
+    // The Director node owns all storyboard settings. Keep the script's target
+    // platform as a backwards-compatible hint only when the director still has
+    // its untouched default; dimensions and timing never come from the script.
+    const defaultPlatform = normalizeStickmanSettings({}).platform;
+    const directorState = !baseDirectorState.output
+      && scriptInput.platform
+      && baseDirectorState.platform === defaultPlatform
+      ? { ...baseDirectorState, platform: scriptInput.platform }
       : baseDirectorState;
     const sourceType = 'script' as const;
     const input = {
@@ -2062,7 +2199,7 @@ export default function App() {
       setNodes(previous => previous.map(node => node.id === directorNodeId
         ? { ...node, status: NodeStatus.ERROR, director: { ...directorState, sourceType, scriptInput, analysis: analysisState, status: 'failed', error: message } }
         : node));
-      showToast(message, { tone: 'error', duration: 6500 });
+      showToast(message, { tone: 'error', duration: TOAST_PERSIST });
     }
   }, [analyzeStickmanReferenceVideo, canvasEditLock, ensureStickmanPipeline, setNodes, setSelectedNodeIds, showToast, workflowId]);
 
@@ -2263,7 +2400,7 @@ export default function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : '视频拼接失败';
       setNodes(previous => previous.map(node => node.id === mergeNodeId ? { ...node, videoMerge: { ...mergeState, status: 'failed', error: message } } : node));
-      showToast(message, { tone: 'error', duration: 6500 });
+      showToast(message, { tone: 'error', duration: TOAST_PERSIST });
     }
   }, [canvasEditLock, setNodes, showToast, workflowId]);
 
@@ -2359,7 +2496,7 @@ export default function App() {
         subtitleJobStatus: 'failed',
         errorMessage: message,
       });
-      showToast(message, { tone: 'error', duration: 6500 });
+      showToast(message, { tone: 'error', duration: TOAST_PERSIST });
     } finally {
       subtitleLaunchesRef.current.delete(sourceNodeId);
     }
@@ -2589,11 +2726,33 @@ export default function App() {
     return result;
   }, [nodes]);
 
+  // 视口剔除：只渲染可视区（外扩一屏）内的节点。
+  //
+  // 画布原本无差别渲染全部节点，NodeControls 一千七百行的子树对屏幕外几千像素的
+  // 节点照样挂着。节点上百之后这是最大的一块开销。
+  //
+  // keepIds 里的两类节点永不剔除，否则会制造比性能更糟的 bug：正在拖的节点
+  // （靠 setPointerCapture，卸载会让拖拽断在半路）和连线拖拽的起点节点。
+  // 详见 utils/viewportCulling.js。
+  const renderedNodes = React.useMemo(() => {
+    const keepIds = [...selectedNodeIds];
+    if (connectionStart?.nodeId) keepIds.push(connectionStart.nodeId);
+    const visible = visibleNodeIds({
+      nodes,
+      viewport,
+      rect: getCanvasRect(),
+      keepIds,
+    });
+    // 全部可见时直接复用原数组，避免每帧产生新引用。
+    return visible.size === nodes.length ? nodes : nodes.filter(node => visible.has(node.id));
+  }, [nodes, viewport, selectedNodeIds, connectionStart]);
+
   // 这十几个回调来自不同的 hook，稳定性无法逐个保证。用 ref 转发：
   // 传给 CanvasNode 的引用永远不变，内部始终调用最新实现。
   const latestNodeCallbacks = {
     updateNodeWithSync,
     handleGenerate,
+    handleCancelGeneration,
     handleAnalyzeVideoNode,
     handleGenerateVideoAnalysisAssets,
     handleLockVideoAnalysisAssetMain,
@@ -2630,6 +2789,7 @@ export default function App() {
     onUpdate: (id: string, updates: Partial<NodeData>) =>
       nodeCallbacksRef.current.updateNodeWithSync(id, updates),
     onGenerate: (id: string) => nodeCallbacksRef.current.handleGenerate(id),
+    onCancelGeneration: (id: string) => { void nodeCallbacksRef.current.handleCancelGeneration(id); },
     onContextMenu: (e: React.MouseEvent, id: string) =>
       nodeCallbacksRef.current.handleNodeContextMenu(e, id),
     onConnectorDown: (e: React.PointerEvent, id: string, side: 'left' | 'right', portId?: string) => {
@@ -2725,6 +2885,8 @@ export default function App() {
         isOpen={isWorkflowPanelOpen}
         onClose={closeWorkflowPanel}
         onLoadWorkflow={handleLoadWithTracking}
+        onImportLocalProject={handleImportLocalProject}
+        isImportingLocalProject={isImportingLocalProject}
         onRenameWorkflow={(id, title, renamedNodes, renamedVideoRemixes) => {
           if (id !== workflowId) return;
           ignoreNextChange.current = true;
@@ -2806,17 +2968,10 @@ export default function App() {
           onSave={handleSaveWithTracking}
           onRefresh={handleRefreshCurrentCanvas}
           onNew={handleRequestNewProject}
+          onOpenExistingProject={handleOpenExistingProject}
           hasUnsavedChanges={hasUnsavedChanges}
           canvasTheme={canvasTheme}
           onToggleTheme={() => setCanvasTheme(prev => prev === 'dark' ? 'light' : 'dark')}
-          onOpenAssets={() => {
-            if (isAssetLibraryOpen) {
-              closeAssetLibrary();
-            } else {
-              openAssetLibraryModal(56, closeWorkflowPanel);
-            }
-          }}
-          assetsOpen={isAssetLibraryOpen}
           lastAutoSaveTime={lastAutoSaveTime}
           workflowId={workflowId}
           onRestoreNodes={(restoredNodes) => {
@@ -2839,8 +2994,8 @@ export default function App() {
           style={{ left: sidebarCollapsed ? COLLAPSED_SIDEBAR_WIDTH : EXPANDED_SIDEBAR_WIDTH }}
         >
           <div className="rounded-2xl border border-neutral-700/70 bg-black/70 px-5 py-3 text-center backdrop-blur-sm">
-            <p className="text-sm font-medium text-neutral-100">请先新建项目，再开始编辑画布</p>
-            <p className="mt-1 text-[11px] text-neutral-400">点击顶部「+ 新建」创建项目后即可添加节点</p>
+            <p className="text-sm font-medium text-neutral-100">请先新建项目或打开已有项目</p>
+            <p className="mt-1 text-[11px] text-neutral-400">点击顶部「打开项目」加载已有画布，或点击「+ 新建」创建项目</p>
           </div>
         </div>
       )}
@@ -2898,7 +3053,7 @@ export default function App() {
 
           {/* Nodes Layer */}
           <div className="pointer-events-auto">
-            {nodes.map(node => (
+            {renderedNodes.map(node => (
               <CanvasNode
                 workflowId={workflowId || undefined}
                 key={node.id}
@@ -2910,6 +3065,7 @@ export default function App() {
                 connectedReferences={nodeConnectedReferences.get(node.id)}
                 onUpdate={stableNodeHandlers.onUpdate}
                 onGenerate={stableNodeHandlers.onGenerate}
+                onCancelGeneration={stableNodeHandlers.onCancelGeneration}
                 selected={selectedNodeIds.includes(node.id)}
                 showControls={selectedNodeIds.length === 1 && selectedNodeIds.includes(node.id)}
                 onNodePointerDown={stableNodeHandlers.onNodePointerDown}
@@ -3278,6 +3434,11 @@ export default function App() {
 
       {/* 应用内提示（替代会冻住渲染进程的 window.alert） */}
       <ToastStack toasts={toasts} onDismiss={dismissToast} canvasTheme={canvasTheme} />
+      <ShortcutHelpModal
+        isOpen={isShortcutHelpOpen}
+        onClose={() => setIsShortcutHelpOpen(false)}
+        canvasTheme={canvasTheme}
+      />
     </div >
   );
 }

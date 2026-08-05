@@ -475,7 +475,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
               isDark ? 'border-white/10 bg-[#202123]' : 'border-neutral-200 bg-white'
             }`}>
               <ProjectMenuButton dark={isDark} onClick={() => setProjectMenuOpen(false)}>回到画布</ProjectMenuButton>
-              <ProjectMenuButton dark={isDark} onClick={(e) => { setProjectMenuOpen(false); onOpenWorkflows(e); }}>全部项目</ProjectMenuButton>
+              <ProjectMenuButton dark={isDark} onClick={(e) => { setProjectMenuOpen(false); onOpenWorkflows(e); }}>打开已有项目</ProjectMenuButton>
               <ProjectMenuButton dark={isDark} disabled={!workflowId || revealingProject} onClick={() => void handleRevealProject()}>
                 <span className="flex items-center gap-2">
                   {revealingProject ? <Loader2 size={15} className="animate-spin" /> : <FolderOpen size={15} />}

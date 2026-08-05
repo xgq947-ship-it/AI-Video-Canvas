@@ -54,7 +54,7 @@ test('闸门拦截时给用户提示，而不是静默失败', () => {
 
 test('无项目时画布上有可见的只读提示', () => {
     assert.match(APP, /!canEditCanvas &&/);
-    assert.match(APP, /请先新建项目，再开始编辑画布/);
+    assert.match(APP, /请先新建项目或打开已有项目/);
 });
 
 test('新建项目后立即恢复编辑，不需要重启', () => {

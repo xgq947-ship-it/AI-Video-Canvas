@@ -16,6 +16,7 @@ export interface GenerateImageParams {
   imageModel?: string; // Image model version
   nodeId?: string; // ID of the node initiating generation
   count?: number; // Batch size for providers that support one-request multi-image generation
+  signal?: AbortSignal; // 取消用；不会随 body 发出去，fetch 单独消费
 }
 
 export interface GenerateVideoParams {
@@ -35,6 +36,7 @@ export interface GenerateVideoParams {
   referenceAudioUrls?: string[]; // Seedance 2.0 reference audio (voice/tone anchor)
   generateAudio?: boolean; // 支持原生音频的视频模型，默认开启
   nodeId?: string; // ID of the node initiating generation
+  signal?: AbortSignal; // 取消用；不会随 body 发出去，fetch 单独消费
 }
 
 export interface GenerationRequestError extends Error {
@@ -43,6 +45,12 @@ export interface GenerationRequestError extends Error {
   retryable?: boolean;
   details?: Record<string, unknown>;
 }
+
+/** signal 只给 fetch 用，不能混进请求体。 */
+const withoutSignal = <T extends { signal?: AbortSignal }>(params: T) => {
+  const { signal: _signal, ...body } = params;
+  return body;
+};
 
 const readGenerationError = async (response: Response): Promise<GenerationRequestError> => {
   const data = await response.json().catch(() => ({})) as Record<string, unknown>;
@@ -288,7 +296,8 @@ export const generateImageBatch = async (params: GenerateImageParams): Promise<s
     const response = await fetch('/api/generate-image', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params)
+      body: JSON.stringify(withoutSignal(params)),
+      signal: params.signal
     });
 
     if (!response.ok) {
@@ -312,6 +321,38 @@ export const generateImageBatch = async (params: GenerateImageParams): Promise<s
   }
 };
 
+export interface CancelGenerationResult {
+  cancelled: boolean;
+  /**
+   * true 表示请求可能已被平台受理、**本次仍可能计费**，结果也可能出现在平台历史里。
+   * 界面必须原样转述，不能一律说「已取消」。
+   */
+  submitted: boolean;
+  message: string;
+}
+
+/** 请求后端停止某个节点的生成。前端的 AbortController 只断开本地等待，这一步才真正叫停服务端。 */
+export const cancelGeneration = async (nodeId: string, workflowId?: string | null): Promise<CancelGenerationResult> => {
+  const response = await fetch(`/api/generations/${encodeURIComponent(nodeId)}/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workflowId: workflowId || '' })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    // 404 = 服务端已经没有在跑的任务（可能刚好完成或早已结束），不算错误。
+    if (response.status === 404) {
+      return { cancelled: false, submitted: false, message: '该任务已经结束' };
+    }
+    throw new Error(String(data.error || '取消生成失败'));
+  }
+  return {
+    cancelled: Boolean(data.cancelled),
+    submitted: Boolean(data.submitted),
+    message: String(data.message || '生成任务已取消')
+  };
+};
+
 export const generateImage = async (params: GenerateImageParams): Promise<string> => {
   const resultUrls = await generateImageBatch({ ...params, count: 1 });
   return resultUrls[0];
@@ -325,7 +366,8 @@ export const generateVideo = async (params: GenerateVideoParams): Promise<string
     const response = await fetch('/api/generate-video', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params)
+      body: JSON.stringify(withoutSignal(params)),
+      signal: params.signal
     });
 
     if (!response.ok) {

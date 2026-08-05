@@ -34,6 +34,26 @@ export const ToastStack: React.FC<ToastStackProps> = ({ toasts, onDismiss, canva
                     }`}
                 >
                     <span className="flex-1 break-words">{toast.message}</span>
+                    {toast.action && (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                // 先关掉再执行：重试通常会立刻再弹一条新提示，
+                                // 留着旧的会让用户以为没反应。
+                                onDismiss(toast.id);
+                                toast.action!.onClick();
+                            }}
+                            className={`shrink-0 rounded px-2 py-1 text-xs font-medium transition-colors ${
+                                toast.tone === 'error'
+                                    ? 'bg-red-500/20 text-red-100 hover:bg-red-500/35'
+                                    : isDark
+                                        ? 'bg-neutral-700 text-neutral-100 hover:bg-neutral-600'
+                                        : 'bg-neutral-200 text-neutral-800 hover:bg-neutral-300'
+                            }`}
+                        >
+                            {toast.action.label}
+                        </button>
+                    )}
                     <button
                         type="button"
                         onClick={() => onDismiss(toast.id)}

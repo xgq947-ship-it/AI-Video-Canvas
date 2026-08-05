@@ -113,6 +113,10 @@ test('视频分析结果只转换成剧本素材，不直接生成最终分镜',
   assert.match(script.content, /人物推门进入/);
   assert.match(script.content, /门轴声/);
   assert.match(script.notes, /最终分镜由火柴人视频导演 Skill 重新推导/);
+  assert.equal(script.aspectRatio, undefined, '剧本草案不再携带导演画幅配置');
+  assert.equal(script.totalDuration, undefined, '剧本草案不再携带导演时长配置');
+  assert.equal(script.shotCount, undefined, '剧本草案不再携带导演镜头数量配置');
+  assert.equal(script.durationPerShot, undefined, '剧本草案不再携带导演单镜头时长配置');
 });
 
 test('Skill Runner 使用真实 Provider 适配接口，并在空 shots 时走修复调用', async () => {

@@ -50,12 +50,6 @@ export interface StickmanScriptInput {
   content: string;
   notes?: string;
   platform: string;
-  aspectRatio: string;
-  width: number;
-  height: number;
-  totalDuration: number;
-  shotCount: number;
-  durationPerShot: number;
 }
 
 export interface StickmanReferenceVideoInput {

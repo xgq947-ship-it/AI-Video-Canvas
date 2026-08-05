@@ -87,11 +87,3 @@ export class GenerationProviderRegistry {
 
 export const generationProviderRegistry = new GenerationProviderRegistry(DEFAULT_WEB_PROVIDERS);
 
-/** Canvas model id -> orchestration provider id. */
-export function providerForWebModel(modelId) {
-    const id = String(modelId || '');
-    if (id.startsWith('google-flow-')) return 'google-flow';
-    if (id.startsWith('gemini-web-')) return 'gemini-web';
-    if (id.startsWith('jimeng-')) return 'jimeng';
-    return null;
-}

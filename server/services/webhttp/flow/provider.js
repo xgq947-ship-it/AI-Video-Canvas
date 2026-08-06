@@ -34,6 +34,7 @@ import {
     buildVideoUploadChunkRequest,
     buildFlowMediaUrl,
     buildProjectMediaRequest,
+    buildVideoGenerationStatusRequest,
     buildUpsampleImageRequest,
     buildUploadImageRequest,
     extractFlowModels,
@@ -735,7 +736,12 @@ export async function generateFlowVideoHttp({
     const auth = await getFlowAuth({ signal, forceRefresh: true, recaptchaAction: 'VIDEO_GENERATION' });
 
     const batchId = randomUUID();
-    attachCurrentGenerationDetails(PROVIDER, { batchId, projectId: auth.projectId });
+    const flowWorkflowId = randomUUID();
+    attachCurrentGenerationDetails(PROVIDER, {
+        batchId,
+        flowWorkflowId,
+        projectId: auth.projectId
+    });
     const spec = buildGenerateVideoRequest({
         auth,
         prompt: cleanPrompt,
@@ -744,6 +750,7 @@ export async function generateFlowVideoHttp({
         duration,
         count,
         batchId,
+        flowWorkflowId,
         firstFrameMediaId: firstFrameInput ? mediaIds[0] : '',
         referenceMediaIds: firstFrameInput ? mediaIds.slice(1) : mediaIds,
         referenceVideo: uploadedVideo ? {
@@ -814,6 +821,8 @@ async function waitForFlowVideos(media, auth, { timeoutMinutes, signal, editMatc
     const deadline = performance.now() + timeoutMinutes * 60_000;
     let current = media;
     let pollAuth = auth;
+    let pollCount = 0;
+    let lastPollDiagnostics = { mediaCount: 0, matchCount: 0, matchType: 'none', statuses: [] };
     // 下一轮轮询前的等待；命中 429 时按服务端 Retry-After 覆盖（借鉴 gflow-cli 尊重 Retry-After）。
     let nextPollDelayMs = VIDEO_POLL_INTERVAL_MS;
     while (performance.now() < deadline) {
@@ -821,10 +830,7 @@ async function waitForFlowVideos(media, auth, { timeoutMinutes, signal, editMatc
 
         const failed = current.filter(isFlowVideoFailed);
         if (failed.length === current.length) {
-            throw new WebProviderError(
-                `${PROVIDER_NAME} 视频生成失败（${failed[0]?.status || '未知状态'}）`,
-                { provider: PROVIDER, code: 'GENERATION_FAILED', submitted: true }
-            );
+            throw flowVideoFailureError(failed[0]);
         }
         if (current.every(item => isFlowVideoCompleted(item) || isFlowVideoFailed(item))) {
             const done = current.filter(isFlowVideoCompleted);
@@ -838,6 +844,65 @@ async function waitForFlowVideos(media, auth, { timeoutMinutes, signal, editMatc
             // 会话临近过期先主动续期，避免这次轮询正好撞上 401。
             pollAuth = await ensureFreshFlowAuth(pollAuth, { signal });
             const wantedIds = current.map(item => item.mediaId);
+            pollCount += 1;
+            const wanted = new Set(wantedIds);
+
+            // Flow's own page checks this endpoint for async state. It is the
+            // only source that exposes ACTIVE/FAILED/FILTERED before the
+            // result is materialized in projectInitialData.
+            const statusSpec = buildVideoGenerationStatusRequest({ auth: pollAuth, mediaIds: wantedIds });
+            let statusMedia = [];
+            let statusError = null;
+            try {
+                const statusPayload = await runProviderPoll(
+                    PROVIDER,
+                    () => fetchFlowVideoGenerationStatus(statusSpec, { signal }),
+                    { signal, label: `${PROVIDER_NAME} 视频状态` }
+                );
+                statusMedia = collectMediaEntries(statusPayload)
+                    .map(parseFlowVideoMedia)
+                    .filter(item => item.mediaId);
+                const statusMatches = statusMedia.filter(item => wanted.has(item.mediaId));
+                if (statusMatches.length > 0) {
+                    current = statusMatches;
+                    lastPollDiagnostics = {
+                        source: 'generation-status',
+                        mediaCount: statusMedia.length,
+                        matchCount: statusMatches.length,
+                        matchType: 'mediaId',
+                        statuses: [...new Set(statusMedia.map(item => item.status).filter(Boolean))].slice(0, 8),
+                        failureReasons: statusMatches.flatMap(item => item.failureReasons || []).slice(0, 8),
+                        errorMessages: statusMatches.map(item => item.errorMessage).filter(Boolean).slice(0, 4)
+                    };
+                    if (pollCount === 1 || statusMatches.some(item => isFlowVideoFailed(item))) {
+                        console.info('[Flow HTTP] 视频生成状态', {
+                            pollCount,
+                            mediaCount: statusMedia.length,
+                            matchCount: statusMatches.length,
+                            statuses: lastPollDiagnostics.statuses,
+                            failureReasons: lastPollDiagnostics.failureReasons,
+                            errorMessages: lastPollDiagnostics.errorMessages
+                        });
+                    }
+                    const statusFailed = statusMatches.filter(isFlowVideoFailed);
+                    if (statusFailed.length > 0) throw flowVideoFailureError(statusFailed[0]);
+                    if (statusMatches.every(item => isFlowVideoCompleted(item))) return statusMatches;
+                    // The status endpoint found the submitted media, so a project
+                    // history refresh cannot add useful information this cycle.
+                    continue;
+                }
+            } catch (error) {
+                if (error?.code === 'GENERATION_FAILED' && error?.details?.mediaId) throw error;
+                // Older Flow deployments may not expose the batch status route;
+                // keep the project-history fallback instead of turning that into
+                // a false timeout. The outer catch still handles auth refresh
+                // after the fallback request is attempted.
+                statusError = error;
+                console.warn(`[Flow HTTP] 视频生成状态查询失败，改用项目历史：${error.message}`);
+            }
+
+            // Fallback for edit jobs and older Flow deployments that do not
+            // return the submitted media from batchCheckAsyncVideoGenerationStatus.
             const spec = buildProjectMediaRequest({ auth: pollAuth, mediaIds: wantedIds });
             const payload = await runProviderPoll(
                 PROVIDER,
@@ -845,17 +910,62 @@ async function waitForFlowVideos(media, auth, { timeoutMinutes, signal, editMatc
                 { signal, label: `${PROVIDER_NAME} 视频轮询` }
             );
             const refreshed = collectMediaEntries(payload).map(parseFlowVideoMedia).filter(item => item.mediaId);
-            const wanted = new Set(wantedIds);
             let matches = refreshed.filter(item => wanted.has(item.mediaId));
+            let matchType = matches.length > 0 ? 'mediaId' : 'none';
+
+            // Some Flow deployments return the submit media id before the
+            // project hydration record is materialized, then expose the same
+            // result under a new media name. Prefer the stable workflow id,
+            // then the exact generated prompt, before declaring a poll miss.
+            if (matches.length === 0) {
+                const workflowIds = new Set(current.map(item => item.workflowId).filter(Boolean));
+                const workflowMatches = workflowIds.size > 0
+                    ? refreshed.filter(item => workflowIds.has(item.workflowId))
+                    : [];
+                if (workflowMatches.length > 0) {
+                    matches = workflowMatches;
+                    matchType = 'workflowId';
+                }
+            }
+            if (matches.length === 0) {
+                const prompts = new Set(current.map(item => String(item.prompt || '').trim()).filter(Boolean));
+                const promptMatches = prompts.size > 0
+                    ? refreshed.filter(item => prompts.has(String(item.prompt || '').trim()))
+                    : [];
+                if (promptMatches.length > 0) {
+                    matches = promptMatches;
+                    matchType = 'prompt';
+                }
+            }
 
             // 参考视频编辑：结果 media 的最终 name 由 Flow 在提交之后分配，提交响应里
             // 拿不到，按提交 mediaId 轮询永远匹配不上（正是 15 分钟超时的根因）。但结果
             // 会继承参考视频的 workflowId——我们每轮都新上传参考视频，该 id 每次唯一，
             // 且同一 workflowId 下除参考视频本身外只有这一个生成结果，据此稳定定位。
             const editMatches = editMatch ? selectEditResultMedia(refreshed, editMatch) : [];
-            if (editMatches.length > 0) matches = editMatches;
+            if (editMatches.length > 0) {
+                matches = editMatches;
+                matchType = 'edit-input';
+            }
 
             if (matches.length > 0) current = matches;
+            lastPollDiagnostics = {
+                source: 'project-history',
+                mediaCount: refreshed.length,
+                matchCount: matches.length,
+                matchType,
+                statuses: [...new Set(refreshed.map(item => item.status).filter(Boolean))].slice(0, 8),
+                ...(statusError ? { statusError: statusError.message } : {})
+            };
+            if (pollCount === 1 || matchType !== 'mediaId') {
+                console.info('[Flow HTTP] 视频轮询结果', {
+                    pollCount,
+                    mediaCount: refreshed.length,
+                    matchCount: matches.length,
+                    matchType,
+                    statuses: lastPollDiagnostics.statuses
+                });
+            }
         } catch (error) {
             // Poll endpoints change shape more often than generate endpoints do;
             // a lookup failure must not discard an already-billed generation.
@@ -889,7 +999,7 @@ async function waitForFlowVideos(media, auth, { timeoutMinutes, signal, editMatc
             provider: PROVIDER,
             code: 'POLL_TIMEOUT',
             submitted: true,
-            details: { mediaIds }
+            details: { mediaIds, pollCount, lastPollDiagnostics }
         }
     );
 }
@@ -928,6 +1038,71 @@ async function fetchFlowProjectMedia(spec, { signal } = {}) {
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
     }
+}
+
+/** Query the same async status endpoint used by Flow's video queue. */
+async function fetchFlowVideoGenerationStatus(spec, { signal } = {}) {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(signal?.reason);
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => controller.abort(new Error('Flow video status timeout')), 30_000);
+    try {
+        const response = await fetch(spec.url, {
+            method: spec.method,
+            headers: spec.headers,
+            body: spec.body,
+            redirect: 'follow',
+            signal: controller.signal
+        });
+        if (!response.ok) {
+            const code = response.status === 401 ? 'AUTH_EXPIRED'
+                : response.status === 403 ? 'WAF_BLOCKED'
+                    : response.status === 429 ? 'RATE_LIMIT'
+                        : 'GENERATION_FAILED';
+            const retryAfterMs = code === 'RATE_LIMIT' ? parseRetryAfterMs(response.headers) : null;
+            throw new WebProviderError(`${PROVIDER_NAME} 视频状态查询失败：HTTP ${response.status}`, {
+                provider: PROVIDER,
+                code,
+                submitted: true,
+                ...(retryAfterMs !== null ? { details: { retryAfterMs } } : {})
+            });
+        }
+        return response.json();
+    } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+    }
+}
+
+export function describeFlowVideoFailure(item = {}) {
+    const reasons = Array.isArray(item.failureReasons) ? item.failureReasons.filter(Boolean) : [];
+    const rawDetail = reasons.length > 0
+        ? reasons.join(', ')
+        : item.errorMessage || item.status || '未知状态';
+    const detail = reasons.includes('PROMINENT_PERSON')
+        || item.errorCode === 'PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED'
+        ? '参考图或提示词触发了 Flow 的人物安全过滤（PROMINENT_PERSON），请更换参考图或调整内容后再重试。'
+        : rawDetail;
+    return { detail, rawDetail, reasons };
+}
+
+function flowVideoFailureError(item = {}) {
+    const { detail, rawDetail, reasons } = describeFlowVideoFailure(item);
+    return new WebProviderError(`${PROVIDER_NAME} 视频生成失败：${detail}`, {
+        provider: PROVIDER,
+        code: 'GENERATION_FAILED',
+        submitted: true,
+        details: {
+            mediaId: item.mediaId || '',
+            status: item.status || '',
+            errorCode: item.errorCode || '',
+            errorMessage: item.errorMessage || '',
+            failureReasons: reasons,
+            visibility: item.visibility || '',
+            rawDetail
+        }
+    });
 }
 
 /** tRPC wraps payloads differently across versions; find media arrays anywhere. */

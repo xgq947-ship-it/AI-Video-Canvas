@@ -1,0 +1,42 @@
+{
+  "version": "1.0",
+  "title": "雨夜咖啡店",
+  "sourceType": "script",
+  "model": { "provider": "gemini", "modelId": "gemini-web" },
+  "global": {
+    "platform": "抖音",
+    "visualStyle": "cinematic-realistic",
+    "aspectRatio": "9:16",
+    "width": 1080,
+    "height": 1920,
+    "totalDuration": 8,
+    "shotCount": 1,
+    "language": "zh-CN",
+    "pace": "标准",
+    "videoModel": "google-flow-omni-flash",
+    "audioEnabled": true
+  },
+  "cast": [
+    {
+      "id": "CAST_01",
+      "name": "林深",
+      "role": "protagonist",
+      "description": "28 岁咖啡师，深色短发，黑色围巾",
+      "referenceImages": []
+    }
+  ],
+  "shots": [
+    {
+      "id": "shot_01",
+      "order": 1,
+      "title": "雨夜推门",
+      "duration": 8,
+      "scene": "深夜街角咖啡店，雨势逐渐增大",
+      "action": "林深推开玻璃门走进店内，抖落肩头雨水并看向窗边",
+      "cast": ["CAST_01"],
+      "camera": { "shotType": "中景", "fov": "47°自然人眼", "angle": "平视", "motion": "缓慢推近" },
+      "prompt": "【场景】深夜街角咖啡店，雨势逐渐增大。\n【镜头】中景，47°自然人眼视场角，平视。\n【动作】林深推门进入并抖落肩头雨水。\n【光线】室内暖光从门口铺到湿润地面，室外冷蓝雨幕形成纵深。\n【声音】玻璃门铃声和雨点敲击伞面的声音。\n【锁定】林深的脸部身份、黑色围巾和进入店内的动作方向全程保持一致。",
+      "generation": { "provider": "google-flow", "modelId": "google-flow-omni-flash", "status": "pending", "retryCount": 0 }
+    }
+  ]
+}

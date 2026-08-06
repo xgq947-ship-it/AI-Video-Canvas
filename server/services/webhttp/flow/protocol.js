@@ -446,6 +446,9 @@ export function buildGenerateVideoRequest({
     count = 1,
     seed,
     batchId,
+    flowWorkflowId = '',
+    collectionId = '',
+    sceneId = '',
     firstFrameMediaId = '',
     referenceMediaIds = [],
     referenceVideo
@@ -473,10 +476,17 @@ export function buildGenerateVideoRequest({
             textInput: { structuredPrompt: { parts: [{ text: String(prompt || '') }] } },
             videoModelKey: variant.modelKey,
             seed: (seed ?? randomSeed(Math.random, seedMaximum)) + index,
-            metadata: {}
+            metadata: {
+                ...(flowWorkflowId ? { workflowId: String(flowWorkflowId) } : {}),
+                ...(collectionId ? { collectionId: String(collectionId) } : {}),
+                ...(sceneId ? { sceneId: String(sceneId) } : {})
+            }
         };
         if (firstFrameMediaId) request.startImage = { mediaId: firstFrameMediaId };
         if (references.length > 0) {
+            // 提交请求使用 referenceImages + IMAGE_USAGE_TYPE_ASSET；Flow 落到项目
+            // 历史后会把同一输入规范化为 videoGenerationImageInputs + ASSET_IMAGE。
+            // 这两个枚举属于不同 schema，不能混用。
             request.referenceImages = references.map(mediaId => ({
                 mediaId,
                 imageUsageType: 'IMAGE_USAGE_TYPE_ASSET'
@@ -510,9 +520,8 @@ export function buildGenerateVideoRequest({
         body: JSON.stringify({
             mediaGenerationContext: {
                 batchId,
-                // Flow 页面的视频编辑默认不发送音频失败策略；编辑模型可能自然产出静音，
-                // 固定 BLOCK_SILENCED_VIDEOS 会让请求接受后不生成成片。
-                ...(!referenceVideo ? { audioFailurePreference: 'BLOCK_SILENCED_VIDEOS' } : {})
+                // Flow 页面只在用户明确打开「允许静音视频」时才发送
+                // audioFailurePreference；默认请求不携带该字段。
             },
             clientContext: context,
             requests,
@@ -529,12 +538,22 @@ const FLOW_VIDEO_STATUS_FAILED = new Set([
 ]);
 
 export function parseFlowVideoMedia(media) {
-    const videoInputs = media?.mediaMetadata?.requestData?.videoGenerationRequestData
-        ?.videoGenerationVideoInputs;
+    const videoGenerationRequestData = media?.mediaMetadata?.requestData?.videoGenerationRequestData;
+    const videoInputs = videoGenerationRequestData?.videoGenerationVideoInputs
+        || videoGenerationRequestData?.videoGenerationImageInputs;
+    const mediaStatus = media?.mediaMetadata?.mediaStatus || {};
+    const failureReasons = Array.isArray(mediaStatus.failureReasons)
+        ? mediaStatus.failureReasons.filter(Boolean).map(String)
+        : [];
     return {
-        mediaId: media?.name || media?.video?.operation?.name || '',
-        workflowId: media?.workflowId || '',
-        status: media?.mediaMetadata?.mediaStatus?.mediaGenerationStatus || '',
+        mediaId: media?.name || media?.mediaId || media?.video?.generatedVideo?.mediaId || media?.video?.operation?.name || '',
+        workflowId: media?.workflowId || media?.mediaMetadata?.workflowId || '',
+        workflowStepId: media?.workflowStepId || media?.mediaMetadata?.workflowStepId || '',
+        status: mediaStatus.mediaGenerationStatus || '',
+        errorCode: mediaStatus.error?.code ?? '',
+        errorMessage: mediaStatus.error?.message || '',
+        failureReasons,
+        visibility: media?.mediaMetadata?.visibility || '',
         model: media?.video?.generatedVideo?.model || '',
         prompt: media?.video?.generatedVideo?.prompt || '',
         seed: media?.video?.generatedVideo?.seed,
@@ -554,7 +573,22 @@ export function parseFlowVideoMedia(media) {
 
 export function parseGenerateVideoResponse(payload) {
     // The doc is explicit that one request may return several media entries.
-    return (payload?.media ?? []).map(parseFlowVideoMedia).filter(item => item.mediaId);
+    // tRPC/API gateway wrappers have returned both { media } and
+    // { result: { data: { media } } } over time, so only use a nested array
+    // when it contains media-shaped objects.
+    const findMedia = (value, depth = 0) => {
+        if (!value || depth > 5) return [];
+        if (Array.isArray(value)) {
+            return value.some(item => item && typeof item === 'object'
+                && (item.name || item.mediaId || item.video || item.mediaMetadata))
+                ? value
+                : value.flatMap(item => findMedia(item, depth + 1));
+        }
+        if (typeof value !== 'object') return [];
+        if (Array.isArray(value.media)) return value.media;
+        return Object.values(value).flatMap(item => findMedia(item, depth + 1));
+    };
+    return findMedia(payload).map(parseFlowVideoMedia).filter(item => item.mediaId);
 }
 
 export function isFlowVideoCompleted(media) {
@@ -611,6 +645,31 @@ export function buildProjectMediaRequest({ auth, mediaIds = [] }) {
             pragma: 'no-cache'
         },
         mediaIds: mediaIds.filter(Boolean)
+    };
+}
+
+/**
+ * Flow's page polls in-flight video generations through this endpoint before
+ * refreshing project history. Project history only contains materialized
+ * media, so using it as the sole status source makes filtered/failed jobs look
+ * like they are still generating forever.
+ */
+export function buildVideoGenerationStatusRequest({ auth, mediaIds = [] }) {
+    const ids = mediaIds.filter(Boolean);
+    return {
+        url: `${FLOW_API_ORIGIN}/v1/video:batchCheckAsyncVideoGenerationStatus`,
+        method: 'POST',
+        headers: {
+            authorization: `Bearer ${auth.accessToken}`,
+            accept: 'application/json',
+            'content-type': 'application/json',
+            origin: FLOW_LABS_ORIGIN,
+            referer: `${FLOW_LABS_ORIGIN}/`
+        },
+        body: JSON.stringify({
+            media: ids.map(name => ({ name, projectId: auth.projectId }))
+        }),
+        mediaIds: ids
     };
 }
 

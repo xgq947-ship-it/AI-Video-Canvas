@@ -11,6 +11,7 @@ import { calculateConnectionPath } from '../../utils/connectionHelpers';
 import { VIDEO_ANALYSIS_INPUT_PORTS } from '../../../shared/videoAnalysis.js';
 import { VIDEO_ANALYSIS_NODE_HEIGHT } from '../../features/video-analysis/VideoAnalysisNode';
 import { getFlowBatchVideoNodeHeight, getStickmanStoryboardNodeHeight, SCRIPT_INPUT_NODE_HEIGHT, SCRIPT_INPUT_REFERENCE_NODE_HEIGHT } from '../../features/stickman-director/StickmanWorkflowNodes';
+import { CINEMATIC_CAST_NODE_HEIGHT, CINEMATIC_DIRECTOR_NODE_HEIGHT, CINEMATIC_VIDEO_MERGE_NODE_HEIGHT, getCinematicStoryboardNodeHeight } from '../../features/cinematic-director/CinematicWorkflowNodes';
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -49,7 +50,7 @@ export const getNodeWidth = (node: NodeData, parentNode?: NodeData): number => {
     if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 460;
     if (node.type === NodeType.VIDEO_REMIX) return 420;
     if (node.type === NodeType.VIDEO_ANALYSIS) return 420;
-    if ([NodeType.REFERENCE_VIDEO, NodeType.SCRIPT_INPUT, NodeType.STICKMAN_DIRECTOR, NodeType.STORYBOARD, NodeType.STORYBOARD_COMPARE, NodeType.FLOW_BATCH_VIDEO, NodeType.VIDEO_MERGE].includes(node.type)) return 430;
+    if ([NodeType.REFERENCE_VIDEO, NodeType.SCRIPT_INPUT, NodeType.STICKMAN_DIRECTOR, NodeType.STORYBOARD, NodeType.STORYBOARD_COMPARE, NodeType.FLOW_BATCH_VIDEO, NodeType.VIDEO_MERGE, NodeType.CINEMATIC_CAST, NodeType.CINEMATIC_DIRECTOR, NodeType.CINEMATIC_STORYBOARD, NodeType.CINEMATIC_VIDEO_MERGE].includes(node.type)) return 430;
     // Image and other nodes
     return 365;
 };
@@ -119,6 +120,10 @@ export const getNodeHeight = (node: NodeData, parentNode?: NodeData): number => 
     if (node.type === NodeType.STORYBOARD || node.type === NodeType.STORYBOARD_COMPARE) return getStickmanStoryboardNodeHeight(node.storyboard);
     if (node.type === NodeType.FLOW_BATCH_VIDEO) return getFlowBatchVideoNodeHeight(parentNode?.storyboard);
     if (node.type === NodeType.VIDEO_MERGE) return 300;
+    if (node.type === NodeType.CINEMATIC_CAST) return CINEMATIC_CAST_NODE_HEIGHT;
+    if (node.type === NodeType.CINEMATIC_DIRECTOR) return CINEMATIC_DIRECTOR_NODE_HEIGHT;
+    if (node.type === NodeType.CINEMATIC_STORYBOARD) return getCinematicStoryboardNodeHeight(node.cinematicStoryboard);
+    if (node.type === NodeType.CINEMATIC_VIDEO_MERGE) return CINEMATIC_VIDEO_MERGE_NODE_HEIGHT;
 
     // Parse aspect ratio to calculate content height for Image/Video nodes
     let aspectRatio: number;

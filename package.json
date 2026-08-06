@@ -83,6 +83,7 @@
       "server/**/*",
       "shared/**/*",
       "src/skills/stickman-video-director/**/*",
+      "src/skills/cinematic-director/**/*",
       "remotion/**/*",
       "scripts/codex-image-queue.mjs",
       "integrations/skills/twitcanva-codex-images/**/*",

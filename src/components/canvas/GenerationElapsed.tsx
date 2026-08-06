@@ -16,6 +16,10 @@ import React, { useEffect, useState } from 'react';
 
 interface GenerationElapsedProps {
     startedAt?: number;
+    queuedAt?: number;
+    finishedAt?: number;
+    elapsedMs?: number;
+    label?: string;
     className?: string;
 }
 
@@ -31,23 +35,37 @@ const formatElapsed = (totalSeconds: number): string => {
         : `${minutes}:${pad(seconds)}`;
 };
 
-export const GenerationElapsed: React.FC<GenerationElapsedProps> = ({ startedAt, className = '' }) => {
+export const GenerationElapsed: React.FC<GenerationElapsedProps> = ({
+    startedAt,
+    queuedAt,
+    finishedAt,
+    elapsedMs,
+    label,
+    className = '',
+}) => {
     const [now, setNow] = useState(() => Date.now());
+    const anchor = startedAt || queuedAt;
+    const isLive = Boolean(anchor && elapsedMs === undefined && !finishedAt);
 
     useEffect(() => {
-        if (!startedAt) return;
+        if (!isLive) return;
         // 立刻对齐一次，避免组件挂载时显示上一次残留的时间。
         setNow(Date.now());
         const timer = window.setInterval(() => setNow(Date.now()), 1000);
         return () => window.clearInterval(timer);
-    }, [startedAt]);
+    }, [isLive]);
 
-    // 没有起始时间就什么都不显示，绝不退化成从 0 开始的假计时。
-    if (!startedAt) return null;
+    // 没有起始时间或已保存的耗时就什么都不显示，绝不退化成从 0 开始的假计时。
+    if (!anchor && elapsedMs === undefined) return null;
+
+    const durationMs = elapsedMs !== undefined
+        ? Math.max(0, elapsedMs)
+        : Math.max(0, (finishedAt || now) - (anchor || now));
+    const defaultLabel = startedAt ? (finishedAt ? '耗时' : '已用') : '等待';
 
     return (
         <span className={`tabular-nums ${className}`}>
-            已用 {formatElapsed((now - startedAt) / 1000)}
+            {label || defaultLabel} {formatElapsed(durationMs / 1000)}
         </span>
     );
 };

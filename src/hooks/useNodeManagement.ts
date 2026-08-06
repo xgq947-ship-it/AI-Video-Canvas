@@ -11,6 +11,10 @@ import { DEFAULT_NODE_WIDTH, paneToCanvas } from '@/shared/canvasCoords.js';
 import { assignVideoAnalysisInputPort, createVideoAnalysisNodeData } from '../../shared/videoAnalysis.js';
 import { listVideoGenerationProviders } from '../../shared/generationProviders.js';
 import { normalizeStickmanSettings } from '../../shared/stickmanDirector.js';
+import {
+    CINEMATIC_DEFAULT_VIDEO_MODEL,
+    normalizeCinematicSettings,
+} from '../../shared/cinematicDirector.js';
 
 const applyStickmanNodeDefaults = (node: NodeData): NodeData => {
     if (node.type === NodeType.SCRIPT_INPUT) {
@@ -50,6 +54,35 @@ const applyStickmanNodeDefaults = (node: NodeData): NodeData => {
     if (node.type === NodeType.VIDEO_MERGE) {
         node.title = '视频拼接';
         node.videoMerge = { status: 'idle', outputFormat: 'mp4', fps: 30, skipFailed: true };
+    }
+    if (node.type === NodeType.CINEMATIC_CAST) {
+        node.title = '角色设定';
+        node.cinematicCast = {
+            characters: [{ id: 'CAST_01', name: '主角', role: 'protagonist', description: '', referenceImages: [] }],
+            videoModel: CINEMATIC_DEFAULT_VIDEO_MODEL,
+        };
+    }
+    if (node.type === NodeType.CINEMATIC_DIRECTOR) {
+        node.title = '电影短片导演';
+        node.cinematicDirector = {
+            ...normalizeCinematicSettings({}),
+            provider: 'auto',
+            status: 'idle',
+        };
+    }
+    if (node.type === NodeType.CINEMATIC_STORYBOARD) {
+        node.title = '电影分镜';
+        node.cinematicStoryboard = {
+            shots: [],
+            cast: [],
+            expanded: false,
+            concurrency: 2,
+            status: 'idle',
+        };
+    }
+    if (node.type === NodeType.CINEMATIC_VIDEO_MERGE) {
+        node.title = '电影成片拼接';
+        node.cinematicVideoMerge = { status: 'idle', outputFormat: 'mp4', fps: 30, skipFailed: true };
     }
     return node;
 };
@@ -284,6 +317,58 @@ export const useNodeManagement = () => {
     }, []);
 
     /**
+     * Creates the script-only cinematic workflow described in the product
+     * plan. Shot generation lives in the storyboard node, so this graph has
+     * exactly five nodes: script, cast, director, storyboard and merge.
+     */
+    const addCinematicWorkflow = useCallback((
+        paneX: number,
+        paneY: number,
+        viewport: Viewport,
+    ) => {
+        const { x: anchorX, y: anchorY } = paneToCanvas(paneX, paneY, viewport);
+        const halfWidth = DEFAULT_NODE_WIDTH / 2;
+        const topY = anchorY - 100;
+        const step = 520;
+        const source = createNodeData(NodeType.SCRIPT_INPUT, anchorX - halfWidth, topY);
+        source.title = '电影剧本输入';
+        source.scriptInput = {
+            ...source.scriptInput!,
+            title: '电影短片剧本',
+            content: '',
+            notes: '导演会根据剧本重新编排镜头、角色动作、对白和摄影机语言。',
+        };
+        const cast = createNodeData(NodeType.CINEMATIC_CAST, anchorX - halfWidth, topY + 520);
+        const director = createNodeData(
+            NodeType.CINEMATIC_DIRECTOR,
+            anchorX + step,
+            topY,
+            [source.id, cast.id],
+        );
+        const storyboard = createNodeData(
+            NodeType.CINEMATIC_STORYBOARD,
+            anchorX + step * 2,
+            topY,
+            [director.id],
+        );
+        const merge = createNodeData(
+            NodeType.CINEMATIC_VIDEO_MERGE,
+            anchorX + step * 3,
+            topY,
+            [storyboard.id],
+        );
+        setNodes(previous => [...previous, source, cast, director, storyboard, merge]);
+        setSelectedNodeIds([director.id]);
+        return {
+            sourceId: source.id,
+            castId: cast.id,
+            directorId: director.id,
+            storyboardId: storyboard.id,
+            mergeId: merge.id,
+        };
+    }, []);
+
+    /**
      * Updates a node with partial data
      * @param id - Node ID to update
      * @param updates - Partial node data to merge
@@ -405,6 +490,7 @@ export const useNodeManagement = () => {
         addNode,
         addStickmanWorkflow,
         addStickmanWorkflowFromParent,
+        addCinematicWorkflow,
         updateNode,
         deleteNode,
         deleteNodes,

@@ -57,6 +57,7 @@ import {
     buildVideoUploadChunkRequest,
     buildFlowMediaUrl,
     buildProjectMediaRequest,
+    buildVideoGenerationStatusRequest,
     buildUpsampleImageRequest,
     extractFlowModels,
     isFlowVideoCompleted,
@@ -74,6 +75,7 @@ import {
     validateFlowImageDimensions
 } from '../server/services/webhttp/flow/protocol.js';
 import {
+    describeFlowVideoFailure,
     shouldFallbackFlowUpsampleToOriginal,
     shouldRetryFlowUpsampleError
 } from '../server/services/webhttp/flow/provider.js';
@@ -873,10 +875,58 @@ test('Flow 视频按文本 / 首帧 / 多参考图切换真实 endpoint 与模�
         { mediaId: 'media-a', imageUsageType: 'IMAGE_USAGE_TYPE_ASSET' },
         { mediaId: 'media-b', imageUsageType: 'IMAGE_USAGE_TYPE_ASSET' }
     ]);
+    assert.equal(references.requests[0].videoGenerationImageInputs, undefined);
 
     assert.throws(() => buildGenerateVideoRequest({
         auth, prompt: 'p', batchId: 'b', firstFrameMediaId: 'media-1', referenceMediaIds: ['media-a']
     }), /不能在同一请求中混用/);
+});
+
+test('Flow Omni Flash 两张参考图成功成片协议固定为 abra_r2v_8s', () => {
+    const spec = buildGenerateVideoRequest({
+        auth: {
+            accessToken: 'token',
+            projectId: 'project-1',
+            sessionId: 'session-1',
+            recaptchaToken: 'captcha-1'
+        },
+        prompt: '一头大象沿海岸前行，远处鲸鱼跃出海面',
+        batchId: 'batch-1',
+        flowWorkflowId: 'workflow-1',
+        modelFamily: 'abra',
+        aspectRatio: '16:9',
+        duration: 8,
+        referenceMediaIds: ['elephant-media', 'whale-media'],
+        seed: 123
+    });
+    const body = JSON.parse(spec.body);
+    assert.equal(spec.url, 'https://aisandbox-pa.googleapis.com/v1/video:batchAsyncGenerateVideoReferenceImages');
+    assert.deepEqual(body.mediaGenerationContext, { batchId: 'batch-1' });
+    assert.equal(body.useV2ModelConfig, true);
+    assert.deepEqual(body.clientContext, {
+        projectId: 'project-1',
+        tool: 'PINHOLE',
+        sessionId: 'session-1',
+        recaptchaContext: {
+            token: 'captcha-1',
+            applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB'
+        }
+    });
+    assert.deepEqual(body.requests, [{
+        aspectRatio: 'VIDEO_ASPECT_RATIO_LANDSCAPE',
+        textInput: {
+            structuredPrompt: {
+                parts: [{ text: '一头大象沿海岸前行，远处鲸鱼跃出海面' }]
+            }
+        },
+        videoModelKey: 'abra_r2v_8s',
+        seed: 123,
+        metadata: { workflowId: 'workflow-1' },
+        referenceImages: [
+            { mediaId: 'elephant-media', imageUsageType: 'IMAGE_USAGE_TYPE_ASSET' },
+            { mediaId: 'whale-media', imageUsageType: 'IMAGE_USAGE_TYPE_ASSET' }
+        ]
+    }]);
 });
 
 test('Flow 参考视频使用分片上传和 Omni Flash 视频编辑协议', () => {
@@ -945,6 +995,18 @@ test('Flow 参考视频使用分片上传和 Omni Flash 视频编辑协议', () 
     }), /不能与首帧或参考图混用/);
 });
 
+test('Flow 视频提交把生成归属写入独立 workflowId，默认不发送静音策略', () => {
+    const spec = buildGenerateVideoRequest({
+        auth: { projectId: 'project-1', sessionId: ';1' },
+        prompt: 'p', batchId: 'batch-1', flowWorkflowId: 'flow-workflow-1',
+        modelFamily: 'abra', duration: 8, referenceMediaIds: ['media-a']
+    });
+    const body = JSON.parse(spec.body);
+    assert.equal(body.requests[0].metadata.workflowId, 'flow-workflow-1');
+    assert.equal(body.mediaGenerationContext.audioFailurePreference, undefined);
+    assert.equal(body.useV2ModelConfig, true);
+});
+
 test('Flow 三个 Veo 3.1 档位使用页面抓到的精确模式 key', () => {
     assert.deepEqual(resolveFlowVideoVariant({
         modelFamily: 'veo_3_1_lite', mode: 'text', duration: 8
@@ -996,6 +1058,22 @@ test('Flow 视频轮询走项目页面真实 projectInitialData，避开 fetchMe
     assert.deepEqual(spec.mediaIds, ['m1', 'm2']);
 });
 
+test('Flow 视频状态轮询走页面使用的 batchCheckAsyncVideoGenerationStatus', () => {
+    const spec = buildVideoGenerationStatusRequest({
+        auth: { accessToken: 'token', projectId: 'project-1' },
+        mediaIds: ['m1', '', 'm2']
+    });
+    assert.equal(spec.url, 'https://aisandbox-pa.googleapis.com/v1/video:batchCheckAsyncVideoGenerationStatus');
+    assert.equal(spec.method, 'POST');
+    assert.equal(spec.headers.referer, 'https://labs.google/');
+    assert.deepEqual(JSON.parse(spec.body), {
+        media: [
+            { name: 'm1', projectId: 'project-1' },
+            { name: 'm2', projectId: 'project-1' }
+        ]
+    });
+});
+
 test('Flow 图片结果取 fifeUrl，视频结果按成功状态判定', () => {
     const images = parseGenerateImagesResponse({
         media: [{
@@ -1019,6 +1097,58 @@ test('Flow 图片结果取 fifeUrl，视频结果按成功状态判定', () => {
     assert.equal(videos.length, 2);
     assert.equal(isFlowVideoCompleted(videos[0]), true);
     assert.equal(isFlowVideoCompleted(videos[1]), false);
+});
+
+test('Flow 视频提交响应支持 tRPC 嵌套媒体数组，并保留 workflowStepId', () => {
+    const videos = parseGenerateVideoResponse({
+        result: { data: { media: [{
+            name: 'nested-video',
+            workflowId: 'workflow-1',
+            workflowStepId: 'CAE',
+            mediaMetadata: { mediaStatus: { mediaGenerationStatus: 'MEDIA_GENERATION_STATUS_PENDING' } },
+            video: {}
+        }] } }
+    });
+    assert.equal(videos.length, 1);
+    assert.equal(videos[0].mediaId, 'nested-video');
+    assert.equal(videos[0].workflowId, 'workflow-1');
+    assert.equal(videos[0].workflowStepId, 'CAE');
+});
+
+test('Flow 异步状态保留过滤失败原因，不能继续显示为生成中', () => {
+    const [video] = [parseFlowVideoMedia({
+        name: 'filtered-video',
+        workflowId: 'workflow-1',
+        mediaMetadata: {
+            visibility: 'FILTERED',
+            mediaStatus: {
+                mediaGenerationStatus: 'MEDIA_GENERATION_STATUS_FAILED',
+                error: {
+                    code: 3,
+                    message: 'PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED'
+                },
+                failureReasons: ['PROMINENT_PERSON']
+            }
+        },
+        video: {}
+    })];
+    assert.equal(video.status, 'MEDIA_GENERATION_STATUS_FAILED');
+    assert.equal(video.errorCode, 3);
+    assert.equal(video.errorMessage, 'PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED');
+    assert.deepEqual(video.failureReasons, ['PROMINENT_PERSON']);
+    assert.equal(video.visibility, 'FILTERED');
+    assert.equal(isFlowVideoCompleted(video), false);
+});
+
+test('Flow 人物过滤失败给出可执行提示，同时保留原始诊断', () => {
+    assert.deepEqual(describeFlowVideoFailure({
+        errorCode: 'PUBLIC_ERROR_PROMINENT_PEOPLE_FILTER_FAILED',
+        failureReasons: ['PROMINENT_PERSON']
+    }), {
+        detail: '参考图或提示词触发了 Flow 的人物安全过滤（PROMINENT_PERSON），请更换参考图或调整内容后再重试。',
+        rawDetail: 'PROMINENT_PERSON',
+        reasons: ['PROMINENT_PERSON']
+    });
 });
 
 test('Flow 媒体地址按 mediaId 拼装并做 URL 编码', () => {
@@ -1507,4 +1637,27 @@ test('参考视频编辑：workflowId 变化时按最终成片记录里的输入
     });
     assert.equal(hits.length, 1);
     assert.equal(hits[0].mediaId, 'result-with-new-workflow');
+});
+
+test('Flow 电影分镜结果从真实 videoGenerationImageInputs 读取角色参考图', () => {
+    const parsed = parseFlowVideoMedia({
+        name: 'cinematic-result',
+        mediaMetadata: {
+            mediaStatus: { mediaGenerationStatus: 'MEDIA_GENERATION_STATUS_SUCCESSFUL' },
+            requestData: {
+                videoGenerationRequestData: {
+                    videoModelControlInput: {
+                        videoModelName: 'abra_r2v_8s',
+                        videoGenerationMode: 'VIDEO_GENERATION_MODE_REFERENCE_TO_VIDEO'
+                    },
+                    videoGenerationImageInputs: [
+                        { imageUsageType: 'IMAGE_USAGE_TYPE_ASSET_IMAGE', mediaId: 'character-front' },
+                        { imageUsageType: 'IMAGE_USAGE_TYPE_ASSET_IMAGE', mediaId: 'character-board' }
+                    ]
+                }
+            }
+        },
+        video: { generatedVideo: { model: 'abra_r2v_8s' } }
+    });
+    assert.deepEqual(parsed.videoInputMediaIds, ['character-front', 'character-board']);
 });

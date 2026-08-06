@@ -40,6 +40,7 @@ interface ContextMenuProps {
   onDuplicate?: () => void;
   onCreateAsset?: () => void;
   onCreateStickmanWorkflow?: (mode: 'script' | 'reference_video') => void;
+  onCreateCinematicWorkflow?: () => void;
   onUseAsReferenceVideo?: () => void;
   canUseAsReferenceVideo?: boolean;
   onAddAssets?: () => void;
@@ -61,6 +62,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onDuplicate,
   onCreateAsset,
   onCreateStickmanWorkflow,
+  onCreateCinematicWorkflow,
   onUseAsReferenceVideo,
   canUseAsReferenceVideo = false,
   onAddAssets,
@@ -293,6 +295,15 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
             }}
             canvasTheme={canvasTheme}
           />
+          <MenuItem
+            icon={<Clapperboard size={16} />}
+            label="电影短片工作流"
+            onClick={() => {
+              onCreateCinematicWorkflow?.();
+              onClose();
+            }}
+            canvasTheme={canvasTheme}
+          />
 
           <div className={`my-1 border-t mx-1 ${canvasTheme === 'dark' ? 'border-neutral-800' : 'border-neutral-100'}`} />
 
@@ -368,6 +379,10 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           }} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<Film size={19} />} label="火柴人参考视频工作流" badge="快捷" badgeTone="cyan" onClick={() => {
             onCreateStickmanWorkflow?.('reference_video');
+            onClose();
+          }} canvasTheme={canvasTheme} />
+          <AddNodeMenuItem icon={<Clapperboard size={19} />} label="电影短片工作流" badge="快捷" badgeTone="cyan" onClick={() => {
+            onCreateCinematicWorkflow?.();
             onClose();
           }} canvasTheme={canvasTheme} />
 

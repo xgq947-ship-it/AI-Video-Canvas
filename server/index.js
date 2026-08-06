@@ -18,6 +18,7 @@ import settingsRoutes from './routes/settings.js';
 import videoRemixRoutes from './routes/video-remix.js';
 import videoAnalysisRoutes from './routes/video-analysis.js';
 import stickmanDirectorRoutes from './routes/stickman-director.js';
+import cinematicDirectorRoutes from './routes/cinematic-director.js';
 import trashRoutes from './routes/trash.js';
 import libraryRoutes from './routes/library.js';
 import browserRoutes from './routes/browser.js';
@@ -175,6 +176,7 @@ app.use('/api/video-remix', videoRemixRoutes);
 app.use('/api/video-analysis', videoAnalysisRoutes);
 // Internal Stickman Video Director skill, Flow batch orchestration and merge jobs.
 app.use('/api', stickmanDirectorRoutes);
+app.use('/api', cinematicDirectorRoutes);
 app.use('/api/projects', trashRoutes);
 app.use('/api/library', libraryRoutes);
 // 能力探测 / 共享浏览器登录态：路径各不相同，统一挂在 /api 下。

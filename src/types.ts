@@ -9,6 +9,12 @@ import type {
   StickmanDirectorSettings,
   StickmanShot,
 } from '../shared/stickmanDirector.js';
+import type {
+  CinematicCastMember,
+  CinematicDirectorOutput,
+  CinematicDirectorSettings,
+  CinematicShot,
+} from '../shared/cinematicDirector.js';
 
 export enum NodeType {
   TEXT = 'Text',
@@ -27,6 +33,10 @@ export enum NodeType {
   STORYBOARD_COMPARE = 'Storyboard Compare',
   FLOW_BATCH_VIDEO = 'Flow Batch Video',
   VIDEO_MERGE = 'Video Merge',
+  CINEMATIC_CAST = 'Cinematic Cast',
+  CINEMATIC_DIRECTOR = 'Cinematic Director',
+  CINEMATIC_STORYBOARD = 'Cinematic Storyboard',
+  CINEMATIC_VIDEO_MERGE = 'Cinematic Video Merge',
   // Local open-source model nodes
   // AI 漫剧 0-1 生产节点（取值需与 shared/manifest.js 的 MANGA_NODE_TYPES 一致）
   SFX = 'SFX',            // 音效
@@ -84,7 +94,7 @@ export interface StickmanStoryboardState {
   shots: StickmanShot[];
   expanded: boolean;
   compareMode?: boolean;
-  status: 'idle' | 'ready' | 'generating' | 'completed' | 'failed';
+  status: 'idle' | 'ready' | 'generating' | 'paused' | 'completed' | 'failed';
   error?: string;
 }
 
@@ -117,6 +127,41 @@ export interface StickmanFlowBatchState {
 }
 
 export interface StickmanVideoMergeState {
+  jobId?: string;
+  status: 'idle' | 'queued' | 'rendering' | 'success' | 'failed' | 'cancelled';
+  outputUrl?: string;
+  outputFormat: 'mp4' | 'mov' | 'webm';
+  fps: number;
+  skipFailed: boolean;
+  error?: string;
+}
+
+export interface CinematicCastNodeState {
+  characters: CinematicCastMember[];
+  imageProvider?: string;
+  videoModel?: string;
+  error?: string;
+}
+
+export interface CinematicDirectorNodeState extends CinematicDirectorSettings {
+  provider: 'auto' | 'gemini' | 'codex' | 'deepseek' | string;
+  modelId?: string;
+  status: 'idle' | 'running' | 'completed' | 'failed';
+  output?: CinematicDirectorOutput;
+  error?: string;
+  repaired?: boolean;
+}
+
+export interface CinematicStoryboardState {
+  shots: CinematicShot[];
+  cast: CinematicCastMember[];
+  expanded: boolean;
+  concurrency: 1 | 2 | 3 | 4;
+  status: 'idle' | 'ready' | 'generating' | 'paused' | 'completed' | 'partial_failed' | 'failed' | 'recovery_required';
+  error?: string;
+}
+
+export interface CinematicVideoMergeState {
   jobId?: string;
   status: 'idle' | 'queued' | 'rendering' | 'success' | 'failed' | 'cancelled';
   outputUrl?: string;
@@ -325,6 +370,11 @@ export interface NodeData {
   storyboard?: StickmanStoryboardState;
   flowBatch?: StickmanFlowBatchState;
   videoMerge?: StickmanVideoMergeState;
+  // 电影短片工作流节点状态。
+  cinematicCast?: CinematicCastNodeState;
+  cinematicDirector?: CinematicDirectorNodeState;
+  cinematicStoryboard?: CinematicStoryboardState;
+  cinematicVideoMerge?: CinematicVideoMergeState;
   /** parentId -> 固定目标端口，连接语义不能依赖 parentIds 数组顺序。 */
   inputPortByParentId?: Record<string, VideoAnalysisInputPort | string>;
   outputPortId?: string;

@@ -21,6 +21,10 @@ export const NODE = {
   STORYBOARD_COMPARE: 'Storyboard Compare',
   FLOW_BATCH_VIDEO: 'Flow Batch Video',
   VIDEO_MERGE: 'Video Merge',
+  CINEMATIC_CAST: 'Cinematic Cast',
+  CINEMATIC_DIRECTOR: 'Cinematic Director',
+  CINEMATIC_STORYBOARD: 'Cinematic Storyboard',
+  CINEMATIC_VIDEO_MERGE: 'Cinematic Video Merge',
   SFX: 'SFX',
   BGM: 'BGM',
   SUBTITLE: 'Subtitle',
@@ -54,6 +58,21 @@ export const isValidNodeConnection = (parentType, childType) => {
   if (childType === NODE.VIDEO_MERGE) return parentType === NODE.FLOW_BATCH_VIDEO;
   if (childType === NODE.SCRIPT_INPUT) return parentType === NODE.VIDEO || parentType === NODE.REFERENCE_VIDEO;
   if (childType === NODE.REFERENCE_VIDEO) return false;
+  // Cinematic Director workflow: the director receives the editable script and
+  // the cast table as separate inputs; storyboard and merge are single-output
+  // stages so their semantics do not depend on parentIds array ordering.
+  if (childType === NODE.CINEMATIC_CAST) {
+    return parentType === NODE.IMAGE || parentType === NODE.IMAGE_EDITOR;
+  }
+  if (childType === NODE.CINEMATIC_DIRECTOR) {
+    return parentType === NODE.SCRIPT_INPUT || parentType === NODE.CINEMATIC_CAST;
+  }
+  if (childType === NODE.CINEMATIC_STORYBOARD) {
+    return parentType === NODE.CINEMATIC_DIRECTOR;
+  }
+  if (childType === NODE.CINEMATIC_VIDEO_MERGE) {
+    return parentType === NODE.CINEMATIC_STORYBOARD;
+  }
   if (parentType === NODE.VIDEO_MERGE) return false;
 
   // Video Analysis only accepts media references on its fixed input ports.

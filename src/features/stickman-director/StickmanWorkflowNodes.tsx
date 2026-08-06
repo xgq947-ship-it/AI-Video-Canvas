@@ -15,6 +15,7 @@ import {
   Loader2,
   Merge,
   Maximize2,
+  Pause,
   Play,
   Plus,
   RefreshCw,
@@ -30,6 +31,8 @@ import {
 } from 'lucide-react';
 import { NodeConnectors } from '../../components/canvas/NodeConnectors';
 import { LazyVideo } from '../../components/LazyVideo';
+import { GenerationCancelButton } from '../../components/canvas/GenerationCancelButton';
+import { GenerationElapsed } from '../../components/canvas/GenerationElapsed';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import type { StickmanDirectorOutput, StickmanShot } from '../../../shared/stickmanDirector.js';
 import {
@@ -166,7 +169,7 @@ const TextArea: React.FC<React.TextareaHTMLAttributes<HTMLTextAreaElement> & { d
 );
 
 const statusLabel = (status?: string) => ({
-  pending: '等待', queued: '排队', generating: '生成中', completed: '已完成', failed: '失败', cancelled: '已取消',
+  pending: '等待', queued: '排队', generating: '生成中', paused: '已暂停', completed: '已完成', failed: '失败', cancelled: '已取消',
 }[status || 'pending'] || status || '等待');
 
 export const ScriptInputNode: React.FC<BaseProps & { onAnalyzeReference?: (id: string) => void }> = props => {
@@ -181,6 +184,7 @@ export const ScriptInputNode: React.FC<BaseProps & { onAnalyzeReference?: (id: s
   };
   const sourceNode = allNodes.find(node => data.parentIds?.includes(node.id) && (node.type === NodeType.VIDEO || node.type === NodeType.REFERENCE_VIDEO));
   const directorNode = allNodes.find(node => node.type === NodeType.STICKMAN_DIRECTOR && node.parentIds?.includes(data.id));
+  const cinematicDirectorNode = allNodes.find(node => node.type === NodeType.CINEMATIC_DIRECTOR && node.parentIds?.includes(data.id));
   const analysis = directorNode?.director?.analysis;
   const isReferenceScript = Boolean(sourceNode);
   const analysisStatus = analysis?.status || (data.status === NodeStatus.LOADING ? 'analyzing' : data.status === NodeStatus.ERROR ? 'error' : 'idle');
@@ -194,7 +198,7 @@ export const ScriptInputNode: React.FC<BaseProps & { onAnalyzeReference?: (id: s
     scriptInput: { ...value, ...patch },
   });
   return (
-    <Shell {...props} icon={<FileText size={20} />} label={data.title || '剧本输入'} subtitle={isReferenceScript ? '参考视频 → 剧本 → 火柴人导演' : '剧本 → 火柴人导演'} minHeight={isReferenceScript ? SCRIPT_INPUT_REFERENCE_NODE_HEIGHT : SCRIPT_INPUT_NODE_HEIGHT}>
+    <Shell {...props} icon={<FileText size={20} />} label={data.title || '剧本输入'} subtitle={cinematicDirectorNode ? '剧本 → 电影短片导演' : isReferenceScript ? '参考视频 → 剧本 → 火柴人导演' : '剧本 → 火柴人导演'} minHeight={isReferenceScript ? SCRIPT_INPUT_REFERENCE_NODE_HEIGHT : SCRIPT_INPUT_NODE_HEIGHT}>
       <div className="space-y-3 px-5 py-4">
         {isReferenceScript && (
           <div className={`rounded-2xl border p-3 ${dark ? 'border-cyan-400/25 bg-cyan-400/[0.07]' : 'border-cyan-200 bg-cyan-50'}`}>
@@ -231,7 +235,7 @@ export const ScriptInputNode: React.FC<BaseProps & { onAnalyzeReference?: (id: s
         <Field dark={dark} label={isReferenceScript ? '分析得到的剧本正文' : '剧本正文'}><TextArea dark={dark} rows={isReferenceScript ? 9 : 7} value={value.content} placeholder={isReferenceScript ? '点击“分析参考视频并生成剧本”，这里会填入可编辑的剧情、动作、对白和声音…' : '输入故事、动作、对白或旁白…'} onChange={e => update({ content: e.target.value })} onPointerDown={stop} /></Field>
         <Field dark={dark} label="补充说明"><Input dark={dark} value={value.notes || ''} placeholder="节奏、禁用元素、角色说明…" onChange={e => update({ notes: e.target.value })} onPointerDown={stop} /></Field>
         <div className={`flex items-center gap-2 rounded-xl px-3 py-2 text-[10px] ${dark ? 'bg-white/[0.04] text-neutral-400' : 'bg-neutral-50 text-neutral-500'}`}>
-          <Link2 size={12} className="text-cyan-300" />{isReferenceScript ? (analysisReady ? '剧本已生成，可连接导演节点执行分镜规划' : '先完成视频分析，再连接导演节点执行分镜规划') : '连接到“火柴人视频导演”后执行分镜规划'}
+          <Link2 size={12} className="text-cyan-300" />{cinematicDirectorNode ? '连接到“电影短片导演”后执行角色一致性分镜规划' : isReferenceScript ? (analysisReady ? '剧本已生成，可连接导演节点执行分镜规划' : '先完成视频分析，再连接导演节点执行分镜规划') : '连接到“火柴人视频导演”后执行分镜规划'}
         </div>
       </div>
     </Shell>
@@ -448,12 +452,13 @@ const ShotCard: React.FC<{
   onChange: (patch: Partial<StickmanShot>) => void;
   onPreview: () => void;
   onGenerate: () => void;
+  onCancel: () => void;
   onCopy: () => void;
   onDelete: () => void;
   onRecompile: () => void;
   onDragStart: () => void;
   onDrop: () => void;
-}> = ({ shot, dark, compareMode, onChange, onPreview, onGenerate, onCopy, onDelete, onRecompile, onDragStart, onDrop }) => {
+}> = ({ shot, dark, compareMode, onChange, onPreview, onGenerate, onCancel, onCopy, onDelete, onRecompile, onDragStart, onDrop }) => {
   const [editing, setEditing] = useState(false);
   const hasResult = Boolean(shot.generation.videoUrl);
   const generating = shot.generation.status === 'queued' || shot.generation.status === 'generating';
@@ -471,7 +476,7 @@ const ShotCard: React.FC<{
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
             <div className="truncate text-[11px] font-semibold">{String(shot.order).padStart(2, '0')} · {shot.title}</div>
-            <span className={`shrink-0 text-[10px] ${shot.generation.status === 'completed' ? 'text-emerald-400' : shot.generation.status === 'failed' ? 'text-red-400' : muted(dark)}`}>{statusLabel(shot.generation.status)}</span>
+            <span className="flex shrink-0 items-center gap-1.5 text-[10px]"><span className={`${shot.generation.status === 'completed' ? 'text-emerald-400' : shot.generation.status === 'failed' ? 'text-red-400' : muted(dark)}`}>{statusLabel(shot.generation.status)}</span><GenerationElapsed {...shot.generation} className={muted(dark)} /></span>
           </div>
           <div className={`mt-1 line-clamp-2 text-[10px] leading-4 ${muted(dark)}`}>{shot.visual.action || shot.visual.scene}</div>
         </div>
@@ -488,6 +493,7 @@ const ShotCard: React.FC<{
         <Button dark={dark} onClick={onRecompile} onPointerDown={stop}><RefreshCw size={12} />编译</Button>
         <Button dark={dark} onClick={onCopy} onPointerDown={stop}><Copy size={12} />复制</Button>
         {hasResult && <Button dark={dark} onClick={onPreview} onPointerDown={stop}><Maximize2 size={12} />预览</Button>}
+        {generating && <GenerationCancelButton dark={dark} onCancel={onCancel} />}
         <Button dark={dark} tone="primary" disabled={generating} onClick={onGenerate} onPointerDown={stop}>{generating ? <Loader2 size={12} className="animate-spin" /> : hasResult ? <RefreshCw size={12} /> : <Play size={12} />}{actionLabel}</Button>
         <Button dark={dark} tone="danger" onClick={onDelete} onPointerDown={stop}><Trash2 size={12} /></Button>
       </div>
@@ -505,7 +511,8 @@ const ShotPreviewModal: React.FC<{
   onPrevious: () => void;
   onNext: () => void;
   onRegenerate: () => void;
-}> = ({ shot, dark, compareMode, index, total, onClose, onPrevious, onNext, onRegenerate }) => {
+  onCancel: () => void;
+}> = ({ shot, dark, compareMode, index, total, onClose, onPrevious, onNext, onRegenerate, onCancel }) => {
   if (!shot.generation.videoUrl || typeof document === 'undefined') return null;
   const generating = shot.generation.status === 'queued' || shot.generation.status === 'generating';
   return createPortal(
@@ -524,7 +531,7 @@ const ShotPreviewModal: React.FC<{
         <div className={`flex items-center justify-between border-b px-5 py-4 ${dark ? 'border-white/8' : 'border-neutral-200'}`}>
           <div className="min-w-0">
             <div id="stickman-shot-preview-title" className="truncate text-sm font-semibold">{String(shot.order).padStart(2, '0')} · {shot.title}</div>
-            <div className={`mt-1 text-[10px] ${muted(dark)}`}>{index + 1}/{total} · {shot.duration}s · {shot.width}×{shot.height}</div>
+            <div className={`mt-1 flex items-center gap-2 text-[10px] ${muted(dark)}`}>{index + 1}/{total} · {shot.duration}s · {shot.width}×{shot.height}<GenerationElapsed {...shot.generation} /></div>
           </div>
           <button type="button" aria-label="关闭预览" onClick={onClose} onPointerDown={stop} className={`rounded-xl p-2 ${dark ? 'text-neutral-400 hover:bg-white/10 hover:text-white' : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900'}`}><X size={17} /></button>
         </div>
@@ -542,7 +549,7 @@ const ShotPreviewModal: React.FC<{
             <Button dark={dark} disabled={index <= 0} onClick={onPrevious} onPointerDown={stop}><ChevronLeft size={12} />上一个</Button>
             <Button dark={dark} disabled={index >= total - 1} onClick={onNext} onPointerDown={stop}>下一个<ChevronRight size={12} /></Button>
           </div>
-          <Button dark={dark} tone="primary" disabled={generating} onClick={onRegenerate} onPointerDown={stop}>{generating ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} {generating ? '重新生成中' : '重新生成此镜头'}</Button>
+          <div className="flex flex-wrap gap-1.5">{generating && <GenerationCancelButton dark={dark} onCancel={onCancel} />}<Button dark={dark} tone="primary" disabled={generating} onClick={onRegenerate} onPointerDown={stop}>{generating ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} {generating ? '重新生成中' : '重新生成此镜头'}</Button></div>
         </div>
       </div>
     </div>,
@@ -552,8 +559,9 @@ const ShotPreviewModal: React.FC<{
 
 export const StoryboardNode: React.FC<BaseProps & {
   onGenerateShot: (storyboardId: string, shotId: string) => void;
+  onCancelShot?: (storyboardId: string, shotId: string) => void;
 }> = props => {
-  const { data, onUpdate, allNodes, onGenerateShot } = props;
+  const { data, onUpdate, allNodes, onGenerateShot, onCancelShot } = props;
   const dark = (props.canvasTheme || 'dark') === 'dark';
   const state = data.storyboard || { shots: [], expanded: false, status: 'idle' as const };
   const [dragId, setDragId] = useState<string | null>(null);
@@ -615,17 +623,17 @@ export const StoryboardNode: React.FC<BaseProps & {
         <div className="space-y-3 px-5 py-4">
           <div className="flex items-center justify-between"><div className="flex items-center gap-1.5 text-[10px] text-cyan-300"><span className="flex gap-1">{state.shots.map(shot => <span key={shot.id} className={`h-2.5 w-2.5 rounded-full ${shot.generation.status === 'completed' ? 'bg-emerald-400' : shot.generation.status === 'failed' ? 'bg-red-400' : shot.generation.status === 'generating' ? 'bg-amber-300' : dark ? 'bg-neutral-700' : 'bg-neutral-300'}`} />)}</span>{completed}/{state.shots.length}</div><Button dark={dark} onClick={() => onUpdate(data.id, { storyboard: { ...state, expanded: !state.expanded } })} onPointerDown={stop}>{state.expanded ? '收起' : '展开'}</Button></div>
           {!state.expanded && <div className={`rounded-xl border px-3 py-3 text-[11px] ${dark ? 'border-white/8 bg-white/[0.025] text-neutral-300' : 'border-neutral-200 bg-neutral-50 text-neutral-600'}`}>{state.shots.length ? state.shots.slice(0, 6).map(shot => <div key={shot.id} className="flex items-center justify-between py-1"><span className="truncate pr-2">{String(shot.order).padStart(2, '0')} · {shot.title}</span><span className={`text-[10px] ${muted(dark)}`}>{statusLabel(shot.generation.status)}</span></div>) : '等待导演节点生成分镜'}</div>}
-          {state.expanded && <div className="space-y-2 overflow-y-auto pr-1" style={{ maxHeight: STICKMAN_STORYBOARD_MAX_LIST_HEIGHT }}>{state.shots.map(shot => <ShotCard key={shot.id} shot={shot} dark={dark} compareMode={Boolean(state.compareMode)} onDragStart={() => setDragId(shot.id)} onDrop={() => reorder(shot.id)} onChange={patch => updateShot(shot.id, patch)} onPreview={() => setPreviewShotId(shot.id)} onGenerate={() => onGenerateShot(data.id, shot.id)} onCopy={() => void navigator.clipboard?.writeText(shot.prompt)} onRecompile={() => updateShot(shot.id, { prompt: compileFlowPrompt(shot, settings) })} onDelete={() => updateShots(state.shots.filter(item => item.id !== shot.id).map((item, index) => ({ ...item, order: index + 1 })))} />)}</div>}
+          {state.expanded && <div className="space-y-2 overflow-y-auto pr-1" style={{ maxHeight: STICKMAN_STORYBOARD_MAX_LIST_HEIGHT }}>{state.shots.map(shot => <ShotCard key={shot.id} shot={shot} dark={dark} compareMode={Boolean(state.compareMode)} onDragStart={() => setDragId(shot.id)} onDrop={() => reorder(shot.id)} onChange={patch => updateShot(shot.id, patch)} onPreview={() => setPreviewShotId(shot.id)} onGenerate={() => onGenerateShot(data.id, shot.id)} onCancel={() => onCancelShot?.(data.id, shot.id)} onCopy={() => void navigator.clipboard?.writeText(shot.prompt)} onRecompile={() => updateShot(shot.id, { prompt: compileFlowPrompt(shot, settings) })} onDelete={() => updateShots(state.shots.filter(item => item.id !== shot.id).map((item, index) => ({ ...item, order: index + 1 })))} />)}</div>}
           <div className="flex flex-wrap gap-1.5"><Button dark={dark} onClick={addShot} onPointerDown={stop}><Plus size={12} />新增</Button><Button dark={dark} onClick={() => void navigator.clipboard?.writeText(state.shots.map(shot => shot.prompt).join('\n\n'))} onPointerDown={stop}><Clipboard size={12} />复制全部</Button><Button dark={dark} onClick={() => void navigator.clipboard?.writeText(JSON.stringify(state.shots, null, 2))} onPointerDown={stop}><Save size={12} />导出 JSON</Button></div>
         </div>
       </Shell>
-      {previewShot && <ShotPreviewModal shot={previewShot} dark={dark} compareMode={Boolean(state.compareMode)} index={previewIndex} total={previewableShots.length} onClose={() => setPreviewShotId(null)} onPrevious={() => movePreview(-1)} onNext={() => movePreview(1)} onRegenerate={() => onGenerateShot(data.id, previewShot.id)} />}
+      {previewShot && <ShotPreviewModal shot={previewShot} dark={dark} compareMode={Boolean(state.compareMode)} index={previewIndex} total={previewableShots.length} onClose={() => setPreviewShotId(null)} onPrevious={() => movePreview(-1)} onNext={() => movePreview(1)} onRegenerate={() => onGenerateShot(data.id, previewShot.id)} onCancel={() => onCancelShot?.(data.id, previewShot.id)} />}
     </>
   );
 };
 
-export const FlowBatchVideoNode: React.FC<BaseProps & { onBatchGenerate: (id: string) => void; onRetryFailed: (id: string) => void; onGenerateShot: (storyboardId: string, shotId: string) => void }> = props => {
-  const { data, onUpdate, allNodes, onBatchGenerate, onRetryFailed, onGenerateShot } = props;
+export const FlowBatchVideoNode: React.FC<BaseProps & { onBatchGenerate: (id: string) => void; onRetryFailed: (id: string) => void; onGenerateShot: (storyboardId: string, shotId: string) => void; onCancelShot?: (storyboardId: string, shotId: string) => void; onPauseBatch?: (id: string) => void; onResumeBatch?: (id: string) => void }> = props => {
+  const { data, onUpdate, allNodes, onBatchGenerate, onRetryFailed, onGenerateShot, onCancelShot, onPauseBatch, onResumeBatch } = props;
   const dark = (props.canvasTheme || 'dark') === 'dark';
   const [previewShotId, setPreviewShotId] = useState<string | null>(null);
   useGenerationModelRegistry();
@@ -663,7 +671,7 @@ export const FlowBatchVideoNode: React.FC<BaseProps & { onBatchGenerate: (id: st
   const durations = Array.from(new Set((storyboard?.shots || []).map(shot => shot.duration).filter(value => Number.isFinite(value))));
   const inheritedDuration = durations.length === 1 ? `${durations[0]} 秒/镜头` : durations.length > 1 ? '按分镜设置' : `${state.duration || 8} 秒/镜头`;
   const waiting = (storyboard?.shots || []).filter(shot => shot.generation.status !== 'completed').length;
-  const batchButtonLabel = state.status === 'running' ? '生成中…' : waiting > 0 ? `生成待处理镜头（${waiting}）` : '全部镜头已生成';
+  const batchButtonLabel = state.status === 'running' ? '生成中…' : state.status === 'paused' ? '队列已暂停' : waiting > 0 ? `生成待处理镜头（${waiting}）` : '全部镜头已生成';
   const generatedShots = (storyboard?.shots || []).filter(shot => Boolean(shot.generation.videoUrl));
   const previewShot = generatedShots.find(shot => shot.id === previewShotId);
   const previewIndex = previewShot ? generatedShots.findIndex(shot => shot.id === previewShot.id) : -1;
@@ -702,17 +710,17 @@ export const FlowBatchVideoNode: React.FC<BaseProps & { onBatchGenerate: (id: st
                   <span className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition-opacity hover:opacity-100"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white"><Play size={14} /></span></span>
                   {generating && <span className="absolute inset-x-1.5 bottom-1.5 rounded-md bg-amber-500/85 px-1.5 py-1 text-[9px] text-black">正在重新生成</span>}
                 </button>
-                <div className="p-2"><div className="truncate text-[10px] font-medium">{String(shot.order).padStart(2, '0')} · {shot.title}</div><div className="mt-2 flex gap-1"><Button dark={dark} className="flex-1 justify-center" onClick={() => setPreviewShotId(shot.id)} onPointerDown={stop}><Maximize2 size={11} />预览</Button><Button dark={dark} className="flex-1 justify-center" disabled={generating} onClick={() => storyboardNode && onGenerateShot(storyboardNode.id, shot.id)} onPointerDown={stop}>{generating ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}重生成</Button></div></div>
+                <div className="p-2"><div className="flex items-center justify-between gap-2"><div className="truncate text-[10px] font-medium">{String(shot.order).padStart(2, '0')} · {shot.title}</div><GenerationElapsed {...shot.generation} className={`text-[9px] ${muted(dark)}`} /></div><div className="mt-2 flex flex-wrap gap-1">{generating && <GenerationCancelButton dark={dark} className="flex-1" onCancel={() => storyboardNode && onCancelShot?.(storyboardNode.id, shot.id)} />}<Button dark={dark} className="flex-1 justify-center" onClick={() => setPreviewShotId(shot.id)} onPointerDown={stop}><Maximize2 size={11} />预览</Button><Button dark={dark} className="flex-1 justify-center" disabled={generating} onClick={() => storyboardNode && onGenerateShot(storyboardNode.id, shot.id)} onPointerDown={stop}>{generating ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}重生成</Button></div></div>
               </div>;
             })}
           </div>
         </div>}
-        {showTaskQueue && <div className={`rounded-xl border px-3 py-2 text-[10px] ${dark ? 'border-white/8 bg-white/[0.025]' : 'border-neutral-200 bg-neutral-50'}`}><div className="mb-1 flex items-center justify-between"><span className={muted(dark)}>任务队列</span><span className={running ? 'text-amber-300' : failed ? 'text-red-300' : 'text-emerald-300'}>{running ? `生成中 ${running}` : failed ? `失败 ${failed}` : state.status === 'completed' ? '全部完成' : '待执行'}</span></div>{(tasks.length ? tasks : (storyboard?.shots || []).map(shot => ({ shotId: shot.id, taskId: '', status: 'waiting' as const, retryCount: 0 }))).slice(0, 10).map(task => <div key={task.shotId} className="flex items-center justify-between py-1"><span className="truncate pr-2">{String(storyboard?.shots.find(shot => shot.id === task.shotId)?.order || '')} · {storyboard?.shots.find(shot => shot.id === task.shotId)?.title || task.shotId}</span><span className={task.status === 'success' ? 'text-emerald-400' : task.status === 'failed' ? 'text-red-400' : muted(dark)}>{task.status === 'success' ? '✓' : statusLabel(task.status)}</span></div>)}</div>}
+        {showTaskQueue && <div className={`rounded-xl border px-3 py-2 text-[10px] ${dark ? 'border-white/8 bg-white/[0.025]' : 'border-neutral-200 bg-neutral-50'}`}><div className="mb-1 flex items-center justify-between"><span className={muted(dark)}>任务队列</span><span className={running ? 'text-amber-300' : failed ? 'text-red-300' : state.status === 'paused' ? 'text-cyan-300' : 'text-emerald-300'}>{running ? `生成中 ${running}` : failed ? `失败 ${failed}` : state.status === 'paused' ? '队列已暂停' : state.status === 'completed' ? '全部完成' : '待执行'}</span></div>{(tasks.length ? tasks : (storyboard?.shots || []).map(shot => ({ shotId: shot.id, taskId: '', status: 'waiting' as const, retryCount: 0 }))).slice(0, 10).map(task => { const shot = storyboard?.shots.find(item => item.id === task.shotId); const generating = task.status === 'generating' || shot?.generation.status === 'generating' || shot?.generation.status === 'queued'; return <div key={task.shotId} className="flex items-center justify-between gap-2 py-1"><span className="truncate pr-2">{String(shot?.order || '')} · {shot?.title || task.shotId}</span><span className="flex shrink-0 items-center gap-1.5"><GenerationElapsed {...(shot?.generation || {})} className={`text-[9px] ${muted(dark)}`} />{generating && storyboardNode && <GenerationCancelButton dark={dark} className="px-2 py-1 text-[9px]" onCancel={() => onCancelShot?.(storyboardNode.id, task.shotId)} />}{task.status === 'success' ? <span className="text-emerald-400">✓</span> : <span className={task.status === 'failed' ? 'text-red-400' : task.status === 'cancelled' ? 'text-neutral-400' : muted(dark)}>{statusLabel(task.status)}</span>}</span></div>; })}</div>}
         {state.error && <div className="flex items-start gap-1.5 rounded-xl bg-red-500/10 px-3 py-2 text-[10px] text-red-300"><AlertCircle size={12} />{state.error}</div>}
-        <div className="flex flex-wrap gap-1.5"><Button dark={dark} tone="primary" disabled={!storyboard?.shots.length || state.status === 'running' || waiting === 0} onClick={() => onBatchGenerate(data.id)} onPointerDown={stop}>{state.status === 'running' ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}{batchButtonLabel}</Button>{failed > 0 && <Button dark={dark} onClick={() => onRetryFailed(data.id)} onPointerDown={stop}><RotateCcw size={12} />只重试失败项（{failed}）</Button>}</div>
+        <div className="flex flex-wrap gap-1.5">{state.status === 'running' && <Button dark={dark} onClick={() => onPauseBatch?.(data.id)} onPointerDown={stop}><Pause size={12} />暂停队列</Button>}{state.status === 'paused' && <Button dark={dark} onClick={() => onResumeBatch?.(data.id)} onPointerDown={stop}><Play size={12} />继续队列</Button>}<Button dark={dark} tone="primary" disabled={!storyboard?.shots.length || state.status === 'running' || state.status === 'paused' || waiting === 0} onClick={() => onBatchGenerate(data.id)} onPointerDown={stop}>{state.status === 'running' ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}{batchButtonLabel}</Button>{failed > 0 && <Button dark={dark} onClick={() => onRetryFailed(data.id)} onPointerDown={stop}><RotateCcw size={12} />只重试失败项（{failed}）</Button>}</div>
         </div>
       </Shell>
-      {previewShot && <ShotPreviewModal shot={previewShot} dark={dark} compareMode={Boolean(storyboard?.compareMode)} index={previewIndex} total={generatedShots.length} onClose={() => setPreviewShotId(null)} onPrevious={() => movePreview(-1)} onNext={() => movePreview(1)} onRegenerate={() => storyboardNode && onGenerateShot(storyboardNode.id, previewShot.id)} />}
+      {previewShot && <ShotPreviewModal shot={previewShot} dark={dark} compareMode={Boolean(storyboard?.compareMode)} index={previewIndex} total={generatedShots.length} onClose={() => setPreviewShotId(null)} onPrevious={() => movePreview(-1)} onNext={() => movePreview(1)} onRegenerate={() => storyboardNode && onGenerateShot(storyboardNode.id, previewShot.id)} onCancel={() => storyboardNode && onCancelShot?.(storyboardNode.id, previewShot.id)} />}
     </>
   );
 };

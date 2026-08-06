@@ -28,7 +28,7 @@ function safeMetadata(metadata) {
 
 function safeDetails(details) {
     if (!details || typeof details !== 'object') return undefined;
-    const allow = ['runId', 'batchId', 'submitId', 'taskId', 'conversationId', 'mediaIds', 'projectId'];
+    const allow = ['runId', 'batchId', 'flowWorkflowId', 'submitId', 'taskId', 'conversationId', 'mediaIds', 'projectId'];
     const output = {};
     for (const key of allow) {
         const value = details[key];

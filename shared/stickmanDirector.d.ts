@@ -68,6 +68,10 @@ export interface StickmanShot {
     thumbnailUrl?: string;
     error?: string;
     retryCount?: number;
+    queuedAt?: number;
+    startedAt?: number;
+    finishedAt?: number;
+    elapsedMs?: number;
   };
 }
 

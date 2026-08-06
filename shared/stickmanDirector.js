@@ -299,6 +299,10 @@ const normalizeShot = (raw, index, settings, sourceShots = []) => {
       ...(asText(source.generation?.thumbnailUrl) ? { thumbnailUrl: asText(source.generation.thumbnailUrl) } : {}),
       ...(asText(source.generation?.error) ? { error: asText(source.generation.error) } : {}),
       retryCount: Math.max(0, Math.round(Number(source.generation?.retryCount) || 0)),
+      ...Object.fromEntries(['queuedAt', 'startedAt', 'finishedAt', 'elapsedMs'].flatMap(key => {
+        const value = Number(source.generation?.[key]);
+        return Number.isFinite(value) && value >= 0 ? [[key, value]] : [];
+      })),
     },
   };
   shot.prompt = shot.prompt || compileFlowPrompt(shot, settings);

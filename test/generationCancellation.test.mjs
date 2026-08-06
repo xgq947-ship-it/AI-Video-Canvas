@@ -97,6 +97,11 @@ test('两条生成路由都登记了取消句柄并在 finally 里释放', () =>
     assert.equal((ROUTES.match(/cancellation\?\.release\(\)/g) || []).length, 2, '必须在 finally 释放，否则登记表会泄漏');
 });
 
+test('生成路由按调度器 provider 名称查询提交边界', () => {
+    assert.match(ROUTES, /generationHasCrossedSubmissionBoundary\(\s*webProviderForModel\(imageModel\)/s);
+    assert.match(ROUTES, /generationHasCrossedSubmissionBoundary\(\s*webProviderForModel\(videoModel\)/s);
+});
+
 test('signal 透传到了各 provider workflow', () => {
     const passed = (ROUTES.match(/signal: cancellation\?\.signal/g) || []).length;
     assert.ok(passed >= 4, `只有 ${passed} 处透传了 signal，浏览器 workflow 路径可能有遗漏`);

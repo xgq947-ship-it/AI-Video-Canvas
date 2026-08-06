@@ -27,6 +27,12 @@ import {
   StoryboardNode,
   VideoMergeNode,
 } from '../../features/stickman-director/StickmanWorkflowNodes';
+import {
+  CinematicCastNode,
+  CinematicDirectorNode,
+  CinematicStoryboardNode,
+  CinematicVideoMergeNode,
+} from '../../features/cinematic-director/CinematicWorkflowNodes';
 
 interface CanvasNodeProps {
   workflowId?: string;
@@ -65,7 +71,18 @@ interface CanvasNodeProps {
   onGenerateStickmanShot?: (storyboardId: string, shotId: string) => void;
   onBatchGenerateStickman?: (nodeId: string) => void;
   onRetryStickmanFailed?: (nodeId: string) => void;
+  onCancelStickmanShot?: (storyboardId: string, shotId: string) => void;
+  onPauseStickmanBatch?: (nodeId: string) => void;
+  onResumeStickmanBatch?: (nodeId: string) => void;
   onMergeStickmanVideos?: (nodeId: string) => void;
+  onRunCinematicDirector?: (nodeId: string) => void;
+  onGenerateCinematicShot?: (storyboardId: string, shotId: string) => void;
+  onBatchGenerateCinematic?: (nodeId: string) => void;
+  onRetryCinematicFailed?: (nodeId: string) => void;
+  onCancelCinematicShot?: (storyboardId: string, shotId: string) => void;
+  onPauseCinematicBatch?: (nodeId: string) => void;
+  onResumeCinematicBatch?: (nodeId: string) => void;
+  onMergeCinematicVideos?: (nodeId: string) => void;
   zoom: number;
   // 悬停回调带上 nodeId，调用方才能传稳定的引用（否则每次 render 都是新箭头函数，
   // React.memo 会全部失效）。
@@ -92,6 +109,10 @@ const NODE_TYPE_LABELS: Record<NodeType, string> = {
   [NodeType.STORYBOARD_COMPARE]: '分镜对照组',
   [NodeType.FLOW_BATCH_VIDEO]: 'Flow 视频生成',
   [NodeType.VIDEO_MERGE]: '视频拼接',
+  [NodeType.CINEMATIC_CAST]: '角色设定',
+  [NodeType.CINEMATIC_DIRECTOR]: '电影短片导演',
+  [NodeType.CINEMATIC_STORYBOARD]: '电影分镜',
+  [NodeType.CINEMATIC_VIDEO_MERGE]: '电影成片拼接',
   [NodeType.SFX]: '音效',
   [NodeType.BGM]: '背景音乐',
   [NodeType.SUBTITLE]: '字幕',
@@ -133,7 +154,18 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   onGenerateStickmanShot,
   onBatchGenerateStickman,
   onRetryStickmanFailed,
+  onCancelStickmanShot,
+  onPauseStickmanBatch,
+  onResumeStickmanBatch,
   onMergeStickmanVideos,
+  onRunCinematicDirector,
+  onGenerateCinematicShot,
+  onBatchGenerateCinematic,
+  onRetryCinematicFailed,
+  onCancelCinematicShot,
+  onPauseCinematicBatch,
+  onResumeCinematicBatch,
+  onMergeCinematicVideos,
   zoom,
   onMouseEnter,
   onMouseLeave,
@@ -308,12 +340,28 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
     return <StickmanDirectorNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onGenerate, onNodePointerDown, onContextMenu, onConnectorDown, onRun: onRunStickmanDirector || (() => undefined) } as any)} />;
   }
 
+  if (data.type === NodeType.CINEMATIC_CAST) {
+    return <CinematicCastNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onNodePointerDown, onContextMenu, onConnectorDown, workflowId } as any)} />;
+  }
+
+  if (data.type === NodeType.CINEMATIC_DIRECTOR) {
+    return <CinematicDirectorNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onNodePointerDown, onContextMenu, onConnectorDown, workflowId, onRun: onRunCinematicDirector || (() => undefined) } as any)} />;
+  }
+
+  if (data.type === NodeType.CINEMATIC_STORYBOARD) {
+    return <CinematicStoryboardNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onNodePointerDown, onContextMenu, onConnectorDown, workflowId, onGenerateShot: onGenerateCinematicShot || (() => undefined), onBatchGenerate: onBatchGenerateCinematic || (() => undefined), onRetryFailed: onRetryCinematicFailed || (() => undefined), onCancelShot: onCancelCinematicShot || (() => undefined), onPauseBatch: onPauseCinematicBatch || (() => undefined), onResumeBatch: onResumeCinematicBatch || (() => undefined) } as any)} />;
+  }
+
+  if (data.type === NodeType.CINEMATIC_VIDEO_MERGE) {
+    return <CinematicVideoMergeNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onNodePointerDown, onContextMenu, onConnectorDown, workflowId, onMerge: onMergeCinematicVideos || (() => undefined) } as any)} />;
+  }
+
   if (data.type === NodeType.STORYBOARD || data.type === NodeType.STORYBOARD_COMPARE) {
-    return <StoryboardNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onGenerate, onNodePointerDown, onContextMenu, onConnectorDown, onGenerateShot: onGenerateStickmanShot || (() => undefined) } as any)} />;
+    return <StoryboardNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onGenerate, onNodePointerDown, onContextMenu, onConnectorDown, onGenerateShot: onGenerateStickmanShot || (() => undefined), onCancelShot: onCancelStickmanShot || (() => undefined) } as any)} />;
   }
 
   if (data.type === NodeType.FLOW_BATCH_VIDEO) {
-    return <FlowBatchVideoNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onGenerate, onNodePointerDown, onContextMenu, onConnectorDown, onBatchGenerate: onBatchGenerateStickman || (() => undefined), onRetryFailed: onRetryStickmanFailed || (() => undefined), onGenerateShot: onGenerateStickmanShot || (() => undefined) } as any)} />;
+    return <FlowBatchVideoNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onGenerate, onNodePointerDown, onContextMenu, onConnectorDown, onBatchGenerate: onBatchGenerateStickman || (() => undefined), onRetryFailed: onRetryStickmanFailed || (() => undefined), onGenerateShot: onGenerateStickmanShot || (() => undefined), onCancelShot: onCancelStickmanShot || (() => undefined), onPauseBatch: onPauseStickmanBatch || (() => undefined), onResumeBatch: onResumeStickmanBatch || (() => undefined) } as any)} />;
   }
 
   if (data.type === NodeType.VIDEO_MERGE) {

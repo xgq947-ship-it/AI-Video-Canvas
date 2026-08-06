@@ -73,6 +73,7 @@ class FairSemaphore {
 
 function errorState(error, context) {
     if (context?.submissionUnknown) return 'submission_unknown';
+    if (error?.submitted === true || context?.phase === 'submitted') return 'recovery_required';
     if (error?.cancelled || error?.code === 'OPERATION_CANCELLED') {
         // Cancelling the local wait cannot cancel a task already accepted by
         // the platform. Keep that case recoverable instead of presenting it as
@@ -162,6 +163,7 @@ export class GenerationScheduler {
             id: job.id,
             provider,
             label,
+            metadata: metadata && typeof metadata === 'object' ? { ...metadata } : {},
             state: 'queued',
             createdAt: job.createdAt,
             critical: false
@@ -289,6 +291,25 @@ export class GenerationScheduler {
         } : null;
     }
 
+    /**
+     * Cancellation arrives through a different HTTP request and therefore a
+     * different AsyncLocalStorage context. Match the live scheduler entry by
+     * provider and the safe node/workflow metadata instead of looking only at
+     * the caller's context.
+     */
+    hasCrossedSubmissionBoundary(provider, metadata = {}) {
+        const expectedWorkflowId = metadata?.workflowId;
+        const expectedNodeId = metadata?.nodeId;
+        return [...this.activeJobs.values()].some(active => {
+            if (active.provider !== provider || active.state !== 'submitted' && active.state !== 'polling' && active.state !== 'downloading') {
+                return false;
+            }
+            if (expectedWorkflowId && active.metadata?.workflowId !== expectedWorkflowId) return false;
+            if (expectedNodeId && active.metadata?.nodeId !== expectedNodeId) return false;
+            return true;
+        });
+    }
+
     busyLabel() {
         return [...this.activeJobs.values()]
             .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)))[0]?.label || '';
@@ -335,9 +356,10 @@ export const runProviderDownload = (provider, task, options = {}) => generationS
 export const noteBillableRequestStart = provider => generationScheduler.noteBillableRequestStart(provider);
 export const noteBillableRequestSettled = (provider, details, options) => generationScheduler.noteBillableRequestSettled(provider, details, options);
 export const attachCurrentGenerationDetails = (provider, details) => generationScheduler.attachCurrentDetails(provider, details);
-export const generationHasCrossedSubmissionBoundary = provider => {
+export const generationHasCrossedSubmissionBoundary = (provider, metadata) => {
     const context = generationScheduler.currentContext();
-    return context?.provider === provider && context.phase === 'submitted';
+    if (context?.provider === provider && context.phase === 'submitted') return true;
+    return generationScheduler.hasCrossedSubmissionBoundary(provider, metadata);
 };
 export const generationRuntimeBusyLabel = () => generationScheduler.busyLabel();
 export const generationSchedulerSnapshot = () => generationScheduler.snapshot();

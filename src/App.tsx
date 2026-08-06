@@ -17,6 +17,7 @@ import {
   dismissProductSceneResultNodes,
   generateImage,
   generateImageBatch,
+  cancelGeneration as requestCancelGeneration,
   type ProductSceneJob
 } from './services/generationService';
 import { useCanvasNavigation } from './hooks/useCanvasNavigation';
@@ -92,6 +93,21 @@ import {
 } from './features/stickman-director/stickmanDirectorService';
 import { createStickmanScriptFromAnalysis, mergeStickmanShotsPreservingGeneration, normalizeStickmanSettings, rollupStickmanGenerationStatus } from '../shared/stickmanDirector.js';
 import type { StickmanDirectorOutput, StickmanShot } from '../shared/stickmanDirector.js';
+import {
+  generateCinematicShotVideo,
+  getCinematicMergeJob,
+  runCinematicDirector,
+  submitCinematicMerge,
+} from './features/cinematic-director/cinematicDirectorService';
+import {
+  mergeCinematicShotsPreservingGeneration,
+  normalizeCinematicCast,
+  normalizeCinematicDirectorOutput,
+  normalizeCinematicSettings,
+  rollupCinematicGenerationStatus,
+  validateCinematicReferenceBudget,
+} from '../shared/cinematicDirector.js';
+import type { CinematicDirectorOutput, CinematicShot } from '../shared/cinematicDirector.js';
 
 // ============================================================================
 // MAIN COMPONENT
@@ -109,10 +125,31 @@ const NODE_TYPES_NEEDING_ALL_NODES = new Set<NodeType>([
   NodeType.STORYBOARD_COMPARE,
   NodeType.FLOW_BATCH_VIDEO,
   NodeType.VIDEO_MERGE,
+  NodeType.CINEMATIC_CAST,
+  NodeType.CINEMATIC_DIRECTOR,
+  NodeType.CINEMATIC_STORYBOARD,
+  NodeType.CINEMATIC_VIDEO_MERGE,
   ...Object.values(NodeType).filter(isMangaNode)
 ]);
 
 type CanvasHistoryState = { nodes: NodeData[]; groups: ReturnType<typeof useGroupManagement>['groups'] };
+
+type SpecialGenerationKind = 'stickman' | 'cinematic';
+type SpecialRunControl = {
+  kind: SpecialGenerationKind;
+  storyboardId: string;
+  paused: boolean;
+};
+type SpecialShotController = {
+  kind: SpecialGenerationKind;
+  storyboardId: string;
+  shotId: string;
+  nodeId: string;
+  controller: AbortController;
+};
+
+const specialRunKey = (kind: SpecialGenerationKind, storyboardId: string) => `${kind}:${storyboardId}`;
+const specialShotKey = (kind: SpecialGenerationKind, storyboardId: string, shotId: string) => `${kind}:${storyboardId}:${shotId}`;
 
 type StickmanScriptDraft = Pick<NonNullable<NodeData['scriptInput']>, 'title' | 'content' | 'notes' | 'platform'>;
 
@@ -245,6 +282,11 @@ export default function App() {
 
   // Wrap handleWheel to pass hovered node for zoom-to-center
   const handleWheel = (e: React.WheelEvent) => {
+    // 节点内部的 textarea、下拉框和列表需要优先消费滚轮事件。
+    // 如果继续把事件交给画布，普通滚轮会平移画布，用户就无法精确滚动节点内容。
+    // 统一按 data-node-id 判断，覆盖所有节点类型和节点控制面板。
+    if (e.target instanceof Element && e.target.closest('[data-node-id]')) return;
+
     const hoveredId = canvasHoveredNodeIdRef.current;
     const hoveredNode = hoveredId ? nodes.find(n => n.id === hoveredId) : undefined;
     baseHandleWheel(e, hoveredNode);
@@ -257,6 +299,7 @@ export default function App() {
     setSelectedNodeIds,
     addStickmanWorkflow,
     addStickmanWorkflowFromParent,
+    addCinematicWorkflow,
     updateNode,
     deleteNodes,
     clearSelection,
@@ -626,6 +669,12 @@ export default function App() {
   }, [handleGenerateNow]);
 
   const generationPromisesRef = React.useRef(new Map<string, Promise<NodeData>>());
+
+  // 导演工作流的一个批次会包含多个普通视频请求，不能复用单节点生成 hook 的
+  // controller；这里按镜头登记 controller，同时保存批次的暂停状态。
+  const specialRunControlsRef = React.useRef(new Map<string, SpecialRunControl>());
+  const specialShotControllersRef = React.useRef(new Map<string, SpecialShotController>());
+  const cancelledSpecialShotsRef = React.useRef(new Set<string>());
 
   // 取消生成：先叫停服务端，再清掉本地那条等待中的 promise，
   // 否则 waitForNodeResult 会一直挂到一小时超时，之后点重新生成没有任何反应。
@@ -1211,6 +1260,15 @@ export default function App() {
         : '已创建剧本工作流：填写“剧本输入”后，点击“执行火柴人导演 Skill”',
     );
   }, [addStickmanWorkflow, canvasEditLock, contextMenu.canvasX, contextMenu.canvasY, contextMenu.x, contextMenu.y, showToast, viewport]);
+
+  const handleCreateCinematicWorkflow = React.useCallback(() => {
+    if (!canvasEditLock.guard()) return;
+    const rect = getCanvasRect();
+    const paneX = contextMenu.canvasX ?? contextMenu.x - rect.left;
+    const paneY = contextMenu.canvasY ?? contextMenu.y - rect.top;
+    addCinematicWorkflow(paneX, paneY, viewport);
+    showToast('已创建电影短片工作流：填写剧本、准备角色参考图后执行导演');
+  }, [addCinematicWorkflow, canvasEditLock, contextMenu.canvasX, contextMenu.canvasY, contextMenu.x, contextMenu.y, showToast, viewport]);
 
   const handleSidebarAssetPreview = (asset: SidebarAssetPreview, anchor: HTMLElement) => {
     const rect = anchor.getBoundingClientRect();
@@ -2090,6 +2148,398 @@ export default function App() {
     return { storyboardId, batchId, mergeId };
   }, [setNodes]);
 
+  const ensureCinematicPipeline = React.useCallback((directorNodeId: string, output: CinematicDirectorOutput) => {
+    const current = nodesRef.current;
+    const director = current.find(node => node.id === directorNodeId && node.type === NodeType.CINEMATIC_DIRECTOR);
+    if (!director) throw new Error('找不到电影短片导演节点');
+    const storyboard = current.find(node => node.type === NodeType.CINEMATIC_STORYBOARD && node.parentIds?.includes(directorNodeId));
+    const storyboardId = storyboard?.id || crypto.randomUUID();
+    const merge = current.find(node => node.type === NodeType.CINEMATIC_VIDEO_MERGE && node.parentIds?.includes(storyboardId));
+    const mergeId = merge?.id || crypto.randomUUID();
+    const previous = storyboard?.cinematicStoryboard || { shots: [], cast: [], expanded: false, concurrency: 2 as const, status: 'idle' as const };
+    const plannedShots = mergeCinematicShotsPreservingGeneration(previous.shots, output.shots);
+    const cast = normalizeCinematicCast(output.cast);
+    const additions: NodeData[] = [];
+    if (!storyboard) additions.push({
+      id: storyboardId,
+      type: NodeType.CINEMATIC_STORYBOARD,
+      title: '电影分镜',
+      x: director.x + 520,
+      y: director.y,
+      prompt: '',
+      status: NodeStatus.IDLE,
+      model: output.global.videoModel,
+      aspectRatio: output.global.aspectRatio,
+      resolution: 'Auto',
+      parentIds: [directorNodeId],
+      cinematicStoryboard: { shots: plannedShots, cast, expanded: false, concurrency: 2, status: 'ready' },
+    });
+    if (!merge) additions.push({
+      id: mergeId,
+      type: NodeType.CINEMATIC_VIDEO_MERGE,
+      title: '电影成片拼接',
+      x: (storyboard?.x || director.x + 520) + 520,
+      y: storyboard?.y || director.y,
+      prompt: '',
+      status: NodeStatus.IDLE,
+      model: 'remotion',
+      aspectRatio: output.global.aspectRatio,
+      resolution: 'Auto',
+      parentIds: [storyboardId],
+      cinematicVideoMerge: { status: 'idle', outputFormat: 'mp4', fps: 30, skipFailed: true },
+    });
+    setNodes(previousNodes => {
+      const next = previousNodes.map(node => {
+        if (node.id === storyboardId) {
+          return {
+            ...node,
+            cinematicStoryboard: {
+              ...previous,
+              shots: plannedShots,
+              cast,
+              status: 'ready' as const,
+              error: undefined,
+            },
+          };
+        }
+        if (node.id === mergeId && !node.cinematicVideoMerge) {
+          return { ...node, cinematicVideoMerge: { status: 'idle' as const, outputFormat: 'mp4' as const, fps: 30, skipFailed: true } };
+        }
+        return node;
+      });
+      return [...next, ...additions.filter(node => !next.some(item => item.id === node.id))];
+    });
+    return { storyboardId, mergeId };
+  }, [setNodes]);
+
+  const handleRunCinematicDirector = React.useCallback(async (directorNodeId: string) => {
+    if (!canvasEditLock.guard()) return;
+    if (!workflowId) {
+      showToast('请先新建或打开项目', { tone: 'error' });
+      return;
+    }
+    const current = nodesRef.current;
+    const directorNode = current.find(node => node.id === directorNodeId && node.type === NodeType.CINEMATIC_DIRECTOR);
+    if (!directorNode) return;
+    const parents = (directorNode.parentIds || []).map(id => current.find(node => node.id === id)).filter((node): node is NodeData => Boolean(node));
+    const scriptNode = parents.find(node => node.type === NodeType.SCRIPT_INPUT);
+    const castNode = parents.find(node => node.type === NodeType.CINEMATIC_CAST);
+    const script = scriptNode?.scriptInput || { title: scriptNode?.title || '电影短片剧本', content: scriptNode?.prompt || '', notes: '' };
+    const cast = normalizeCinematicCast(castNode?.cinematicCast?.characters || []);
+    const settings = normalizeCinematicSettings(directorNode.cinematicDirector || {});
+    const videoModel = listVideoGenerationProviders().find(model => model.id === settings.videoModel);
+    if (!String(script.content || '').trim()) {
+      showToast('请先填写电影剧本正文', { tone: 'error' });
+      return;
+    }
+    if (videoModel && !videoModel.supportedAspectRatios.includes(settings.aspectRatio)) {
+      showToast(`${videoModel.name} 不支持 ${settings.aspectRatio} 画幅，请调整导演设置`, { tone: 'error' });
+      return;
+    }
+    if (!cast.length || cast.some(character => character.referenceImages.length === 0)) {
+      showToast('请为每个角色准备至少一张参考图；可用 AI 默认生成正面照和设定板', { tone: 'error' });
+      return;
+    }
+    const budget = validateCinematicReferenceBudget(cast, settings.videoModel);
+    if (!budget.valid) {
+      showToast(budget.errors[0], { tone: 'error' });
+      return;
+    }
+    const directorState = {
+      ...settings,
+      provider: directorNode.cinematicDirector?.provider || 'auto',
+      modelId: directorNode.cinematicDirector?.modelId,
+      status: 'running' as const,
+      output: directorNode.cinematicDirector?.output,
+      error: undefined,
+    };
+    setNodes(previous => previous.map(node => node.id === directorNodeId
+      ? { ...node, status: NodeStatus.LOADING, cinematicDirector: directorState }
+      : node));
+    try {
+      const result = await runCinematicDirector({
+        input: { title: script.title, content: script.content, notes: script.notes || '' },
+        cast,
+        settings: directorState,
+        provider: directorState.provider,
+        allowFallback: true,
+      });
+      const output = normalizeCinematicDirectorOutput(result.output, { settings: directorState, model: result.model, cast });
+      setNodes(previous => previous.map(node => node.id === directorNodeId
+        ? { ...node, status: NodeStatus.SUCCESS, prompt: JSON.stringify(output), cinematicDirector: { ...directorState, status: 'completed' as const, output, repaired: result.repaired, error: undefined } }
+        : node));
+      const pipeline = ensureCinematicPipeline(directorNodeId, output);
+      setSelectedNodeIds([pipeline.storyboardId]);
+      showToast(`已生成 ${output.shots.length} 个电影分镜`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '电影导演执行失败';
+      setNodes(previous => previous.map(node => node.id === directorNodeId
+        ? { ...node, status: NodeStatus.ERROR, cinematicDirector: { ...directorState, status: 'failed' as const, error: message } }
+        : node));
+      showToast(message, { tone: 'error', duration: TOAST_PERSIST });
+    }
+  }, [canvasEditLock, ensureCinematicPipeline, setNodes, setSelectedNodeIds, showToast, workflowId]);
+
+  const generateCinematicShots = React.useCallback(async (storyboardId: string, shotIds?: string[]) => {
+    if (!canvasEditLock.guard()) return;
+    if (!workflowId) {
+      showToast('请先新建或打开项目', { tone: 'error' });
+      return;
+    }
+    const current = nodesRef.current;
+    const storyboardNode = current.find(node => node.id === storyboardId && node.type === NodeType.CINEMATIC_STORYBOARD);
+    const directorNode = storyboardNode?.parentIds?.map(id => current.find(node => node.id === id)).find(node => node?.type === NodeType.CINEMATIC_DIRECTOR);
+    const castNode = directorNode?.parentIds?.map(id => current.find(node => node.id === id)).find(node => node?.type === NodeType.CINEMATIC_CAST);
+    const state = storyboardNode?.cinematicStoryboard;
+    const settings = normalizeCinematicSettings(directorNode?.cinematicDirector || {});
+    const cast = normalizeCinematicCast(castNode?.cinematicCast?.characters || state?.cast || []);
+    if (!storyboardNode || !state?.shots.length || !directorNode) {
+      showToast('当前没有可生成的电影分镜', { tone: 'error' });
+      return;
+    }
+    const videoModel = listVideoGenerationProviders().find(model => model.id === settings.videoModel);
+    if (videoModel && !videoModel.supportedAspectRatios.includes(settings.aspectRatio)) {
+      showToast(`${videoModel.name} 不支持 ${settings.aspectRatio} 画幅，请调整导演设置`, { tone: 'error' });
+      return;
+    }
+    const runKey = specialRunKey('cinematic', storyboardId);
+    if (specialRunControlsRef.current.has(runKey)) {
+      showToast('这个电影分镜批次正在运行中，可先暂停队列', { tone: 'info' });
+      return;
+    }
+    const requested = shotIds ? new Set(shotIds) : undefined;
+    const targets = state.shots.filter(shot => requested ? requested.has(shot.id) : shot.generation.status !== 'completed');
+    const blocked = targets.filter(shot => shot.generation.status === 'submission_unknown');
+    const isExplicitSingleShotRetry = Boolean(shotIds?.length);
+    if (blocked.length && !isExplicitSingleShotRetry) {
+      showToast(`有 ${blocked.length} 个镜头提交状态未知，请先从 Provider 历史确认结果后再重试`, { tone: 'error' });
+      return;
+    }
+    if (blocked.length && isExplicitSingleShotRetry) {
+      showToast('已确认 Provider 历史无可用结果，开始重试此镜头；若平台已有结果，仍可能产生重复计费', { tone: 'info' });
+    }
+    if (!targets.length) {
+      showToast('没有待生成镜头；已完成镜头不会自动重复扣费');
+      return;
+    }
+    const control: SpecialRunControl = { kind: 'cinematic', storyboardId, paused: false };
+    specialRunControlsRef.current.set(runKey, control);
+    const working = new Map(state.shots.map(shot => [shot.id, shot]));
+    const applyShot = (id: string, generation: Partial<CinematicShot['generation']>) => {
+      const prior = working.get(id);
+      if (!prior) return;
+      const next = { ...prior, generation: { ...prior.generation, ...generation } };
+      working.set(id, next);
+      setNodes(previous => previous.map(node => node.id === storyboardId && node.cinematicStoryboard
+        ? { ...node, cinematicStoryboard: { ...node.cinematicStoryboard, shots: node.cinematicStoryboard.shots.map(shot => shot.id === id ? next : shot) } }
+        : node));
+    };
+    targets.forEach(shot => {
+      cancelledSpecialShotsRef.current.delete(specialShotKey('cinematic', storyboardId, shot.id));
+      applyShot(shot.id, {
+        status: 'queued',
+        progress: 0,
+        error: undefined,
+        queuedAt: Date.now(),
+        startedAt: undefined,
+        finishedAt: undefined,
+        elapsedMs: undefined,
+      });
+    });
+    setNodes(previous => previous.map(node => node.id === storyboardId && node.cinematicStoryboard
+      ? { ...node, cinematicStoryboard: { ...node.cinematicStoryboard, status: 'generating', error: undefined } }
+      : node));
+    let cursor = 0;
+    const results: Array<'success' | 'failed' | 'unknown' | 'cancelled'> = [];
+    const timing = (shot: CinematicShot, finishedAt: number) => {
+      const startedAt = shot.generation.startedAt || shot.generation.queuedAt;
+      return {
+        finishedAt,
+        ...(startedAt ? { elapsedMs: Math.max(0, finishedAt - startedAt) } : {}),
+      };
+    };
+    const process = async (shot: CinematicShot) => {
+      const shotKey = specialShotKey('cinematic', storyboardId, shot.id);
+      if (cancelledSpecialShotsRef.current.has(shotKey)) {
+        const finishedAt = Date.now();
+        const currentShot = working.get(shot.id) || shot;
+        applyShot(shot.id, { status: 'cancelled', progress: 0, error: '已手动取消', ...timing(currentShot, finishedAt) });
+        results.push('cancelled');
+        return;
+      }
+      const retryCount = (shot.generation.retryCount || 0) + (shot.generation.status === 'failed' ? 1 : 0);
+      const controller = new AbortController();
+      const nodeId = `cinematic-${storyboardId}-${shot.id}`;
+      specialShotControllersRef.current.set(shotKey, { kind: 'cinematic', storyboardId, shotId: shot.id, nodeId, controller });
+      applyShot(shot.id, { status: 'generating', progress: 0, retryCount, error: undefined, startedAt: Date.now() });
+      try {
+        const resultUrl = await generateCinematicShotVideo({ workflowId, shot, cast, settings, nodeId, signal: controller.signal });
+        const url = `${resultUrl}${resultUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+        const currentShot = working.get(shot.id) || shot;
+        if (cancelledSpecialShotsRef.current.has(shotKey)) {
+          applyShot(shot.id, { status: 'cancelled', progress: 1, videoUrl: url, error: '已停止等待；结果已返回', ...timing(currentShot, Date.now()) });
+          results.push('cancelled');
+        } else {
+          applyShot(shot.id, { status: 'completed', progress: 1, videoUrl: url, error: undefined, ...timing(currentShot, Date.now()) });
+          results.push('success');
+        }
+      } catch (error) {
+        const manuallyCancelled = cancelledSpecialShotsRef.current.has(shotKey) || controller.signal.aborted;
+        const submitted = Boolean((error as { submitted?: boolean })?.submitted);
+        const message = error instanceof Error ? error.message : '镜头生成失败';
+        const currentShot = working.get(shot.id) || shot;
+        if (manuallyCancelled) {
+          applyShot(shot.id, { status: 'cancelled', error: submitted ? '已停止等待；请求可能已提交并计费，请到 Provider 历史确认' : '已手动取消', ...timing(currentShot, Date.now()) });
+          results.push('cancelled');
+        } else {
+          applyShot(shot.id, submitted ? { status: 'submission_unknown', error: `${message}；任务可能已提交，请先确认 Provider 历史`, ...timing(currentShot, Date.now()) } : { status: 'failed', error: message, ...timing(currentShot, Date.now()) });
+          results.push(submitted ? 'unknown' : 'failed');
+        }
+      } finally {
+        specialShotControllersRef.current.delete(shotKey);
+      }
+    };
+    const worker = async () => {
+      while (true) {
+        if (control.paused) return;
+        const index = cursor++;
+        if (index >= targets.length) return;
+        await process(targets[index]);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(state.concurrency || 2, targets.length) }, () => worker()));
+    const pausedWithPending = control.paused && cursor < targets.length;
+    specialRunControlsRef.current.delete(runKey);
+    const finalShots = state.shots.map(shot => working.get(shot.id) || shot);
+    const rollup = rollupCinematicGenerationStatus(finalShots);
+    setNodes(previous => previous.map(node => node.id === storyboardId && node.cinematicStoryboard
+      ? { ...node, cinematicStoryboard: { ...node.cinematicStoryboard, shots: finalShots, status: pausedWithPending ? 'paused' : rollup.storyboardStatus as NonNullable<NodeData['cinematicStoryboard']>['status'] } }
+      : node));
+    const failures = results.filter(result => result !== 'success').length;
+    if (pausedWithPending) {
+      showToast(`已暂停队列；${results.filter(result => result === 'success').length} 个镜头已完成，剩余镜头等待恢复`, { tone: 'info' });
+    } else {
+      showToast(rollup.batchStatus === 'completed' ? `已完成全部 ${rollup.total} 个电影镜头` : `本轮成功 ${results.filter(result => result === 'success').length} 个${failures ? `，失败或待恢复 ${failures} 个` : ''}（共 ${rollup.total}）`, { tone: failures ? 'error' : 'info' });
+    }
+  }, [canvasEditLock, setNodes, showToast, workflowId]);
+
+  const cancelCinematicShot = React.useCallback(async (storyboardId: string, shotId: string) => {
+    const key = specialShotKey('cinematic', storyboardId, shotId);
+    const entry = specialShotControllersRef.current.get(key);
+    const nodeId = entry?.nodeId || `cinematic-${storyboardId}-${shotId}`;
+    let submitted = false;
+    try {
+      const result = await requestCancelGeneration(nodeId, workflowId);
+      submitted = result.submitted;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '取消电影镜头失败', { tone: 'error' });
+      return;
+    }
+    cancelledSpecialShotsRef.current.add(key);
+    entry?.controller.abort();
+    const shot = nodesRef.current.find(node => node.id === storyboardId)?.cinematicStoryboard?.shots.find(item => item.id === shotId);
+    const finishedAt = Date.now();
+    const startedAt = shot?.generation.startedAt || shot?.generation.queuedAt;
+    setNodes(previous => previous.map(node => node.id === storyboardId && node.cinematicStoryboard
+      ? {
+        ...node,
+        cinematicStoryboard: {
+          ...node.cinematicStoryboard,
+          shots: node.cinematicStoryboard.shots.map(item => item.id === shotId
+            ? {
+              ...item,
+              generation: {
+                ...item.generation,
+                status: 'cancelled',
+                error: submitted ? '已停止等待；请求可能已提交并计费，请到 Provider 历史确认' : '已手动取消',
+                finishedAt,
+                ...(startedAt ? { elapsedMs: Math.max(0, finishedAt - startedAt) } : {}),
+              },
+            }
+            : item),
+        },
+      }
+      : node));
+  }, [setNodes, showToast, workflowId]);
+
+  const pauseCinematicBatch = React.useCallback((storyboardId: string) => {
+    const control = specialRunControlsRef.current.get(specialRunKey('cinematic', storyboardId));
+    if (control) control.paused = true;
+    setNodes(previous => previous.map(node => node.id === storyboardId && node.cinematicStoryboard
+      ? { ...node, cinematicStoryboard: { ...node.cinematicStoryboard, status: 'paused' } }
+      : node));
+  }, [setNodes]);
+
+  const resumeCinematicBatch = React.useCallback((storyboardId: string) => {
+    const control = specialRunControlsRef.current.get(specialRunKey('cinematic', storyboardId));
+    if (control) {
+      control.paused = false;
+      setNodes(previous => previous.map(node => node.id === storyboardId && node.cinematicStoryboard
+        ? { ...node, cinematicStoryboard: { ...node.cinematicStoryboard, status: 'generating', error: undefined } }
+        : node));
+      return;
+    }
+    void generateCinematicShots(storyboardId);
+  }, [generateCinematicShots, setNodes]);
+
+  const handleGenerateCinematicShot = React.useCallback((storyboardId: string, shotId: string) => {
+    void generateCinematicShots(storyboardId, [shotId]);
+  }, [generateCinematicShots]);
+
+  const handleBatchGenerateCinematic = React.useCallback((nodeId: string) => {
+    const node = nodesRef.current.find(item => item.id === nodeId);
+    if (node?.type === NodeType.CINEMATIC_STORYBOARD) void generateCinematicShots(nodeId);
+  }, [generateCinematicShots]);
+
+  const handleRetryCinematicFailed = React.useCallback((nodeId: string) => {
+    const node = nodesRef.current.find(item => item.id === nodeId);
+    const failed = node?.cinematicStoryboard?.shots.filter(shot => shot.generation.status === 'failed').map(shot => shot.id) || [];
+    if (node?.type === NodeType.CINEMATIC_STORYBOARD && failed.length) void generateCinematicShots(nodeId, failed);
+  }, [generateCinematicShots]);
+
+  const handleMergeCinematicVideos = React.useCallback(async (mergeNodeId: string) => {
+    if (!canvasEditLock.guard()) return;
+    if (!workflowId) {
+      showToast('请先新建或打开项目', { tone: 'error' });
+      return;
+    }
+    const current = nodesRef.current;
+    const mergeNode = current.find(node => node.id === mergeNodeId && node.type === NodeType.CINEMATIC_VIDEO_MERGE);
+    const storyboardNode = mergeNode?.parentIds?.map(id => current.find(node => node.id === id)).find(node => node?.type === NodeType.CINEMATIC_STORYBOARD);
+    const directorNode = storyboardNode?.parentIds?.map(id => current.find(node => node.id === id)).find(node => node?.type === NodeType.CINEMATIC_DIRECTOR);
+    const shots = storyboardNode?.cinematicStoryboard?.shots || [];
+    const mergeState = mergeNode?.cinematicVideoMerge || { status: 'idle' as const, outputFormat: 'mp4' as const, fps: 30, skipFailed: true };
+    if (!mergeNode || !storyboardNode || !shots.some(shot => shot.generation.status === 'completed' && shot.generation.videoUrl)) {
+      showToast('请先完成至少一个电影镜头生成', { tone: 'error' });
+      return;
+    }
+    const settings = normalizeCinematicSettings(directorNode?.cinematicDirector || {});
+    setNodes(previous => previous.map(node => node.id === mergeNodeId && node.cinematicVideoMerge ? { ...node, cinematicVideoMerge: { ...mergeState, status: 'queued', error: undefined } } : node));
+    try {
+      const job = await submitCinematicMerge({
+        workflowId,
+        title: directorNode?.title || '电影短片成片',
+        shots: shots.map(shot => ({ id: shot.id, order: shot.order, title: shot.title, duration: shot.duration, videoUrl: shot.generation.videoUrl, status: shot.generation.status, transition: shot.camera.transition })),
+        settings,
+        fps: mergeState.fps,
+        skipFailed: mergeState.skipFailed,
+      });
+      setNodes(previous => previous.map(node => node.id === mergeNodeId && node.cinematicVideoMerge ? { ...node, cinematicVideoMerge: { ...mergeState, status: job.status === 'success' ? 'success' : 'rendering', jobId: job.jobId, outputUrl: job.output || undefined } } : node));
+      let status = job;
+      while (['queued', 'rendering'].includes(status.status)) {
+        await new Promise(resolve => window.setTimeout(resolve, 1500));
+        status = await getCinematicMergeJob(job.jobId);
+        setNodes(previous => previous.map(node => node.id === mergeNodeId && node.cinematicVideoMerge ? { ...node, cinematicVideoMerge: { ...mergeState, status: status.status === 'success' ? 'success' : status.status === 'failed' ? 'failed' : status.status === 'cancelled' ? 'cancelled' : 'rendering', jobId: job.jobId, outputUrl: status.output || undefined, error: status.error || undefined } } : node));
+      }
+      if (status.status !== 'success') throw new Error(status.error || '电影成片拼接失败');
+      showToast('电影最终视频已拼接完成');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '电影成片拼接失败';
+      setNodes(previous => previous.map(node => node.id === mergeNodeId && node.cinematicVideoMerge ? { ...node, cinematicVideoMerge: { ...mergeState, status: 'failed', error: message } } : node));
+      showToast(message, { tone: 'error', duration: TOAST_PERSIST });
+    }
+  }, [canvasEditLock, setNodes, showToast, workflowId]);
+
   const handleRunStickmanDirector = React.useCallback(async (directorNodeId: string) => {
     if (!canvasEditLock.guard()) return;
     if (!workflowId) {
@@ -2247,17 +2697,28 @@ export default function App() {
     const targets = storyboardNode.storyboard.shots.filter(shot => shotIdSet
       ? shotIdSet.has(shot.id)
       : shot.generation.status !== 'completed');
+    const runKey = specialRunKey('stickman', storyboardId);
+    if (specialRunControlsRef.current.has(runKey)) {
+      showToast('这个火柴人分镜批次正在运行中，可先暂停队列', { tone: 'info' });
+      return;
+    }
     if (!targets.length) {
       showToast('没有待生成镜头；已完成镜头不会自动重复扣费');
       return;
     }
+    const control: SpecialRunControl = { kind: 'stickman', storyboardId, paused: false };
+    specialRunControlsRef.current.set(runKey, control);
     const taskSeed = targets.map(shot => {
       const existing = batchState.tasks?.find(task => task.shotId === shot.id);
       return { shotId: shot.id, taskId: existing?.taskId || crypto.randomUUID(), status: 'waiting' as const, retryCount: existing?.retryCount || 0 };
     });
     setNodes(previous => previous.map(node => {
       if (node.id === batchNode.id) return { ...node, flowBatch: { ...batchState, status: 'running', error: undefined, tasks: [...(batchState.tasks || []).filter(task => !targets.some(shot => shot.id === task.shotId)), ...taskSeed] } };
-      if (node.id === storyboardId && node.storyboard) return { ...node, storyboard: { ...node.storyboard, status: 'generating', error: undefined, shots: node.storyboard.shots.map(shot => targets.some(item => item.id === shot.id) ? { ...shot, generation: { ...shot.generation, status: 'queued', error: undefined } } : shot) } };
+      if (node.id === storyboardId && node.storyboard) return { ...node, storyboard: { ...node.storyboard, status: 'generating', error: undefined, shots: node.storyboard.shots.map(shot => {
+        if (!targets.some(item => item.id === shot.id)) return shot;
+        cancelledSpecialShotsRef.current.delete(specialShotKey('stickman', storyboardId, shot.id));
+        return { ...shot, generation: { ...shot.generation, status: 'queued', error: undefined, queuedAt: Date.now(), startedAt: undefined, finishedAt: undefined, elapsedMs: undefined } };
+      }) } };
       return node;
     }));
 
@@ -2277,9 +2738,27 @@ export default function App() {
     };
     const process = async (shot: StickmanShot) => {
       const seed = taskSeed.find(task => task.shotId === shot.id)!;
+      const shotKey = specialShotKey('stickman', storyboardId, shot.id);
+      if (cancelledSpecialShotsRef.current.has(shotKey)) {
+        const finishedAt = Date.now();
+        updateProgress(shot.id, { status: 'cancelled', error: '已手动取消', finishedAt }, { status: 'cancelled', retryCount: seed.retryCount, error: '已手动取消' });
+        results.push('cancelled');
+        outcomes.set(shot.id, 'cancelled');
+        return;
+      }
       let retryCount = seed.retryCount;
       while (true) {
-        updateProgress(shot.id, { status: 'generating', progress: 0, retryCount, error: undefined }, { status: 'generating', retryCount, progress: 0 });
+        if (cancelledSpecialShotsRef.current.has(shotKey)) {
+          const finishedAt = Date.now();
+          updateProgress(shot.id, { status: 'cancelled', error: '已手动取消', finishedAt }, { status: 'cancelled', retryCount, error: '已手动取消' });
+          results.push('cancelled');
+          outcomes.set(shot.id, 'cancelled');
+          return;
+        }
+        const controller = new AbortController();
+        const startedAt = Date.now();
+        specialShotControllersRef.current.set(shotKey, { kind: 'stickman', storyboardId, shotId: shot.id, nodeId: seed.taskId, controller });
+        updateProgress(shot.id, { status: 'generating', progress: 0, retryCount, error: undefined, startedAt, finishedAt: undefined, elapsedMs: undefined }, { status: 'generating', retryCount, progress: 0 });
         try {
           const resultUrl = await generateStickmanShotVideo({
             workflowId,
@@ -2288,33 +2767,63 @@ export default function App() {
             nodeId: seed.taskId,
             nativeAudio: batchState.nativeAudio,
             resolution: batchState.resolution,
+            signal: controller.signal,
           });
-          updateProgress(shot.id, { status: 'completed', progress: 1, videoUrl: `${resultUrl}?t=${Date.now()}`, taskId: seed.taskId, error: undefined }, { status: 'success', retryCount, progress: 1, resultUrl: `${resultUrl}?t=${Date.now()}`, error: undefined });
-          results.push('success');
-          outcomes.set(shot.id, 'completed');
+          const finishedAt = Date.now();
+          const url = `${resultUrl}${resultUrl.includes('?') ? '&' : '?'}t=${finishedAt}`;
+          if (cancelledSpecialShotsRef.current.has(shotKey)) {
+            updateProgress(shot.id, { status: 'cancelled', progress: 1, videoUrl: url, taskId: seed.taskId, error: '已停止等待；结果已返回', finishedAt, elapsedMs: Math.max(0, finishedAt - startedAt) }, { status: 'cancelled', retryCount, progress: 1, resultUrl: url, error: '已停止等待；结果已返回' });
+            results.push('cancelled');
+            outcomes.set(shot.id, 'cancelled');
+          } else {
+            updateProgress(shot.id, { status: 'completed', progress: 1, videoUrl: url, taskId: seed.taskId, error: undefined, finishedAt, elapsedMs: Math.max(0, finishedAt - startedAt) }, { status: 'success', retryCount, progress: 1, resultUrl: url, error: undefined });
+            results.push('success');
+            outcomes.set(shot.id, 'completed');
+          }
           return;
         } catch (error) {
+          const manuallyCancelled = cancelledSpecialShotsRef.current.has(shotKey) || controller.signal.aborted;
           const submitted = Boolean((error as { submitted?: boolean })?.submitted);
+          const finishedAt = Date.now();
           if (batchState.autoRetry && !submitted && retryCount < batchState.maxRetries) {
+            if (manuallyCancelled) {
+              updateProgress(shot.id, { status: 'cancelled', error: '已手动取消', finishedAt, elapsedMs: Math.max(0, finishedAt - startedAt) }, { status: 'cancelled', retryCount, error: '已手动取消' });
+              results.push('cancelled');
+              outcomes.set(shot.id, 'cancelled');
+              return;
+            }
             retryCount += 1;
+            specialShotControllersRef.current.delete(shotKey);
             continue;
           }
           const message = error instanceof Error ? error.message : '镜头生成失败';
-          updateProgress(shot.id, { status: 'failed', error: message, retryCount }, { status: 'failed', retryCount, error: message });
-          results.push('failed');
-          outcomes.set(shot.id, 'failed');
+          if (manuallyCancelled) {
+            const cancelMessage = submitted ? '已停止等待；请求可能已提交并计费，请到 Provider 历史确认' : '已手动取消';
+            updateProgress(shot.id, { status: 'cancelled', error: cancelMessage, retryCount, finishedAt, elapsedMs: Math.max(0, finishedAt - startedAt) }, { status: 'cancelled', retryCount, error: cancelMessage });
+            results.push('cancelled');
+            outcomes.set(shot.id, 'cancelled');
+          } else {
+            updateProgress(shot.id, { status: 'failed', error: message, retryCount, finishedAt, elapsedMs: Math.max(0, finishedAt - startedAt) }, { status: 'failed', retryCount, error: message });
+            results.push('failed');
+            outcomes.set(shot.id, 'failed');
+          }
           return;
+        } finally {
+          specialShotControllersRef.current.delete(shotKey);
         }
       }
     };
     const worker = async () => {
       while (true) {
+        if (control.paused) return;
         const index = cursor++;
         if (index >= targets.length) return;
         await process(targets[index]);
       }
     };
     await Promise.all(Array.from({ length: Math.min(batchState.concurrency || 2, targets.length) }, () => worker()));
+    const pausedWithPending = control.paused && cursor < targets.length;
+    specialRunControlsRef.current.delete(runKey);
     // Roll up from the full shot list (this round's outcomes layered over the
     // shots that were already generated / still pending) so a partial run never
     // reports "全部完成" while other shots remain unfinished.
@@ -2324,18 +2833,94 @@ export default function App() {
     });
     const rollup = rollupStickmanGenerationStatus(finalShots);
     setNodes(previous => previous.map(node => {
-      if (node.id === batchNode.id && node.flowBatch) return { ...node, flowBatch: { ...node.flowBatch, status: rollup.batchStatus === 'ready' ? 'idle' : rollup.batchStatus, tasks: node.flowBatch.tasks } };
-      if (node.id === storyboardId && node.storyboard) return { ...node, storyboard: { ...node.storyboard, status: rollup.storyboardStatus } };
+      if (node.id === batchNode.id && node.flowBatch) return { ...node, flowBatch: { ...node.flowBatch, status: pausedWithPending ? 'paused' : rollup.batchStatus === 'ready' ? 'idle' : rollup.batchStatus, tasks: node.flowBatch.tasks } };
+      if (node.id === storyboardId && node.storyboard) return { ...node, storyboard: { ...node.storyboard, status: pausedWithPending ? 'paused' : rollup.storyboardStatus } };
       return node;
     }));
     const roundFailures = results.filter(result => result === 'failed').length;
     showToast(
-      rollup.batchStatus === 'completed'
-        ? `已完成全部 ${rollup.total} 个镜头`
-        : `本轮完成，成功 ${results.filter(result => result === 'success').length} 个${roundFailures ? `，失败 ${roundFailures} 个` : ''}（共 ${rollup.total}，已生成 ${rollup.completed}）`,
-      { tone: roundFailures ? 'error' : 'info' },
+      pausedWithPending
+        ? `已暂停队列；${results.filter(result => result === 'success').length} 个镜头已完成，剩余镜头等待恢复`
+        : rollup.batchStatus === 'completed'
+          ? `已完成全部 ${rollup.total} 个镜头`
+          : `本轮完成，成功 ${results.filter(result => result === 'success').length} 个${roundFailures ? `，失败 ${roundFailures} 个` : ''}（共 ${rollup.total}，已生成 ${rollup.completed}）`,
+      { tone: pausedWithPending ? 'info' : roundFailures ? 'error' : 'info' },
     );
   }, [canvasEditLock, ensureStickmanBatchNode, setNodes, showToast, workflowId]);
+
+  const resolveStickmanStoryboardId = React.useCallback((nodeId: string) => {
+    const node = nodesRef.current.find(item => item.id === nodeId);
+    if (node?.type === NodeType.FLOW_BATCH_VIDEO) {
+      return node.parentIds?.find(parentId => nodesRef.current.some(parent => parent.id === parentId && [NodeType.STORYBOARD, NodeType.STORYBOARD_COMPARE].includes(parent.type)));
+    }
+    return node?.type === NodeType.STORYBOARD || node?.type === NodeType.STORYBOARD_COMPARE ? nodeId : undefined;
+  }, []);
+
+  const cancelStickmanShot = React.useCallback(async (storyboardId: string, shotId: string) => {
+    const key = specialShotKey('stickman', storyboardId, shotId);
+    const entry = specialShotControllersRef.current.get(key);
+    const batchNode = nodesRef.current.find(node => node.type === NodeType.FLOW_BATCH_VIDEO && node.parentIds?.includes(storyboardId));
+    const taskId = entry?.nodeId || batchNode?.flowBatch?.tasks.find(task => task.shotId === shotId)?.taskId || `stickman-${storyboardId}-${shotId}`;
+    let submitted = false;
+    try {
+      const result = await requestCancelGeneration(taskId, workflowId);
+      submitted = result.submitted;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '取消火柴人镜头失败', { tone: 'error' });
+      return;
+    }
+    cancelledSpecialShotsRef.current.add(key);
+    entry?.controller.abort();
+    const shot = nodesRef.current.find(node => node.id === storyboardId)?.storyboard?.shots.find(item => item.id === shotId);
+    const finishedAt = Date.now();
+    const startedAt = shot?.generation.startedAt || shot?.generation.queuedAt;
+    const errorMessage = submitted ? '已停止等待；请求可能已提交并计费，请到 Provider 历史确认' : '已手动取消';
+    setNodes(previous => previous.map(node => {
+      if (node.id === storyboardId && node.storyboard) {
+        return {
+          ...node,
+          storyboard: {
+            ...node.storyboard,
+            shots: node.storyboard.shots.map(item => item.id === shotId
+              ? { ...item, generation: { ...item.generation, status: 'cancelled', error: errorMessage, finishedAt, ...(startedAt ? { elapsedMs: Math.max(0, finishedAt - startedAt) } : {}) } }
+              : item),
+          },
+        };
+      }
+      if (node.id === batchNode?.id && node.flowBatch) {
+        return { ...node, flowBatch: { ...node.flowBatch, tasks: node.flowBatch.tasks.map(task => task.shotId === shotId ? { ...task, status: 'cancelled', error: errorMessage } : task) } };
+      }
+      return node;
+    }));
+  }, [setNodes, showToast, workflowId]);
+
+  const pauseStickmanBatch = React.useCallback((nodeId: string) => {
+    const storyboardId = resolveStickmanStoryboardId(nodeId);
+    if (!storyboardId) return;
+    const control = specialRunControlsRef.current.get(specialRunKey('stickman', storyboardId));
+    if (control) control.paused = true;
+    setNodes(previous => previous.map(node => {
+      if (node.id === storyboardId && node.storyboard) return { ...node, storyboard: { ...node.storyboard, status: 'paused' } };
+      if (node.id === nodeId && node.flowBatch) return { ...node, flowBatch: { ...node.flowBatch, status: 'paused' } };
+      return node;
+    }));
+  }, [resolveStickmanStoryboardId, setNodes]);
+
+  const resumeStickmanBatch = React.useCallback((nodeId: string) => {
+    const storyboardId = resolveStickmanStoryboardId(nodeId);
+    if (!storyboardId) return;
+    const control = specialRunControlsRef.current.get(specialRunKey('stickman', storyboardId));
+    if (control) {
+      control.paused = false;
+      setNodes(previous => previous.map(node => {
+        if (node.id === storyboardId && node.storyboard) return { ...node, storyboard: { ...node.storyboard, status: 'generating' } };
+        if (node.id === nodeId && node.flowBatch) return { ...node, flowBatch: { ...node.flowBatch, status: 'running' } };
+        return node;
+      }));
+      return;
+    }
+    void generateStickmanShots(storyboardId);
+  }, [generateStickmanShots, resolveStickmanStoryboardId, setNodes]);
 
   const handleGenerateStickmanShot = React.useCallback((storyboardId: string, shotId: string) => {
     void generateStickmanShots(storyboardId, [shotId]);
@@ -2774,7 +3359,18 @@ export default function App() {
     handleGenerateStickmanShot,
     handleBatchGenerateStickman,
     handleRetryStickmanFailed,
+    cancelStickmanShot,
+    pauseStickmanBatch,
+    resumeStickmanBatch,
     handleMergeStickmanVideos,
+    handleRunCinematicDirector,
+    handleGenerateCinematicShot,
+    handleBatchGenerateCinematic,
+    handleRetryCinematicFailed,
+    cancelCinematicShot,
+    pauseCinematicBatch,
+    resumeCinematicBatch,
+    handleMergeCinematicVideos,
     handleDuplicate,
     handleNodePointerDown,
     setSelectedNodeIds,
@@ -2822,7 +3418,18 @@ export default function App() {
     onGenerateStickmanShot: (storyboardId: string, shotId: string) => nodeCallbacksRef.current.handleGenerateStickmanShot(storyboardId, shotId),
     onBatchGenerateStickman: (id: string) => nodeCallbacksRef.current.handleBatchGenerateStickman(id),
     onRetryStickmanFailed: (id: string) => nodeCallbacksRef.current.handleRetryStickmanFailed(id),
+    onCancelStickmanShot: (storyboardId: string, shotId: string) => { void nodeCallbacksRef.current.cancelStickmanShot(storyboardId, shotId); },
+    onPauseStickmanBatch: (id: string) => nodeCallbacksRef.current.pauseStickmanBatch(id),
+    onResumeStickmanBatch: (id: string) => nodeCallbacksRef.current.resumeStickmanBatch(id),
     onMergeStickmanVideos: (id: string) => nodeCallbacksRef.current.handleMergeStickmanVideos(id),
+    onRunCinematicDirector: (id: string) => nodeCallbacksRef.current.handleRunCinematicDirector(id),
+    onGenerateCinematicShot: (storyboardId: string, shotId: string) => nodeCallbacksRef.current.handleGenerateCinematicShot(storyboardId, shotId),
+    onBatchGenerateCinematic: (id: string) => nodeCallbacksRef.current.handleBatchGenerateCinematic(id),
+    onRetryCinematicFailed: (id: string) => nodeCallbacksRef.current.handleRetryCinematicFailed(id),
+    onCancelCinematicShot: (storyboardId: string, shotId: string) => { void nodeCallbacksRef.current.cancelCinematicShot(storyboardId, shotId); },
+    onPauseCinematicBatch: (id: string) => nodeCallbacksRef.current.pauseCinematicBatch(id),
+    onResumeCinematicBatch: (id: string) => nodeCallbacksRef.current.resumeCinematicBatch(id),
+    onMergeCinematicVideos: (id: string) => nodeCallbacksRef.current.handleMergeCinematicVideos(id),
     onNodePointerDown: (e: React.PointerEvent, id: string) => {
       setSelectedConnection(null);
       const current = nodeCallbacksRef.current;
@@ -3091,7 +3698,18 @@ export default function App() {
                 onGenerateStickmanShot={stableNodeHandlers.onGenerateStickmanShot}
                 onBatchGenerateStickman={stableNodeHandlers.onBatchGenerateStickman}
                 onRetryStickmanFailed={stableNodeHandlers.onRetryStickmanFailed}
+                onCancelStickmanShot={stableNodeHandlers.onCancelStickmanShot}
+                onPauseStickmanBatch={stableNodeHandlers.onPauseStickmanBatch}
+                onResumeStickmanBatch={stableNodeHandlers.onResumeStickmanBatch}
                 onMergeStickmanVideos={stableNodeHandlers.onMergeStickmanVideos}
+                onRunCinematicDirector={stableNodeHandlers.onRunCinematicDirector}
+                onGenerateCinematicShot={stableNodeHandlers.onGenerateCinematicShot}
+                onBatchGenerateCinematic={stableNodeHandlers.onBatchGenerateCinematic}
+                onRetryCinematicFailed={stableNodeHandlers.onRetryCinematicFailed}
+                onCancelCinematicShot={stableNodeHandlers.onCancelCinematicShot}
+                onPauseCinematicBatch={stableNodeHandlers.onPauseCinematicBatch}
+                onResumeCinematicBatch={stableNodeHandlers.onResumeCinematicBatch}
+                onMergeCinematicVideos={stableNodeHandlers.onMergeCinematicVideos}
                 zoom={viewport.zoom}
                 onMouseEnter={handleNodeMouseEnter}
                 onMouseLeave={handleNodeMouseLeave}
@@ -3201,6 +3819,7 @@ export default function App() {
           && Boolean(node.resultUrl)
         )}
         onCreateStickmanWorkflow={handleCreateStickmanWorkflow}
+        onCreateCinematicWorkflow={handleCreateCinematicWorkflow}
         onAddAssets={handleContextMenuAddAssets}
         onOpenHistory={handleContextMenuOpenHistory}
         canUndo={canUndo}

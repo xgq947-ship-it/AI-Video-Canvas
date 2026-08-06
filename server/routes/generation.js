@@ -187,7 +187,10 @@ router.post('/generate-image', async (req, res) => {
             nodeId,
             label: '图片生成',
             // 越过提交边界之后，取消已经无法阻止计费，取消端点要据此如实提示用户。
-            submitted: () => generationHasCrossedSubmissionBoundary(getImageGenerationProvider(imageModel)?.id)
+            submitted: () => generationHasCrossedSubmissionBoundary(
+                webProviderForModel(imageModel),
+                { workflowId, nodeId }
+            )
         });
 
         if (imageModel?.startsWith('kling-')) {
@@ -400,7 +403,10 @@ router.post('/generate-video', async (req, res) => {
             workflowId,
             nodeId,
             label: '视频生成',
-            submitted: () => generationHasCrossedSubmissionBoundary(getVideoGenerationProvider(videoModel)?.id)
+            submitted: () => generationHasCrossedSubmissionBoundary(
+                webProviderForModel(videoModel),
+                { workflowId, nodeId }
+            )
         });
 
         // 旧项目里的已下线模型不能静默回落到 Veo，避免误扣其他供应商额度。

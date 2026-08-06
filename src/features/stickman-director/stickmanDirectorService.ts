@@ -50,6 +50,7 @@ export const generateStickmanShotVideo = async ({
   nodeId,
   nativeAudio = true,
   resolution,
+  signal,
 }: {
   workflowId: string;
   shot: StickmanShot;
@@ -57,6 +58,7 @@ export const generateStickmanShotVideo = async ({
   nodeId: string;
   nativeAudio?: boolean;
   resolution?: string;
+  signal?: AbortSignal;
 }) => generateVideo({
   workflowId,
   prompt: shot.prompt,
@@ -66,6 +68,7 @@ export const generateStickmanShotVideo = async ({
   videoModel: modelId,
   generateAudio: nativeAudio,
   nodeId,
+  signal,
 });
 
 export const submitStickmanMerge = async ({

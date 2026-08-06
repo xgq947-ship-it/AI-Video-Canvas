@@ -155,6 +155,27 @@ test('平台确认提交后立即交棒，同平台下一任务无需等待前�
     assert.equal(await first, 'first');
 });
 
+test('跨 HTTP 请求按 workflowId/nodeId 能识别已提交任务', async t => {
+    const { scheduler } = runtimeFixture(t);
+    const release = deferred();
+    const run = scheduler.run({
+        provider: 'google-flow',
+        label: 'cross-request-cancel',
+        metadata: { kind: 'video', workflowId: 'workflow-1', nodeId: 'node-1' },
+        task: async () => {
+            scheduler.noteBillableRequestStart('google-flow');
+            scheduler.noteBillableRequestSettled('google-flow', { batchId: 'batch-1' });
+            await release.promise;
+        }
+    });
+
+    await delay(0);
+    assert.equal(scheduler.hasCrossedSubmissionBoundary('google-flow', { workflowId: 'workflow-1', nodeId: 'node-1' }), true);
+    assert.equal(scheduler.hasCrossedSubmissionBoundary('google-flow', { workflowId: 'workflow-1', nodeId: 'other-node' }), false);
+    release.resolve();
+    await run;
+});
+
 test('排队期间取消不会进入平台，提交后取消会保留恢复状态', async t => {
     const { scheduler, journal } = runtimeFixture(t);
     const releaseFirst = deferred();
@@ -236,6 +257,23 @@ test('计费请求传输结果未知时进入 submission_unknown，不伪装成�
     const job = journal.list().find(item => item.label === 'transport-unknown');
     assert.equal(job.state, 'submission_unknown');
     assert.equal(job.details.submitId, 'local-submit-id');
+});
+
+test('已提交的 provider 取消异常进入 recovery_required', async t => {
+    const { scheduler, journal } = runtimeFixture(t);
+    await assert.rejects(scheduler.run({
+        provider: 'google-flow',
+        label: 'provider-cancel-after-submit',
+        task: async () => {
+            scheduler.noteBillableRequestStart('google-flow');
+            scheduler.noteBillableRequestSettled('google-flow', { mediaId: 'media-1' });
+            const error = new Error('任务已取消');
+            error.submitted = true;
+            throw error;
+        }
+    }), /任务已取消/);
+    const job = journal.list().find(item => item.label === 'provider-cancel-after-submit');
+    assert.equal(job.state, 'recovery_required');
 });
 
 test('任务日志重启后区分安全重跑与需人工核对，并且不落凭证和提示词', t => {

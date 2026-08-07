@@ -43,7 +43,7 @@ export const LICENSE_PUBLIC_KEY_SPKI_B64URL = app.isPackaged
  * 再重新打包。要发布启用登录的版本：把 PACKAGED_DEFAULT 改成 true，npm run desktop:dist。
  * 开发调试时仍可用环境变量临时打开，不需要碰这个常量、不需要重新打包。
  */
-const PACKAGED_DEFAULT_LOGIN_ENABLED = false;
+const PACKAGED_DEFAULT_LOGIN_ENABLED = true;
 export const GOOGLE_LOGIN_ENABLED = app.isPackaged
   ? PACKAGED_DEFAULT_LOGIN_ENABLED
   : String(process.env.GOOGLE_LOGIN_ENABLED || '').toLowerCase() === 'true';

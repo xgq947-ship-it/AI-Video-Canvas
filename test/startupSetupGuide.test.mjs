@@ -10,8 +10,11 @@ const guide = fs.readFileSync(
 // 浏览器登录态相关路由已搬到 server/routes/browser.js（行为未变）。
 const server = fs.readFileSync(new URL('../server/routes/browser.js', import.meta.url), 'utf8');
 
-test('每次桌面界面启动时主动显示服务连接指南，并可从设置再次打开', () => {
-  assert.match(topBar, /useState\(true\)/);
+test('首启配置指南在本机只自动显示一次，并可从设置再次打开', () => {
+  assert.match(topBar, /SETUP_GUIDE_SEEN_KEY = 'evan\.setupGuideSeen'/);
+  assert.match(topBar, /useState\(\(\) => \{/);
+  assert.match(topBar, /localStorage\.getItem\(SETUP_GUIDE_SEEN_KEY\) !== '1'/);
+  assert.match(topBar, /localStorage\.setItem\(SETUP_GUIDE_SEEN_KEY, '1'\)/);
   assert.match(topBar, /启动配置指南/);
   assert.match(topBar, /setShowSetupGuide\(true\)/);
 });

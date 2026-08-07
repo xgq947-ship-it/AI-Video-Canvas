@@ -25,6 +25,7 @@ const hubSyncWorkflow = fs.readFileSync(
 );
 const electronMain = fs.readFileSync(new URL('../electron/main.js', import.meta.url), 'utf8');
 const electronPreload = fs.readFileSync(new URL('../electron/preload.cjs', import.meta.url), 'utf8');
+const electronAuthConfig = fs.readFileSync(new URL('../electron/authConfig.js', import.meta.url), 'utf8');
 const serverMain = fs.readFileSync(new URL('../server/index.js', import.meta.url), 'utf8');
 const serverProjectRoutes = fs.readFileSync(new URL('../server/routes/projects.js', import.meta.url), 'utf8');
 const serverProjectImport = fs.readFileSync(new URL('../server/services/projectImport.js', import.meta.url), 'utf8');
@@ -78,6 +79,13 @@ test('macOS 首次启动缺少 Chrome 时显示阻断页并开放重试', () => 
   assert.match(electronMain, /chromeRequiredPage/);
   assert.match(electronMain, /shell\.openExternal\(CHROME_DOWNLOAD_URL\)/);
   assert.match(electronMain, /createWindow\(chrome\.ready \? null : chromeRequiredPage\(chrome\)\)/);
+});
+
+test('正式安装包默认启用 Google 登录与授权系统', () => {
+  assert.match(electronAuthConfig, /const PACKAGED_DEFAULT_LOGIN_ENABLED = true;/);
+  assert.match(electronAuthConfig, /app\.isPackaged\s*\? PACKAGED_DEFAULT_LOGIN_ENABLED/);
+  assert.match(electronMain, /ipcMain\.handle\('auth:get-config'/);
+  assert.match(electronPreload, /auth:get-config/);
 });
 
 test('关闭最后一个 Evan 窗口只退出本 App，不关闭共享 Chrome', () => {

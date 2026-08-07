@@ -6,6 +6,8 @@ import {
   runStickmanDirector,
 } from '../services/stickmanDirector.js';
 import { resolveProjectMediaTarget } from '../utils/projectAssets.js';
+import { requireFeature } from '../services/licenseGuard.js';
+import { FEATURE_KEYS } from '../../shared/licenseFeatures.js';
 
 const router = express.Router();
 
@@ -13,7 +15,8 @@ router.get('/skills/stickman-video-director/models', (req, res) => {
   res.json({ models: listStickmanDirectorModels(req.app) });
 });
 
-router.post('/skills/stickman-video-director/run', async (req, res) => {
+// 火柴人导演是本期高级节点（导演工作流），执行前必须再次校验——不可绕过（文档 §13）。
+router.post('/skills/stickman-video-director/run', requireFeature(FEATURE_KEYS.DIRECTOR_WORKFLOW), async (req, res) => {
   try {
     const body = req.body || {};
     const provider = body.model?.provider || body.provider || 'auto';
@@ -35,6 +38,10 @@ router.post('/skills/stickman-video-director/run', async (req, res) => {
   }
 });
 
+// 这个接口被两种节点共用：免费的「Video Merge」和「Cinematic Video Merge」。
+// 两者都只是把已经生成好的镜头用本地 ffmpeg 拼成一条成片，不调用云端模型、不产生
+// 新内容——属于文档 §14.4 明确允许试用到期后继续使用的“导出已有文件”，所以这里
+// 不设权限守卫（见 shared/nodeFeatures.js 顶部注释）。
 router.post('/videos/merge', (req, res) => {
   try {
     const body = req.body || {};

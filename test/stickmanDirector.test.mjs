@@ -207,6 +207,7 @@ test('拼接清单按分镜顺序排序并跳过失败镜头', () => {
   assert.deepEqual(manifest.shots.map(shot => shot.id), ['shot_01', 'shot_02']);
   assert.equal(manifest.composition.height, 1920);
   assert.equal(manifest.shots[0].transition, 'hard_cut');
+  assert.deepEqual(manifest.shots.map(shot => shot.volume), [1, 1], '拼接默认继承原片音频');
 });
 
 test('重新规划分镜时保留内容未变镜头的已生成结果，避免孤立已付费视频', () => {

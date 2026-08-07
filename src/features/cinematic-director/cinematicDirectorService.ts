@@ -166,7 +166,7 @@ export const submitCinematicMerge = async ({
 }: {
   workflowId: string;
   title: string;
-  shots: Array<{ id: string; order: number; title?: string; duration?: number; videoUrl?: string; status?: string; transition?: string }>;
+  shots: Array<{ id: string; order: number; title?: string; duration?: number; videoUrl?: string; status?: string; volume?: number; transition?: string }>;
   settings: CinematicDirectorSettings;
   fps?: number;
   skipFailed?: boolean;
@@ -180,7 +180,7 @@ export const submitCinematicMerge = async ({
     height: normalized.height,
     fps,
     skipFailed,
-  }) as { shots?: Array<{ id: string; order: number; name?: string; file: string; end?: number; transition?: string }>; composition?: { width: number; height: number; fps: number } };
+  }) as { shots?: Array<{ id: string; order: number; name?: string; file: string; end?: number; volume?: number; transition?: string }>; composition?: { width: number; height: number; fps: number } };
   const selectedShots = Array.isArray(manifest.shots) ? manifest.shots : [];
   const response = await fetch('/api/videos/merge', {
     method: 'POST',
@@ -195,6 +195,7 @@ export const submitCinematicMerge = async ({
         duration: Math.max(0.1, Number(shot.end) || 5),
         videoUrl: shot.file,
         status: 'completed',
+        volume: shot.volume,
         transition: shot.transition,
       })),
       width: manifest.composition?.width,

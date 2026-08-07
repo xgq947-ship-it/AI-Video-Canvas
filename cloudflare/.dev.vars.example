@@ -1,0 +1,10 @@
+# 复制为 .dev.vars 并填入真实值（.dev.vars 已 gitignore）。
+# 生产环境改用：wrangler secret put <NAME>
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+SESSION_SIGNING_SECRET=
+LICENSE_CODE_SALT=
+# Ed25519 PEM 经 base64 包一层，避免多行 PEM 在 .dev.vars 里换行出问题
+LICENSE_PRIVATE_KEY_PEM_B64=
+LICENSE_PUBLIC_KEY_PEM_B64=
+ADMIN_SECRET=

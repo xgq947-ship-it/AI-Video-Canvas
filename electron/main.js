@@ -14,6 +14,12 @@ import {
     CHROME_DOWNLOAD_URL,
     getChromeCompatibility
 } from '../server/runtime/browserExecutable.js';
+import { createSecureStore } from './secureStore.js';
+import { createDeviceIdentity } from './deviceIdentity.js';
+import { createAuthManager } from './auth/authManager.js';
+import { createLicenseManager } from './license/licenseManager.js';
+import { createActivityReporter } from './activityReporter.js';
+import { AUTH_BASE_URL, GOOGLE_LOGIN_ENABLED } from './authConfig.js';
 
 const ELECTRON_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(ELECTRON_DIR, '..');
@@ -25,6 +31,14 @@ let shuttingDown = false;
 let backendRestartTimer = null;
 let backendCrashTimes = [];
 let updateStartupCheckScheduled = false;
+let authManager = null;
+let licenseManager = null;
+let activityReporter = null;
+let activityReportTimer = null;
+let deviceIdentity = null;
+let lastAuthState = { status: 'login_required', user: null, error: null };
+let lastLicenseState = { status: 'unknown', trialStartedAt: null, trialExpiresAt: null, features: [], stale: true };
+let lastAuthStatus = null;
 const updates = createUpdateController({ getWindow: () => mainWindow });
 const BACKEND_RESTART_LIMIT = 3;
 const BACKEND_RESTART_WINDOW_MS = 60_000;
@@ -487,6 +501,123 @@ ipcMain.handle('external:open', async (_event, rawUrl) => {
     }
 });
 
+/**
+ * 把已验证的 LicenseState 推给本地 Express（执行层守卫的唯一状态来源，
+ * 见 server/services/licenseGuard.js）。仅在登录总开关打开时推送——开关关闭
+ * 时守卫永远收不到消息，永远保持放行，与「加这层之前」的行为完全一致。
+ */
+function pushLicenseStateToBackend(state) {
+    if (!GOOGLE_LOGIN_ENABLED) return;
+    backendProcess?.postMessage({ type: 'license-state', state });
+}
+
+function broadcastLicenseState(next) {
+    lastLicenseState = next;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('desktop:license-state', next);
+    }
+    pushLicenseStateToBackend(next);
+}
+
+function scheduleActivityReport() {
+    if (activityReportTimer) return;
+    activityReportTimer = setTimeout(() => {
+        activityReportTimer = null;
+        void activityReporter?.reportOnce();
+    }, 7_000);
+    activityReportTimer.unref?.();
+}
+
+function broadcastAuthState(next) {
+    lastAuthState = next;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('desktop:auth-state', next);
+    }
+    // 登录成功后（或从未登录→已登录跃迁）拉一次试用/授权状态。
+    if (next?.status === 'authenticated' && lastAuthStatus !== 'authenticated') {
+        void licenseManager?.refresh();
+        scheduleActivityReport();
+    }
+    // 登出后清空授权态。
+    if (next?.status === 'login_required' && lastAuthStatus === 'authenticated') {
+        broadcastLicenseState({ status: 'unknown', trialStartedAt: null, trialExpiresAt: null, features: [], stale: true });
+    }
+    lastAuthStatus = next?.status ?? null;
+}
+
+/**
+ * 初始化鉴权与授权子系统。必须在 app ready 之后调用（safeStorage 才可用）。
+ * 失败不阻塞应用启动——最坏情况是暂时无法登录，本地画布照常可用。
+ */
+async function initAuth() {
+    try {
+        const userDataDir = app.getPath('userData');
+        const secureStore = createSecureStore({ dir: userDataDir });
+        deviceIdentity = createDeviceIdentity({ configDir: userDataDir, secureStore });
+        authManager = createAuthManager({
+            secureStore,
+            deviceIdentity,
+            onStateChange: broadcastAuthState,
+        });
+        licenseManager = createLicenseManager({
+            authManager,
+            deviceIdentity,
+            secureStore,
+            appVersion: app.getVersion(),
+            onStateChange: broadcastLicenseState,
+        });
+        activityReporter = createActivityReporter({
+            authManager,
+            deviceIdentity,
+            baseUrl: AUTH_BASE_URL,
+            appVersion: app.getVersion(),
+        });
+        // 先尝试本地许可证（纯本地操作，不等登录、不发网络请求）——永久授权用户
+        // 离线也能立刻拿到 licensed 状态，这是"离线优先"的关键，不是兜底。
+        await licenseManager.loadLocalLicense();
+        await authManager.loadSession();
+    } catch (error) {
+        console.error('[auth] 初始化失败：', error?.message || error);
+    }
+}
+
+// 唯一的登录开关来源：主进程的 GOOGLE_LOGIN_ENABLED（见 authConfig.js）。渲染进程
+// 通过这个 IPC 询问，而不是自己再维护一份 VITE_ 构建期常量——两个开关分别在不同
+// 构建流水线里配置，一旦不一致就会出现「登录页弹出但后端从不下发许可证状态」或
+// 「后端已启用校验但登录页从不出现、用户永远进不去应用」这类难排查的死锁。
+ipcMain.handle('auth:get-config', () => ({ loginEnabled: GOOGLE_LOGIN_ENABLED }));
+
+ipcMain.handle('auth:get-state', () => (authManager ? authManager.getState() : lastAuthState));
+ipcMain.handle('auth:sign-in', async () => {
+    if (!authManager) return { status: 'error', user: null, error: '鉴权未就绪' };
+    return authManager.signIn();
+});
+ipcMain.handle('auth:sign-out', async () => {
+    if (!authManager) return { status: 'login_required', user: null, error: null };
+    return authManager.signOut();
+});
+
+ipcMain.handle('license:get-state', () => (licenseManager ? licenseManager.getState() : lastLicenseState));
+ipcMain.handle('license:refresh', async () => {
+    if (!licenseManager) return lastLicenseState;
+    return licenseManager.refresh();
+});
+ipcMain.handle('license:activate', async (_event, licenseCode) => {
+    if (!licenseManager) return { success: false, code: 'NOT_READY', message: '授权子系统未就绪' };
+    return licenseManager.activate(String(licenseCode || ''));
+});
+
+// 给设置页展示用（掩码显示），device_hash 不是敏感凭据，只是本机标识符。
+ipcMain.handle('device:get-info', async () => {
+    if (!deviceIdentity) return { deviceHash: null };
+    try {
+        const identity = await deviceIdentity.ensureIdentity();
+        return { deviceHash: identity.deviceHash };
+    } catch {
+        return { deviceHash: null };
+    }
+});
+
 function startBackend() {
     const entryPath = path.join(
         app.isPackaged ? app.getAppPath() : PROJECT_ROOT,
@@ -535,6 +666,9 @@ function launchBackend() {
     backend.on('message', message => {
         if (message?.type !== 'backend-ready') return;
         loadBackendOrigin(message.origin);
+        // 新起/重启的后端进程默认对守卫来说是“一张白纸”（null=放行）；只要登录
+        // 总开关是开的，就必须立刻把当前已知状态补发过去，避免重启后短暂被绕过。
+        pushLicenseStateToBackend(lastLicenseState);
     });
     return backend;
 }
@@ -582,6 +716,8 @@ if (!hasSingleInstanceLock) {
         const chrome = currentChromeStatus();
         createWindow(chrome.ready ? null : chromeRequiredPage(chrome));
         app.focus({ steal: true });
+        // 鉴权子系统在 app ready 后初始化（safeStorage 此时可用）；失败不阻塞启动。
+        void initAuth();
         if (chrome.ready) {
             try {
                 await ensureSharedBrowserHub();
@@ -605,6 +741,10 @@ if (!hasSingleInstanceLock) {
     });
 
     app.on('before-quit', event => {
+        if (activityReportTimer) {
+            clearTimeout(activityReportTimer);
+            activityReportTimer = null;
+        }
         if (backendRestartTimer) {
             clearTimeout(backendRestartTimer);
             backendRestartTimer = null;

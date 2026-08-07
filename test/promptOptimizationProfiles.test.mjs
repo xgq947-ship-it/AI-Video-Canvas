@@ -23,8 +23,29 @@ test('图片提示词优化配置包含人物、场景、道具各三种一致�
       'image-prop-front',
       'image-prop-angles',
       'image-prop-details',
+      'image-edit-surgical',
     ],
   );
+});
+
+test('手术式编辑 profile 输出 CHANGE / PRESERVE EXACTLY 三段式，且不强制改画幅', () => {
+  const edit = getPromptOptimizationProfile('image-edit-surgical');
+  assert.equal(edit.nodeType, 'image');
+  assert.equal(edit.aspectRatio, undefined);
+  assert.match(edit.systemInstruction, /CHANGE（只改这一处）/);
+  assert.match(edit.systemInstruction, /PRESERVE EXACTLY（逐项锁定）/);
+  assert.match(edit.systemInstruction, /ONLY CHANGE/);
+  assert.match(edit.systemInstruction, /一次只改一处/);
+});
+
+test('图片优化指令统一携带 LIRA 防翻车约束，视频优化不带', () => {
+  const imageInstruction = buildPromptOptimizationInstruction(getPromptOptimizationProfile('image-identity-front'));
+  assert.match(imageInstruction, /图片通用防翻车约束（LIRA 提炼，适用于全部图片任务）/);
+  assert.match(imageInstruction, /60\/30\/10 主辅点缀逻辑/);
+  assert.match(imageInstruction, /"painterly（绘画感）"会拉向概念艺术/);
+  assert.match(imageInstruction, /不出现真实人名、品牌名、IP 名/);
+  const videoInstruction = buildPromptOptimizationInstruction(getPromptOptimizationProfile('video'));
+  assert.doesNotMatch(videoInstruction, /图片通用防翻车约束/);
 });
 
 test('三种图片优化均完整携带角色库标准模板的关键结尾与禁止项', () => {

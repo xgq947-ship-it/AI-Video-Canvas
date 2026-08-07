@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   AlertCircle,
+  Captions,
   Check,
   ChevronLeft,
   ChevronDown,
@@ -27,8 +28,10 @@ import {
 import { NodeConnectors } from '../../components/canvas/NodeConnectors';
 import { LazyVideo } from '../../components/LazyVideo';
 import { GenerationCancelButton } from '../../components/canvas/GenerationCancelButton';
+import { LockedNodeOverlay } from '../../components/LockedNodeOverlay';
+import { useNodeLocked } from '../../hooks/useNodeLocked';
 import { GenerationElapsed } from '../../components/canvas/GenerationElapsed';
-import { NodeData, NodeType } from '../../types';
+import { NodeData, NodeStatus, NodeType } from '../../types';
 import type {
   CinematicCastMember,
   CinematicDirectorSettings,
@@ -245,6 +248,7 @@ const directorDefaults = normalizeCinematicSettings({});
 export const CinematicDirectorNode: React.FC<BaseProps & { onRun: (id: string) => void }> = props => {
   const { data, allNodes, onUpdate, onRun } = props;
   const dark = (props.canvasTheme || 'dark') === 'dark';
+  const locked = useNodeLocked(data.type);
   const { models, loading } = useCinematicDirectorModels();
   const state = normalizeCinematicSettings(data.cinematicDirector || directorDefaults) as typeof directorDefaults & CinematicDirectorSettings;
   const videoModels = listVideoGenerationProviders().filter(model => model.id === 'google-flow-omni-flash' || model.id === 'jimeng-seedance-2-0');
@@ -268,7 +272,7 @@ export const CinematicDirectorNode: React.FC<BaseProps & { onRun: (id: string) =
         {budget.errors.length > 0 && <div className="rounded-xl bg-red-500/10 px-3 py-2 text-[10px] text-red-300">{budget.errors[0]}</div>}
         {unsupportedAspect && <div className="rounded-xl bg-amber-500/10 px-3 py-2 text-[10px] text-amber-200">{selectedModel?.name} 不支持 {state.aspectRatio}；请切换为 16:9 / 9:16，或改用即梦 Seedance 2.0。</div>}
         {data.cinematicDirector?.error && <div className="rounded-xl bg-red-500/10 px-3 py-2 text-[10px] leading-4 text-red-300">{data.cinematicDirector.error}</div>}
-        <Button dark={dark} tone="primary" className="w-full" disabled={data.cinematicDirector?.status === 'running' || unsupportedAspect} onClick={() => onRun(data.id)} onPointerDown={stop}>{data.cinematicDirector?.status === 'running' ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}执行电影导演 Skill</Button>
+        {locked ? <LockedNodeOverlay dark={dark} /> : <Button dark={dark} tone="primary" className="w-full" disabled={data.cinematicDirector?.status === 'running' || unsupportedAspect} onClick={() => onRun(data.id)} onPointerDown={stop}>{data.cinematicDirector?.status === 'running' ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}执行电影导演 Skill</Button>}
         <div className={`flex items-center gap-2 rounded-xl px-3 py-2 text-[10px] ${dark ? 'bg-white/[0.04] text-neutral-400' : 'bg-neutral-50 text-neutral-500'}`}><Check size={12} className="text-emerald-400" />输入剧本与角色参考图后，生成可编辑的导演分镜 JSON</div>
       </div>
     </Shell>
@@ -368,15 +372,29 @@ const CinematicShotCard: React.FC<{ shot: CinematicShot; cast: CinematicCastMemb
   </div>;
 };
 
-export const CinematicVideoMergeNode: React.FC<BaseProps & { onMerge: (id: string) => void }> = props => {
-  const { data, allNodes, onUpdate, onMerge } = props;
+export const CinematicVideoMergeNode: React.FC<BaseProps & { onMerge: (id: string) => void; onGenerateSubtitles?: (id: string) => void }> = props => {
+  const { data, allNodes, onUpdate, onMerge, onGenerateSubtitles } = props;
   const dark = (props.canvasTheme || 'dark') === 'dark';
   const storyboard = allNodes.find(node => data.parentIds?.includes(node.id) && node.type === NodeType.CINEMATIC_STORYBOARD);
   const state = data.cinematicVideoMerge || { status: 'idle' as const, outputFormat: 'mp4' as const, fps: 30, skipFailed: true };
   const shots = storyboard?.cinematicStoryboard?.shots || [];
   const completed = shots.filter(shot => shot.generation.status === 'completed' && shot.generation.videoUrl).length;
+  const subtitleNode = allNodes.find(node => node.type === NodeType.VIDEO && node.subtitleSourceNodeId === data.id);
+  const subtitleGenerating = subtitleNode?.status === NodeStatus.LOADING && ['queued', 'extracting', 'transcribing', 'rendering'].includes(subtitleNode.subtitleJobStatus || 'queued');
+  const subtitleReady = subtitleNode?.status === NodeStatus.SUCCESS && Boolean(subtitleNode.resultUrl);
+  const subtitleFailed = subtitleNode?.status === NodeStatus.ERROR || subtitleNode?.subtitleJobStatus === 'failed';
   const update = (patch: Partial<typeof state>) => onUpdate(data.id, { cinematicVideoMerge: { ...state, ...patch } });
   return <Shell {...props} icon={<Merge size={20} />} label={data.title || '电影成片拼接'} subtitle={`${completed} 个已完成镜头 · 统一输出`} minHeight={CINEMATIC_VIDEO_MERGE_NODE_HEIGHT}>
-    <div className="space-y-3 px-5 py-4"><div className="grid grid-cols-2 gap-2"><Field dark={dark} label="输出格式"><Select dark={dark} value={state.outputFormat} onChange={event => update({ outputFormat: event.target.value as typeof state.outputFormat })} onPointerDown={stop}><option value="mp4">MP4 · H.264 + AAC</option><option value="mov">MOV</option><option value="webm">WebM</option></Select></Field><Field dark={dark} label="帧率"><Select dark={dark} value={String(state.fps)} onChange={event => update({ fps: Number(event.target.value) })} onPointerDown={stop}><option value="24">24 fps</option><option value="30">30 fps</option><option value="60">60 fps</option></Select></Field></div><label className={`flex items-center gap-2 text-[10px] ${muted(dark)}`}><input type="checkbox" checked={state.skipFailed} onChange={event => update({ skipFailed: event.target.checked })} onPointerDown={stop} className="accent-cyan-400" />跳过失败镜头继续拼接</label>{state.outputUrl && <LazyVideo src={state.outputUrl} loop={false} controls className="max-h-48 w-full rounded-xl bg-black object-contain" placeholderClassName="h-44 w-full rounded-xl bg-black" onPointerDown={stop} />}{state.error && <div className="rounded-xl bg-red-500/10 px-3 py-2 text-[10px] text-red-300">{state.error}</div>}<Button dark={dark} tone="primary" className="w-full" disabled={!completed || state.status === 'queued' || state.status === 'rendering'} onClick={() => onMerge(data.id)} onPointerDown={stop}>{state.status === 'queued' || state.status === 'rendering' ? <Loader2 size={13} className="animate-spin" /> : <Merge size={13} />} {state.status === 'success' ? '重新拼接' : '拼接最终视频'}</Button><div className={`text-[10px] ${muted(dark)}`}>{state.status === 'success' ? '成片已保存到当前项目' : '按分镜顺序调用现有视频拼接服务'}</div></div>
+    <div className="space-y-3 px-5 py-4">
+      <div className="grid grid-cols-2 gap-2"><Field dark={dark} label="输出格式"><Select dark={dark} value={state.outputFormat} onChange={event => update({ outputFormat: event.target.value as typeof state.outputFormat })} onPointerDown={stop}><option value="mp4">MP4 · H.264 + AAC</option><option value="mov">MOV</option><option value="webm">WebM</option></Select></Field><Field dark={dark} label="帧率"><Select dark={dark} value={String(state.fps)} onChange={event => update({ fps: Number(event.target.value) })} onPointerDown={stop}><option value="24">24 fps</option><option value="30">30 fps</option><option value="60">60 fps</option></Select></Field></div>
+      <label className={`flex items-center gap-2 text-[10px] ${muted(dark)}`}><input type="checkbox" checked={state.skipFailed} onChange={event => update({ skipFailed: event.target.checked })} onPointerDown={stop} className="accent-cyan-400" />跳过失败镜头继续拼接</label>
+      {state.outputUrl && <LazyVideo src={state.outputUrl} loop={false} controls className="max-h-48 w-full rounded-xl bg-black object-contain" placeholderClassName="h-44 w-full rounded-xl bg-black" onPointerDown={stop} />}
+      {state.error && <div className="rounded-xl bg-red-500/10 px-3 py-2 text-[10px] text-red-300">{state.error}</div>}
+      <Button dark={dark} tone="primary" className="w-full" disabled={!completed || state.status === 'queued' || state.status === 'rendering'} onClick={() => onMerge(data.id)} onPointerDown={stop}>{state.status === 'queued' || state.status === 'rendering' ? <Loader2 size={13} className="animate-spin" /> : <Merge size={13} />} {state.status === 'success' ? '重新拼接' : '拼接最终视频'}</Button>
+      <Button dark={dark} className="w-full" disabled={!state.outputUrl || subtitleGenerating} onClick={() => onGenerateSubtitles?.(data.id)} onPointerDown={stop}>{subtitleGenerating ? <Loader2 size={13} className="animate-spin" /> : <Captions size={13} />} {subtitleGenerating ? '字幕生成中…' : subtitleReady ? '重新生成字幕' : subtitleFailed ? '重试生成字幕' : '生成字幕'}</Button>
+      {subtitleGenerating && <div className={`text-[10px] ${muted(dark)}`}>正在识别成片音频并烧录字幕，完成后会在右侧生成字幕视频节点</div>}
+      {subtitleReady && <div className="text-[10px] text-emerald-400">字幕视频已生成到画布右侧，原始成片仍保留</div>}
+      <div className={`text-[10px] ${muted(dark)}`}>{state.status === 'success' ? '成片已保存到当前项目 · 默认继承每个镜头原声音频' : '按分镜顺序调用现有视频拼接服务'}</div>
+    </div>
   </Shell>;
 };

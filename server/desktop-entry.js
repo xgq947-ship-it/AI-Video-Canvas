@@ -6,6 +6,7 @@
  */
 import { startBackend } from './index.js';
 import { closeBrowserForShutdown } from './services/opsCliRunner.js';
+import { setLicenseState } from './services/licenseGuard.js';
 
 const host = process.env.HOST || '127.0.0.1';
 const configuredPort = Number(process.env.PORT);
@@ -39,7 +40,10 @@ const shutdown = () => {
 };
 
 process.parentPort?.on('message', event => {
-    if (event?.data?.type === 'shutdown') shutdown();
+    const data = event?.data;
+    if (data?.type === 'shutdown') shutdown();
+    // 主进程验完的 LicenseState（节点权限执行层守卫的唯一状态来源，见 licenseGuard.js）。
+    else if (data?.type === 'license-state') setLicenseState(data.state);
 });
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);

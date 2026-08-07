@@ -33,6 +33,8 @@ import { NodeConnectors } from '../../components/canvas/NodeConnectors';
 import { LazyVideo } from '../../components/LazyVideo';
 import { GenerationCancelButton } from '../../components/canvas/GenerationCancelButton';
 import { GenerationElapsed } from '../../components/canvas/GenerationElapsed';
+import { LockedNodeOverlay } from '../../components/LockedNodeOverlay';
+import { useNodeLocked } from '../../hooks/useNodeLocked';
 import { NodeData, NodeStatus, NodeType } from '../../types';
 import type { StickmanDirectorOutput, StickmanShot } from '../../../shared/stickmanDirector.js';
 import {
@@ -364,6 +366,7 @@ export const ReferenceVideoNode: React.FC<BaseProps & { workflowId?: string }> =
 export const StickmanDirectorNode: React.FC<BaseProps & { onRun: (id: string) => void }> = props => {
   const { data, onUpdate, onRun, allNodes } = props;
   const dark = (props.canvasTheme || 'dark') === 'dark';
+  const locked = useNodeLocked(data.type);
   const state = { provider: 'auto' as const, status: 'idle' as const, ...defaults, ...(data.director || {}) };
   const { models, loading: modelsLoading } = useStickmanDirectorModels();
   const sourceType = state.sourceType || (allNodes.some(node => data.parentIds?.includes(node.id) && (node.type === NodeType.VIDEO_ANALYSIS || node.type === NodeType.REFERENCE_VIDEO)) ? 'reference_video' : 'script');
@@ -438,7 +441,7 @@ export const StickmanDirectorNode: React.FC<BaseProps & { onRun: (id: string) =>
         {state.error && <div className="flex items-start gap-1.5 rounded-xl bg-red-500/10 px-3 py-2 text-[10px] leading-4 text-red-300"><AlertCircle size={12} className="mt-0.5 shrink-0" />{state.error}</div>}
         {sourceType === 'reference_video' && !analysisScriptReady && <div className={`rounded-xl px-3 py-2 text-[10px] leading-4 ${dark ? 'bg-cyan-400/10 text-cyan-200' : 'bg-cyan-50 text-cyan-700'}`}>执行时先分析参考视频并生成剧本，再由火柴人导演 Skill 重新推导镜头。</div>}
         {analysisScriptReady && <div className={`rounded-xl px-3 py-2 text-[10px] leading-4 ${dark ? 'bg-emerald-400/10 text-emerald-200' : 'bg-emerald-50 text-emerald-700'}`}>已生成视频分析剧本；最终分镜仍由火柴人导演 Skill 决定。</div>}
-        <Button dark={dark} tone="primary" className="w-full" disabled={state.status === 'running'} onClick={() => onRun(data.id)} onPointerDown={stop}>{state.status === 'running' ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />} {state.status === 'running' ? '正在规划…' : output ? '重新规划分镜' : '执行火柴人导演 Skill'}</Button>
+        {locked ? <LockedNodeOverlay dark={dark} /> : <Button dark={dark} tone="primary" className="w-full" disabled={state.status === 'running'} onClick={() => onRun(data.id)} onPointerDown={stop}>{state.status === 'running' ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />} {state.status === 'running' ? '正在规划…' : output ? '重新规划分镜' : '执行火柴人导演 Skill'}</Button>}
         <div className={`flex items-center gap-1.5 text-[10px] ${muted(dark)}`}><ScanSearch size={12} />输入来源：{sourceType === 'reference_video' ? '参考视频（先生成剧本）' : analysisScriptReady ? '视频分析剧本 → 导演 Skill' : '剧本输入'}</div>
       </div>
     </Shell>

@@ -1,0 +1,11 @@
+# 本地密钥与 wrangler 状态，绝不入库
+.dev.vars
+.wrangler/
+node_modules/
+dist/
+# 一次性生产密钥输出（生成后立即用 wrangler secret put 消费，不留存）
+.prod-secrets/
+# 生产 LICENSE_CODE_SALT——跟上面那些不同，这是运营方要长期反复使用的密钥
+# （每次生成新授权码都要用它算哈希），不能删。管理员自己安全保管（建议同时存进
+# 密码管理器）。生成方式见 scripts/generate-license-codes.mjs 的用法说明。
+.license-code-salt

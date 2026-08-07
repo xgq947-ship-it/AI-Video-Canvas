@@ -3087,6 +3087,97 @@ export default function App() {
     }
   }, [canvasEditLock, nodes, setNodes, setSelectedNodeIds, showToast, updateNode, workflowId]);
 
+  const handleGenerateCinematicSubtitles = React.useCallback(async (mergeNodeId: string) => {
+    if (!canvasEditLock.guard()) return;
+    if (!workflowId) {
+      showToast('请先新建或打开项目', { tone: 'error' });
+      return;
+    }
+
+    const current = nodesRef.current;
+    const source = current.find(node => node.id === mergeNodeId && node.type === NodeType.CINEMATIC_VIDEO_MERGE);
+    const sourceVideoUrl = source?.cinematicVideoMerge?.outputUrl;
+    if (!source || !sourceVideoUrl) {
+      showToast('请先拼接出电影成片，再生成字幕', { tone: 'error' });
+      return;
+    }
+
+    const existing = current.find(node => node.type === NodeType.VIDEO && node.subtitleSourceNodeId === mergeNodeId);
+    const active = existing?.status === NodeStatus.LOADING
+      && ['queued', 'extracting', 'transcribing', 'rendering'].includes(existing.subtitleJobStatus || 'queued');
+    if (subtitleLaunchesRef.current.has(mergeNodeId) || active) {
+      showToast('电影成片字幕正在生成');
+      return;
+    }
+
+    subtitleLaunchesRef.current.add(mergeNodeId);
+    const resultNodeId = existing?.id || crypto.randomUUID();
+    const targetX = source.x + 485;
+    let targetY = source.y;
+    while (current.some(node => node.id !== existing?.id && Math.abs(node.x - targetX) < 390 && Math.abs(node.y - targetY) < 280)) {
+      targetY += 320;
+    }
+    const resultNode: NodeData = {
+      ...(existing || {}),
+      id: resultNodeId,
+      type: NodeType.VIDEO,
+      title: '电影字幕成片',
+      x: existing?.x ?? targetX,
+      y: existing?.y ?? targetY,
+      prompt: '',
+      status: NodeStatus.LOADING,
+      resultUrl: undefined,
+      parentIds: [mergeNodeId],
+      model: '自动字幕',
+      videoModel: '自动字幕',
+      aspectRatio: existing?.aspectRatio || '9:16',
+      resolution: existing?.resolution || 'Auto',
+      subtitleSourceNodeId: mergeNodeId,
+      subtitleJobId: undefined,
+      subtitleJobStatus: 'queued',
+      subtitleJobStage: 'queued',
+      subtitleJobProgress: 0,
+      subtitleSegments: undefined,
+      errorMessage: undefined,
+    };
+    setNodes(previous => previous.some(node => node.id === resultNodeId)
+      ? previous.map(node => node.id === resultNodeId ? resultNode : node)
+      : [...previous, resultNode]);
+    setSelectedNodeIds([resultNodeId]);
+    showToast('正在识别电影成片音频并生成字幕视频…', { duration: 5000 });
+
+    try {
+      const response = await fetch('/api/auto-subtitles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workflowId,
+          sourceNodeId: mergeNodeId,
+          resultNodeId,
+          sourceVideoUrl,
+        }),
+      });
+      const job = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(job.error || '电影字幕任务提交失败');
+      updateNode(resultNodeId, {
+        subtitleJobId: job.jobId,
+        subtitleJobStatus: job.status,
+        subtitleJobStage: job.stage,
+        subtitleJobProgress: job.progress,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '电影字幕任务提交失败';
+      updateNode(resultNodeId, {
+        status: NodeStatus.ERROR,
+        subtitleJobStatus: 'failed',
+        errorMessage: message,
+      });
+      showToast(message, { tone: 'error', duration: TOAST_PERSIST });
+    } finally {
+      subtitleLaunchesRef.current.delete(mergeNodeId);
+    }
+  }, [canvasEditLock, setNodes, setSelectedNodeIds, showToast, updateNode, workflowId]);
+
   // ============================================================================
   // EVENT HANDLERS
   // ============================================================================
@@ -3371,6 +3462,7 @@ export default function App() {
     pauseCinematicBatch,
     resumeCinematicBatch,
     handleMergeCinematicVideos,
+    handleGenerateCinematicSubtitles,
     handleDuplicate,
     handleNodePointerDown,
     setSelectedNodeIds,
@@ -3430,6 +3522,7 @@ export default function App() {
     onPauseCinematicBatch: (id: string) => nodeCallbacksRef.current.pauseCinematicBatch(id),
     onResumeCinematicBatch: (id: string) => nodeCallbacksRef.current.resumeCinematicBatch(id),
     onMergeCinematicVideos: (id: string) => nodeCallbacksRef.current.handleMergeCinematicVideos(id),
+    onGenerateCinematicSubtitles: (id: string) => nodeCallbacksRef.current.handleGenerateCinematicSubtitles(id),
     onNodePointerDown: (e: React.PointerEvent, id: string) => {
       setSelectedConnection(null);
       const current = nodeCallbacksRef.current;
@@ -3710,6 +3803,7 @@ export default function App() {
                 onPauseCinematicBatch={stableNodeHandlers.onPauseCinematicBatch}
                 onResumeCinematicBatch={stableNodeHandlers.onResumeCinematicBatch}
                 onMergeCinematicVideos={stableNodeHandlers.onMergeCinematicVideos}
+                onGenerateCinematicSubtitles={stableNodeHandlers.onGenerateCinematicSubtitles}
                 zoom={viewport.zoom}
                 onMouseEnter={handleNodeMouseEnter}
                 onMouseLeave={handleNodeMouseLeave}

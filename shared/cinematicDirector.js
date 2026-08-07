@@ -699,6 +699,11 @@ export const buildCinematicMergeManifest = ({
       file: shot.videoUrl,
       start: 0,
       end: Math.max(0.1, Number(shot.duration) || 5),
+      // 电影镜头本身已经由视频模型生成原生音频；拼接时默认继承，
+      // 只有调用方明确传入 0 才静音。
+      volume: Number.isFinite(Number(shot.volume))
+        ? Math.max(0, Math.min(1, Number(shot.volume)))
+        : 1,
       order: index + 1,
       transition: shot.transition === 'fade' ? 'fade' : 'hard_cut',
     }));

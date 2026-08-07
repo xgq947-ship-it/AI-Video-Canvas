@@ -262,6 +262,10 @@ export const buildStickmanMergeManifest = ({
       file: shot.videoUrl,
       start: 0,
       end: Math.max(0.1, Number(shot.duration) || 5),
+      // 视频生成节点的原片音频默认保留；只有明确传入 0 才静音。
+      volume: Number.isFinite(Number(shot.volume))
+        ? Math.max(0, Math.min(1, Number(shot.volume)))
+        : 1,
       order: index + 1,
       transition: shot.transition === 'fade' ? 'fade' : 'hard_cut',
     }));

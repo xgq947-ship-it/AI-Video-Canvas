@@ -34,6 +34,32 @@ contextBridge.exposeInMainWorld('evanDesktop', {
         openDownload: () => ipcRenderer.invoke('chrome:open-download'),
         retry: () => ipcRenderer.invoke('chrome:retry')
     },
+    auth: {
+        getConfig: () => ipcRenderer.invoke('auth:get-config'),
+        getState: () => ipcRenderer.invoke('auth:get-state'),
+        signIn: () => ipcRenderer.invoke('auth:sign-in'),
+        signOut: () => ipcRenderer.invoke('auth:sign-out'),
+        /** 订阅主进程推送的登录状态；返回取消订阅函数。 */
+        onState: (callback) => {
+            const listener = (_event, payload) => callback(payload);
+            ipcRenderer.on('desktop:auth-state', listener);
+            return () => ipcRenderer.removeListener('desktop:auth-state', listener);
+        }
+    },
+    device: {
+        getInfo: () => ipcRenderer.invoke('device:get-info')
+    },
+    license: {
+        getState: () => ipcRenderer.invoke('license:get-state'),
+        refresh: () => ipcRenderer.invoke('license:refresh'),
+        activate: (licenseCode) => ipcRenderer.invoke('license:activate', licenseCode),
+        /** 订阅主进程推送的试用/授权状态；返回取消订阅函数。 */
+        onState: (callback) => {
+            const listener = (_event, payload) => callback(payload);
+            ipcRenderer.on('desktop:license-state', listener);
+            return () => ipcRenderer.removeListener('desktop:license-state', listener);
+        }
+    },
     updates: {
         getState: () => ipcRenderer.invoke('update:get-state'),
         check: () => ipcRenderer.invoke('update:check'),

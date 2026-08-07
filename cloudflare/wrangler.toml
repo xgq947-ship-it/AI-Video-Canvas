@@ -1,0 +1,29 @@
+name = "ai-canvas-auth"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+# P5 签发永久许可证用 WebCrypto 原生 Ed25519（crypto.subtle importKey/sign 'Ed25519'），
+# 由 compatibility_date 启用，不需要 nodejs_compat。
+
+# D1 迁移目录（相对本文件）
+migrations_dir = "migrations"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ai-canvas-auth"
+database_id = "fc19240d-3e75-409e-bfb8-1673035362a0"
+
+# 非机密变量。机密（GOOGLE_CLIENT_SECRET / SESSION_SIGNING_SECRET /
+# LICENSE_PRIVATE_KEY / LICENSE_CODE_SALT / ADMIN_SECRET）本地放 .dev.vars，
+# 生产用 `wrangler secret put` 注入，绝不写这里。
+#
+# 这里的值是生产值（`wrangler deploy` 直接用）。本地开发不改这里——
+# cloudflare/.dev.vars 里同名的 APP_ORIGIN / GOOGLE_REDIRECT_URI 会覆盖掉，
+# `wrangler dev` 照旧指向 localhost:8788，不受这份生产配置影响。
+[vars]
+APP_ORIGIN = "https://ai-canvas-auth.xgq-clash.workers.dev"
+GOOGLE_REDIRECT_URI = "https://ai-canvas-auth.xgq-clash.workers.dev/auth/google/callback"
+ACCESS_TOKEN_TTL_SECONDS = "3600"
+REFRESH_TOKEN_TTL_DAYS = "180"
+DESKTOP_LOGIN_CODE_TTL_SECONDS = "120"
+# 桌面回调只允许跳这些 loopback 主机，防开放重定向
+ALLOWED_LOOPBACK_HOSTS = "127.0.0.1,localhost"

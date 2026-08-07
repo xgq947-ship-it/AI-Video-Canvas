@@ -3,6 +3,8 @@ import {
   listCinematicDirectorModels,
   runCinematicDirector,
 } from '../services/cinematicDirector.js';
+import { requireFeature } from '../services/licenseGuard.js';
+import { FEATURE_KEYS } from '../../shared/licenseFeatures.js';
 
 const router = express.Router();
 
@@ -10,7 +12,9 @@ router.get('/skills/cinematic-director/models', (req, res) => {
   res.json({ models: listCinematicDirectorModels(req.app) });
 });
 
-router.post('/skills/cinematic-director/run', async (req, res) => {
+// 电影导演是本期高级节点（导演工作流），执行前必须再次校验授权状态——
+// 这一层不可绕过，UI 上的禁用/锁定只是好看，真正的判定在这里（文档 §13）。
+router.post('/skills/cinematic-director/run', requireFeature(FEATURE_KEYS.DIRECTOR_WORKFLOW), async (req, res) => {
   try {
     const body = req.body || {};
     const provider = body.model?.provider || body.provider || 'auto';

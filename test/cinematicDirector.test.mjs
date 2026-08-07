@@ -125,6 +125,7 @@ test('导演输出 JSON 可修复、可校验，重新规划保留未变镜头�
   assert.equal(rollupCinematicGenerationStatus(preserved).batchStatus, 'completed');
   const manifest = buildCinematicMergeManifest({ workflowId: 'demo', shots: [{ id: 'shot_02', order: 2, status: 'completed', videoUrl: '/2.mp4' }, { id: 'shot_01', order: 1, status: 'completed', videoUrl: '/1.mp4' }] });
   assert.deepEqual(manifest.shots.map(item => item.id), ['shot_01', 'shot_02']);
+  assert.deepEqual(manifest.shots.map(item => item.volume), [1, 1], '电影拼接默认继承每个原片音频');
 });
 
 test('电影工作流连接规则固定为剧本 + 角色 → 导演 → 分镜 → 拼接', () => {

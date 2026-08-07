@@ -83,6 +83,7 @@ interface CanvasNodeProps {
   onPauseCinematicBatch?: (nodeId: string) => void;
   onResumeCinematicBatch?: (nodeId: string) => void;
   onMergeCinematicVideos?: (nodeId: string) => void;
+  onGenerateCinematicSubtitles?: (nodeId: string) => void;
   zoom: number;
   // 悬停回调带上 nodeId，调用方才能传稳定的引用（否则每次 render 都是新箭头函数，
   // React.memo 会全部失效）。
@@ -166,6 +167,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   onPauseCinematicBatch,
   onResumeCinematicBatch,
   onMergeCinematicVideos,
+  onGenerateCinematicSubtitles,
   zoom,
   onMouseEnter,
   onMouseLeave,
@@ -353,7 +355,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   }
 
   if (data.type === NodeType.CINEMATIC_VIDEO_MERGE) {
-    return <CinematicVideoMergeNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onNodePointerDown, onContextMenu, onConnectorDown, workflowId, onMerge: onMergeCinematicVideos || (() => undefined) } as any)} />;
+    return <CinematicVideoMergeNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onNodePointerDown, onContextMenu, onConnectorDown, workflowId, onMerge: onMergeCinematicVideos || (() => undefined), onGenerateSubtitles: onGenerateCinematicSubtitles } as any)} />;
   }
 
   if (data.type === NodeType.STORYBOARD || data.type === NodeType.STORYBOARD_COMPARE) {

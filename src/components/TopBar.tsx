@@ -5,11 +5,13 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, CircleHelp, FolderOpen, Globe2, KeyRound, Loader2, Plus, RefreshCw, Save, Settings, Trash2 } from 'lucide-react';
+import { ChevronDown, CircleHelp, FolderOpen, Globe2, KeyRound, Loader2, Plus, RefreshCw, Save, Settings, ShieldCheck, Trash2 } from 'lucide-react';
 import { NodeData } from '../types';
 import { ApiKeySettingsModal } from './modals/ApiKeySettingsModal';
 import { StartupSetupGuideModal } from './modals/StartupSetupGuideModal';
 import { TrashModal } from './modals/TrashModal';
+import { AccountLicenseSettings } from './AccountLicenseSettings';
+import { useLoginEnabled } from '../hooks/useAuth';
 
 /**
  * 首启配置指南「本机已见过」标记。首次安装时自动弹一次登录/配置指南，
@@ -80,6 +82,8 @@ export const TopBar: React.FC<TopBarProps> = ({
     const [showTrash, setShowTrash] = useState(false);
     const [isOpeningBrowser, setIsOpeningBrowser] = useState(false);
     const [browserOpenError, setBrowserOpenError] = useState<string | null>(null);
+    const [showAccountSettings, setShowAccountSettings] = useState(false);
+    const loginEnabled = useLoginEnabled();
     const settingsMenuRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -296,6 +300,21 @@ export const TopBar: React.FC<TopBarProps> = ({
                         </button>
                         {showSettingsMenu && (
                             <div className={`absolute right-0 top-full mt-2 w-52 overflow-hidden rounded-xl border p-1.5 shadow-2xl ${canvasTheme === 'dark' ? 'border-neutral-700 bg-[#202020]' : 'border-neutral-200 bg-white'}`}>
+                                {loginEnabled && (
+                                    <button
+                                        onClick={() => {
+                                            setShowSettingsMenu(false);
+                                            setShowAccountSettings(true);
+                                        }}
+                                        className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${canvasTheme === 'dark' ? 'text-neutral-200 hover:bg-neutral-700' : 'text-neutral-700 hover:bg-neutral-100'}`}
+                                    >
+                                        <ShieldCheck size={16} className="text-emerald-400" />
+                                        <span>
+                                            <span className="block font-medium">账号与授权</span>
+                                            <span className="mt-0.5 block text-[10px] text-neutral-500">登录状态、试用与激活</span>
+                                        </span>
+                                    </button>
+                                )}
                                 <button
                                     onClick={() => {
                                         setShowSettingsMenu(false);
@@ -438,6 +457,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 onRestoreNodes={onRestoreNodes}
                 canvasTheme={canvasTheme}
             />
+            {showAccountSettings && <AccountLicenseSettings onClose={() => setShowAccountSettings(false)} />}
         </>
     );
 };

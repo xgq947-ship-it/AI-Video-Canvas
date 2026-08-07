@@ -8,7 +8,7 @@ interface Options {
   onFailed?: (message: string) => void;
 }
 
-const ACTIVE = new Set(['queued', 'extracting', 'transcribing', 'rendering']);
+const ACTIVE = new Set(['queued', 'extracting', 'transcribing', 'aligning', 'punctuating', 'rendering']);
 
 /**
  * 把"当前有哪些字幕任务在跑"压成一个稳定字符串。
@@ -88,7 +88,12 @@ export const useAutoSubtitleRecovery = ({ nodes, updateNode, onCompleted, onFail
             subtitleJobStatus: 'success',
             subtitleJobStage: 'done',
             subtitleJobProgress: 1,
+            subtitleAlignmentQuality: job.alignmentQuality,
+            subtitleTranscriptionEngine: job.transcriptionEngine,
+            subtitleFormat: job.subtitleFormat,
             subtitleSegments: job.subtitles || [],
+            model: job.alignmentQuality === 'word' ? '精准字幕 · 词级对齐' : '自动字幕 · 段落估时',
+            videoModel: job.alignmentQuality === 'word' ? '精准字幕 · 词级对齐' : '自动字幕 · 段落估时',
             prompt: (job.subtitles || []).map((segment: { text: string }) => segment.text).join(''),
             errorMessage: undefined,
           });

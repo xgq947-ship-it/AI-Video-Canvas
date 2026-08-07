@@ -282,10 +282,10 @@ export default function App() {
 
   // Wrap handleWheel to pass hovered node for zoom-to-center
   const handleWheel = (e: React.WheelEvent) => {
-    // 节点内部的 textarea、下拉框和列表需要优先消费滚轮事件。
-    // 如果继续把事件交给画布，普通滚轮会平移画布，用户就无法精确滚动节点内容。
-    // 统一按 data-node-id 判断，覆盖所有节点类型和节点控制面板。
-    if (e.target instanceof Element && e.target.closest('[data-node-id]')) return;
+    // 节点内部的 textarea、下拉框和列表继续优先消费普通滚轮事件，
+    // 但 Ctrl/Cmd + 滚轮属于画布缩放，鼠标悬停在节点内时也必须放行。
+    const isZoomGesture = e.ctrlKey || e.metaKey;
+    if (!isZoomGesture && e.target instanceof Element && e.target.closest('[data-node-id]')) return;
 
     const hoveredId = canvasHoveredNodeIdRef.current;
     const hoveredNode = hoveredId ? nodes.find(n => n.id === hoveredId) : undefined;
@@ -3019,7 +3019,7 @@ export default function App() {
     if (subtitleLaunchesRef.current.has(sourceNodeId) || nodes.some(node =>
       node.subtitleSourceNodeId === sourceNodeId &&
       node.status === NodeStatus.LOADING &&
-      ['queued', 'extracting', 'transcribing', 'rendering'].includes(node.subtitleJobStatus || 'queued')
+      ['queued', 'extracting', 'transcribing', 'aligning', 'punctuating', 'rendering'].includes(node.subtitleJobStatus || 'queued')
     )) {
       showToast('这个视频正在生成字幕');
       return;
@@ -3104,7 +3104,7 @@ export default function App() {
 
     const existing = current.find(node => node.type === NodeType.VIDEO && node.subtitleSourceNodeId === mergeNodeId);
     const active = existing?.status === NodeStatus.LOADING
-      && ['queued', 'extracting', 'transcribing', 'rendering'].includes(existing.subtitleJobStatus || 'queued');
+      && ['queued', 'extracting', 'transcribing', 'aligning', 'punctuating', 'rendering'].includes(existing.subtitleJobStatus || 'queued');
     if (subtitleLaunchesRef.current.has(mergeNodeId) || active) {
       showToast('电影成片字幕正在生成');
       return;

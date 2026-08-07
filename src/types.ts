@@ -218,9 +218,12 @@ export interface NodeData {
   videoSourceTitle?: string;
   subtitleSourceNodeId?: string; // 带字幕视频对应的源视频节点
   subtitleJobId?: string;
-  subtitleJobStatus?: 'queued' | 'extracting' | 'transcribing' | 'rendering' | 'success' | 'failed' | 'cancelled';
+  subtitleJobStatus?: 'queued' | 'extracting' | 'transcribing' | 'aligning' | 'punctuating' | 'rendering' | 'success' | 'failed' | 'cancelled';
   subtitleJobStage?: string;
   subtitleJobProgress?: number;
+  subtitleAlignmentQuality?: 'word' | 'estimated';
+  subtitleTranscriptionEngine?: string;
+  subtitleFormat?: 'ass';
   subtitleSegments?: Array<{ id: string; text: string; start: number; end: number }>;
 
   // Video timing/edit metadata

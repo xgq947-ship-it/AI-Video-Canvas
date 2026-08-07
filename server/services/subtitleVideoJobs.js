@@ -4,25 +4,30 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import OpenAI from 'openai';
-import { isTransientRemotionServerError, normalizeTranscriptionSegments } from '../../shared/autoSubtitles.js';
+import {
+  buildAlignedSubtitles,
+  buildAlignedSubtitlesFromBreakPlan,
+  generateAssDocument,
+  normalizeTimedWords,
+  normalizeTranscriptionSegments,
+} from '../../shared/autoSubtitles.js';
 import { resolveAssetPath } from '../utils/manifestAssets.js';
 import { FFMPEG_PATH, FFPROBE_PATH } from '../runtime/mediaTools.js';
-import { _resetBundleCache, renderManifest } from './remotionRender.js';
-import { runGeminiWebMediaTextTask } from './geminiWebWorkflow.js';
+import { runGeminiWebMediaTextTask, runGeminiWebTextTask } from './geminiWebWorkflow.js';
 import { decodeProcessOutput } from '../utils/processOutput.js';
 
 const jobs = new Map();
 const activeBySource = new Map();
-const ACTIVE = new Set(['queued', 'extracting', 'transcribing', 'rendering']);
+const ACTIVE = new Set(['queued', 'extracting', 'transcribing', 'aligning', 'punctuating', 'rendering']);
 const RETENTION_MS = 30 * 60_000;
-let renderQueue = Promise.resolve();
+let encodeQueue = Promise.resolve();
 
-const runInRenderQueue = (job, task) => {
-  const queued = renderQueue.then(async () => {
+const runInEncodeQueue = (job, task) => {
+  const queued = encodeQueue.then(async () => {
     if (job.status === 'cancelled') throw new Error('任务已取消');
     return task();
   });
-  renderQueue = queued.catch(() => {});
+  encodeQueue = queued.catch(() => {});
   return queued;
 };
 
@@ -39,6 +44,41 @@ const parseGeminiSegments = (text) => {
   }
 };
 
+const parseBreakPlan = (text) => {
+  const source = String(text || '').replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+  const start = source.indexOf('[');
+  const end = source.lastIndexOf(']');
+  if (start < 0 || end <= start) return [];
+  try {
+    const parsed = JSON.parse(source.slice(start, end + 1));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const requestChineseBreakPlan = async ({ words, signal, workflowId, sourceNodeId }) => {
+  if (!Array.isArray(words) || words.length < 2 || words.length > 450) return [];
+  const indexedWords = words
+    .map((word, index) => `${index}:[${word.start.toFixed(2)}-${word.end.toFixed(2)}]${word.text}`)
+    .join('\n');
+  const prompt = [
+    '你只负责给中文口播选择自然断句点。禁止改字、删字、加词或调整顺序。',
+    '下面每行是“词下标:[开始秒-结束秒]识别原文”。只返回 JSON 数组，不要 Markdown。',
+    '每项格式：{"endWord":整数,"punctuation":"，或。或！或？或；或：或空字符串"}。',
+    'endWord 表示本条字幕最后一个词的下标，必须严格递增；每条尽量 6—16 个汉字，最长不超过 16 个字或 5 秒。',
+    '最后一项必须覆盖最后一个词。标点只用于显示，不能替代或修改原文。',
+    indexedWords,
+  ].join('\n');
+  const answer = await runGeminiWebTextTask({
+    prompt,
+    signal,
+    workflowId,
+    nodeId: sourceNodeId,
+  });
+  return parseBreakPlan(answer);
+};
+
 const transcribeSpeech = async ({ audioPath, duration, openaiApiKey, signal, workflowId, sourceNodeId }) => {
   if (openaiApiKey) {
     try {
@@ -48,10 +88,20 @@ const transcribeSpeech = async ({ audioPath, duration, openaiApiKey, signal, wor
         model: 'whisper-1',
         language: 'zh',
         response_format: 'verbose_json',
-        timestamp_granularities: ['segment'],
+        timestamp_granularities: ['word', 'segment'],
         temperature: 0,
       }, { signal });
-      return normalizeTranscriptionSegments(transcript.segments, duration, transcript.text);
+      const words = normalizeTimedWords(transcript.words, duration);
+      if (words.length > 0) {
+        return { words, segments: transcript.segments || [], text: transcript.text || '', engine: 'openai-whisper-word', alignmentQuality: 'word' };
+      }
+      return {
+        words: [],
+        segments: normalizeTranscriptionSegments(transcript.segments, duration, transcript.text),
+        text: transcript.text || '',
+        engine: 'openai-whisper-segment',
+        alignmentQuality: 'estimated',
+      };
     } catch (error) {
       if (signal?.aborted) throw error;
       console.warn(`[AutoSubtitle] OpenAI 转写失败，改用 Gemini Web：${error?.message || error}`);
@@ -72,7 +122,13 @@ const transcribeSpeech = async ({ audioPath, duration, openaiApiKey, signal, wor
     nodeId: sourceNodeId,
   });
   const segments = parseGeminiSegments(answer);
-  return normalizeTranscriptionSegments(segments, duration);
+  return {
+    words: [],
+    segments: normalizeTranscriptionSegments(segments, duration),
+    text: segments.map(segment => segment?.text || '').join(''),
+    engine: 'gemini-web-segment',
+    alignmentQuality: 'estimated',
+  };
 };
 
 const publicView = (job) => ({
@@ -87,6 +143,9 @@ const publicView = (job) => ({
   subtitles: job.subtitles,
   durationSec: job.durationSec,
   resultAspectRatio: job.resultAspectRatio,
+  transcriptionEngine: job.transcriptionEngine,
+  alignmentQuality: job.alignmentQuality,
+  subtitleFormat: job.subtitleFormat,
   error: job.error,
   createdAt: job.createdAt,
   updatedAt: job.updatedAt,
@@ -99,8 +158,8 @@ const setStage = (job, stage, progress) => {
   job.updatedAt = new Date().toISOString();
 };
 
-const runProcess = (command, args, job) => new Promise((resolve, reject) => {
-  const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+const runProcess = (command, args, job, options = {}) => new Promise((resolve, reject) => {
+  const child = spawn(command, args, { cwd: options.cwd, stdio: ['ignore', 'pipe', 'pipe'] });
   job.child = child;
   const stdout = [];
   const stderr = [];
@@ -173,6 +232,7 @@ export const createSubtitleVideoJob = ({
     id, workflowId, sourceNodeId, resultNodeId, sourceVideoUrl, sourcePath,
     status: 'queued', stage: 'queued', progress: 0, outputUrl: null, outputPath: null,
     subtitles: [], durationSec: null, resultAspectRatio: null, error: null,
+    transcriptionEngine: null, alignmentQuality: null, subtitleFormat: null,
     createdAt: now, updatedAt: now, child: null, canceller: null, abortController: new AbortController(),
   };
   jobs.set(id, job);
@@ -200,7 +260,7 @@ export const createSubtitleVideoJob = ({
       if (!fs.existsSync(audioPath) || fs.statSync(audioPath).size < 1024) throw new Error('未检测到有效人声');
 
       setStage(job, 'transcribing', 0.22);
-      const subtitles = await transcribeSpeech({
+      const transcription = await transcribeSpeech({
         audioPath,
         duration: metadata.duration,
         openaiApiKey,
@@ -208,51 +268,55 @@ export const createSubtitleVideoJob = ({
         workflowId,
         sourceNodeId,
       });
+      job.transcriptionEngine = transcription.engine;
+      job.alignmentQuality = transcription.alignmentQuality;
+
+      setStage(job, 'aligning', 0.42);
+      let subtitles = transcription.words.length > 0
+        ? buildAlignedSubtitles(transcription.words, metadata.duration)
+        : transcription.segments;
+
+      if (transcription.words.length > 0) {
+        setStage(job, 'punctuating', 0.52);
+        try {
+          const breakPlan = await requestChineseBreakPlan({
+            words: transcription.words,
+            signal: job.abortController.signal,
+            workflowId,
+            sourceNodeId,
+          });
+          const aiSubtitles = buildAlignedSubtitlesFromBreakPlan(
+            transcription.words,
+            metadata.duration,
+            breakPlan,
+          );
+          if (aiSubtitles.length > 0) subtitles = aiSubtitles;
+        } catch (error) {
+          if (job.abortController.signal.aborted) throw error;
+          console.warn(`[AutoSubtitle] AI 中文断句不可用，保留词级时间轴并使用本地断句：${error?.message || error}`);
+        }
+      }
       if (subtitles.length === 0) throw new Error('未识别到有效口播');
       job.subtitles = subtitles;
 
-      setStage(job, 'rendering', 0.38);
+      setStage(job, 'rendering', 0.65);
       fs.mkdirSync(outputDir, { recursive: true });
       const outputName = `subtitle_${Date.now()}_${id.slice(0, 8)}.mp4`;
       job.outputPath = path.join(outputDir, outputName);
-      const manifest = {
-        project: { id: `subtitle-${workflowId}-${sourceNodeId}`, title: '字幕视频' },
-        composition: {
-          width: metadata.width,
-          height: metadata.height,
-          fps: Math.max(1, Math.round(metadata.fps)),
-        },
-        shots: [{ id: sourceNodeId, name: '源视频', file: sourceVideoUrl, start: 0, end: metadata.duration, volume: 1, order: 1 }],
-        audioTracks: [],
-        subtitles,
-        output: { endFadeToBlack: 0, subtitleStyle: 'short-video', fileName: outputName },
-      };
-      let cancelSignal;
-      const { makeCancelSignal } = await import('@remotion/renderer');
-      const cancellation = makeCancelSignal();
-      cancelSignal = cancellation.cancelSignal;
-      job.canceller = cancellation.cancel;
-      const renderOptions = {
-        manifest,
-        libraryDir,
-        outputPath: job.outputPath,
-        cancelSignal,
-        master: false,
-        onProgress: ({ progress }) => {
-          job.progress = 0.38 + progress * 0.61;
-          job.updatedAt = new Date().toISOString();
-        },
-      };
-      await runInRenderQueue(job, async () => {
-        try {
-          await renderManifest(renderOptions);
-        } catch (error) {
-          if (!isTransientRemotionServerError(error) || job.status === 'cancelled') throw error;
-          console.warn('[AutoSubtitle] Remotion 本地服务瞬时不可用，重新打包后重试一次');
-          _resetBundleCache();
-          fs.rmSync(job.outputPath, { force: true });
-          await renderManifest(renderOptions);
-        }
+      const assPath = path.join(tempDir, 'captions.ass');
+      fs.writeFileSync(assPath, generateAssDocument(subtitles, metadata), 'utf8');
+      job.subtitleFormat = 'ass';
+      await runInEncodeQueue(job, async () => {
+        await runProcess(FFMPEG_PATH, [
+          '-y', '-hide_banner', '-loglevel', 'error',
+          '-i', sourcePath,
+          '-map', '0:v:0', '-map', '0:a?',
+          '-vf', 'ass=captions.ass',
+          '-c:v', 'libx264', '-preset', 'medium', '-crf', '18',
+          '-c:a', 'aac', '-b:a', '192k',
+          '-movflags', '+faststart',
+          job.outputPath,
+        ], job, { cwd: tempDir });
       });
       job.outputUrl = `${outputUrlPrefix}/${encodeURIComponent(outputName)}`;
       job.status = 'success';

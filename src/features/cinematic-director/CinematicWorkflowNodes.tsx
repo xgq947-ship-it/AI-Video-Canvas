@@ -380,7 +380,7 @@ export const CinematicVideoMergeNode: React.FC<BaseProps & { onMerge: (id: strin
   const shots = storyboard?.cinematicStoryboard?.shots || [];
   const completed = shots.filter(shot => shot.generation.status === 'completed' && shot.generation.videoUrl).length;
   const subtitleNode = allNodes.find(node => node.type === NodeType.VIDEO && node.subtitleSourceNodeId === data.id);
-  const subtitleGenerating = subtitleNode?.status === NodeStatus.LOADING && ['queued', 'extracting', 'transcribing', 'rendering'].includes(subtitleNode.subtitleJobStatus || 'queued');
+  const subtitleGenerating = subtitleNode?.status === NodeStatus.LOADING && ['queued', 'extracting', 'transcribing', 'aligning', 'punctuating', 'rendering'].includes(subtitleNode.subtitleJobStatus || 'queued');
   const subtitleReady = subtitleNode?.status === NodeStatus.SUCCESS && Boolean(subtitleNode.resultUrl);
   const subtitleFailed = subtitleNode?.status === NodeStatus.ERROR || subtitleNode?.subtitleJobStatus === 'failed';
   const update = (patch: Partial<typeof state>) => onUpdate(data.id, { cinematicVideoMerge: { ...state, ...patch } });

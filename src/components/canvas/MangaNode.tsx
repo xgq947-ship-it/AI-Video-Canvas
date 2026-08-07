@@ -66,7 +66,7 @@ const NumField: React.FC<{ label: string; value: any; onChange: (v: number) => v
     <input
       type="number" step={step} min={min} value={value ?? ''}
       onChange={(e) => onChange(NUM(e.target.value))}
-      onPointerDown={stop} onWheel={stop} className={inputCls}
+      onPointerDown={stop} className={inputCls}
     />
   </div>
 );
@@ -276,7 +276,7 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
           </span>
         </div>
 
-        <div className="p-3 flex flex-col gap-2.5" onWheel={stop}>
+        <div className="p-3 flex flex-col gap-2.5">
           {/* 音频类：配音/音效/BGM */}
           {isAudioKind && (
             <>

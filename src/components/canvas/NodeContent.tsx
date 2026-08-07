@@ -194,7 +194,6 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                                 value={localPrompt}
                                 onChange={(e) => handleTextChange(e.target.value)}
                                 onPointerDown={(e) => e.stopPropagation()}
-                                onWheel={(e) => e.stopPropagation()}
                                 onBlur={() => {
                                     // Ensure final value is saved on blur
                                     if (updateTimeoutRef.current) {

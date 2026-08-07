@@ -1074,7 +1074,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                         }}
                         onKeyDown={handlePromptKeyDown}
                         onClick={(e) => updateMentionState(e.currentTarget.value, e.currentTarget.selectionStart)}
-                        onWheel={(e) => e.stopPropagation()}
                         onBlur={() => {
                             // Ensure final value is saved on blur
                             if (updateTimeoutRef.current) {
@@ -1362,7 +1361,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                 {showSizeDropdown && (
                                     <div
                                         className="absolute bottom-full mb-2 right-0 w-32 bg-[#252525] border border-neutral-700 rounded-lg shadow-xl overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-100 flex flex-col max-h-60 overflow-y-auto"
-                                        onWheel={(e) => e.stopPropagation()}
                                     >
                                         <div className="px-3 py-2 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f]">
                                             {isVideoNode ? '分辨率' : '画面比例'}
@@ -1397,7 +1395,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                 {showResolutionDropdown && (
                                     <div
                                         className="absolute bottom-full mb-2 right-0 w-24 bg-[#252525] border border-neutral-700 rounded-lg shadow-xl overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-100"
-                                        onWheel={(e) => e.stopPropagation()}
                                     >
                                         <div className="px-3 py-2 text-[10px] font-bold text-neutral-500 uppercase tracking-wider bg-[#1f1f1f]">
                                             Quality
@@ -1434,7 +1431,6 @@ const NodeControlsComponent: React.FC<NodeControlsProps> = ({
                                 {showImageCountDropdown && (
                                     <div
                                         className="absolute bottom-full mb-2 right-0 w-32 bg-[#252525] border border-neutral-700 rounded-lg shadow-xl overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-100"
-                                        onWheel={(e) => e.stopPropagation()}
                                     >
                                         <div className="px-3 py-2 bg-[#1f1f1f]">
                                             <div className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">

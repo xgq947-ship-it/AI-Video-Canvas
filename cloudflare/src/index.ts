@@ -9,6 +9,7 @@ import {
   handleGoogleStart,
   handleGoogleCallback,
   handleExchange,
+  handleDesktopPoll,
   handleRefresh,
   handleLogout,
   handleMe,
@@ -31,6 +32,7 @@ export default {
       if (path === '/auth/google/start' && method === 'GET') return handleGoogleStart(req, env);
       if (path === '/auth/google/callback' && method === 'GET') return handleGoogleCallback(req, env);
       if (path === '/auth/exchange' && method === 'POST') return handleExchange(req, env);
+      if (path === '/auth/poll' && method === 'POST') return handleDesktopPoll(req, env);
       if (path === '/auth/refresh' && method === 'POST') return handleRefresh(req, env);
       if (path === '/auth/logout' && method === 'POST') return handleLogout(req, env);
       if (path === '/auth/me' && method === 'GET') return handleMe(req, env);

@@ -1,7 +1,7 @@
 /**
  * 主进程会话管理器（文档 §20 客户端状态机的登录部分）。
  *
- * 职责：发起 Google 登录（系统浏览器 + loopback 回调）、用一次性 code 换会话、
+ * 职责：发起 Google 登录（系统浏览器 + Worker 轮询确认）、签发桌面会话、
  * 把 refresh token 存进 SecureStore、Access Token 到期前自动刷新、退出登录。
  *
  * 安全：Access Token 只留内存；Refresh Token 只经 SecureStore（safeStorage 加密）落盘，
@@ -9,7 +9,7 @@
  */
 
 import { shell } from 'electron';
-import { startLoopbackServer } from './loopbackServer.js';
+import { createDesktopPollProof, pollDesktopSession } from './desktopPolling.js';
 import { AUTH_BASE_URL, LOGIN_TIMEOUT_MS, SECURE_KEYS } from '../authConfig.js';
 
 /** @typedef {'login_required'|'authenticating'|'authenticated'|'offline'|'error'} AuthStatus */
@@ -38,11 +38,12 @@ export function createAuthManager({ secureStore, deviceIdentity, baseUrl = AUTH_
     return { status: state.status, user: state.user, error: state.error };
   }
 
-  async function apiPost(pathname, body) {
+  async function apiPost(pathname, body, options = {}) {
     const res = await fetch(`${baseUrl}${pathname}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: options.signal,
     });
     let data = null;
     try {
@@ -135,26 +136,26 @@ export function createAuthManager({ secureStore, deviceIdentity, baseUrl = AUTH_
     }
   }
 
-  /** 发起 Google 登录：系统浏览器 + loopback 回调 + 一次性 code 换会话。 */
+  /**
+   * 发起 Google 登录：系统浏览器完成 OAuth，应用用高熵 verifier 主动轮询 Worker。
+   * 浏览器不再访问 localhost，避免企业代理、防火墙和 HTTPS-Only 阻断回跳。
+   */
   async function signIn() {
     if (state.status === 'authenticating') return publicState();
     setState({ status: 'authenticating', error: null });
     try {
       const identity = await deviceIdentity.ensureIdentity();
-      const { port, waitForCode } = await startLoopbackServer({ timeoutMs: LOGIN_TIMEOUT_MS });
+      const { verifier, challenge } = createDesktopPollProof();
 
-      const startUrl = `${baseUrl}/auth/google/start?port=${port}`;
+      const startUrl = `${baseUrl}/auth/google/start?poll_challenge=${encodeURIComponent(challenge)}`;
       await shell.openExternal(startUrl);
 
-      const code = await waitForCode();
-
-      const { ok, data, status } = await apiPost('/auth/exchange', {
-        code,
-        device_hash: identity.deviceHash,
+      const data = await pollDesktopSession({
+        apiPost,
+        pollVerifier: verifier,
+        deviceHash: identity.deviceHash,
+        timeoutMs: LOGIN_TIMEOUT_MS,
       });
-      if (!ok || !data?.success) {
-        throw new Error(data?.message || `换取会话失败(${status})`);
-      }
       await persistSession(data);
       applySession(data);
       setState({ status: 'authenticated', user: data.user || null, error: null });

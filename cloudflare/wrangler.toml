@@ -4,13 +4,12 @@ compatibility_date = "2025-01-01"
 # P5 签发永久许可证用 WebCrypto 原生 Ed25519（crypto.subtle importKey/sign 'Ed25519'），
 # 由 compatibility_date 启用，不需要 nodejs_compat。
 
-# D1 迁移目录（相对本文件）
-migrations_dir = "migrations"
-
 [[d1_databases]]
 binding = "DB"
 database_name = "ai-canvas-auth"
 database_id = "fc19240d-3e75-409e-bfb8-1673035362a0"
+# D1 迁移目录属于当前数据库 binding（Wrangler 4.x 配置结构）。
+migrations_dir = "migrations"
 
 # 非机密变量。机密（GOOGLE_CLIENT_SECRET / SESSION_SIGNING_SECRET /
 # LICENSE_PRIVATE_KEY / LICENSE_CODE_SALT / ADMIN_SECRET）本地放 .dev.vars，

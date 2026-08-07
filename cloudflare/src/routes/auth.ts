@@ -16,6 +16,7 @@ import {
   findOrCreateUserByGoogle,
   createDesktopLoginCode,
   consumeDesktopLoginCode,
+  consumeDesktopLoginByPollVerifier,
   storeRefreshToken,
   rotateRefreshToken,
   revokeRefreshToken,
@@ -24,7 +25,7 @@ import {
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
-/** GET /auth/google/start?port=NNNN —— 生成 state+PKCE+nonce，跳 Google 授权页。 */
+/** GET /auth/google/start?poll_challenge=...（或旧版 port）—— 生成 state+PKCE+nonce。 */
 export async function handleGoogleStart(req: Request, env: Env): Promise<Response> {
   const url = new URL(req.url);
   const portParam = url.searchParams.get('port');
@@ -34,11 +35,20 @@ export async function handleGoogleStart(req: Request, env: Env): Promise<Respons
     if (!Number.isInteger(n) || n < 1 || n > 65535) return errorJson('BAD_REQUEST', 'port 非法', 400);
     port = n;
   }
+  const pollChallengeParam = url.searchParams.get('poll_challenge');
+  if (pollChallengeParam !== null && !/^[a-f0-9]{64}$/.test(pollChallengeParam)) {
+    return errorJson('BAD_REQUEST', 'poll_challenge 非法', 400);
+  }
 
   const nonce = randomToken(16);
   const codeVerifier = generateCodeVerifier();
   const challenge = await codeChallengeS256(codeVerifier);
-  const state = await signState(env.SESSION_SIGNING_SECRET, { nonce, codeVerifier, port });
+  const state = await signState(env.SESSION_SIGNING_SECRET, {
+    nonce,
+    codeVerifier,
+    port,
+    pollChallenge: pollChallengeParam,
+  });
 
   const auth = new URL(GOOGLE_AUTH_URL);
   auth.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
@@ -109,7 +119,10 @@ export async function handleGoogleCallback(req: Request, env: Env): Promise<Resp
   // 一次性桌面登录码（60-120s），浏览器只带它回客户端
   const loginCode = randomToken(32);
   const ttl = Number(env.DESKTOP_LOGIN_CODE_TTL_SECONDS) || 120;
-  await createDesktopLoginCode(env, userId, loginCode, ttl);
+  await createDesktopLoginCode(env, userId, loginCode, ttl, state.pollChallenge ?? null);
+
+  // 新版桌面应用主动轮询 Worker，不再要求浏览器访问 localhost。
+  if (state.pollChallenge) return html(loginPollingCompleteHtml(), 200);
 
   // 回桌面：只允许跳 loopback 主机，防开放重定向
   if (state.port !== null) {
@@ -136,6 +149,18 @@ export async function handleExchange(req: Request, env: Env): Promise<Response> 
   const userId = await consumeDesktopLoginCode(env, body.code);
   if (!userId) return errorJson('CODE_INVALID', 'code 无效或已使用/过期', 401);
 
+  return issueSession(env, userId, body.device_hash ?? null);
+}
+
+/** POST /auth/poll { poll_verifier } —— 不依赖 localhost 的桌面登录完成确认。 */
+export async function handleDesktopPoll(req: Request, env: Env): Promise<Response> {
+  const body = await safeJson<{ poll_verifier?: string; device_hash?: string }>(req);
+  if (!body?.poll_verifier || !/^[A-Za-z0-9_-]{43,128}$/.test(body.poll_verifier)) {
+    return errorJson('BAD_REQUEST', 'poll_verifier 非法', 400);
+  }
+
+  const userId = await consumeDesktopLoginByPollVerifier(env, body.poll_verifier);
+  if (!userId) return errorJson('LOGIN_PENDING', '等待浏览器完成 Google 登录', 202);
   return issueSession(env, userId, body.device_hash ?? null);
 }
 
@@ -247,6 +272,16 @@ min-height:100vh;align-items:center;justify-content:center;margin:0}
 <body><div class="card"><h2>登录成功</h2><p>正在返回 AI Canvas…</p>
 <p><a href="${safe}">若未自动跳转，请点此返回应用</a></p></div>
 <script>location.replace(${JSON.stringify(target)});</script></body></html>`;
+}
+
+function loginPollingCompleteHtml(): string {
+  return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<title>登录成功 · AI Canvas</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body{font-family:-apple-system,system-ui,sans-serif;background:#111;color:#eee;display:flex;
+min-height:100vh;align-items:center;justify-content:center;margin:0}.card{text-align:center;max-width:420px;padding:32px}</style>
+</head><body><div class="card"><h2>登录成功</h2><p>AI Canvas 正在确认登录，请返回应用。</p>
+<p>可以关闭此页面。</p></div></body></html>`;
 }
 
 export { preflight };

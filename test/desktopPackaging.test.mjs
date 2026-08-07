@@ -26,6 +26,7 @@ const hubSyncWorkflow = fs.readFileSync(
 const electronMain = fs.readFileSync(new URL('../electron/main.js', import.meta.url), 'utf8');
 const electronPreload = fs.readFileSync(new URL('../electron/preload.cjs', import.meta.url), 'utf8');
 const electronAuthConfig = fs.readFileSync(new URL('../electron/authConfig.js', import.meta.url), 'utf8');
+const electronAuthManager = fs.readFileSync(new URL('../electron/auth/authManager.js', import.meta.url), 'utf8');
 const serverMain = fs.readFileSync(new URL('../server/index.js', import.meta.url), 'utf8');
 const serverProjectRoutes = fs.readFileSync(new URL('../server/routes/projects.js', import.meta.url), 'utf8');
 const serverProjectImport = fs.readFileSync(new URL('../server/services/projectImport.js', import.meta.url), 'utf8');
@@ -86,6 +87,12 @@ test('正式安装包默认启用 Google 登录与授权系统', () => {
   assert.match(electronAuthConfig, /app\.isPackaged\s*\? PACKAGED_DEFAULT_LOGIN_ENABLED/);
   assert.match(electronMain, /ipcMain\.handle\('auth:get-config'/);
   assert.match(electronPreload, /auth:get-config/);
+});
+
+test('正式安装包使用 Worker 轮询确认登录，不依赖浏览器回跳 localhost', () => {
+  assert.match(electronAuthManager, /poll_challenge=/);
+  assert.match(electronAuthManager, /pollDesktopSession/);
+  assert.doesNotMatch(electronAuthManager, /startLoopbackServer/);
 });
 
 test('关闭最后一个 Evan 窗口只退出本 App，不关闭共享 Chrome', () => {

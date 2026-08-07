@@ -93,15 +93,35 @@ export async function createDesktopLoginCode(
   env: Env,
   userId: string,
   code: string,
-  ttlSeconds: number
+  ttlSeconds: number,
+  pollChallenge: string | null = null
 ): Promise<void> {
   const codeHash = await sha256Hex(code);
   await env.DB.prepare(
-    `INSERT INTO desktop_login_codes (code_hash, user_id, used, expires_at, created_at)
-      VALUES (?, ?, 0, ?, ?)`
+    `INSERT INTO desktop_login_codes (code_hash, user_id, poll_challenge, used, expires_at, created_at)
+      VALUES (?, ?, ?, 0, ?, ?)`
   )
-    .bind(codeHash, userId, isoInSeconds(ttlSeconds), nowIso())
+    .bind(codeHash, userId, pollChallenge, isoInSeconds(ttlSeconds), nowIso())
     .run();
+}
+
+/**
+ * 新版桌面登录：客户端只提交高熵 verifier，服务端计算 challenge 后原子消费登录码。
+ * challenge 可公开，verifier 不经过浏览器，避免 localhost 回跳被拦截。
+ */
+export async function consumeDesktopLoginByPollVerifier(
+  env: Env,
+  pollVerifier: string
+): Promise<string | null> {
+  const pollChallenge = await sha256Hex(pollVerifier);
+  const row = await env.DB.prepare(
+    `UPDATE desktop_login_codes SET used = 1
+      WHERE poll_challenge = ? AND used = 0 AND expires_at > ?
+      RETURNING user_id`
+  )
+    .bind(pollChallenge, nowIso())
+    .first<{ user_id: string }>();
+  return row?.user_id ?? null;
 }
 
 /** 原子消费一次性登录码：未用且未过期才成功，用后即焚。返回 user_id 或 null。 */

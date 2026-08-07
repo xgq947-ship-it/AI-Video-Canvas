@@ -33,18 +33,26 @@ export interface OAuthState {
   nonce: string;
   codeVerifier: string;
   port: number | null; // 桌面 loopback 回调端口；null 表示纯浏览器调试
+  pollChallenge?: string | null; // 新版桌面轮询挑战；只有客户端持有 verifier
   exp: number; // epoch 秒
 }
 
 export async function signState(
   secret: string,
-  data: { nonce: string; codeVerifier: string; port: number | null; ttlSeconds?: number }
+  data: {
+    nonce: string;
+    codeVerifier: string;
+    port: number | null;
+    pollChallenge?: string | null;
+    ttlSeconds?: number;
+  }
 ): Promise<string> {
   const state: OAuthState = {
     v: 1,
     nonce: data.nonce,
     codeVerifier: data.codeVerifier,
     port: data.port,
+    pollChallenge: data.pollChallenge ?? null,
     exp: Math.floor(Date.now() / 1000) + (data.ttlSeconds ?? 600),
   };
   return seal(secret, state);
@@ -54,6 +62,7 @@ export async function verifyState(secret: string, token: string): Promise<OAuthS
   const state = await open<OAuthState>(secret, token);
   if (!state || state.v !== 1) return null;
   if (typeof state.exp !== 'number' || state.exp < Math.floor(Date.now() / 1000)) return null;
+  if (state.pollChallenge != null && !/^[a-f0-9]{64}$/.test(state.pollChallenge)) return null;
   return state;
 }
 

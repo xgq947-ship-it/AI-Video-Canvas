@@ -210,6 +210,8 @@ export const normalizeCinematicSettings = (input = {}) => {
     source.width ?? DEFAULT_SETTINGS.width,
     source.height ?? DEFAULT_SETTINGS.height,
   );
+  // 镜头数量与单镜头时长现在由 AI 按剧情自动决定（用户不再输入）。
+  // 保留默认值仅作兼容与兜底：旧项目数据继续可读，未提供时用 6 镜头/总时长÷镜头数。
   const shotCount = Math.min(30, asPositiveInteger(source.shotCount, DEFAULT_SETTINGS.shotCount));
   const totalDuration = Math.min(600, asPositiveNumber(source.totalDuration, DEFAULT_SETTINGS.totalDuration));
   const videoModel = (getCinematicVideoModel(source.videoModel)?.id
@@ -530,7 +532,7 @@ export const normalizeCinematicDirectorOutput = (value, {
   return output;
 };
 
-export const validateCinematicDirectorOutput = value => {
+export const validateCinematicDirectorOutput = (value, { targetTotalDuration } = {}) => {
   const errors = [];
   if (!value || typeof value !== 'object') return { valid: false, errors: ['导演输出必须是对象'] };
   if (value.version !== CINEMATIC_SCHEMA_VERSION) errors.push(`version 必须为 ${CINEMATIC_SCHEMA_VERSION}`);
@@ -577,6 +579,15 @@ export const validateCinematicDirectorOutput = value => {
       }
     });
     if (global?.shotCount !== value.shots.length) errors.push('global.shotCount 必须等于 shots.length');
+    if (Number(targetTotalDuration) > 0) {
+      const actual = value.shots.reduce((sum, shot) => sum + (Number(shot?.duration) || 0), 0);
+      const target = Number(targetTotalDuration);
+      // AI 按剧情自动分配镜头时长：允许 ±20% 浮动，避免模型因严格的精确匹配反复修复。
+      const tolerance = target * 0.2;
+      if (Math.abs(actual - target) > tolerance) {
+        errors.push(`镜头总时长 ${actual}s 与目标 ${target}s 偏差超过 20%`);
+      }
+    }
   }
   return { valid: errors.length === 0, errors };
 };

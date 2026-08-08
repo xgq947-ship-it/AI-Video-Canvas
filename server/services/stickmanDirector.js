@@ -63,7 +63,7 @@ const buildUserPrompt = ({ sourceType, input, settings, skill }) => {
           content: input?.content || '',
           notes: input?.notes || '',
         },
-        instruction: '将剧本拆成清晰可执行的火柴人镜头，并让镜头总时长接近 settings.totalDuration。',
+        instruction: '将剧本拆成清晰可执行的火柴人镜头。镜头数量与每镜头时长由 AI 根据剧情节奏自行决定，无需等于 settings 中的 shotCount/durationPerShot；目标总时长约 settings.totalDuration 秒（允许 ±20% 浮动）。',
       };
   return [
     '请根据以下内部导演规则返回 StickmanDirectorOutput JSON。',

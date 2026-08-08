@@ -96,6 +96,11 @@ const buildUserPrompt = ({ script, cast, settings, skill }) => [
   '请根据电影导演规则返回 CinematicDirectorOutput JSON。',
   'sourceType: script',
   `settings: ${JSON.stringify(settings)}`,
+  // AI 自动分镜：镜头数量与每镜头时长由剧情决定，不要求等于设置值。
+  `分镜要求：镜头数量与每镜头时长由 AI 根据剧情节奏自行决定，无需等于设置中的 shotCount/durationPerShot。` +
+  `目标总时长约 ${settings.totalDuration} 秒（允许 ±20% 浮动）。` +
+  `每镜头时长必须使用当前视频模型 ${settings.videoModel} 支持的档位（${(getCinematicVideoModel(settings.videoModel)?.supportedDurations || []).join('/')} 秒），` +
+  `动作密度高、信息量大的镜头用长档位，对白、反应、过渡镜头用短档位，总时长尽量接近目标。`,
   `cast: ${JSON.stringify(cast)}`,
   `script: ${JSON.stringify({
     title: script?.title || '',
@@ -244,7 +249,7 @@ export const runCinematicDirector = async ({
 
       const model = first.model || outputModel(providerId, requestModelFor(providerId, settings));
       const output = normalizeCinematicDirectorOutput(parsed, { settings, model, cast });
-      const validation = validateCinematicDirectorOutput(output);
+      const validation = validateCinematicDirectorOutput(output, { targetTotalDuration: settings.totalDuration });
       if (!validation.valid) {
         const repaired = await providerRunner({
           providerId,
@@ -261,7 +266,7 @@ export const runCinematicDirector = async ({
           model: repaired.model || model,
           cast,
         });
-        const repairedValidation = validateCinematicDirectorOutput(repairedOutput);
+        const repairedValidation = validateCinematicDirectorOutput(repairedOutput, { targetTotalDuration: settings.totalDuration });
         if (!repairedValidation.valid) throw new Error(`导演输出校验失败：${repairedValidation.errors.join('；')}`);
         return { output: repairedOutput, providerId, model: repaired.model || model, repaired: true };
       }

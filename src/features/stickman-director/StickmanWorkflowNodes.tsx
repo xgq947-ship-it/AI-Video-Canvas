@@ -421,14 +421,13 @@ export const StickmanDirectorNode: React.FC<BaseProps & { onRun: (id: string) =>
           <Field dark={dark} label="比例"><Select dark={dark} value={state.aspectRatio} onChange={event => setAspect(event.target.value)} onPointerDown={stop}>{STICKMAN_ASPECT_RATIOS.map(item => <option key={item} value={item}>{item}</option>)}</Select></Field>
           <Field dark={dark} label="尺寸"><Select dark={dark} value={`${resolution.width}x${resolution.height}`} onChange={event => setPreset(event.target.value)} onPointerDown={stop}>{(STICKMAN_RESOLUTION_PRESETS[state.aspectRatio] || []).map(item => <option key={`${item.width}x${item.height}`} value={`${item.width}x${item.height}`}>{item.label}</option>)}</Select></Field>
         </div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <Field dark={dark} label="总时长(s)"><Input dark={dark} type="number" min={1} value={state.totalDuration} onChange={event => update({ totalDuration: Number(event.target.value) })} onPointerDown={stop} /></Field>
-          <Field dark={dark} label="镜头数量"><Input dark={dark} type="number" min={1} max={30} value={state.shotCount} onChange={event => update({ shotCount: Number(event.target.value) })} onPointerDown={stop} /></Field>
-          <Field dark={dark} label="单镜头(s)"><Input dark={dark} type="number" min={1} value={state.durationPerShot} onChange={event => update({ durationPerShot: Number(event.target.value) })} onPointerDown={stop} /></Field>
+          <Field dark={dark} label="平台"><Select dark={dark} value={state.platform} onChange={event => update({ platform: event.target.value })} onPointerDown={stop}>{STICKMAN_PLATFORMS.map(item => <option key={item} value={item}>{item}</option>)}</Select></Field>
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <Field dark={dark} label="平台"><Select dark={dark} value={state.platform} onChange={event => update({ platform: event.target.value })} onPointerDown={stop}>{STICKMAN_PLATFORMS.map(item => <option key={item} value={item}>{item}</option>)}</Select></Field>
           <Field dark={dark} label="节奏"><Select dark={dark} value={state.pace} onChange={event => update({ pace: event.target.value })} onPointerDown={stop}>{STICKMAN_PACES.map(item => <option key={item} value={item}>{item}</option>)}</Select></Field>
+          <div className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-[10px] ${dark ? 'bg-white/[0.04] text-neutral-400' : 'bg-neutral-50 text-neutral-500'}`}><Sparkles size={12} className="text-cyan-400 shrink-0" />镜头数量与时长由 AI 按剧情决定</div>
         </div>
         <div className={`grid grid-cols-3 gap-1 rounded-xl p-2 text-[10px] ${dark ? 'bg-white/[0.035] text-neutral-400' : 'bg-neutral-50 text-neutral-500'}`}>
           {([

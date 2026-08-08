@@ -23,18 +23,16 @@ const flowNode = workflowNodes.slice(
   workflowNodes.indexOf('export const VideoMergeNode')
 );
 
-test('剧本输入节点不再提供导演分镜参数，导演节点保留唯一配置入口', () => {
-  for (const [scriptLabel, directorLabel] of [
-    ['默认比例', '比例'],
-    ['总时长(s)', '总时长(s)'],
-    ['镜头数量', '镜头数量'],
-    ['单镜头(s)', '单镜头(s)'],
-  ]) {
+test('剧本输入节点不再提供导演分镜参数，导演节点保留 AI 定长配置入口', () => {
+  for (const scriptLabel of ['默认比例', '总时长(s)', '镜头数量', '单镜头(s)']) {
     const scriptPattern = new RegExp(scriptLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    const directorPattern = new RegExp(directorLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     assert.doesNotMatch(scriptNode, scriptPattern);
-    assert.match(directorNode, directorPattern);
   }
+  // 导演节点：镜头数量/单镜头时长改为 AI 自动决定，只保留总时长输入
+  assert.match(directorNode, /总时长\(s\)/);
+  assert.doesNotMatch(directorNode, /label="镜头数量"/);
+  assert.doesNotMatch(directorNode, /label="单镜头\(s\)"/);
+  assert.match(directorNode, /镜头数量与时长由 AI 按剧情决定/);
 });
 
 test('分镜列表只负责镜头管理，Flow 节点负责批量执行', () => {

@@ -141,7 +141,7 @@ test('电影导演 Skill Runner 对无 shots 的真实 Provider 输出执行一�
   const result = await runCinematicDirector({
     input: { title: '测试', content: '林深在雨夜推开咖啡店玻璃门。' },
     cast,
-    settings: { shotCount: 1 },
+    settings: { shotCount: 1, totalDuration: 8 },
     provider: 'gemini',
     allowFallback: false,
     providerRunner: async request => {

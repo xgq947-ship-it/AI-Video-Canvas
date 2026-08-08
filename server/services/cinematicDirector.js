@@ -101,6 +101,17 @@ const buildUserPrompt = ({ script, cast, settings, skill }) => [
   `目标总时长约 ${settings.totalDuration} 秒（允许 ±20% 浮动）。` +
   `每镜头时长必须使用当前视频模型 ${settings.videoModel} 支持的档位（${(getCinematicVideoModel(settings.videoModel)?.supportedDurations || []).join('/')} 秒），` +
   `动作密度高、信息量大的镜头用长档位，对白、反应、过渡镜头用短档位，总时长尽量接近目标。`,
+  // 台词模式：auto=AI 按剧情自动创作台词；preserve=只保留剧本已有对白；none=不生成任何台词。
+  `台词要求：dialogueMode=${settings.dialogueMode || 'auto'}。` +
+  (settings.dialogueMode === 'none'
+    ? '本片不需要台词：所有镜头的 dialogue 留空，声音只保留明确音效或环境声。'
+    : settings.dialogueMode === 'preserve'
+      ? '只保留剧本中已有对白（原样引用），剧本没有的对白一律不创作。'
+      : 'AI 自动创作台词：为适合的镜头生成贴合剧情与角色的口语化台词。' +
+        '规则：①说话者必须是该镜头 cast 中出场的角色，禁止场外音与画外旁白；②每镜头 0-2 句，' +
+        '短镜头（4s 内）最多 1 句或不说，8s 以上镜头最多 2 句；③台词口语化、简短有力，' +
+        '避免书面腔与长篇大论；④台词字数与镜头时长匹配（约每秒 3-4 字）；⑤连续镜头里同一角色' +
+        '避免连说两镜（除非剧情强需求）；⑥情绪或情节关键镜头必须有台词，纯过场/氛围镜头可无台词。'),
   `cast: ${JSON.stringify(cast)}`,
   `script: ${JSON.stringify({
     title: script?.title || '',

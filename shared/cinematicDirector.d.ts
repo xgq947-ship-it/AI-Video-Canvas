@@ -37,6 +37,7 @@ export interface CinematicDirectorSettings {
   videoResolution?: string;
   audioEnabled?: boolean;
   allowDirectorOptimization?: boolean;
+  dialogueMode?: 'auto' | 'preserve' | 'none' | string;
   [key: string]: unknown;
 }
 
@@ -103,6 +104,7 @@ export interface CinematicDirectorOutput {
     pace: string;
     videoModel: string;
     audioEnabled: boolean;
+    dialogueMode?: 'auto' | 'preserve' | 'none' | string;
   };
   cast: CinematicCastMember[];
   shots: CinematicShot[];

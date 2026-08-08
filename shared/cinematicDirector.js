@@ -104,6 +104,8 @@ const DEFAULT_SETTINGS = Object.freeze({
   videoResolution: '自动',
   audioEnabled: true,
   allowDirectorOptimization: true,
+  // 台词模式：auto=AI 按剧情自动生成台词；preserve=仅保留剧本原对白；none=不生成台词。
+  dialogueMode: 'auto',
 });
 
 const asText = value => String(value ?? '').trim();
@@ -247,6 +249,9 @@ export const normalizeCinematicSettings = (input = {}) => {
     videoResolution: asText(source.videoResolution) || model?.resolutions?.[0] || DEFAULT_SETTINGS.videoResolution,
     audioEnabled: supportsAudio && source.audioEnabled !== false,
     allowDirectorOptimization: source.allowDirectorOptimization !== false,
+    dialogueMode: ['auto', 'preserve', 'none'].includes(asText(source.dialogueMode).toLowerCase())
+      ? asText(source.dialogueMode).toLowerCase()
+      : DEFAULT_SETTINGS.dialogueMode,
   };
 };
 
@@ -524,6 +529,7 @@ export const normalizeCinematicDirectorOutput = (value, {
       pace: asText(global.pace) || normalizedSettings.pace,
       videoModel: normalizedSettings.videoModel,
       audioEnabled: normalizedSettings.audioEnabled,
+      dialogueMode: normalizedSettings.dialogueMode,
     },
     cast: mergedCast,
     shots,

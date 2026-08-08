@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { loadCinematicDirectorSkill, DIRECTOR_KNOWLEDGE_FRAMING } from '../server/services/cinematicDirector.js';
 import { runCinematicDirector } from '../server/services/cinematicDirector.js';
-import { normalizeCinematicSettings } from '../shared/cinematicDirector.js';
+import { normalizeCinematicSettings, compileCinematicPrompt } from '../shared/cinematicDirector.js';
 import { buildPromptOptimizationInstruction, getPromptOptimizationProfile } from '../shared/promptOptimizationProfiles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -170,4 +170,52 @@ test('AI 自动分镜：normalize 保留 AI 定长默认语义（6 镜头/总时
   assert.ok(settings.durationPerShot > 0, '兜底单镜头时长存在');
   // 时长吸附到模型档位（google-flow-omni-flash: 4/6/8/10）
   assert.ok([4, 6, 8, 10].includes(settings.durationPerShot), `durationPerShot=${settings.durationPerShot} 不在模型档位内`);
+});
+
+// —— 台词模式：AI 自动创作 / 仅保留剧本原对白 / 无台词 ——
+
+test('台词模式：normalize 默认 auto，非法值回落默认', () => {
+  assert.equal(normalizeCinematicSettings({}).dialogueMode, 'auto');
+  assert.equal(normalizeCinematicSettings({ dialogueMode: 'preserve' }).dialogueMode, 'preserve');
+  assert.equal(normalizeCinematicSettings({ dialogueMode: 'none' }).dialogueMode, 'none');
+  assert.equal(normalizeCinematicSettings({ dialogueMode: 'bogus' }).dialogueMode, 'auto');
+});
+
+test('台词模式：导演输出携带台词并进入编译后提示词的【声音】模块', async () => {
+  const result = await runCinematicDirector({
+    input: { title: '测试', content: '林深在雨夜推开咖啡店玻璃门，周宁抬头看他。' },
+    cast,
+    settings: { shotCount: 1, totalDuration: 8, videoModel: 'google-flow-omni-flash', dialogueMode: 'auto' },
+    provider: 'gemini',
+    allowFallback: false,
+    providerRunner: async () => {
+      const withDialogue = {
+        ...shot(),
+        duration: 8,
+        dialogue: { speaker: '林深', text: '还营业吗？', emotion: '平静' },
+      };
+      return { raw: JSON.stringify({ title: '带台词', cast, shots: [withDialogue] }), model: { provider: 'gemini', modelId: 'gemini-test' } };
+    },
+  });
+  assert.equal(result.output.global.dialogueMode, 'auto');
+  assert.equal(result.output.shots[0].dialogue.text, '还营业吗？');
+  // 编译后的视频提示词必须包含台词
+  const compiled = compileCinematicPrompt(result.output.shots[0], result.output.global, cast);
+  assert.match(compiled, /【声音】林深：还营业吗？/);
+});
+
+test('台词模式：dialogueMode=none 时提示词指令要求不生成台词', async () => {
+  const result = await runCinematicDirector({
+    input: { title: '测试', content: '林深在雨夜推开咖啡店玻璃门。' },
+    cast,
+    settings: { shotCount: 1, totalDuration: 8, videoModel: 'google-flow-omni-flash', dialogueMode: 'none' },
+    provider: 'gemini',
+    allowFallback: false,
+    providerRunner: async () => {
+      const silent = { ...shot(), duration: 8, dialogue: undefined };
+      return { raw: JSON.stringify({ title: '无台词', cast, shots: [silent] }), model: { provider: 'gemini', modelId: 'gemini-test' } };
+    },
+  });
+  assert.equal(result.output.global.dialogueMode, 'none');
+  assert.equal(result.output.shots[0].dialogue, undefined);
 });

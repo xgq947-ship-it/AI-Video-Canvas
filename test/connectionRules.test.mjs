@@ -6,7 +6,6 @@ test('AI 漫剧节点可连向成片(RENDER)', () => {
   assert.equal(isValidNodeConnection(NODE.AUDIO, NODE.RENDER), true);
   assert.equal(isValidNodeConnection(NODE.SFX, NODE.RENDER), true);
   assert.equal(isValidNodeConnection(NODE.BGM, NODE.RENDER), true);
-  assert.equal(isValidNodeConnection(NODE.SUBTITLE, NODE.RENDER), true);
   assert.equal(isValidNodeConnection(NODE.VIDEO, NODE.RENDER), true);
 });
 
@@ -25,13 +24,12 @@ test('配音可连向视频作为 Seedance 音色参考，其他音轨仍只能�
   assert.equal(isValidNodeConnection(NODE.AUDIO, NODE.VIDEO), true);
   assert.equal(isValidNodeConnection(NODE.SFX, NODE.VIDEO), false);
   assert.equal(isValidNodeConnection(NODE.BGM, NODE.IMAGE), false);
-  assert.equal(isValidNodeConnection(NODE.SUBTITLE, NODE.VIDEO), false);
 });
 
-test('TEXT 可连向 IMAGE/VIDEO/AUDIO/SUBTITLE，但不能连向 TEXT', () => {
+test('TEXT 可连向 IMAGE/VIDEO/AUDIO，但不能连向 TEXT', () => {
   assert.equal(isValidNodeConnection(NODE.TEXT, NODE.IMAGE), true);
   assert.equal(isValidNodeConnection(NODE.TEXT, NODE.VIDEO), true);
-  assert.equal(isValidNodeConnection(NODE.TEXT, NODE.SUBTITLE), true);
+  assert.equal(isValidNodeConnection(NODE.TEXT, NODE.AUDIO), true);
   assert.equal(isValidNodeConnection(NODE.TEXT, NODE.TEXT), false);
 });
 

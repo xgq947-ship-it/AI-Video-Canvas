@@ -104,7 +104,6 @@ const typeLabel: Record<string, string> = {
   [NodeType.CINEMATIC_VIDEO_MERGE]: '电影成片拼接',
   [NodeType.SFX]: '音效',
   [NodeType.BGM]: '背景音乐',
-  [NodeType.SUBTITLE]: '字幕',
   [NodeType.RENDER]: '成片',
 };
 

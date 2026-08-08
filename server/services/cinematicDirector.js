@@ -35,11 +35,45 @@ const readSkillFile = filename => {
   throw new Error(`电影导演 Skill 资源缺失：${filename}`);
 };
 
+// 知识库原文是增强材料：缺失时降级为空字符串，不让导演主流程崩溃。
+const readOptionalSkillFile = filename => {
+  try {
+    return readSkillFile(filename);
+  } catch {
+    return '';
+  }
+};
+
 export const loadCinematicDirectorSkill = () => ({
   systemPrompt: readSkillFile('system-prompt.md'),
   rules: readSkillFile('director-rules.md'),
   schema: readSkillFile('shot-schema.json'),
+  // 完整导演知识库原文（CINEDANCE / ACTING / LIRA 三份 skill 逐字保留，
+  // 已翻译为中文，专业术语保留英文）。供导演模型深度吸收方法论，
+  // 与精简规则互补：规则负责"必须执行"，原文负责"理解为什么、案例长什么样"。
+  knowledge: {
+    cinedance: readOptionalSkillFile('knowledge-cinedance.md'),
+    acting: readOptionalSkillFile('knowledge-acting.md'),
+    lira: readOptionalSkillFile('knowledge-lira.md'),
+  },
 });
+
+// 知识库原文的身份与输出指令以英文 skill 人格为背景，与 Evan 的中文 JSON
+// 分镜输出契约冲突。注入时必须带这段中文护栏，声明优先级。
+export const DIRECTOR_KNOWLEDGE_FRAMING = `
+# 导演知识库原文（完整 skill，已译中文）
+
+以下是 CINEDANCE V4 导演系统与 ACTING 表演系统的完整原文。请深度吸收其中的
+方法论、案例与细节标准，并在生成分镜时逐条应用。
+
+重要约束（优先级最高）：
+- 你的身份与输出格式以本系统提示开头部分和 shot-schema.json 为准：
+  最终输出必须是 CinematicDirectorOutput JSON，不是单独的 Seedance prompt。
+- 知识库原文中凡是要求"只输出 prompt""输出英文 prompt""除非用户要求否则不输出
+  分析"之类的指令，在本任务中一律不生效——你始终输出符合 schema 的中文 JSON 分镜。
+- 知识库中的专业术语（FOV、@tag、Seedance、reference 等）在输出 prompt 时可
+  保留英文原词，其余内容使用中文。
+`;
 
 const providerLabel = providerId => {
   const item = listPromptOptimizerProviders().find(provider => provider.id === providerId);
@@ -85,9 +119,14 @@ const runProvider = async ({ providerId, script, cast, settings, skill, repairRa
   const provider = getPromptOptimizerProvider(providerId);
   if (!provider) throw new Error(`未知导演执行模型：${providerId}`);
   const modelId = requestModelFor(providerId, settings);
+  // 知识库原文：CINEDANCE + ACTING 是导演生成领域，逐字注入；
+  // LIRA 是图片提示词领域，导演分镜不注入（图片优化路径另行挂载）。
+  const knowledge = skill.knowledge?.cinedance || skill.knowledge?.acting
+    ? `${DIRECTOR_KNOWLEDGE_FRAMING}\n\n${skill.knowledge.cinedance}\n\n${skill.knowledge.acting}`
+    : '';
   const systemInstruction = repairRaw
-    ? `${skill.systemPrompt}\n\n${skill.rules}\n\n你现在只负责修复 JSON。`
-    : `${skill.systemPrompt}\n\n${skill.rules}`;
+    ? `${skill.systemPrompt}\n\n${skill.rules}\n\n${knowledge}\n\n你现在只负责修复 JSON。`
+    : `${skill.systemPrompt}\n\n${skill.rules}\n\n${knowledge}`;
   const raw = await provider.run({
     systemInstruction,
     userPrompt: repairRaw

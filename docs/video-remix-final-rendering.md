@@ -18,10 +18,10 @@ Timeline 只提供需求范围内的轻量编辑：
 - 微调切入点和切出点；
 - 选择 Hard Cut 或 Fade。
 
-编辑后会重新编号、重算总时长、字幕时间和连续性报告。修改任一 Timeline、BGM 或字幕
-选项都会使旧成片失效，但不会使已确认的镜头视频失效。
+编辑后会重新编号、重算总时长和连续性报告。修改 Timeline 或 BGM
+都会使旧成片失效，但不会使已确认的镜头视频失效。
 
-## BGM 与字幕
+## BGM
 
 BGM 支持三种模式：
 
@@ -29,10 +29,6 @@ BGM 支持三种模式：
 - 原视频音轨：关闭 Shot 声音，以原参考视频作为完整背景音轨；
 - 上传音乐：通过现有项目音频上传接口保存素材，循环叠加在 Shot 声音之上，并允许调节
   音量。
-
-自动字幕来自结构化分析中的 Dialogue Blueprint。字幕会依据当前 Timeline 顺序和切点
-重新计算，不复用原视频中可能已经烧录的文字。用户可关闭字幕，或选择默认中文描边与
-短视频大字两种样式。
 
 ## 连续性检查
 
@@ -50,7 +46,6 @@ BGM 支持三种模式：
 
 - Shot 顺序、相对切点、音量和转场进入 `shots`；
 - BGM 进入 `backgroundMusic`；
-- 自动字幕及样式进入 `subtitles` 与 `output.subtitleStyle`；
 - 输出文件名包含当前输入哈希，相同输入可稳定定位同一成片。
 
 Manifest 仍先经过现有校验器，再提交现有 `/api/render/start`。Remotion Composition 支持
@@ -76,11 +71,10 @@ AI 画布”后才创建或更新一个普通 Final Video 节点；再次发送�
 Phase 9 使用两个本地 640×360、带 AAC 声音的短视频完成浏览器与真实 Remotion 验收：
 
 - Timeline 为 2 Shot、总目标时长 2.20 秒，首个切点使用 Fade；
-- Dialogue Blueprint 生成两条随 Timeline 排时的短视频样式字幕；
 - 连续性检查正确报告相邻 Shot 的道具变化；
 - 渲染输出经内置 FFprobe 验证为 H.264 + AAC、640×360、2.261 秒；
 - 刷新应用后仍恢复完成状态；执行“发送到 AI 画布”后，画布只保留一个普通 Final Video 节点；
 - 验收项目与素材在检查后通过项目删除接口清理。
 
-未登录 Gemini 不影响 Timeline 编辑、字幕排时、连续性检查、Manifest 构建、Remotion
+未登录 Gemini 不影响 Timeline 编辑、连续性检查、Manifest 构建、Remotion
 渲染或成片恢复。

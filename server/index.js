@@ -12,7 +12,6 @@ import crypto from 'crypto';
 import generationRoutes from './routes/generation.js';
 import audioRoutes from './routes/audio.js';
 import renderRoutes from './routes/render.js';
-import autoSubtitleRoutes from './routes/auto-subtitles.js';
 import codexImageJobRoutes from './routes/codex-image-jobs.js';
 import settingsRoutes from './routes/settings.js';
 import videoRemixRoutes from './routes/video-remix.js';
@@ -165,7 +164,6 @@ app.use('/api/audio', audioRoutes);
 app.use('/api/render', renderRoutes);
 
 // Mount automatic speech recognition + burned-in subtitle video jobs.
-app.use('/api/auto-subtitles', autoSubtitleRoutes);
 
 // Video Remix keeps reference originals under the current project's durable
 // folder. Local uploads use a streaming body, so this router must not install a

@@ -717,7 +717,6 @@ export const buildCinematicMergeManifest = ({
     },
     shots: selected,
     audioTracks: [],
-    subtitles: [],
-    output: { endFadeToBlack: 0.6, subtitleStyle: 'default' },
+    output: { endFadeToBlack: 0.6 },
   };
 };

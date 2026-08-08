@@ -10,8 +10,7 @@
  * 把 CanvasNode 那套 memo 优化整个抵消掉。
  *
  * 正确写法是先把「该轮询谁」压成一个稳定字符串（节点 id + 任务 id），effect 只
- * 依赖这个字符串；节点快照从 ref 里取。useGenerationRecovery 一直是这么写的，
- * useAutoSubtitleRecovery 曾经不是，本测试防止它和后来者再退回去。
+ * 依赖这个字符串；节点快照从 ref 里取。
  */
 
 import assert from 'node:assert/strict';
@@ -20,7 +19,6 @@ import test from 'node:test';
 
 const read = name => fs.readFileSync(new URL(`../src/hooks/${name}`, import.meta.url), 'utf8');
 
-const SUBTITLE = read('useAutoSubtitleRecovery.ts');
 const RECOVERY = read('useGenerationRecovery.ts');
 
 /** 抓出源码里所有 `}, [...]);` 形式的 effect 依赖数组。 */
@@ -32,30 +30,6 @@ const dependsOnNodesArray = deps => deps
     .split(',')
     .map(entry => entry.trim())
     .includes('nodes');
-
-test('自动字幕轮询不依赖 nodes 数组', () => {
-    const offenders = dependencyArrays(SUBTITLE).filter(dependsOnNodesArray);
-    assert.deepEqual(
-        offenders,
-        [],
-        `useAutoSubtitleRecovery 的 effect 依赖了 nodes，拖拽时会把 1.2s 轮询打成每帧一次：[${offenders.join('] [')}]`
-    );
-});
-
-test('自动字幕轮询依赖的是「待轮询任务」的稳定字符串', () => {
-    // 这个 key 必须只由 节点 id + 任务 id 组成：坐标、尺寸等变化不得触发重建。
-    assert.match(SUBTITLE, /\$\{node\.id\}:\$\{node\.subtitleJobId\}/);
-    assert.match(SUBTITLE, /\}, \[pendingJobs\]\);/);
-});
-
-test('自动字幕轮询通过 ref 读取回调，调用方是否记忆化不影响轮询节奏', () => {
-    // 回调进依赖数组等于把「调用方有没有包 useCallback」变成轮询频率的隐性前提，
-    // 是同一个 bug 的另一种触发路径。
-    assert.match(SUBTITLE, /callbacksRef/);
-    const offenders = dependencyArrays(SUBTITLE)
-        .filter(deps => /\b(updateNode|onCompleted|onFailed)\b/.test(deps));
-    assert.deepEqual(offenders, [], `回调不应进入 effect 依赖数组：[${offenders.join('] [')}]`);
-});
 
 test('生成状态轮询同样不依赖 nodes 数组（既有约定，防止回退）', () => {
     const offenders = dependencyArrays(RECOVERY).filter(dependsOnNodesArray);

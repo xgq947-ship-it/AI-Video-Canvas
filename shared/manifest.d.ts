@@ -40,18 +40,8 @@ export interface AudioTrack {
   speaker?: string;
 }
 
-/** 字幕：start/end 是「成片时间轴」上的绝对位置（秒）。 */
-export interface Subtitle {
-  id: string;
-  text: string;
-  start: number;
-  end: number;
-  speaker?: string;
-}
-
 export interface OutputConfig {
   endFadeToBlack?: number;
-  subtitleStyle?: string;
   fileName?: string;
 }
 
@@ -65,7 +55,6 @@ export interface ProjectManifest {
   composition: CompositionConfig;
   shots: Shot[];
   audioTracks: AudioTrack[];
-  subtitles: Subtitle[];
   output?: OutputConfig;
 }
 

@@ -27,7 +27,6 @@ export const NODE = {
   CINEMATIC_VIDEO_MERGE: 'Cinematic Video Merge',
   SFX: 'SFX',
   BGM: 'BGM',
-  SUBTITLE: 'Subtitle',
   RENDER: 'Render',
 };
 
@@ -89,12 +88,11 @@ export const isValidNodeConnection = (parentType, childType) => {
     return childType === NODE.IMAGE || childType === NODE.VIDEO || childType === NODE.RENDER || childType === NODE.STICKMAN_DIRECTOR;
   }
 
-  // RENDER 可接收：视频镜头 / 音轨(配音·音效·BGM) / 字幕
+  // RENDER 可接收：视频镜头 / 音轨(配音·音效·BGM)
   if (childType === NODE.RENDER) {
     return (
       parentType === NODE.VIDEO ||
-      AUDIO_KINDS.includes(parentType) ||
-      parentType === NODE.SUBTITLE
+      AUDIO_KINDS.includes(parentType)
     );
   }
 
@@ -102,23 +100,22 @@ export const isValidNodeConnection = (parentType, childType) => {
   if (childType === NODE.VIDEO_REMIX || parentType === NODE.VIDEO_REMIX) return false;
 
   // 配音节点还可连向 VIDEO，作为 Seedance 2.0 的人物音色参考。
-  // SFX / BGM / 字幕仍只能连向 RENDER。
+  // SFX / BGM 仍只能连向 RENDER。
   if (parentType === NODE.AUDIO && childType === NODE.VIDEO) return true;
-  if (AUDIO_KINDS.includes(parentType) || parentType === NODE.SUBTITLE) return false;
+  if (AUDIO_KINDS.includes(parentType)) return false;
 
-  // TEXT → IMAGE / VIDEO（提示词）或 AUDIO / SUBTITLE（台词文本）
+  // TEXT → IMAGE / VIDEO（提示词）或 AUDIO（台词文本）
   if (parentType === NODE.TEXT) {
     return (
       childType === NODE.IMAGE ||
       childType === NODE.VIDEO ||
       childType === NODE.PRODUCT_SCENE_REPLACE ||
-      childType === NODE.AUDIO ||
-      childType === NODE.SUBTITLE
+      childType === NODE.AUDIO
     );
   }
 
-  // 非 TEXT 来源不能连向音轨 / 字幕
-  if (AUDIO_KINDS.includes(childType) || childType === NODE.SUBTITLE) return false;
+  // 非 TEXT 来源不能连向音轨
+  if (AUDIO_KINDS.includes(childType)) return false;
 
   // 产品短视频生成接收两张图片和一个文本提示词。
   if (childType === NODE.PRODUCT_SCENE_REPLACE) {

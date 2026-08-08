@@ -447,15 +447,6 @@ export interface TimelineShot {
   generatedInputHash?: string;
 }
 
-export interface VideoRemixSubtitle {
-  id: string;
-  shotId: string;
-  characterId?: string;
-  text: string;
-  start: number;
-  end: number;
-}
-
 export interface VideoRemixContinuityCut {
   fromShotId: string;
   toShotId: string;
@@ -571,12 +562,6 @@ export interface VideoRemixState {
     loop?: boolean;
     fadeIn?: number;
     fadeOut?: number;
-  };
-  subtitles: {
-    enabled: boolean;
-    style: 'default' | 'short-video';
-    items: VideoRemixSubtitle[];
-    sourceHash?: string;
   };
   renderJob: VideoRemixRenderJob | null;
   output: {
@@ -1061,9 +1046,6 @@ export function videoRemixOutputNodeId(remixNodeId: string): string;
 export function checkVideoRemixContinuity(
   state: unknown
 ): VideoRemixContinuityReport;
-export function buildVideoRemixSubtitles(
-  state: unknown
-): VideoRemixSubtitle[];
 export function prepareVideoRemixTimeline(state: unknown): VideoRemixState;
 export function moveVideoRemixTimelineShot(
   state: unknown,
@@ -1097,13 +1079,6 @@ export function setVideoRemixBgm(
   bgm: Partial<VideoRemixState['bgm']> & {
     mode: VideoRemixState['bgm']['mode'];
   }
-): VideoRemixState;
-export function setVideoRemixSubtitles(
-  state: unknown,
-  settings: Partial<Pick<
-    VideoRemixState['subtitles'],
-    'enabled' | 'style'
-  >>
 ): VideoRemixState;
 export function buildVideoRemixManifest(
   state: unknown,

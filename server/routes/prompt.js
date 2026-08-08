@@ -10,6 +10,7 @@ import { GoogleGenAI } from '@google/genai';
 import path from 'path';
 
 import { getPromptOptimizerProvider } from '../services/promptOptimizerProviders.js';
+import { loadCinematicDirectorSkill, DIRECTOR_KNOWLEDGE_FRAMING } from '../services/cinematicDirector.js';
 import { resolveImageToBase64 } from '../utils/imageHelpers.js';
 import {
     buildPromptOptimizationInstruction,
@@ -23,6 +24,23 @@ import { LIBRARY_DIR } from '../runtime/libraryPaths.js';
 const clientFor = req => new GoogleGenAI({ apiKey: req.app.locals.GEMINI_API_KEY || '' });
 
 const router = express.Router();
+
+// LIRA 是图片提示词优化领域：优化图片 prompt 时注入完整原文。
+// 与 DIRECTOR_KNOWLEDGE_FRAMING 同职责——护栏声明输出契约优先，
+// 防止 skill 原文里的英文人格指令带偏中文成品输出。
+const LIRA_KNOWLEDGE_FRAMING = `
+# 图片提示词优化知识库原文（LIRA skill，已译中文）
+
+以下是 Lira 图片提示词优化大师的完整原文。请深度吸收其中的方法论、案例与
+防翻车标准，并在优化图片 prompt 时逐条应用。
+
+重要约束（优先级最高）：
+- 你的输出格式以本系统提示要求为准：输出中文成品提示词，不解释修改过程。
+- 原文中凡是要求"输出英文 prompt""保持 prompt 文本为英文"之类的指令，
+  在本任务中一律不生效——你始终输出中文提示词，专业术语可保留英文原词。
+- 原文中的 4-D 方法论（DECONSTRUCT / DIAGNOSE / OPTIMIZE / DELIVER）在
+  内部执行，只输出最终成品，不输出过程分析。
+`;
 
 // ============================================================================
 // GEMINI IMAGE DESCRIPTION API
@@ -177,11 +195,25 @@ const optimizePromptHandler = async (req, res) => {
         console.log(`[Prompt Optimize:${providerId}] Model: ${model}${effort ? ` (effort=${effort})` : ''}. Profile: ${profileId}. Prompt: ${prompt.length > 50 ? prompt.substring(0, 50) + '...' : prompt}`);
 
         const systemInstruction = buildPromptOptimizationInstruction(profile, context);
+        // 知识库原文按领域挂载：视频类 profile 注入 CINEDANCE + ACTING，
+        // 图片类 profile 注入 LIRA。全量原文帮助模型深度吸收方法论。
+        const skill = loadCinematicDirectorSkill();
+        const isImageProfile = ['image', 'image-remix'].includes(profile.nodeType);
+        const knowledgeSection = isImageProfile
+          ? skill.knowledge?.lira
+            ? `${LIRA_KNOWLEDGE_FRAMING}\n\n${skill.knowledge.lira}`
+            : ''
+          : skill.knowledge?.cinedance || skill.knowledge?.acting
+            ? `${DIRECTOR_KNOWLEDGE_FRAMING}\n\n${skill.knowledge.cinedance}\n\n${skill.knowledge.acting}`
+            : '';
+        const finalSystemInstruction = knowledgeSection
+          ? `${systemInstruction}\n\n${knowledgeSection}`
+          : systemInstruction;
 
         let text;
         try {
             text = await provider.run({
-                systemInstruction,
+                systemInstruction: finalSystemInstruction,
                 userPrompt: prompt,
                 apiKey,
                 model,

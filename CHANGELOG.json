@@ -10,7 +10,8 @@
     "improved": [
       "Google 登录不再依赖浏览器访问 127.0.0.1 随机端口，兼容企业代理、防火墙与 HTTPS-Only 环境。",
       "轮询过程可容忍短暂网络错误和 Worker 5xx，并在总超时后给出明确重试提示。",
-      "Worker 继续保留 v0.2.16 的 localhost 回跳和 /auth/exchange，旧安装版不受影响。"
+      "Worker 继续保留 v0.2.16 的 localhost 回跳和 /auth/exchange，旧安装版不受影响。",
+      "移除自动识别、生成和烧录字幕功能，成片链路只处理镜头与音轨。"
     ],
     "fixed": [
       "修复 Google 页面显示登录成功、但桌面应用持续等待或最终显示 fail/登录超时的问题。"

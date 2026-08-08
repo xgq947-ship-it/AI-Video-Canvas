@@ -30,7 +30,6 @@ import {
   replaceVideoRemixSource,
   resolveVideoRemixAsset,
   setVideoRemixBgm,
-  setVideoRemixSubtitles,
   videoRemixOutputNodeId,
 } from '../shared/videoRemix.js';
 
@@ -420,10 +419,6 @@ test('18 秒 / 3 Shot MVP 从本地化状态贯通到唯一 Final Video Node', (
   assert.equal(state.videoReview.confirmed, true);
 
   state = prepareVideoRemixTimeline(state);
-  state = setVideoRemixSubtitles(state, {
-    enabled: true,
-    style: 'short-video',
-  });
   state = setVideoRemixBgm(state, {
     mode: 'upload',
     url: '/library/projects/Acceptance/audio/bgm.mp3',
@@ -441,7 +436,6 @@ test('18 秒 / 3 Shot MVP 从本地化状态贯通到唯一 Final Video Node', (
     'shot_003',
   ]);
   assert.equal(manifest.durationSec, 18);
-  assert.equal(manifest.subtitles.length, 1);
   assert.equal(manifest.audioTracks[0].file, '/library/projects/Acceptance/audio/bgm.mp3');
 
   state = beginVideoRemixRender(state, {

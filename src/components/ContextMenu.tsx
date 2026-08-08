@@ -18,7 +18,6 @@ import {
   ChevronRight,
   Mic,
   Volume2,
-  Captions,
   Clapperboard,
   ArrowLeft,
   SlidersHorizontal,
@@ -508,12 +507,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           icon={<Music size={18} />}
           label="背景音乐"
           onClick={() => onSelectType(NodeType.BGM)}
-          canvasTheme={canvasTheme}
-        />
-        <MenuItem
-          icon={<Captions size={18} />}
-          label="字幕"
-          onClick={() => onSelectType(NodeType.SUBTITLE)}
           canvasTheme={canvasTheme}
         />
         <MenuItem

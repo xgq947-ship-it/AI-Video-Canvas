@@ -121,12 +121,6 @@ const DEFAULT_BGM = Object.freeze({
   fadeOut: 1,
 });
 
-const DEFAULT_SUBTITLES = Object.freeze({
-  enabled: false,
-  style: 'default',
-  items: Object.freeze([]),
-});
-
 export const VIDEO_REMIX_KEYFRAME_POSITIONS = Object.freeze({
   simple: Object.freeze(['start']),
   medium: Object.freeze(['start', 'end']),
@@ -356,7 +350,6 @@ export function createVideoRemixState(overrides = {}) {
     timelineReview: { ...DEFAULT_TIMELINE_REVIEW },
     continuityReport: null,
     bgm: { ...DEFAULT_BGM },
-    subtitles: { ...DEFAULT_SUBTITLES, items: [] },
     renderJob: null,
     output: null,
     locks: { ...HIGH_FIDELITY_LOCKS },
@@ -400,13 +393,6 @@ export function createVideoRemixState(overrides = {}) {
   state.continuityReport = overrides.continuityReport || null;
   state.locks = { ...HIGH_FIDELITY_LOCKS, ...(overrides.locks || {}) };
   state.bgm = { ...DEFAULT_BGM, ...(overrides.bgm || {}) };
-  state.subtitles = {
-    ...DEFAULT_SUBTITLES,
-    ...(overrides.subtitles || {}),
-    items: Array.isArray(overrides.subtitles?.items)
-      ? overrides.subtitles.items
-      : [],
-  };
   state.renderJob = overrides.renderJob || null;
   return state;
 }
@@ -558,7 +544,6 @@ export function completeVideoRemixPreprocessing(state, {
     timelineReview: { ...DEFAULT_TIMELINE_REVIEW },
     continuityReport: null,
     bgm: { ...DEFAULT_BGM },
-    subtitles: { ...DEFAULT_SUBTITLES, items: [] },
     renderJob: null,
     output: null,
     errors: current.errors.filter(item => item?.scope !== 'preprocessing'),
@@ -4271,7 +4256,7 @@ function finalStateWithTimeline(current, timeline, updates = {}) {
     order: index,
   }));
   const now = new Date().toISOString();
-  let next = {
+  const next = {
     ...current,
     ...updates,
     stage: current.videoReview?.confirmed ? 'videos_ready' : current.stage,
@@ -4284,24 +4269,6 @@ function finalStateWithTimeline(current, timeline, updates = {}) {
     output: null,
     errors: current.errors.filter(item => item?.scope !== 'render'),
     updatedAt: now,
-  };
-  const subtitleItems = next.subtitles?.enabled
-    ? buildVideoRemixSubtitles(next)
-    : [];
-  next = {
-    ...next,
-    subtitles: {
-      ...DEFAULT_SUBTITLES,
-      ...(next.subtitles || {}),
-      items: subtitleItems,
-      sourceHash: promptValueHash({
-        timeline: normalizedTimeline,
-        dialogues: next.shots.map(shot => ({
-          shotId: shot.shotId,
-          dialogue: shot.audioBlueprint?.dialogue || [],
-        })),
-      }),
-    },
   };
   return {
     ...next,
@@ -4431,46 +4398,6 @@ export function checkVideoRemixContinuity(state) {
   };
 }
 
-export function buildVideoRemixSubtitles(state) {
-  const current = isVideoRemixState(state) ? state : createVideoRemixState();
-  const shotsById = new Map(current.shots.map(shot => [shot.shotId, shot]));
-  const output = [];
-  let cursor = 0;
-  for (const item of orderedVideoRemixTimeline(current)) {
-    const shot = shotsById.get(item.shotId);
-    const trimStart = Math.max(0, Number(item.start) || 0);
-    const trimEnd = Math.max(trimStart, Number(item.end) || trimStart);
-    if (shot) {
-      for (const [dialogueIndex, dialogue] of (
-        shot.audioBlueprint?.dialogue || []
-      ).entries()) {
-        const text = String(dialogue.text?.value || '').trim();
-        if (!text) continue;
-        const dialogueStart = Math.max(0, Number(dialogue.start) || 0);
-        const rawEnd = Number(dialogue.end);
-        const dialogueEnd = Number.isFinite(rawEnd)
-          ? Math.max(dialogueStart, rawEnd)
-          : Math.min(trimEnd, dialogueStart + 3);
-        const visibleStart = Math.max(trimStart, dialogueStart);
-        const visibleEnd = Math.min(trimEnd, dialogueEnd);
-        if (visibleEnd - visibleStart < VIDEO_REMIX_MIN_TIMELINE_DURATION) {
-          continue;
-        }
-        output.push({
-          id: `remix-subtitle-${item.shotId}-${dialogueIndex + 1}`,
-          shotId: item.shotId,
-          characterId: dialogue.characterId || undefined,
-          text,
-          start: roundShotTime(cursor + visibleStart - trimStart),
-          end: roundShotTime(cursor + visibleEnd - trimStart),
-        });
-      }
-    }
-    cursor += Math.max(0, trimEnd - trimStart);
-  }
-  return output.sort((left, right) => left.start - right.start);
-}
-
 export function prepareVideoRemixTimeline(state) {
   const current = isVideoRemixState(state) ? state : createVideoRemixState();
   if (!current.videoReview?.confirmed || current.shots.length === 0) {
@@ -4536,18 +4463,10 @@ export function prepareVideoRemixTimeline(state) {
   });
   const nextSignature = promptValueHash(timeline);
   const currentSignature = promptValueHash(orderedVideoRemixTimeline(current));
-  const subtitleSourceHash = promptValueHash({
-    timeline,
-    dialogues: current.shots.map(shot => ({
-      shotId: shot.shotId,
-      dialogue: shot.audioBlueprint?.dialogue || [],
-    })),
-  });
   if (
     prepared
     && nextSignature === currentSignature
     && current.continuityReport
-    && current.subtitles?.sourceHash === subtitleSourceHash
   ) {
     return current;
   }
@@ -4731,29 +4650,6 @@ export function setVideoRemixBgm(state, bgm = {}) {
     : finalStateWithTimeline(current, current.timeline, { bgm: nextBgm });
 }
 
-export function setVideoRemixSubtitles(state, settings = {}) {
-  const current = prepareVideoRemixTimeline(state);
-  const subtitles = {
-    ...DEFAULT_SUBTITLES,
-    ...current.subtitles,
-    enabled: settings.enabled ?? current.subtitles?.enabled ?? false,
-    style: settings.style === 'short-video'
-      ? 'short-video'
-      : settings.style === 'default'
-        ? 'default'
-        : current.subtitles?.style === 'short-video'
-          ? 'short-video'
-          : 'default',
-  };
-  if (
-    subtitles.enabled === current.subtitles?.enabled
-    && subtitles.style === current.subtitles?.style
-  ) {
-    return current;
-  }
-  return finalStateWithTimeline(current, current.timeline, { subtitles });
-}
-
 function evenDimension(value) {
   const rounded = Math.max(2, Math.round(Number(value) || 0));
   return rounded % 2 === 0 ? rounded : rounded + 1;
@@ -4830,20 +4726,8 @@ export function buildVideoRemixManifest(state, {
       transition: item.transition === 'fade' ? 'fade' : 'hard_cut',
     })),
     audioTracks: [],
-    subtitles: current.subtitles?.enabled
-      ? buildVideoRemixSubtitles(current).map(item => ({
-          id: item.id,
-          text: item.text,
-          start: item.start,
-          end: item.end,
-          speaker: item.characterId || '',
-        }))
-      : [],
     output: {
       endFadeToBlack: 0.3,
-      subtitleStyle: current.subtitles?.style === 'short-video'
-        ? 'short-video'
-        : 'default',
     },
   };
   if (current.bgm?.mode === 'original') {

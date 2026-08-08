@@ -41,7 +41,6 @@ export enum NodeType {
   // AI 漫剧 0-1 生产节点（取值需与 shared/manifest.js 的 MANGA_NODE_TYPES 一致）
   SFX = 'SFX',            // 音效
   BGM = 'BGM',            // 背景音乐
-  SUBTITLE = 'Subtitle',  // 字幕
   RENDER = 'Render'       // Remotion 成片
 }
 
@@ -50,7 +49,6 @@ export const MANGA_NODE_TYPES_SET = new Set<NodeType>([
   NodeType.AUDIO,
   NodeType.SFX,
   NodeType.BGM,
-  NodeType.SUBTITLE,
   NodeType.RENDER,
 ]);
 export const isMangaNode = (t: NodeType) => MANGA_NODE_TYPES_SET.has(t);
@@ -216,15 +214,6 @@ export interface NodeData {
   videoSourceId?: string;
   videoSourcePlatform?: string;
   videoSourceTitle?: string;
-  subtitleSourceNodeId?: string; // 带字幕视频对应的源视频节点
-  subtitleJobId?: string;
-  subtitleJobStatus?: 'queued' | 'extracting' | 'transcribing' | 'aligning' | 'punctuating' | 'rendering' | 'success' | 'failed' | 'cancelled';
-  subtitleJobStage?: string;
-  subtitleJobProgress?: number;
-  subtitleAlignmentQuality?: 'word' | 'estimated';
-  subtitleTranscriptionEngine?: string;
-  subtitleFormat?: 'ass';
-  subtitleSegments?: Array<{ id: string; text: string; start: number; end: number }>;
 
   // Video timing/edit metadata
   trimStart?: number; // Trim start time in seconds
@@ -413,7 +402,7 @@ export interface NodeData {
   needsUpdate?: boolean;
 
   // ==========================================================================
-  // AI 漫剧生产节点字段（配音/音效/BGM/字幕/成片）
+  // AI 漫剧生产节点字段（配音/音效/BGM/成片）
   // ==========================================================================
   mediaUrl?: string;        // 音频/视频素材地址（音频类节点用）
   durationSec?: number;     // 素材真实时长（秒），由音频探测或 TTS 返回
@@ -430,7 +419,7 @@ export interface NodeData {
   fadeOut?: number;
   loop?: boolean;
   ducking?: boolean;        // 仅 BGM：对白期间自动压低
-  speaker?: string;         // 角色名（配音/字幕）
+  speaker?: string;         // 角色名（配音）
 
   // 配音(TTS)参数
   ttsText?: string;
@@ -441,9 +430,6 @@ export interface NodeData {
   voiceId?: string;
   voiceSpeed?: number;
   voiceEmotion?: string;
-
-  // 字幕
-  subtitleText?: string;
 
   // 成片(Render)节点状态
   compWidth?: number;

@@ -61,7 +61,6 @@ interface CanvasNodeProps {
   onImageToVideo?: (nodeId: string) => void;
   onChangeAngleGenerate?: (nodeId: string) => void;
   onExtractLastFrame?: (nodeId: string) => void;
-  onAutoSubtitle?: (nodeId: string) => void;
   onOpenVideoRemix?: (nodeId: string) => void;
   onAnalyzeVideo?: (nodeId: string) => void;
   onGenerateVideoAnalysisAssets?: (nodeId: string) => void;
@@ -83,7 +82,6 @@ interface CanvasNodeProps {
   onPauseCinematicBatch?: (nodeId: string) => void;
   onResumeCinematicBatch?: (nodeId: string) => void;
   onMergeCinematicVideos?: (nodeId: string) => void;
-  onGenerateCinematicSubtitles?: (nodeId: string) => void;
   zoom: number;
   // 悬停回调带上 nodeId，调用方才能传稳定的引用（否则每次 render 都是新箭头函数，
   // React.memo 会全部失效）。
@@ -116,7 +114,6 @@ const NODE_TYPE_LABELS: Record<NodeType, string> = {
   [NodeType.CINEMATIC_VIDEO_MERGE]: '电影成片拼接',
   [NodeType.SFX]: '音效',
   [NodeType.BGM]: '背景音乐',
-  [NodeType.SUBTITLE]: '字幕',
   [NodeType.RENDER]: '成片',
 };
 
@@ -145,7 +142,6 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   onImageToVideo,
   onChangeAngleGenerate,
   onExtractLastFrame,
-  onAutoSubtitle,
   onOpenVideoRemix,
   onAnalyzeVideo,
   onGenerateVideoAnalysisAssets,
@@ -167,7 +163,6 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   onPauseCinematicBatch,
   onResumeCinematicBatch,
   onMergeCinematicVideos,
-  onGenerateCinematicSubtitles,
   zoom,
   onMouseEnter,
   onMouseLeave,
@@ -206,7 +201,6 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   ];
   const videoToolbarActions: NodeHoverToolbarAction[] = [
     ...(onExtractLastFrame ? ['lastFrame' as const, 'separator' as const] : []),
-    ...(onAutoSubtitle && !data.subtitleSourceNodeId ? ['autoSubtitle' as const, 'separator' as const] : []),
     'expand',
     'download',
   ];
@@ -355,7 +349,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   }
 
   if (data.type === NodeType.CINEMATIC_VIDEO_MERGE) {
-    return <CinematicVideoMergeNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onNodePointerDown, onContextMenu, onConnectorDown, workflowId, onMerge: onMergeCinematicVideos || (() => undefined), onGenerateSubtitles: onGenerateCinematicSubtitles } as any)} />;
+    return <CinematicVideoMergeNode {...({ data, allNodes: allNodes || [], selected, canvasTheme, onUpdate, onNodePointerDown, onContextMenu, onConnectorDown, workflowId, onMerge: onMergeCinematicVideos || (() => undefined) } as any)} />;
   }
 
   if (data.type === NodeType.STORYBOARD || data.type === NodeType.STORYBOARD_COMPARE) {
@@ -555,7 +549,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
     );
   }
 
-  // AI 漫剧生产节点（配音/音效/BGM/字幕/成片）—— 自包含渲染
+  // AI 漫剧生产节点（配音/音效/BGM/成片）—— 自包含渲染
   if (isMangaNode(data.type)) {
     return (
       <MangaNode
@@ -636,7 +630,6 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
             onUpdate={onUpdate}
             onExpand={onExpand}
             onExtractLastFrame={onExtractLastFrame}
-            onAutoSubtitle={onAutoSubtitle}
           />
         )}
 
@@ -700,7 +693,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
         </div>
 
         {/* Control Panel - Only show when single node is selected (not in group selection) */}
-        {selected && showControls && data.type !== NodeType.TEXT && !data.subtitleSourceNodeId && (
+        {selected && showControls && data.type !== NodeType.TEXT && (
           <div className="absolute top-[calc(100%+12px)] left-1/2 -translate-x-1/2 w-[600px] flex justify-center z-[100]">
             <NodeControls
               workflowId={workflowId}

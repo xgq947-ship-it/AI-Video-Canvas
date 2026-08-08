@@ -7,7 +7,6 @@
  * 时间约定（重要）：
  *  - shots[].start / shots[].end   —— 源素材的裁剪入点/出点（秒），镜头按 order 顺序首尾拼接。
  *  - audioTracks[].start / end     —— 成片时间轴上的绝对位置（秒）。
- *  - subtitles[].start / end       —— 成片时间轴上的绝对位置（秒）。
  * 所有时间统一用秒；Remotion 内部按 fps 折算为帧。
  */
 
@@ -71,17 +70,15 @@ export const computeShotsDurationSec = (shots) =>
   layoutShots(shots).reduce((sum, s) => sum + s.durationSec, 0);
 
 /**
- * 成片总时长（秒）= max(镜头总时长, 所有音轨结束点, 所有字幕结束点)。
- * 保证末尾的音效/BGM/字幕不会被截断。
+ * 成片总时长（秒）= max(镜头总时长, 所有音轨结束点)。
+ * 保证末尾的音效/BGM 不会被截断。
  * @param {any} manifest
  */
 export const computeTotalDurationSec = (manifest) => {
   const shotsDur = computeShotsDurationSec(manifest && manifest.shots);
   const audioEnd = (manifest && Array.isArray(manifest.audioTracks) ? manifest.audioTracks : [])
     .reduce((mx, t) => Math.max(mx, Number(t.end) || 0), 0);
-  const subEnd = (manifest && Array.isArray(manifest.subtitles) ? manifest.subtitles : [])
-    .reduce((mx, s) => Math.max(mx, Number(s.end) || 0), 0);
-  return Math.max(shotsDur, audioEnd, subEnd);
+  return Math.max(shotsDur, audioEnd);
 };
 
 /** 对白时间窗（绝对秒），用于 BGM 自动闪避(ducking) */
@@ -96,8 +93,7 @@ export const createEmptyManifest = () => ({
   composition: { width: 1280, height: 720, fps: 24 },
   shots: [],
   audioTracks: [],
-  subtitles: [],
-  output: { endFadeToBlack: 0.6, subtitleStyle: 'default' },
+  output: { endFadeToBlack: 0.6 },
 });
 
 const AUDIO_TYPES = ['dialogue', 'sfx', 'bgm'];
@@ -139,16 +135,6 @@ export const validateManifestShape = (manifest) => {
       if (end <= start) errors.push(`audioTracks[${i}] 的 end 必须大于 start`);
     });
   }
-  if (manifest.subtitles != null && !Array.isArray(manifest.subtitles)) {
-    errors.push('subtitles 必须为数组');
-  } else {
-    (manifest.subtitles || []).forEach((s, i) => {
-      if (!s || typeof s.text !== 'string') errors.push(`subtitles[${i}].text 缺失`);
-      const end = Number(s && s.end) || 0;
-      const start = Number(s && s.start) || 0;
-      if (end <= start) errors.push(`subtitles[${i}] 的 end 必须大于 start`);
-    });
-  }
   if (manifest.shots && manifest.shots.length === 0 &&
       (!manifest.audioTracks || manifest.audioTracks.length === 0)) {
     errors.push('清单为空：至少需要一个镜头或一条音轨');
@@ -176,7 +162,6 @@ export const MANGA_NODE_TYPES = {
   AUDIO: 'Audio',        // 配音 / dialogue
   SFX: 'SFX',            // 音效
   BGM: 'BGM',            // 背景音乐
-  SUBTITLE: 'Subtitle',  // 字幕
   RENDER: 'Render',      // Remotion 成片
 };
 
@@ -187,7 +172,6 @@ const num = (v, d) => (v == null || Number.isNaN(Number(v)) ? d : Number(v));
  * 语义：成片节点的直接父节点（parentIds）按类型分桶：
  *   - Video（有素材）  -> shots（源裁剪点 start/end，按 order/x 排序）
  *   - Audio / SFX / BGM               -> audioTracks（时间轴绝对 start/end）
- *   - Subtitle                        -> subtitles（时间轴绝对 start/end）
  * 纯函数，节点用鸭子类型读取字段，便于测试。
  *
  * @param {string} renderNodeId
@@ -214,7 +198,6 @@ export const buildManifestFromNodes = (renderNodeId, nodes, opts = {}) => {
   };
   manifest.output = {
     endFadeToBlack: num(renderNode.endFadeToBlack, 0.6),
-    subtitleStyle: 'default',
   };
 
   // 镜头
@@ -266,21 +249,6 @@ export const buildManifestFromNodes = (renderNodeId, nodes, opts = {}) => {
         fadeOut: num(n.fadeOut, type === 'bgm' ? 1 : 0),
         ducking: type === 'bgm' ? n.ducking !== false : false,
         loop: !!n.loop,
-        speaker: n.speaker || '',
-      });
-    });
-
-  // 字幕
-  parents
-    .filter((n) => n.type === T.SUBTITLE && (n.subtitleText || n.prompt))
-    .forEach((n) => {
-      const start = num(n.timelineStart, 0);
-      const end = num(n.timelineEnd, start + 3);
-      manifest.subtitles.push({
-        id: n.id,
-        text: n.subtitleText || n.prompt || '',
-        start,
-        end: end > start ? end : start + 3,
         speaker: n.speaker || '',
       });
     });

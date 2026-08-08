@@ -28,7 +28,7 @@ server.registerTool('create_edit_plan', {
   description: '创建剪辑计划文件但不改画布。segments 是完整配音上的绝对时间段；默认按画布横坐标选择最后 N 个视频。',
   inputSchema: {
     workflowId: z.string(), audioFile: z.string(), title: z.string().optional(), videoNodeIds: z.array(z.string()).optional(),
-    segments: z.array(z.object({ start: z.number().nonnegative(), end: z.number().positive(), text: z.string().optional(), subtitle: z.string().optional() })).min(1),
+    segments: z.array(z.object({ start: z.number().nonnegative(), end: z.number().positive(), text: z.string().optional() })).min(1),
   },
 }, run((args) => service.createEditPlan(args)));
 server.registerTool('apply_edit_plan', {

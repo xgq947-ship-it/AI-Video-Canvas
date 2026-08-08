@@ -274,8 +274,7 @@ export const buildStickmanMergeManifest = ({
     composition: { width: Math.max(256, Math.round(Number(width) || 1080)), height: Math.max(256, Math.round(Number(height) || 1920)), fps: Math.max(1, Math.round(Number(fps) || 30)) },
     shots: selected,
     audioTracks: [],
-    subtitles: [],
-    output: { endFadeToBlack: 0.6, subtitleStyle: 'default' },
+    output: { endFadeToBlack: 0.6 },
   };
   const validation = validateManifestShape(manifest);
   if (!validation.valid) throw new Error(`视频拼接清单无效：${validation.errors.join('；')}`);

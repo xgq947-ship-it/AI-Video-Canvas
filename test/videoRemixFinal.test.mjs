@@ -4,7 +4,6 @@ import test from 'node:test';
 import {
   beginVideoRemixRender,
   buildVideoRemixManifest,
-  buildVideoRemixSubtitles,
   checkVideoRemixContinuity,
   completeVideoRemixRender,
   createVideoRemixShot,
@@ -16,7 +15,6 @@ import {
   restoreVideoRemixTimelineShot,
   setVideoRemixBgm,
   setVideoRemixRenderError,
-  setVideoRemixSubtitles,
   updateVideoRemixRenderJob,
   updateVideoRemixTimelineShot,
   videoRemixOutputNodeId,
@@ -210,15 +208,12 @@ test('旧版 schema-v1 项目会补齐 Phase 9 默认状态', () => {
   delete legacy.timelineReview;
   delete legacy.continuityReport;
   delete legacy.bgm;
-  delete legacy.subtitles;
   delete legacy.renderJob;
   delete legacy.output;
 
   const normalized = createVideoRemixState(legacy);
   assert.deepEqual(normalized.timelineReview, { prepared: false });
   assert.equal(normalized.bgm.mode, 'none');
-  assert.equal(normalized.subtitles.enabled, false);
-  assert.deepEqual(normalized.subtitles.items, []);
   assert.equal(normalized.renderJob, null);
   assert.equal(normalized.output, null);
   assert.equal(prepareVideoRemixTimeline(normalized).timelineReview.prepared, true);
@@ -236,33 +231,16 @@ test('连续性检查比较场景、光线与人物状态，并指出不连续�
   assert.match(report.warnings[0], /PROP_02/);
 });
 
-test('Dialogue Blueprint 字幕随 Shot 排序与切点重算绝对时间', () => {
-  let state = setVideoRemixSubtitles(
-    prepareVideoRemixTimeline(finalFixture()),
-    { enabled: true, style: 'short-video' }
-  );
-  assert.deepEqual(buildVideoRemixSubtitles(state).map(item => [
-    item.text,
-    item.start,
-    item.end,
-  ]), [
-    ['第一句', 1, 2],
-    ['第二句', 3.5, 4.5],
-  ]);
-
+test('Timeline 排序与切点可以独立调整', () => {
+  let state = prepareVideoRemixTimeline(finalFixture());
   state = moveVideoRemixTimelineShot(state, 'shot_002', -1);
+  assert.deepEqual(state.timeline.map(item => item.shotId), ['shot_002', 'shot_001']);
   state = updateVideoRemixTimelineShot(state, 'shot_002', {
     start: 0.5,
     end: 1.5,
   });
-  assert.deepEqual(state.subtitles.items.map(item => [
-    item.text,
-    item.start,
-    item.end,
-  ]), [
-    ['第二句', 0, 1],
-    ['第一句', 2, 3],
-  ]);
+  assert.equal(state.timeline[0].start, 0.5);
+  assert.equal(state.timeline[0].end, 1.5);
 });
 
 test('轻量 Timeline 支持替换、恢复、删除与最少一个 Shot 保护', () => {
@@ -285,10 +263,7 @@ test('轻量 Timeline 支持替换、恢复、删除与最少一个 Shot 保护'
 });
 
 test('Video Remix Manifest 复用 Remotion，并实现无/原视频/上传 BGM', () => {
-  let state = setVideoRemixSubtitles(
-    prepareVideoRemixTimeline(finalFixture()),
-    { enabled: true, style: 'short-video' }
-  );
+  let state = prepareVideoRemixTimeline(finalFixture());
   const none = buildVideoRemixManifest(state, {
     projectId: 'workflow-1',
     title: '测试成片',
@@ -299,8 +274,6 @@ test('Video Remix Manifest 复用 Remotion，并实现无/原视频/上传 BGM',
   assert.equal(none.shots[0].transition, 'fade');
   assert.equal(none.shots[0].volume, 1);
   assert.equal(none.audioTracks.length, 0);
-  assert.equal(none.subtitles.length, 2);
-  assert.equal(none.output.subtitleStyle, 'short-video');
   assert.equal(none.durationSec, 5);
   assert.match(none.output.fileName, /^video-remix-remix-final-test-/);
 

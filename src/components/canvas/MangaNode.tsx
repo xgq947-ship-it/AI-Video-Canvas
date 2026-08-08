@@ -1,15 +1,15 @@
 /**
  * MangaNode.tsx
  *
- * AI 漫剧生产节点的自包含渲染与逻辑：配音(Audio) / 音效(SFX) / 背景音乐(BGM) /
- * 字幕(Subtitle) / Remotion 成片(Render)。
+ * AI 漫剧生产节点的自包含渲染与逻辑：配音(Audio) / 音效(SFX) /
+ * 背景音乐(BGM) / Remotion 成片(Render)。
  *
  * 直接调用后端 API（/api/audio/*、/api/render/*），并通过 onUpdate 持久化节点字段。
  * 成片节点从「直接连接的父节点」构建统一 manifest 并提交渲染、轮询进度、预览成片。
  */
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Mic, Music, Volume2, Type as TypeIcon, Clapperboard, Upload, Play,
+  Mic, Music, Volume2, Clapperboard, Upload, Play,
   Loader2, Download, FolderOpen, RotateCcw, AlertTriangle, CheckCircle2,
   Settings2, ChevronDown,
 } from 'lucide-react';
@@ -50,7 +50,6 @@ const meta: Record<string, { label: string; color: string; icon: React.ReactNode
   [NodeType.AUDIO]: { label: '配音', color: '#34d399', icon: <Mic size={14} /> },
   [NodeType.SFX]: { label: '音效', color: '#fbbf24', icon: <Volume2 size={14} /> },
   [NodeType.BGM]: { label: '背景音乐', color: '#a78bfa', icon: <Music size={14} /> },
-  [NodeType.SUBTITLE]: { label: '字幕', color: '#60a5fa', icon: <TypeIcon size={14} /> },
   [NodeType.RENDER]: { label: 'Remotion 成片', color: '#f87171', icon: <Clapperboard size={14} /> },
 };
 
@@ -117,7 +116,7 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
           voiceId: data.voiceId,
           voiceName: data.ttsVoiceName,
           speaker: data.speaker,
-          text: data.ttsText || data.subtitleText || data.prompt || '',
+          text: data.ttsText || data.prompt || '',
           workflowId,
         }),
       });
@@ -131,7 +130,7 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
   };
 
   const generateTts = async () => {
-    const text = data.ttsText || data.subtitleText || data.prompt || '';
+    const text = data.ttsText || data.prompt || '';
     if (!text.trim()) { setMsg('请先输入配音文本'); return; }
     if (!canGenerateHere) {
       setMsg(`请在 ${ttsProvider.label} 生成后点击“导入配音”`);
@@ -271,8 +270,8 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
             {m.icon}
             <span className="truncate text-xs font-semibold">{data.title || m.label}</span>
           </div>
-          <span className={`shrink-0 text-[10px] ${data.mediaUrl || data.renderOutputUrl || data.subtitleText ? 'text-emerald-400' : 'text-neutral-600'}`}>
-            {data.mediaUrl || data.renderOutputUrl || data.subtitleText ? '已配置' : '待配置'}
+          <span className={`shrink-0 text-[10px] ${data.mediaUrl || data.renderOutputUrl ? 'text-emerald-400' : 'text-neutral-600'}`}>
+            {data.mediaUrl || data.renderOutputUrl ? '已配置' : '待配置'}
           </span>
         </div>
 
@@ -295,7 +294,7 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
                   </select>
                   <label className={labelCls}>配音文本</label>
                   <textarea
-                    value={data.ttsText ?? data.subtitleText ?? ''}
+                    value={data.ttsText ?? ''}
                     onChange={(e) => up({ ttsText: e.target.value })}
                     onPointerDown={stop}
                     placeholder={canGenerateHere ? `输入台词，用 ${ttsProvider.label} 合成配音` : '输入台词，去所选平台生成后导入'}
@@ -384,36 +383,11 @@ export const MangaNode: React.FC<MangaNodeProps> = ({
             </>
           )}
 
-          {/* 字幕 */}
-          {data.type === NodeType.SUBTITLE && (
-            <>
-              <label className={labelCls}>字幕文本</label>
-              <textarea value={data.subtitleText ?? ''} onChange={(e) => up({ subtitleText: e.target.value })}
-                onPointerDown={stop} placeholder="输入字幕内容" className={inputCls + ' resize-none'} style={{ minHeight: 44 }} />
-              {/* 预览 */}
-              <div className="rounded bg-black/70 py-2 px-2 text-center">
-                <span className="text-white text-sm" style={{ textShadow: '0 1px 3px #000' }}>
-                  {data.subtitleText || '字幕预览'}
-                </span>
-              </div>
-              {showAdvanced && (
-                <div className="flex flex-col gap-2 rounded-lg border border-neutral-800 bg-[#141414] p-2">
-                  <input value={data.speaker ?? ''} onChange={(e) => up({ speaker: e.target.value })}
-                    onPointerDown={stop} placeholder="角色名（可选）" className={inputCls} />
-                  <div className="flex gap-1.5">
-                    <NumField label="起始(s)" value={data.timelineStart ?? 0} onChange={(v) => up({ timelineStart: v })} />
-                    <NumField label="结束(s)" value={data.timelineEnd ?? 3} onChange={(v) => up({ timelineEnd: v })} />
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-
           {/* Remotion 成片 */}
           {data.type === NodeType.RENDER && manifestPreview && (
             <>
               <div className="text-[11px] text-neutral-300 bg-[#1a1a1a] rounded p-2 flex flex-col gap-0.5">
-                <div>镜头: <b>{manifestPreview.shots.length}</b> · 音轨: <b>{manifestPreview.audioTracks.length}</b> · 字幕: <b>{manifestPreview.subtitles.length}</b></div>
+                <div>镜头: <b>{manifestPreview.shots.length}</b> · 音轨: <b>{manifestPreview.audioTracks.length}</b></div>
                 <div className="text-neutral-500">连接素材节点后即可自动组装</div>
               </div>
 

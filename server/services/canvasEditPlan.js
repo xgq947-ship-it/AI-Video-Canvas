@@ -110,7 +110,7 @@ export const createCanvasEditService = ({ rootDir = path.resolve(process.cwd()) 
       const end = round(segment.end);
       if (start < 0 || end <= start || (index > 0 && start < previousEnd)) throw new Error(`第 ${index + 1} 段时间非法或重叠`);
       previousEnd = end;
-      return { start, end, text: String(segment.text || ''), subtitle: String(segment.subtitle || segment.text || '') };
+      return { start, end, text: String(segment.text || '') };
     });
   };
 
@@ -184,17 +184,12 @@ export const createCanvasEditService = ({ rootDir = path.resolve(process.cwd()) 
       mediaUrl: plan.audio.file, durationSec: plan.audio.duration, timelineStart: 0, timelineEnd: plan.audio.duration,
       audioVolume: 1, fadeIn: 0, fadeOut: 0, speaker: '莫妮卡', ttsSource: 'imported', ttsProvider: 'import',
     };
-    const subtitleNodes = plan.segments.map((segment, index) => ({
-      id: crypto.randomUUID(), type: 'Subtitle', title: `字幕 ${index + 1}`, x: maxX + 450, y: minY + 260 + index * 150,
-      prompt: segment.subtitle, subtitleText: segment.subtitle, status: 'success', model: '', aspectRatio: '9:16', resolution: 'Auto',
-      parentIds: [], timelineStart: segment.start, timelineEnd: segment.end, speaker: '莫妮卡',
-    }));
     const renderNode = {
       id: crypto.randomUUID(), type: 'Render', title: '莫妮卡自我介绍成片', x: maxX + 950, y: minY + 300,
       prompt: '', status: 'idle', model: '', aspectRatio: '9:16', resolution: '1080p', compWidth: 1080, compHeight: 1920,
-      compFps: 24, endFadeToBlack: 0.6, parentIds: [...plan.shots.map((shot) => shot.nodeId), audioNode.id, ...subtitleNodes.map((node) => node.id)],
+      compFps: 24, endFadeToBlack: 0.6, parentIds: [...plan.shots.map((shot) => shot.nodeId), audioNode.id],
     };
-    workflow.nodes.push(audioNode, ...subtitleNodes, renderNode);
+    workflow.nodes.push(audioNode, renderNode);
     writeJson(workflowPath(workflow.id), workflow);
 
     plan.status = 'applied';

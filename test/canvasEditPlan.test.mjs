@@ -20,7 +20,7 @@ const fixture = () => {
   return { rootDir, workflow };
 };
 
-test('应用计划只创建副本，并生成完整配音、字幕和成片节点', () => {
+test('应用计划只创建副本，并生成完整配音和成片节点', () => {
   const { rootDir, workflow } = fixture();
   const service = createCanvasEditService({ rootDir });
   const planDir = path.join(rootDir, 'library', 'edit-plans');
@@ -28,8 +28,8 @@ test('应用计划只创建副本，并生成完整配音、字幕和成片节�
     id: 'plan1', version: 1, status: 'draft', sourceWorkflowId: 'source', title: '莫妮卡自我介绍',
     audio: { file: '/library/audio/voice.mp3', duration: 8 },
     segments: [
-      { start: 0, end: 4, subtitle: '第一句' },
-      { start: 4, end: 8, subtitle: '第二句' },
+      { start: 0, end: 4, text: '第一句' },
+      { start: 4, end: 8, text: '第二句' },
     ],
     shots: [
       { nodeId: 'v1', trimStart: 0, trimEnd: 4 },
@@ -43,7 +43,6 @@ test('应用计划只创建副本，并生成完整配音、字幕和成片节�
   assert.notEqual(applied.workflow.id, workflow.id);
   assert.equal(applied.workflow.nodes.find((node) => node.id === 'v1').shotVolume, 0);
   assert.equal(applied.workflow.nodes.filter((node) => node.type === 'Audio').length, 1);
-  assert.equal(applied.workflow.nodes.filter((node) => node.type === 'Subtitle').length, 2);
   assert.equal(applied.workflow.nodes.filter((node) => node.type === 'Render').length, 1);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(rootDir, 'library', 'workflows', 'source.json'))), workflow);
 

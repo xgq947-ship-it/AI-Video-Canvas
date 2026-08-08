@@ -9,7 +9,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
-import type { ProjectManifest, AudioTrack, Subtitle } from "../shared/manifest";
+import type { ProjectManifest, AudioTrack } from "../shared/manifest";
 import {
   layoutShots,
   normalizeAssetPath,
@@ -22,7 +22,6 @@ import {
  * 画面：镜头按 order 顺序拼接，支持 hard_cut 与 fade，objectFit: cover（等比铺满不拉伸）。
  * 声音：dialogue / sfx / bgm 三类音轨按绝对时间轴摆放，支持淡入淡出、循环、
  *       以及 bgm 在对白期间自动闪避(ducking)。
- * 字幕：按绝对时间轴摆放，通用中文样式。
  * 收尾：可选结尾淡黑。
  */
 
@@ -160,58 +159,6 @@ const AudioLayer: React.FC<{ track: AudioTrack; manifest: ProjectManifest; fps: 
   );
 };
 
-const SubtitleView: React.FC<{
-  text: string;
-  durationInFrames: number;
-  styleName?: string;
-}> = ({
-  text,
-  durationInFrames,
-  styleName,
-}) => {
-  const frame = useCurrentFrame();
-  const { height } = useVideoConfig();
-  const shortVideo = styleName === "short-video";
-  const opacity = interpolate(
-    frame,
-    [0, 4, Math.max(4, durationInFrames - 4), durationInFrames],
-    [0, 1, 1, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-  return (
-    <AbsoluteFill
-      style={{
-        justifyContent: "flex-end",
-        alignItems: "center",
-        paddingBottom: Math.round(height * (shortVideo ? 0.13 : 0.09)),
-        pointerEvents: "none",
-      }}
-    >
-      <div
-        style={{
-          color: "#f5f5f5",
-          fontFamily: '"PingFang SC", "Microsoft YaHei", sans-serif',
-          fontSize: Math.round(Math.max(
-            shortVideo ? 36 : 30,
-            Math.min(shortVideo ? 82 : 68, height * (shortVideo ? 0.048 : 0.038))
-          )),
-          fontWeight: shortVideo ? 800 : 700,
-          letterSpacing: 1,
-          lineHeight: 1.28,
-          WebkitTextStroke: `${Math.max(1.5, height * 0.0015)}px rgba(0,0,0,0.9)`,
-          paintOrder: "stroke fill",
-          textShadow: "0 2px 7px rgba(0,0,0,0.95)",
-          opacity,
-          maxWidth: "86%",
-          textAlign: "center",
-        }}
-      >
-        {text}
-      </div>
-    </AbsoluteFill>
-  );
-};
-
 export const MangaComposition: React.FC<MangaProps> = ({ manifest }) => {
   const { fps, durationInFrames } = useVideoConfig();
   const frame = useCurrentFrame();
@@ -235,20 +182,6 @@ export const MangaComposition: React.FC<MangaProps> = ({ manifest }) => {
       {(manifest.audioTracks || []).map((track) => (
         <AudioLayer key={track.id} track={track} manifest={manifest} fps={fps} />
       ))}
-
-      {(manifest.subtitles || []).map((sub: Subtitle) => {
-        const from = secToFrames(sub.start);
-        const dur = Math.max(1, secToFrames(sub.end) - from);
-        return (
-          <Sequence key={sub.id} from={from} durationInFrames={dur}>
-            <SubtitleView
-              text={sub.text}
-              durationInFrames={dur}
-              styleName={manifest.output?.subtitleStyle}
-            />
-          </Sequence>
-        );
-      })}
 
       {endFade > 0 && (
         <AbsoluteFill style={{ backgroundColor: "black", opacity: finalFade }} />

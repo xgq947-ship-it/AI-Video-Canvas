@@ -43,11 +43,10 @@ test('layoutShots 按 order 排序并累计入点', () => {
   assert.equal(computeShotsDurationSec(shots), 6);
 });
 
-test('computeTotalDurationSec 取镜头/音轨/字幕的最大结束', () => {
+test('computeTotalDurationSec 取镜头与音轨的最大结束', () => {
   const manifest = {
     shots: [{ file: 'a.mp4', start: 0, end: 5 }],
     audioTracks: [{ type: 'bgm', file: 'b.mp3', start: 0, end: 9 }],
-    subtitles: [{ text: 'x', start: 0, end: 3 }],
   };
   assert.equal(computeTotalDurationSec(manifest), 9);
 });
@@ -73,7 +72,6 @@ test('validateManifestShape 捕获非法结构', () => {
     composition: { width: 1280, height: 720, fps: 24 },
     shots: [{ file: 'a.mp4', start: 0, end: 5 }],
     audioTracks: [],
-    subtitles: [],
   };
   assert.equal(validateManifestShape(good).valid, true);
   assert.equal(validateManifestShape({
@@ -96,12 +94,11 @@ test('collectAssetRefs 收集镜头与音轨素材', () => {
 test('buildManifestFromNodes 从节点图组装清单', () => {
   const T = MANGA_NODE_TYPES;
   const nodes = [
-    { id: 'r', type: T.RENDER, title: '成片', parentIds: ['v1', 'v2', 'd1', 'bgm1', 'sub1'] },
+    { id: 'r', type: T.RENDER, title: '成片', parentIds: ['v1', 'v2', 'd1', 'bgm1'] },
     { id: 'v2', type: T.VIDEO, resultUrl: '/library/videos/s2.mp4', trimStart: 0, trimEnd: 5, order: 2, x: 200 },
     { id: 'v1', type: T.VIDEO, resultUrl: '/library/videos/s1.mp4', trimStart: 0, trimEnd: 4, order: 1, transition: 'fade', x: 100 },
     { id: 'd1', type: T.AUDIO, mediaUrl: '/library/audio/d.mp3', timelineStart: 1, durationSec: 3, speaker: '林默' },
     { id: 'bgm1', type: T.BGM, mediaUrl: '/library/audio/bgm.mp3', timelineStart: 0, timelineEnd: 9 },
-    { id: 'sub1', type: T.SUBTITLE, subtitleText: '你好', timelineStart: 1, timelineEnd: 4 },
     { id: 'stray', type: T.SFX, mediaUrl: '/library/audio/x.mp3' }, // 未连接，应被忽略
   ];
   const m = buildManifestFromNodes('r', nodes, { composition: { width: 1280, height: 720, fps: 24 } });
@@ -118,9 +115,6 @@ test('buildManifestFromNodes 从节点图组装清单', () => {
   assert.equal(dia.end, 4); // start + durationSec(3)
   const bgm = m.audioTracks.find((t) => t.type === 'bgm');
   assert.equal(bgm.ducking, true); // BGM 默认闪避
-
-  assert.equal(m.subtitles.length, 1);
-  assert.equal(m.subtitles[0].text, '你好');
 
   // 未连接的 SFX 节点不进入清单
   assert.ok(!m.audioTracks.some((t) => t.file.includes('x.mp3')));

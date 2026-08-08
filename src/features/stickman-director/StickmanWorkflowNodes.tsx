@@ -36,7 +36,7 @@ import { GenerationElapsed } from '../../components/canvas/GenerationElapsed';
 import { LockedNodeOverlay } from '../../components/LockedNodeOverlay';
 import { useNodeLocked } from '../../hooks/useNodeLocked';
 import { NodeData, NodeStatus, NodeType } from '../../types';
-import type { StickmanDirectorOutput, StickmanShot } from '../../../shared/stickmanDirector.js';
+import type { StickmanShot } from '../../../shared/stickmanDirector.js';
 import {
   STICKMAN_ASPECT_RATIOS,
   STICKMAN_PACES,

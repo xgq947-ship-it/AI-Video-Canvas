@@ -88,11 +88,7 @@ export const buildTestManifest = (refs) => ({
     { id: 'aud-sfx', type: 'sfx', file: refs.sfx, start: 5, end: 5.8, volume: 0.8 },
     { id: 'aud-bgm', type: 'bgm', file: refs.bgm, start: 0, end: 9, volume: 0.15, fadeIn: 1, fadeOut: 1, ducking: true, loop: true },
   ],
-  subtitles: [
-    { id: 'sub-001', text: '这是第一条测试字幕', start: 1, end: 4, speaker: '角色A' },
-    { id: 'sub-002', text: '这是第二条测试字幕', start: 5.5, end: 8, speaker: '角色B' },
-  ],
-  output: { endFadeToBlack: 0.6, subtitleStyle: 'default' },
+  output: { endFadeToBlack: 0.6 },
 });
 
 // 直接运行则生成到默认 library

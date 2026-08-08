@@ -101,15 +101,35 @@ function prepareBrowserHub() {
     }
 }
 
-async function start() {
-    const recordedPid = readPid();
-    const activePids = [...new Set([
-        ...(isAlive(recordedPid) ? [recordedPid] : []),
-        ...managedElectronPids()
-    ])];
-    if (activePids.length > 0) {
-        emit({ status: 'already_running', pid: activePids[0] });
+function syncPidFile(activePids) {
+    if (activePids.length === 0) {
+        fs.rmSync(PID_FILE, { force: true });
         return;
+    }
+    const recordedPid = readPid();
+    if (recordedPid !== activePids[0]) {
+        fs.mkdirSync(RUNTIME_DIR, { recursive: true });
+        fs.writeFileSync(PID_FILE, `${activePids[0]}\n`);
+    }
+}
+
+function status() {
+    const activePids = managedElectronPids();
+    syncPidFile(activePids);
+    const payload = activePids.length > 0
+        ? { status: 'running', pid: activePids[0], electronProcesses: activePids.length }
+        : { status: 'stopped', electronProcesses: 0 };
+    emit(payload);
+    return payload;
+}
+
+async function start({ emitResult = true, resultStatus = 'started' } = {}) {
+    const activePids = managedElectronPids();
+    if (activePids.length > 0) {
+        syncPidFile(activePids);
+        const payload = { status: 'already_running', pid: activePids[0] };
+        if (emitResult) emit(payload);
+        return payload;
     }
 
     requireRuntimeFiles();
@@ -128,7 +148,8 @@ async function start() {
     fs.writeFileSync(PID_FILE, `${child.pid}\n`);
 
     await delay(1500);
-    if (!isAlive(child.pid)) {
+    const launchedPids = managedElectronPids();
+    if (launchedPids.length === 0) {
         fs.rmSync(PID_FILE, { force: true });
         let detail = '';
         try {
@@ -138,7 +159,10 @@ async function start() {
         }
         throw new Error(`Electron 启动后立即退出${detail ? `：\n${detail}` : ''}`);
     }
-    emit({ status: 'started', pid: child.pid });
+    syncPidFile(launchedPids);
+    const payload = { status: resultStatus, pid: launchedPids[0] };
+    if (emitResult) emit(payload);
+    return payload;
 }
 
 function signalAll(pids, signal) {
@@ -161,30 +185,45 @@ async function waitForExit(pids, timeoutMs) {
     return pids.every((pid) => !isAlive(pid));
 }
 
-async function stop() {
-    const recordedPid = readPid();
-    const electronPids = [...new Set([
-        ...(isAlive(recordedPid) ? [recordedPid] : []),
-        ...managedElectronPids()
-    ])];
+async function stop({ emitResult = true } = {}) {
+    const electronPids = managedElectronPids();
     if (electronPids.length === 0) {
         fs.rmSync(PID_FILE, { force: true });
-        emit({ status: 'not_running' });
-        return;
+        const payload = { status: 'not_running', electronProcesses: 0 };
+        if (emitResult) emit(payload);
+        return payload;
     }
 
     signalAll(electronPids, 'SIGTERM');
-    if (!(await waitForExit(electronPids, 10_000))) {
+    let exited = await waitForExit(electronPids, 10_000);
+    if (!exited) {
         signalAll(electronPids, 'SIGKILL');
-        await waitForExit(electronPids, 2_000);
+        exited = await waitForExit(electronPids, 2_000);
+    }
+    if (!exited) {
+        throw new Error(`无法停止 Evan Electron 进程：${electronPids.join(', ')}`);
     }
 
     fs.rmSync(PID_FILE, { force: true });
-    emit({
+    const payload = {
         status: 'stopped',
         electronProcesses: electronPids.length,
         browserRuntime: 'shared-hub-managed'
-    });
+    };
+    if (emitResult) emit(payload);
+    return payload;
+}
+
+async function restart() {
+    const stopped = await stop({ emitResult: false });
+    const started = await start({ emitResult: false, resultStatus: 'restarted' });
+    const payload = {
+        ...started,
+        status: 'restarted',
+        stoppedProcesses: stopped.electronProcesses || 0
+    };
+    emit(payload);
+    return payload;
 }
 
 const command = process.argv[2];
@@ -193,8 +232,12 @@ try {
         await start();
     } else if (command === 'stop') {
         await stop();
+    } else if (command === 'restart') {
+        await restart();
+    } else if (command === 'status') {
+        status();
     } else {
-        throw new Error('用法：desktop-launcher.mjs <start|stop>');
+        throw new Error('用法：desktop-launcher.mjs <start|stop|restart|status>');
     }
 } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

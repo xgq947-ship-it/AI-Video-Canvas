@@ -47,7 +47,7 @@ export const purgeAllExpiredProjectTrash = () => {
         try {
             const workflow = JSON.parse(fs.readFileSync(path.join(WORKFLOWS_DIR, filename), 'utf8'));
             const projectRoot = resolveWorkflowProjectRoot(workflow, PROJECTS_DIR);
-            if (projectRoot && fs.existsSync(projectRoot)) purgeExpiredProjectTrash(projectRoot);
+            if (projectRoot && fs.existsSync(projectRoot)) purgeExpiredProjectTrash(projectRoot, Date.now(), workflow);
         } catch (error) {
             console.warn(`[回收站] 清理 ${filename} 失败：${error.message}`);
         }

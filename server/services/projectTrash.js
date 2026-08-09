@@ -5,7 +5,17 @@ import path from 'path';
 export const PROJECT_TRASH_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 const TRASH_INDEX_VERSION = 2;
-const TRASHABLE_IMAGE_NODE_TYPES = new Set(['Image', 'Image Editor', 'Camera Angle']);
+const TRASHABLE_MEDIA_NODE_TYPES = new Set([
+    'Image',
+    'Image Editor',
+    'Camera Angle',
+    'Video',
+    'Reference Video',
+    'Flow Batch Video',
+    'Video Merge',
+    'Cinematic Video Merge',
+    'Render'
+]);
 
 function trashRoot(projectRoot) {
     return path.join(projectRoot, '.trash');
@@ -57,7 +67,7 @@ function resolveWithin(root, relativePath) {
     return resolved;
 }
 
-function parseProjectImageUrl(value, projectDirName) {
+function parseProjectMediaUrl(value, projectDirName) {
     if (!value || typeof value !== 'string') return null;
     let pathname = value.split('?')[0];
     if (/^https?:\/\//i.test(value)) {
@@ -67,14 +77,16 @@ function parseProjectImageUrl(value, projectDirName) {
             return null;
         }
     }
-    const match = pathname.match(/^\/library\/projects\/([^/]+)\/images\/([^/]+)$/);
+    const match = pathname.match(/^\/library\/projects\/([^/]+)\/(images|videos)\/([^/]+)$/);
     if (!match) return null;
     try {
         const parsedProjectDir = decodeURIComponent(match[1]);
-        const filename = decodeURIComponent(match[2]);
+        const type = match[2];
+        const filename = decodeURIComponent(match[3]);
         if (parsedProjectDir !== projectDirName || path.basename(filename) !== filename) return null;
         return {
-            key: `/library/projects/${encodeURIComponent(projectDirName)}/images/${encodeURIComponent(filename)}`,
+            key: `/library/projects/${encodeURIComponent(projectDirName)}/${type}/${encodeURIComponent(filename)}`,
+            type,
             filename
         };
     } catch {
@@ -82,55 +94,41 @@ function parseProjectImageUrl(value, projectDirName) {
     }
 }
 
-function collectNodeImageUrls(node, projectDirName) {
-    if (!node || !TRASHABLE_IMAGE_NODE_TYPES.has(node.type)) return [];
-    const values = [node.resultUrl];
-    for (const version of node.imageVersions || []) values.push(version?.url);
-    const unique = new Map();
-    for (const value of values) {
-        const parsed = parseProjectImageUrl(value, projectDirName);
-        if (parsed) unique.set(parsed.key, parsed);
-    }
-    return [...unique.values()];
-}
-
-function collectAllProjectImageReferences(node, projectDirName) {
-    if (!node) return [];
+function collectNodeMediaUrls(node, projectDirName) {
+    if (!node || !TRASHABLE_MEDIA_NODE_TYPES.has(node.type)) return [];
     const values = [
         node.resultUrl,
         node.lastFrame,
         node.editorCanvasData,
         node.editorBackgroundUrl,
         node.mediaUrl,
-        node.renderOutputUrl,
-        node.inputUrl,
-        ...(node.characterReferenceUrls || []),
-        ...(node.imageVersions || []).map(version => version?.url)
+        node.renderOutputUrl
     ];
+    for (const version of node.imageVersions || []) values.push(version?.url);
     const unique = new Map();
     for (const value of values) {
-        const parsed = parseProjectImageUrl(value, projectDirName);
+        const parsed = parseProjectMediaUrl(value, projectDirName);
         if (parsed) unique.set(parsed.key, parsed);
     }
     return [...unique.values()];
 }
 
-function collectVideoRemixImageReferences(videoRemixes, projectDirName) {
+function collectAllProjectMediaReferences(value, projectDirName) {
     const unique = new Map();
-    const visit = value => {
-        if (typeof value === 'string') {
-            const parsed = parseProjectImageUrl(value, projectDirName);
+    const visit = candidate => {
+        if (typeof candidate === 'string') {
+            const parsed = parseProjectMediaUrl(candidate, projectDirName);
             if (parsed) unique.set(parsed.key, parsed);
             return;
         }
-        if (Array.isArray(value)) {
-            value.forEach(visit);
+        if (Array.isArray(candidate)) {
+            candidate.forEach(visit);
             return;
         }
-        if (!value || typeof value !== 'object') return;
-        Object.values(value).forEach(visit);
+        if (!candidate || typeof candidate !== 'object') return;
+        Object.values(candidate).forEach(visit);
     };
-    visit(videoRemixes);
+    visit(value);
     return [...unique.values()];
 }
 
@@ -139,18 +137,18 @@ function sidecarPath(filePath) {
     return extension ? filePath.slice(0, -extension.length) + '.json' : `${filePath}.json`;
 }
 
-function findImageMetadataRelativePaths(projectRoot, filename) {
-    const imagesDir = resolveWithin(projectRoot, 'images');
-    if (!fs.existsSync(imagesDir)) return [];
+function findMediaMetadataRelativePaths(projectRoot, type, filename) {
+    const mediaDir = resolveWithin(projectRoot, type);
+    if (!fs.existsSync(mediaDir)) return [];
 
     const matches = new Set();
-    const canonicalPath = sidecarPath(path.join(imagesDir, filename));
+    const canonicalPath = sidecarPath(path.join(mediaDir, filename));
     if (fs.existsSync(canonicalPath)) {
         matches.add(path.relative(projectRoot, canonicalPath));
     }
 
-    for (const candidate of fs.readdirSync(imagesDir).filter(name => name.endsWith('.json'))) {
-        const candidatePath = path.join(imagesDir, candidate);
+    for (const candidate of fs.readdirSync(mediaDir).filter(name => name.endsWith('.json'))) {
+        const candidatePath = path.join(mediaDir, candidate);
         try {
             const metadata = JSON.parse(fs.readFileSync(candidatePath, 'utf8'));
             if (metadata?.filename === filename) {
@@ -174,19 +172,38 @@ function publicEntry(entry, workflowId) {
         deletedAt: entry.deletedAt,
         expiresAt: entry.expiresAt,
         nodeCount: entry.nodes?.length || 0,
-        title: entry.nodes?.[0]?.title || (entry.nodes?.length > 1 ? `${entry.nodes.length} 个画布节点` : '图片素材'),
+        title: entry.nodes?.[0]?.title || (entry.nodes?.length > 1 ? `${entry.nodes.length} 个画布节点` : '本地素材'),
+        mediaType: previewFile?.type || (previewFile?.originalRelativePath?.startsWith('videos/') ? 'videos' : 'images'),
         previewUrl: previewFile
             ? `/api/projects/${encodeURIComponent(workflowId)}/trash/${encodeURIComponent(entry.id)}/preview`
             : entry.nodes?.[0]?.resultUrl
     };
 }
 
-export function purgeExpiredProjectTrash(projectRoot, now = Date.now()) {
+function activeProjectMediaKeys(workflow) {
+    if (!workflow?.projectDirName) return new Set();
+    return new Set(collectAllProjectMediaReferences(workflow, workflow.projectDirName).map(file => file.key));
+}
+
+function removeUnreferencedOriginals(entry, workflow, projectRoot) {
+    if (!workflow) return;
+    const activeFileKeys = activeProjectMediaKeys(workflow);
+    for (const file of entry.files || []) {
+        if (activeFileKeys.has(file.key)) continue;
+        removeIfExists(resolveWithin(projectRoot, file.originalRelativePath));
+        for (const metadata of file.metadataFiles || []) {
+            removeIfExists(resolveWithin(projectRoot, metadata.originalRelativePath));
+        }
+    }
+}
+
+export function purgeExpiredProjectTrash(projectRoot, now = Date.now(), workflow = null) {
     const index = readTrashIndex(projectRoot);
     const expired = index.entries.filter(entry => new Date(entry.expiresAt).getTime() <= now);
     if (expired.length === 0) return 0;
 
     for (const entry of expired) {
+        removeUnreferencedOriginals(entry, workflow, projectRoot);
         fs.rmSync(resolveWithin(path.join(trashRoot(projectRoot), 'files'), entry.id), {
             recursive: true,
             force: true
@@ -198,7 +215,7 @@ export function purgeExpiredProjectTrash(projectRoot, now = Date.now()) {
 }
 
 export function listProjectTrash(workflow, projectRoot, now = Date.now()) {
-    purgeExpiredProjectTrash(projectRoot, now);
+    purgeExpiredProjectTrash(projectRoot, now, workflow);
     return readTrashIndex(projectRoot).entries
         .sort((left, right) => new Date(right.deletedAt).getTime() - new Date(left.deletedAt).getTime())
         .map(entry => publicEntry(entry, workflow.id));
@@ -212,7 +229,7 @@ export function trashWorkflowNodes(workflow, currentNodes, nodeIds, projectRoot,
 
     const deletedFiles = new Map();
     for (const node of deletedNodes) {
-        for (const file of collectNodeImageUrls(node, workflow.projectDirName)) {
+        for (const file of collectNodeMediaUrls(node, workflow.projectDirName)) {
             deletedFiles.set(file.key, file);
         }
     }
@@ -220,20 +237,7 @@ export function trashWorkflowNodes(workflow, currentNodes, nodeIds, projectRoot,
         return { entry: null, deletedNodes, remainingNodes };
     }
 
-    const activeFileKeys = new Set();
-    for (const node of remainingNodes) {
-        for (const file of collectAllProjectImageReferences(node, workflow.projectDirName)) {
-            activeFileKeys.add(file.key);
-        }
-    }
-    for (const file of collectVideoRemixImageReferences(
-        workflow.videoRemixes,
-        workflow.projectDirName
-    )) {
-        activeFileKeys.add(file.key);
-    }
-    const coverReference = parseProjectImageUrl(workflow.coverUrl, workflow.projectDirName);
-    if (coverReference) activeFileKeys.add(coverReference.key);
+    const activeFileKeys = activeProjectMediaKeys(workflow);
 
     const id = crypto.randomUUID();
     const deletedAt = new Date(now).toISOString();
@@ -241,11 +245,11 @@ export function trashWorkflowNodes(workflow, currentNodes, nodeIds, projectRoot,
     const files = [];
 
     for (const file of deletedFiles.values()) {
-        const originalRelativePath = `images/${file.filename}`;
+        const originalRelativePath = `${file.type}/${file.filename}`;
         const originalPath = resolveWithin(projectRoot, originalRelativePath);
-        const backupRelativePath = `files/${id}/images/${file.filename}`;
+        const backupRelativePath = `files/${id}/${file.type}/${file.filename}`;
         const backupPath = resolveWithin(trashRoot(projectRoot), backupRelativePath);
-        const metadataFiles = findImageMetadataRelativePaths(projectRoot, file.filename)
+        const metadataFiles = findMediaMetadataRelativePaths(projectRoot, file.type, file.filename)
             .map(originalMetadataRelativePath => {
                 const backupMetadataRelativePath = `files/${id}/${originalMetadataRelativePath}`;
                 const originalMetadataPath = resolveWithin(projectRoot, originalMetadataRelativePath);
@@ -265,6 +269,7 @@ export function trashWorkflowNodes(workflow, currentNodes, nodeIds, projectRoot,
 
         files.push({
             key: file.key,
+            type: file.type,
             originalRelativePath,
             backupRelativePath: fs.existsSync(backupPath) ? backupRelativePath : null,
             metadataFiles
@@ -333,14 +338,15 @@ export function restoreProjectTrashEntry(workflow, projectRoot, entryId) {
     return restoredNodes;
 }
 
-export function permanentlyDeleteProjectTrashEntry(projectRoot, entryId) {
+export function permanentlyDeleteProjectTrashEntry(workflow, projectRoot, entryId) {
     const index = readTrashIndex(projectRoot);
-    const exists = index.entries.some(entry => entry.id === entryId);
-    if (!exists) {
+    const entry = index.entries.find(candidate => candidate.id === entryId);
+    if (!entry) {
         const error = new Error('回收站项目不存在或已过期');
         error.code = 'TRASH_NOT_FOUND';
         throw error;
     }
+    removeUnreferencedOriginals(entry, workflow, projectRoot);
     index.entries = index.entries.filter(entry => entry.id !== entryId);
     writeTrashIndex(projectRoot, index);
     fs.rmSync(resolveWithin(path.join(trashRoot(projectRoot), 'files'), entryId), {
@@ -357,7 +363,7 @@ export function permanentlyDeleteProjectTrashEntry(projectRoot, entryId) {
  *
  * @returns {{ deleted: number }}
  */
-export function purgeAllProjectTrash(projectRoot) {
+export function purgeAllProjectTrash(workflow, projectRoot) {
     const index = readTrashIndex(projectRoot);
     const entries = [...index.entries];
     if (!entries.length) return { deleted: 0 };
@@ -366,6 +372,7 @@ export function purgeAllProjectTrash(projectRoot) {
     let deleted = 0;
     for (const entry of entries) {
         try {
+            removeUnreferencedOriginals(entry, workflow, projectRoot);
             fs.rmSync(resolveWithin(path.join(trashRoot(projectRoot), 'files'), entry.id), {
                 recursive: true,
                 force: true

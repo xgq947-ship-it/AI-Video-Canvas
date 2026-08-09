@@ -413,8 +413,8 @@ export default function App() {
   /**
    * 已经移进回收站、但节点可能被撤销拿回来的记录。
    *
-   * 删除项目图片节点时，图片文件会被移进 .trash；而撤销（Ctrl+Z）只还原画布状态，
-   * 不碰磁盘 —— 节点方框回来了，图片却 404。这里记下「哪几个节点的图片进了哪个
+   * 删除项目图片/视频节点时，本地文件会被移进 .trash；而撤销（Ctrl+Z）只还原画布状态，
+   * 不碰磁盘 —— 节点方框回来了，素材却 404。这里记下「哪几个节点的素材进了哪个
    * 回收站条目」，节点一旦重新出现在画布上就把文件还原回去。
    */
   const pendingTrashRef = React.useRef<{ entryId: string; nodeIds: string[] }[]>([]);
@@ -422,11 +422,33 @@ export default function App() {
   const deleteNodesWithTrash = React.useCallback(async (ids: string[]) => {
     const uniqueIds = [...new Set(ids)];
     const deleted = nodes.filter(node => uniqueIds.includes(node.id));
-    const hasProjectImage = Boolean(workflowId) && deleted.some(node =>
-      [NodeType.IMAGE, NodeType.IMAGE_EDITOR, NodeType.CAMERA_ANGLE].includes(node.type)
-      && typeof node.resultUrl === 'string'
-      && /\/library\/projects\/[^/]+\/images\//.test(node.resultUrl)
-    );
+    const trashableMediaTypes = new Set<NodeType>([
+      NodeType.IMAGE,
+      NodeType.IMAGE_EDITOR,
+      NodeType.CAMERA_ANGLE,
+      NodeType.VIDEO,
+      NodeType.REFERENCE_VIDEO,
+      NodeType.FLOW_BATCH_VIDEO,
+      NodeType.VIDEO_MERGE,
+      NodeType.CINEMATIC_VIDEO_MERGE,
+      NodeType.RENDER,
+    ]);
+    const hasProjectMedia = Boolean(workflowId) && deleted.some(node => {
+      if (!trashableMediaTypes.has(node.type)) return false;
+      const urls = [
+        node.resultUrl,
+        node.lastFrame,
+        node.editorCanvasData,
+        node.editorBackgroundUrl,
+        node.mediaUrl,
+        node.renderOutputUrl,
+        ...(node.imageVersions || []).map(version => version?.url),
+      ];
+      return urls.some(url => (
+        typeof url === 'string'
+        && /\/library\/projects\/[^/]+\/(?:images|videos)\//.test(url)
+      ));
+    });
 
     // 产品短视频任务的结果节点（图片和视频都算）删掉后要在任务里记一笔，否则画布恢复
     // 逻辑会把它当成「结果还在但节点丢了」，下一轮就原样长回来 —— 表现就是删不掉。
@@ -435,14 +457,14 @@ export default function App() {
       void dismissProductSceneResultNodes(uniqueIds, workflowId);
     }
 
-    if (!hasProjectImage) {
+    if (!hasProjectMedia) {
       deleteNodes(uniqueIds);
       return;
     }
     if (trashDeleteInFlight.current) return;
 
-    // 图片文件移入回收站需要一次磁盘往返。先清掉选中态，让图片节点下方的提示词
-    // 控制面板立即消失；否则图片文件已经移动时，控制面板仍会留在画布上，看起来像
+    // 本地素材移入回收站需要一次磁盘往返。先清掉选中态，让节点下方的提示词
+    // 控制面板立即消失；否则素材文件已经移动时，控制面板仍会留在画布上，看起来像
     // “图片删了但文字节点删不掉”。真正节点仍在请求成功后统一删除。
     setSelectedNodeIds(previous => previous.filter(id => !uniqueIds.includes(id)));
     trashDeleteInFlight.current = true;
@@ -453,7 +475,7 @@ export default function App() {
         body: JSON.stringify({ nodeIds: uniqueIds, nodes })
       });
       const result = await readApiResponse<{ entry?: { id?: string } }>(response, '移入回收站失败');
-      // 记下这次删除对应的回收站条目：撤销只会把节点还原到画布上，图片文件还在
+      // 记下这次删除对应的回收站条目：撤销只会把节点还原到画布上，素材文件还在
       // .trash 里，节点回来了却是一个「Failed to load」的空框。见 pendingTrashRef。
       const entryId = result?.entry?.id;
       if (entryId) {
@@ -464,8 +486,8 @@ export default function App() {
       }
       deleteNodes(uniqueIds);
     } catch (error) {
-      console.error('Failed to move canvas image to trash:', error);
-      window.alert(error instanceof Error ? error.message : '移入回收站失败，图片没有删除');
+      console.error('Failed to move canvas media to trash:', error);
+      window.alert(error instanceof Error ? error.message : '移入回收站失败，素材没有删除');
     } finally {
       trashDeleteInFlight.current = false;
     }

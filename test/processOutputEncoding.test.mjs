@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import test from 'node:test';
 
 import {
@@ -6,6 +7,7 @@ import {
     withUtf8PythonEnvironment
 } from '../server/utils/processOutput.js';
 import { opsEnvironment } from '../server/services/opsCliRunner.js';
+import { RUNTIME_PATHS } from '../server/runtime/paths.js';
 
 test('跨数据块拼接 UTF-8 中文，不产生替换字符', () => {
     const bytes = Buffer.from('即梦生图失败：参数设置浮层未关闭', 'utf8');
@@ -46,4 +48,9 @@ test('Python 与冻结 Ops CLI 始终收到 UTF-8 环境', () => {
     assert.equal(environment.PYTHONUTF8, '1');
     assert.equal(environment.PYTHONIOENCODING, 'utf-8');
     assert.equal(environment.PYTHONLEGACYWINDOWSSTDIO, '0');
+    assert.equal(
+        environment.GOOGLE_FLOW_DIAG_DIR,
+        path.join(RUNTIME_PATHS.logsDir, 'google-flow-diagnostics')
+    );
+    assert.doesNotMatch(environment.GOOGLE_FLOW_DIAG_DIR, /Desktop[\\/]GoogleFlow诊断/);
 });

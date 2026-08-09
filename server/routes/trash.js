@@ -71,8 +71,8 @@ router.post('/:id/trash/:entryId/restore', (req, res) => {
 // 清空：路由放在 /:entryId 之前，否则 "all" 会被当成 entryId 匹配掉。
 router.delete('/:id/trash', (req, res) => {
     try {
-        const { projectRoot } = loadWorkflowForTrash(req.params.id);
-        res.json({ success: true, ...purgeAllProjectTrash(projectRoot) });
+        const { workflow, projectRoot } = loadWorkflowForTrash(req.params.id);
+        res.json({ success: true, ...purgeAllProjectTrash(workflow, projectRoot) });
     } catch (error) {
         const status = error.code === 'PROJECT_NOT_FOUND' ? 404 : 500;
         res.status(status).json({ error: error.message });
@@ -81,8 +81,8 @@ router.delete('/:id/trash', (req, res) => {
 
 router.delete('/:id/trash/:entryId', (req, res) => {
     try {
-        const { projectRoot } = loadWorkflowForTrash(req.params.id);
-        permanentlyDeleteProjectTrashEntry(projectRoot, req.params.entryId);
+        const { workflow, projectRoot } = loadWorkflowForTrash(req.params.id);
+        permanentlyDeleteProjectTrashEntry(workflow, projectRoot, req.params.entryId);
         res.json({ success: true });
     } catch (error) {
         const status = error.code === 'TRASH_NOT_FOUND' || error.code === 'PROJECT_NOT_FOUND' ? 404 : 500;

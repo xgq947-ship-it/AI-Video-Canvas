@@ -655,7 +655,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                   key={`${asset.type}-${asset.id}`}
                   role="button"
                   tabIndex={0}
-                  className={`group relative mb-1 flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-left ${hover} ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                  className={`group relative mb-1 flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left ${hover} ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
                   onClick={event => {
                     if (editingAsset?.key === `${asset.type}:${asset.id}` || asset.type === 'audio') return;
                     if (assetPreviewTimerRef.current) clearTimeout(assetPreviewTimerRef.current);
@@ -699,7 +699,7 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                   } : undefined}
                   title={draggable ? '拖到画布添加节点，或点击预览' : undefined}
                 >
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-neutral-700 bg-neutral-800">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-neutral-700 bg-neutral-800">
                     {asset.type === 'image'
                       ? <img src={asset.url} alt="" className="h-full w-full object-cover" draggable={false} />
                       : asset.type === 'audio' ? <Volume2 size={20} className={muted} /> : <Film size={20} className={muted} />}
@@ -724,11 +724,11 @@ export const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
                         }
                       }}
                       aria-label="图片显示名称"
-                      className="min-w-0 flex-1 rounded-md border border-neutral-500 bg-black/10 px-1.5 py-1 text-sm text-inherit outline-none focus:border-neutral-300"
+                      className="min-w-0 flex-1 rounded-md border border-neutral-500 bg-black/10 px-1.5 py-1 text-[13px] text-inherit outline-none focus:border-neutral-300"
                     />
                   ) : (
                     <span
-                      className={`min-w-0 flex-1 truncate text-sm ${assetScope === 'personal' && asset.type === 'image' && asset.filename ? 'cursor-text' : ''}`}
+                      className={`min-w-0 flex-1 line-clamp-2 break-words text-[13px] leading-[17px] ${assetScope === 'personal' && asset.type === 'image' && asset.filename ? 'cursor-text' : ''}`}
                       onDoubleClick={event => startAssetRename(asset, event)}
                       title={assetScope === 'personal' && asset.type === 'image' && asset.filename ? `${asset.name}（双击重命名）` : asset.name}
                     >
@@ -886,9 +886,9 @@ const NodeRow = ({
           onSelect(node.id);
         }
       }}
-      className={`group mb-1 flex w-full items-center gap-3 rounded-2xl px-3 py-2 text-left transition-colors ${selected ? 'bg-[#292929]' : hover}`}
+      className={`group mb-1 flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left transition-colors ${selected ? 'bg-[#292929]' : hover}`}
     >
-      <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-neutral-700 bg-neutral-800">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-neutral-700 bg-neutral-800">
         {thumb && node.type !== NodeType.VIDEO
           ? <img src={thumb} alt="" className="h-full w-full object-cover" />
           : node.type === NodeType.VIDEO ? <Film size={20} className={muted} />
@@ -918,7 +918,7 @@ const NodeRow = ({
         />
       ) : (
         <span
-          className={`min-w-0 flex-1 truncate text-[13px] ${isImage ? 'cursor-text' : ''}`}
+          className={`min-w-0 flex-1 line-clamp-2 break-words text-[13px] leading-[17px] ${isImage ? 'cursor-text' : ''}`}
           onDoubleClick={startRename}
           title={isImage ? `${resolvedName}（双击重命名）` : resolvedName}
         >

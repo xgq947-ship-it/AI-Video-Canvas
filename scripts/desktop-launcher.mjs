@@ -20,6 +20,10 @@ const ELECTRON_BINARY = path.join(
 );
 const VITE_ENTRY = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
 const BROWSER_HUB_PREPARE = path.join(ROOT, 'scripts', 'prepare-browser-hub.mjs');
+// Electron 的 before-quit 自身会在 10.5 秒后兜底退出；外部关闭器必须给它更长的
+// 清理窗口，避免后端正在释放项目文件或 Hub 租约时被提前 SIGKILL。
+const GRACEFUL_STOP_TIMEOUT_MS = 15_000;
+const FORCE_STOP_TIMEOUT_MS = 3_000;
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -195,10 +199,10 @@ async function stop({ emitResult = true } = {}) {
     }
 
     signalAll(electronPids, 'SIGTERM');
-    let exited = await waitForExit(electronPids, 10_000);
+    let exited = await waitForExit(electronPids, GRACEFUL_STOP_TIMEOUT_MS);
     if (!exited) {
         signalAll(electronPids, 'SIGKILL');
-        exited = await waitForExit(electronPids, 2_000);
+        exited = await waitForExit(electronPids, FORCE_STOP_TIMEOUT_MS);
     }
     if (!exited) {
         throw new Error(`无法停止 Evan Electron 进程：${electronPids.join(', ')}`);

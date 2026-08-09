@@ -10,6 +10,7 @@ interface TrashEntry {
     nodeCount: number;
     title: string;
     previewUrl?: string;
+    mediaType?: 'images' | 'videos';
 }
 
 interface TrashModalProps {
@@ -44,12 +45,24 @@ const TrashPreview: React.FC<{
     }
 
     return (
-        <img
-            src={previewUrl}
-            alt={entry.title}
-            className="h-full w-full object-cover"
-            onError={() => setFailed(true)}
-        />
+        entry.mediaType === 'videos' ? (
+            <video
+                src={previewUrl}
+                aria-label={entry.title}
+                className="h-full w-full object-cover"
+                muted
+                playsInline
+                preload="metadata"
+                onError={() => setFailed(true)}
+            />
+        ) : (
+            <img
+                src={previewUrl}
+                alt={entry.title}
+                className="h-full w-full object-cover"
+                onError={() => setFailed(true)}
+            />
+        )
     );
 };
 
@@ -194,7 +207,7 @@ export const TrashModal: React.FC<TrashModalProps> = ({
                         <div className="flex min-h-[240px] flex-col items-center justify-center text-center text-neutral-500">
                             <Trash2 size={34} className="mb-3 opacity-50" />
                             <p className="text-sm font-medium">回收站为空</p>
-                            <p className="mt-1 text-xs">画布中删除的本地图片会显示在这里。</p>
+                            <p className="mt-1 text-xs">画布中删除的本地图片和视频会显示在这里。</p>
                         </div>
                     ) : (
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

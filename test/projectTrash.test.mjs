@@ -10,6 +10,7 @@ import {
     listProjectTrash,
     permanentlyDeleteProjectTrashEntry,
     PROJECT_TRASH_RETENTION_MS,
+    purgeAllProjectTrash,
     purgeExpiredProjectTrash,
     restoreProjectTrashEntry,
     trashWorkflowNodes
@@ -44,6 +45,30 @@ const createFixture = (t) => {
         nodes: [node]
     };
     return { projectRoot, imagePath, sidecarPath, nodeMetadataPath, resultUrl, node, workflow };
+};
+
+const createVideoFixture = (t) => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'evan-project-video-trash-'));
+    t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(projectRoot, 'videos'), { recursive: true });
+    const filename = 'generated.mp4';
+    const videoPath = path.join(projectRoot, 'videos', filename);
+    const metadataPath = path.join(projectRoot, 'videos', 'video-1.json');
+    fs.writeFileSync(videoPath, Buffer.from('video-bytes'));
+    fs.writeFileSync(metadataPath, JSON.stringify({ id: 'video-1', filename }));
+    const resultUrl = '/library/projects/TestProject/videos/generated.mp4';
+    const node = {
+        id: 'video-1',
+        type: 'Video',
+        title: '测试视频',
+        resultUrl
+    };
+    const workflow = {
+        id: 'workflow-video-1',
+        projectDirName: 'TestProject',
+        nodes: [node]
+    };
+    return { projectRoot, videoPath, metadataPath, resultUrl, node, workflow };
 };
 
 test('删除最后一个图片引用时把本地文件移入项目回收站并可完整恢复', (t) => {
@@ -96,6 +121,30 @@ test('同一图片仍被其他画布节点引用时保留原文件，同时为�
     assert.deepEqual(fixture.workflow.nodes.map(node => node.id), ['image-2']);
 });
 
+test('删除视频节点时把视频和元数据移入项目回收站并可恢复', (t) => {
+    const fixture = createVideoFixture(t);
+    const result = trashWorkflowNodes(
+        fixture.workflow,
+        [fixture.node],
+        [fixture.node.id],
+        fixture.projectRoot
+    );
+
+    assert.ok(result.entry);
+    assert.equal(result.entry.mediaType, 'videos');
+    assert.equal(fs.existsSync(fixture.videoPath), false);
+    assert.equal(fs.existsSync(fixture.metadataPath), false);
+    assert.ok(getProjectTrashPreviewPath(fixture.projectRoot, result.entry.id));
+
+    const restored = restoreProjectTrashEntry(fixture.workflow, fixture.projectRoot, result.entry.id);
+    assert.deepEqual(restored.map(node => node.id), ['video-1']);
+    assert.equal(fs.readFileSync(fixture.videoPath, 'utf8'), 'video-bytes');
+    assert.deepEqual(JSON.parse(fs.readFileSync(fixture.metadataPath, 'utf8')), {
+        id: 'video-1',
+        filename: 'generated.mp4'
+    });
+});
+
 test('图片仍被独立复刻任务引用时保留项目文件', (t) => {
     const fixture = createFixture(t);
     fixture.workflow.videoRemixes = [{
@@ -120,7 +169,7 @@ test('图片仍被独立复刻任务引用时保留项目文件', (t) => {
     assert.deepEqual(fixture.workflow.nodes, []);
 });
 
-test('删除项目图片时先清除选中态，提示词控制面板不会残留在画布上', () => {
+test('删除项目图片或视频时统一调用项目回收站，并先清除选中态', () => {
     const block = appSource.slice(
         appSource.indexOf('const deleteNodesWithTrash'),
         appSource.indexOf('// Simple dirty flag')
@@ -131,6 +180,8 @@ test('删除项目图片时先清除选中态，提示词控制面板不会残�
         '磁盘回收站请求前必须先关闭所删节点的控制面板'
     );
     assert.match(block, /deleteNodes\(uniqueIds\)/);
+    assert.match(block, /NodeType\.VIDEO/);
+    assert.match(block, /\(\?:images\|videos\)/);
 });
 
 test('图片和文字节点一起删除时两者都进入回收站且可一起恢复', (t) => {
@@ -162,7 +213,7 @@ test('图片和文字节点一起删除时两者都进入回收站且可一起�
     assert.deepEqual(restored.map(node => node.id), ['image-1', 'text-1']);
 });
 
-test('永久删除和七天到期清理只移除回收站副本', (t) => {
+test('永久删除和七天到期清理移除回收站副本及无引用的项目原文件', (t) => {
     const first = createFixture(t);
     const firstResult = trashWorkflowNodes(
         first.workflow,
@@ -172,7 +223,7 @@ test('永久删除和七天到期清理只移除回收站副本', (t) => {
         1000
     );
     const firstPreview = getProjectTrashPreviewPath(first.projectRoot, firstResult.entry.id);
-    permanentlyDeleteProjectTrashEntry(first.projectRoot, firstResult.entry.id);
+    permanentlyDeleteProjectTrashEntry(first.workflow, first.projectRoot, firstResult.entry.id);
     assert.equal(fs.existsSync(firstPreview), false);
     assert.equal(listProjectTrash(first.workflow, first.projectRoot, 1000).length, 0);
 
@@ -189,10 +240,59 @@ test('永久删除和七天到期清理只移除回收站副本', (t) => {
         0
     );
     assert.equal(
-        purgeExpiredProjectTrash(second.projectRoot, 2000 + PROJECT_TRASH_RETENTION_MS),
+        purgeExpiredProjectTrash(second.projectRoot, 2000 + PROJECT_TRASH_RETENTION_MS, second.workflow),
         1
     );
     assert.equal(listProjectTrash(second.workflow, second.projectRoot, Date.now()).length, 0);
+});
+
+test('永久删除时清理后来已无引用的项目原文件，但保留仍被画布使用的共享素材', (t) => {
+    const removed = createFixture(t);
+    const removedSharedNode = { ...removed.node, id: 'image-2' };
+    removed.workflow.nodes = [removed.node, removedSharedNode];
+    const removedResult = trashWorkflowNodes(
+        removed.workflow,
+        [removed.node, removedSharedNode],
+        [removed.node.id],
+        removed.projectRoot
+    );
+    assert.equal(fs.existsSync(removed.imagePath), true);
+    removed.workflow.nodes = [];
+    permanentlyDeleteProjectTrashEntry(removed.workflow, removed.projectRoot, removedResult.entry.id);
+    assert.equal(fs.existsSync(removed.imagePath), false);
+    assert.equal(fs.existsSync(removed.sidecarPath), false);
+    assert.equal(fs.existsSync(removed.nodeMetadataPath), false);
+
+    const retained = createFixture(t);
+    const retainedSharedNode = { ...retained.node, id: 'image-2' };
+    retained.workflow.nodes = [retained.node, retainedSharedNode];
+    const retainedResult = trashWorkflowNodes(
+        retained.workflow,
+        [retained.node, retainedSharedNode],
+        [retained.node.id],
+        retained.projectRoot
+    );
+    permanentlyDeleteProjectTrashEntry(retained.workflow, retained.projectRoot, retainedResult.entry.id);
+    assert.equal(fs.existsSync(retained.imagePath), true);
+    assert.equal(fs.existsSync(retained.nodeMetadataPath), true);
+});
+
+test('全部永久删除也同步清理已无引用的项目原文件', (t) => {
+    const fixture = createFixture(t);
+    const sharedNode = { ...fixture.node, id: 'image-2' };
+    fixture.workflow.nodes = [fixture.node, sharedNode];
+    trashWorkflowNodes(
+        fixture.workflow,
+        [fixture.node, sharedNode],
+        [fixture.node.id],
+        fixture.projectRoot
+    );
+    fixture.workflow.nodes = [];
+
+    assert.deepEqual(purgeAllProjectTrash(fixture.workflow, fixture.projectRoot), { deleted: 1 });
+    assert.equal(fs.existsSync(fixture.imagePath), false);
+    assert.equal(fs.existsSync(fixture.nodeMetadataPath), false);
+    assert.deepEqual(listProjectTrash(fixture.workflow, fixture.projectRoot), []);
 });
 
 test('回收站预览接口可以读取隐藏 .trash 目录中的真实图片', async t => {

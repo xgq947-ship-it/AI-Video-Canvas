@@ -21,9 +21,8 @@ import { createLicenseManager } from './license/licenseManager.js';
 import { createActivityReporter } from './activityReporter.js';
 import { AUTH_BASE_URL, GOOGLE_LOGIN_ENABLED } from './authConfig.js';
 import {
+    createDetailRemixExportDirectory,
     exportDetailRemixFiles,
-    findDetailRemixExportCollisions,
-    planDetailRemixExport
 } from './detailRemixExport.js';
 
 const ELECTRON_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -399,7 +398,7 @@ ipcMain.handle('detail-remix:export', async (_event, { jobId, workflowId } = {})
 
         const options = {
             title: `导出 ${Number(manifest.count) || 0} 张最终详情图`,
-            buttonLabel: '导出到此文件夹',
+            buttonLabel: '在此位置新建结果文件夹',
             defaultPath: app.getPath('desktop'),
             properties: ['openDirectory', 'createDirectory']
         };
@@ -410,31 +409,10 @@ ipcMain.handle('detail-remix:export', async (_event, { jobId, workflowId } = {})
             return { ok: true, data: { canceled: true } };
         }
 
-        const destination = path.resolve(selected.filePaths[0]);
-        const plan = planDetailRemixExport(manifest.files, destination);
-        const collisions = findDetailRemixExportCollisions(plan);
-        if (collisions.length > 0) {
-            const confirmation = mainWindow
-                ? await dialog.showMessageBox(mainWindow, {
-                    type: 'warning',
-                    title: '发现同名详情图',
-                    message: `所选文件夹已有 ${collisions.length} 个同名编号文件。`,
-                    detail: '继续后会覆盖这些文件；其他文件不会改动。',
-                    buttons: ['取消', '覆盖并导出'],
-                    defaultId: 0,
-                    cancelId: 0
-                })
-                : await dialog.showMessageBox({
-                    type: 'warning',
-                    title: '发现同名详情图',
-                    message: `所选文件夹已有 ${collisions.length} 个同名编号文件。`,
-                    detail: '继续后会覆盖这些文件；其他文件不会改动。',
-                    buttons: ['取消', '覆盖并导出'],
-                    defaultId: 0,
-                    cancelId: 0
-                });
-            if (confirmation.response !== 1) return { ok: true, data: { canceled: true } };
-        }
+        const parentDestination = path.resolve(selected.filePaths[0]);
+        const destination = createDetailRemixExportDirectory(parentDestination, {
+            projectName: manifest.projectName,
+        });
         const exported = exportDetailRemixFiles(manifest.files, destination);
         return { ok: true, data: { canceled: false, ...exported } };
     } catch (error) {

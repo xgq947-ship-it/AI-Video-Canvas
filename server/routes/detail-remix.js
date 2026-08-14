@@ -8,6 +8,7 @@ import {
   getDetailRemixExportManifest,
   getDetailRemixJob,
   getLatestDetailRemixJob,
+  regenerateCompletedDetailRemixPage,
   retryFailedDetailRemixPages,
 } from '../services/detailRemixJobs.js';
 
@@ -57,9 +58,9 @@ function isTrustedDesktopRequest(req) {
   );
 }
 
-function codexUnavailableResponse(req) {
-  const usesCodexRecognition = req.body?.recognitionProvider === 'codex-cli';
-  const usesCodexImage = req.body?.imageModel === 'codex-imagegen';
+function codexUnavailableResponse(req, job = null) {
+  const usesCodexRecognition = (job?.recognitionProvider || req.body?.recognitionProvider) === 'codex-cli';
+  const usesCodexImage = (job?.imageModel || req.body?.imageModel) === 'codex-imagegen';
   if (!usesCodexRecognition && !usesCodexImage) return null;
   const status = req.app.locals.CODEX_INTEGRATION?.getStatus?.();
   const basicReady = status?.available && status.authenticated;
@@ -151,7 +152,13 @@ router.post('/detail-remix-jobs/:jobId/retry-failed', (req, res) => {
   try {
     const workflowId = String(req.body?.workflowId || '');
     if (!workflowId) return res.status(400).json({ error: '缺少 workflowId' });
-    const unavailable = codexUnavailableResponse(req);
+    const existing = getDetailRemixJob(
+      req.params.jobId,
+      workflowId,
+      requestContext(req.app.locals)
+    );
+    if (!existing) return res.status(404).json({ error: '商品详情复刻任务不存在' });
+    const unavailable = codexUnavailableResponse(req, existing);
     if (unavailable) return res.status(unavailable.status).json({ error: unavailable.error });
     const job = retryFailedDetailRemixPages(
       req.params.jobId,
@@ -163,6 +170,27 @@ router.post('/detail-remix-jobs/:jobId/retry-failed', (req, res) => {
     return res.status(202).json(job);
   } catch (error) {
     return sendError(res, error, '无法重试失败详情页');
+  }
+});
+
+router.post('/detail-remix-jobs/:jobId/regenerate-page', (req, res) => {
+  try {
+    const workflowId = String(req.body?.workflowId || '');
+    if (!workflowId) return res.status(400).json({ error: '缺少 workflowId' });
+    const context = requestContext(req.app.locals);
+    const existing = getDetailRemixJob(req.params.jobId, workflowId, context);
+    if (!existing) return res.status(404).json({ error: '商品详情复刻任务不存在' });
+    const unavailable = codexUnavailableResponse(req, existing);
+    if (unavailable) return res.status(unavailable.status).json({ error: unavailable.error });
+    const job = regenerateCompletedDetailRemixPage(
+      req.params.jobId,
+      workflowId,
+      req.body || {},
+      context
+    );
+    return res.status(202).json(job);
+  } catch (error) {
+    return sendError(res, error, '无法重新生成指定详情页');
   }
 });
 

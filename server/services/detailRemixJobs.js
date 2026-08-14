@@ -126,6 +126,12 @@ function rebaseJobImageUrls(job, workflowId, dirs) {
     resultUrl: rebaseProjectImageUrl(page.resultUrl, imageTarget),
     compositeRawUrl: rebaseProjectImageUrl(page.compositeRawUrl, imageTarget),
     compositeUrl: rebaseProjectImageUrl(page.compositeUrl, imageTarget),
+    previousResults: Array.isArray(page.previousResults) ? page.previousResults.map(result => ({
+      ...result,
+      rawResultUrl: rebaseProjectImageUrl(result?.rawResultUrl, imageTarget),
+      finalUrl: rebaseProjectImageUrl(result?.finalUrl, imageTarget),
+      resultUrl: rebaseProjectImageUrl(result?.resultUrl, imageTarget),
+    })) : page.previousResults,
   })) : job.pages;
   job.resultUrls = Array.isArray(job.resultUrls)
     ? job.resultUrls.map(value => rebaseProjectImageUrl(value, imageTarget))
@@ -1754,6 +1760,7 @@ async function validateFinalDetailPage(
   selectedProducts,
   brandReferences,
   evidenceReferences,
+  characterReferences,
   context,
   signal,
 ) {
@@ -1764,6 +1771,7 @@ async function validateFinalDetailPage(
     ...selectedProducts.map(item => item.imageUrl),
     ...brandReferences,
     ...evidenceReferences.map(item => item.imageUrl),
+    ...characterReferences,
   ].map(value => imageInputToDataUrl(value, context)).filter(Boolean);
   if (!generatedDataUrl) throw new Error('无法读取待质检的最终详情图');
   page.validationStatus = 'processing';
@@ -1775,6 +1783,10 @@ async function validateFinalDetailPage(
     pageAnalysis: page.analysis,
     copyPlan,
     ownBrandIdentity: job.brandIdentity,
+    productReferenceCount: selectedProducts.length,
+    hasBrandLogoReference: brandReferences.length > 0,
+    evidenceReferenceCount: evidenceReferences.length,
+    characterReferenceCount: characterReferences.length,
   });
   let parsed;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -1782,7 +1794,7 @@ async function validateFinalDetailPage(
     const request = {
       systemInstruction: instruction,
       userPrompt: attempt === 0
-        ? '验收参考图1。逐字核对全部文案、参数、品牌和产品，严格返回指定 JSON。'
+        ? '验收参考图1。逐字核对文案、参数、品牌和产品；若提供人物参考，还必须分别核对人脸、发型、服装和配饰。严格返回指定 JSON。'
         : '上一次质检结果未通过 JSON 校验。请重新检查同一组图片，只返回符合 Schema 的 JSON。',
       imageDataUrls: [generatedDataUrl, ...supporting],
       outputSchema: DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA,
@@ -1818,11 +1830,16 @@ async function validateFinalDetailPage(
     && parsed.productPlacementCorrect === true
     && parsed.parameterAlignmentCorrect === true
     && parsed.unsupportedStrictFactsAbsent === true
+    && parsed.characterIdentityCorrect === true
+    && parsed.characterHairstyleCorrect === true
+    && parsed.characterOutfitCorrect === true
+    && parsed.characterAccessoriesCorrect === true
     && parsed.competitorRemoved === true
     && parsed.gibberishDetected !== true
     && parsed.missingTexts.length === 0
     && parsed.wrongTexts.length === 0
-    && parsed.unexpectedTexts.length === 0;
+    && parsed.unexpectedTexts.length === 0
+    && parsed.characterIssues.length === 0;
   const validation = { ...parsed, passed };
   page.validation = validation;
   page.validationStatus = passed ? 'passed' : 'failed';
@@ -1838,6 +1855,7 @@ async function repairFinalDetailPage(
   validation,
   brandReferences,
   evidenceReferences,
+  characterReferences,
   context,
   signal,
 ) {
@@ -1854,7 +1872,7 @@ async function repairFinalDetailPage(
   page.repairAttempts = repairAttempt;
   page.status = 'repairing_final';
   job.stage = 'repairing_final';
-  job.stageLabel = `正在 AI 修复第 ${page.index + 1} 页文案`;
+  job.stageLabel = `正在 AI 修复第 ${page.index + 1} 页质检问题`;
   writeJob(job, context);
   const current = saveImageBuffer(rawBuffer, imageTarget, `${page.resultNodeId}-quality-failed-${repairAttempt}`);
   page.qualityFailedCandidateUrl = current.resultUrl;
@@ -1862,6 +1880,7 @@ async function repairFinalDetailPage(
     current.resultUrl,
     ...evidenceReferences.map(item => item.imageUrl),
     ...brandReferences,
+    ...characterReferences,
   ];
   const prompt = buildFinalDetailRepairPrompt({
     pageAnalysis: page.analysis,
@@ -1870,6 +1889,7 @@ async function repairFinalDetailPage(
     validation,
     evidenceReferenceCount: evidenceReferences.length,
     hasBrandLogoReference: brandReferences.length > 0,
+    characterReferenceCount: characterReferences.length,
   });
   page.repairPrompt = prompt;
   page.status = 'submitting';
@@ -1895,6 +1915,7 @@ async function repairFinalDetailPage(
       'quality-failed-final',
       ...evidenceReferences.map(() => 'own-fact-evidence'),
       ...brandReferences.map(() => 'own-brand-logo'),
+      ...characterReferences.map(() => 'character'),
     ],
   }, signal);
   assertActive(job, context, signal);
@@ -2054,6 +2075,11 @@ async function generateFinalPage(job, page, context, signal) {
       productPlacementCorrect: true,
       parameterAlignmentCorrect: true,
       unsupportedStrictFactsAbsent: true,
+      characterIdentityCorrect: true,
+      characterHairstyleCorrect: true,
+      characterOutfitCorrect: true,
+      characterAccessoriesCorrect: true,
+      characterIssues: [],
       competitorRemoved: true,
       gibberishDetected: false,
       missingTexts: [],
@@ -2068,6 +2094,7 @@ async function generateFinalPage(job, page, context, signal) {
       selectedProducts,
       brandReferences,
       evidenceReferences,
+      characterReferences,
       context,
       signal,
     );
@@ -2087,6 +2114,7 @@ async function generateFinalPage(job, page, context, signal) {
       validation,
       brandReferences,
       evidenceReferences,
+      characterReferences,
       context,
       signal,
     );
@@ -2099,6 +2127,7 @@ async function generateFinalPage(job, page, context, signal) {
       selectedProducts,
       brandReferences,
       evidenceReferences,
+      characterReferences,
       context,
       signal,
     );
@@ -2108,6 +2137,7 @@ async function generateFinalPage(job, page, context, signal) {
       ...validation.missingTexts,
       ...validation.wrongTexts,
       ...validation.unexpectedTexts,
+      ...validation.characterIssues,
     ].slice(0, 5).join('；');
     const error = new Error(`AI 成图质检未通过${details ? `：${details}` : validation.summary ? `：${validation.summary}` : ''}`);
     error.code = 'DETAIL_REMIX_QUALITY_FAILED';
@@ -2210,7 +2240,7 @@ async function executeFinalPhase(job, context) {
 
     for (const page of job.pages) {
       assertActive(job, context, signal);
-      if (['completed', 'failed', 'failed_validation', 'recovery_required'].includes(page.status)) continue;
+      if (['completed', 'failed', 'failed_validation', 'recovery_required', 'cancelled'].includes(page.status)) continue;
       job.currentPageIndex = page.index;
       writeJob(job, context);
       try {
@@ -2948,7 +2978,7 @@ function exportSourcePath(resultUrl, imageTarget) {
 export function getDetailRemixExportManifest(jobId, workflowId, context) {
   const job = readJob(jobId, workflowId, context.dirs);
   if (!job) return null;
-  const { imageTarget } = getStorage(workflowId, context.dirs);
+  const { imageTarget, projectRoot } = getStorage(workflowId, context.dirs);
   const dismissed = new Set(job.dismissedResultNodeIds || []);
   const pages = (job.pages || [])
     .filter(page => (
@@ -2981,7 +3011,13 @@ export function getDetailRemixExportManifest(jobId, workflowId, context) {
     empty.code = 'DETAIL_REMIX_EXPORT_EMPTY';
     throw empty;
   }
-  return { jobId: job.id, workflowId: job.workflowId, count: files.length, files };
+  return {
+    jobId: job.id,
+    workflowId: job.workflowId,
+    projectName: path.basename(projectRoot),
+    count: files.length,
+    files,
+  };
 }
 
 function pageHasGenerationSubmission(job, page) {
@@ -3079,6 +3115,112 @@ export function retryFailedDetailRemixPages(jobId, workflowId, payload, context)
   job.retryPageIndexes = retryPages.map(page => Number(page.index));
   job.retryRequestedAt = requestedAt;
   job.currentSubmission = undefined;
+  writeJob(job, context);
+  if (context.autoStart !== false) void executeFinalPhase(job, context);
+  return job;
+}
+
+/**
+ * Explicitly regenerate one already-completed page. The old local result is
+ * retained in previousResults, while a fresh result-node ID prevents file
+ * overwrite and makes the new candidate independently recoverable.
+ */
+export function regenerateCompletedDetailRemixPage(jobId, workflowId, payload, context) {
+  const job = readJob(jobId, workflowId, context.dirs);
+  if (!job) return null;
+  if (activeJobs.has(job.id) || ['pending', 'processing'].includes(job.status)) {
+    const conflict = new Error('当前任务仍在执行，不能同时重新生成页面');
+    conflict.status = 409;
+    conflict.code = 'DETAIL_REMIX_JOB_ACTIVE';
+    throw conflict;
+  }
+  if (Number(job.schemaVersion) < 3 || job.phase !== 'final') {
+    const incompatible = new Error('旧版两阶段任务不支持单页重新生成，请创建新的单次生成任务');
+    incompatible.status = 409;
+    incompatible.code = 'DETAIL_REMIX_REGENERATE_UNSUPPORTED';
+    throw incompatible;
+  }
+  const pageIndex = Number(payload?.pageIndex);
+  if (!Number.isInteger(pageIndex) || pageIndex < 0) {
+    const invalid = new Error('缺少有效的详情页序号');
+    invalid.status = 400;
+    invalid.code = 'DETAIL_REMIX_PAGE_INDEX_INVALID';
+    throw invalid;
+  }
+  const page = (job.pages || []).find(item => Number(item.index) === pageIndex);
+  if (!page || page.status !== 'completed' || !(page.finalUrl || page.resultUrl)) {
+    const unavailable = new Error(`第 ${pageIndex + 1} 页不是可重新生成的成功结果`);
+    unavailable.status = 409;
+    unavailable.code = 'DETAIL_REMIX_COMPLETED_PAGE_REQUIRED';
+    throw unavailable;
+  }
+
+  const requestedAt = nowIso(context);
+  const previousResult = {
+    resultNodeId: page.resultNodeId,
+    rawResultUrl: page.rawResultUrl,
+    finalUrl: page.finalUrl,
+    resultUrl: page.resultUrl,
+    validation: page.validation,
+    repairAttempts: Math.max(0, Number(page.repairAttempts) || 0),
+    completedAt: page.completedAt,
+    supersededAt: requestedAt,
+  };
+  page.previousResults = [
+    ...(Array.isArray(page.previousResults) ? page.previousResults : []),
+    previousResult,
+  ].slice(-5);
+  page.resultNodeId = newId(context);
+  page.status = 'waiting';
+  page.terminalStatus = undefined;
+  page.error = undefined;
+  page.errorCode = undefined;
+  page.failedAt = undefined;
+  page.completedAt = undefined;
+  page.rawResultUrl = undefined;
+  page.initialRawResultUrl = undefined;
+  page.finalUrl = undefined;
+  page.resultUrl = undefined;
+  page.qualityFailedCandidateUrl = undefined;
+  page.finalPrompt = undefined;
+  page.prompt = undefined;
+  page.generationReferenceCount = undefined;
+  page.submittingAt = undefined;
+  page.generationCompletedAt = undefined;
+  page.codexImageJobId = undefined;
+  page.repairCodexImageJobId = undefined;
+  page.repairAttempts = 0;
+  page.repairPrompt = undefined;
+  page.repairSubmittingAt = undefined;
+  page.repairCompletedAt = undefined;
+  page.validation = undefined;
+  page.validationStatus = undefined;
+  page.validationAttempts = 0;
+  page.validationCompletedAt = undefined;
+  page.regenerationCount = Math.max(0, Number(page.regenerationCount) || 0) + 1;
+  page.regenerationRequestedAt = requestedAt;
+
+  job.status = 'pending';
+  job.phase = 'final';
+  job.stage = 'queued';
+  job.stageLabel = `准备重新生成第 ${pageIndex + 1} 页（仅此一页）`;
+  job.error = undefined;
+  job.failedAt = undefined;
+  job.completedAt = undefined;
+  job.cancelRequested = false;
+  job.cancelSubmitted = false;
+  job.retryMode = 'completed-page-regeneration';
+  job.retryPageIndexes = [pageIndex];
+  job.retryRequestedAt = requestedAt;
+  job.currentPageIndex = pageIndex;
+  job.currentSubmission = undefined;
+  job.resultNodeIds = (job.pages || [])
+    .filter(item => item.status === 'completed' && (item.finalUrl || item.resultUrl))
+    .map(item => item.resultNodeId);
+  job.resultUrls = (job.pages || [])
+    .filter(item => item.status === 'completed' && (item.finalUrl || item.resultUrl))
+    .map(item => item.finalUrl || item.resultUrl);
+  job.plannedResultNodeIds = (job.pages || []).map(item => item.resultNodeId);
   writeJob(job, context);
   if (context.autoStart !== false) void executeFinalPhase(job, context);
   return job;

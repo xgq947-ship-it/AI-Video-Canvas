@@ -14,6 +14,7 @@ import {
   getDetailRemixJob,
   getDetailRemixExportManifest,
   getLatestDetailRemixJob,
+  regenerateCompletedDetailRemixPage,
   retryFailedDetailRemixPages,
 } from '../server/services/detailRemixJobs.js';
 import {
@@ -905,12 +906,16 @@ test('成图质检失败时只追加一次 AI 修复，通过复检后才发布�
         passed: false, copyExact: false, brandCorrect: true, productCorrect: true,
         logoCorrect: true, productPlacementCorrect: true,
         parameterAlignmentCorrect: false, unsupportedStrictFactsAbsent: true,
+        characterIdentityCorrect: true, characterHairstyleCorrect: true,
+        characterOutfitCorrect: true, characterAccessoriesCorrect: true, characterIssues: [],
         competitorRemoved: true, gibberishDetected: true,
         missingTexts: [], wrongTexts: ['把16W写成16V'], unexpectedTexts: [], summary: '参数错字',
       } : {
         passed: true, copyExact: true, brandCorrect: true, productCorrect: true,
         logoCorrect: true, productPlacementCorrect: true,
         parameterAlignmentCorrect: true, unsupportedStrictFactsAbsent: true,
+        characterIdentityCorrect: true, characterHairstyleCorrect: true,
+        characterOutfitCorrect: true, characterAccessoriesCorrect: true, characterIssues: [],
         competitorRemoved: true, gibberishDetected: false,
         missingTexts: [], wrongTexts: [], unexpectedTexts: [], summary: '通过',
       });
@@ -930,9 +935,177 @@ test('成图质检失败时只追加一次 AI 修复，通过复检后才发布�
   assert.deepEqual(generationCalls.map(call => call.meta.phase), ['final-detail', 'final-repair']);
   assert.equal(completed.pages[0].repairAttempts, 1);
   assert.equal(completed.pages[0].validation.passed, true);
-  assert.match(generationCalls[1].request.prompt, /只修复文字与品牌问题/);
+  assert.match(generationCalls[1].request.prompt, /只修复质检报告中失败的区域/);
   assert.equal(generationCalls[1].meta.referenceKinds[0], 'quality-failed-final');
   assert.ok(completed.pages[0].finalUrl);
+});
+
+test('人物只换脸但发型服装不符时质检失败，定向修复继续携带完整人物参考', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let validationCalls = 0;
+  const validationRequests = [];
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    skipFinalValidation: false,
+    runRecognition: async (request, meta) => {
+      if (meta.kind === 'own-selling-points') {
+        return JSON.stringify({
+          productViews: [{
+            sourceImageIndex: 0,
+            cropRegion: { x: 0, y: 0, width: 1, height: 1 },
+            viewAngle: 'front', visibleSides: ['front'], description: '', quality: 0.95,
+          }],
+          sellingPoints: [{ id: 'sp-1', title: '颈部放松' }],
+        });
+      }
+      if (meta.kind === 'competitor-page') {
+        return JSON.stringify({ page: {
+          pageType: 'marketing', hasPerson: true,
+          selectedProductViewIds: ['pv-1'], productInstances: [], copySlots: [],
+          mappedSellingPoints: [], mappedFacts: [],
+        } });
+      }
+      validationCalls += 1;
+      validationRequests.push(request);
+      const characterPassed = validationCalls > 1;
+      return JSON.stringify({
+        passed: characterPassed,
+        copyExact: true,
+        brandCorrect: true,
+        productCorrect: true,
+        logoCorrect: true,
+        productPlacementCorrect: true,
+        parameterAlignmentCorrect: true,
+        unsupportedStrictFactsAbsent: true,
+        characterIdentityCorrect: true,
+        characterHairstyleCorrect: characterPassed,
+        characterOutfitCorrect: characterPassed,
+        characterAccessoriesCorrect: true,
+        characterIssues: characterPassed ? [] : ['只换了脸，仍保留竞品发型和服装'],
+        competitorRemoved: true,
+        gibberishDetected: false,
+        missingTexts: [],
+        wrongTexts: [],
+        unexpectedTexts: [],
+        summary: characterPassed ? '通过' : '人物造型不完整',
+      });
+    },
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from(`character-${meta.phase}`), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'character-style-repair-job',
+    productImages: [], productNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(validationCalls, 2);
+  assert.deepEqual(generationCalls.map(call => call.meta.phase), ['final-detail', 'final-repair']);
+  assert.deepEqual(generationCalls[0].meta.referenceKinds, [
+    'competitor-layout', 'own-product-auto-angle', 'character',
+  ]);
+  assert.deepEqual(generationCalls[1].meta.referenceKinds, ['quality-failed-final', 'character']);
+  assert.equal(generationCalls[1].request.referenceImageInputs.at(-1), CHARACTER);
+  assert.match(generationCalls[0].request.prompt, /绝不允许只换脸/);
+  assert.match(generationCalls[1].request.prompt, /发型、服装或配饰/);
+  assert.match(validationRequests[0].systemInstruction, /参考图3是人物完整造型参考/);
+  assert.equal(validationRequests[0].imageDataUrls.at(-1), CHARACTER);
+  assert.equal(completed.pages[0].validation.characterOutfitCorrect, true);
+  assert.deepEqual(completed.pages[0].validation.characterIssues, []);
+});
+
+test('单页重新生成只提交首个指定成功页，失败页和已取消页保持不动且旧文件可恢复', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const recognitionCalls = [];
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      recognitionCalls.push(meta);
+      return completeRecognition({ hasPerson: false })(request, meta);
+    },
+    generateImage: async (_request, meta) => {
+      generationCalls.push(meta);
+      return { buffer: Buffer.from(`page-${meta.pageIndex}`), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'single-completed-page-regeneration-job',
+    competitorDetails: [0, 1, 2].map(index => ({
+      nodeId: `competitor-${index}`,
+      imageUrl: COMPETITOR,
+      order: index,
+      sourceWidth: 600,
+      sourceHeight: 800,
+    })),
+    useCharacterReference: false,
+    characterReferenceImages: [],
+    characterReferenceNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+  const targetBefore = completed.pages[1];
+  const oldResultNodeId = targetBefore.resultNodeId;
+  const oldResultUrl = targetBefore.finalUrl;
+  const oldResultPath = path.join(
+    env.root, 'library', 'projects', '详情复刻测试', 'images', `${oldResultNodeId}.png`,
+  );
+  assert.ok(fs.existsSync(oldResultPath));
+
+  const interrupted = __detailRemixTest.readJob(created.id, 'workflow-1', context.dirs);
+  interrupted.status = 'cancelled';
+  interrupted.stage = 'cancelled';
+  interrupted.cancelRequested = true;
+  interrupted.pages[0].status = 'failed';
+  interrupted.pages[0].finalUrl = undefined;
+  interrupted.pages[0].resultUrl = undefined;
+  interrupted.pages[2].status = 'cancelled';
+  interrupted.pages[2].finalUrl = undefined;
+  interrupted.pages[2].resultUrl = undefined;
+  __detailRemixTest.writeJob(interrupted, context);
+  recognitionCalls.length = 0;
+  generationCalls.length = 0;
+
+  const regenerationContext = {
+    ...context,
+    newId: () => 'fresh-regenerated-result-node',
+    autoStart: false,
+  };
+  const queued = regenerateCompletedDetailRemixPage(
+    created.id,
+    'workflow-1',
+    { pageIndex: 1 },
+    regenerationContext,
+  );
+  assert.equal(queued.status, 'pending');
+  assert.equal(queued.pages[0].status, 'failed');
+  assert.equal(queued.pages[1].status, 'waiting');
+  assert.equal(queued.pages[2].status, 'cancelled');
+  assert.equal(queued.pages[1].resultNodeId, 'fresh-regenerated-result-node');
+  assert.equal(queued.pages[1].previousResults.at(-1).resultNodeId, oldResultNodeId);
+  assert.equal(queued.pages[1].previousResults.at(-1).finalUrl, oldResultUrl);
+  assert.equal(queued.pages[1].recognitionStatus, 'completed');
+  assert.ok(queued.pages[1].analysis);
+
+  const executionContext = { ...regenerationContext, autoStart: true };
+  void __detailRemixTest.executeFinalPhase(queued, executionContext);
+  const regenerated = await waitFor(
+    created.id,
+    executionContext,
+    job => job?.status === 'partial_failed',
+  );
+  assert.deepEqual(recognitionCalls, []);
+  assert.deepEqual(generationCalls.map(meta => meta.pageIndex), [1]);
+  assert.equal(regenerated.pages[0].status, 'failed');
+  assert.equal(regenerated.pages[1].status, 'completed');
+  assert.equal(regenerated.pages[2].status, 'cancelled');
+  assert.equal(regenerated.pages[1].regenerationCount, 1);
+  assert.equal(regenerated.pages[1].resultNodeId, 'fresh-regenerated-result-node');
+  assert.ok(fs.existsSync(oldResultPath));
 });
 
 test('严格参数字段错配会安全重试识图并在正式生图前失败', async t => {
@@ -1034,6 +1207,8 @@ test('质检自称通过但仍报告无证据参数时不得放行，修复一�
         passed: true, copyExact: true, brandCorrect: true, productCorrect: true,
         logoCorrect: true, productPlacementCorrect: true,
         parameterAlignmentCorrect: true, unsupportedStrictFactsAbsent: true,
+        characterIdentityCorrect: true, characterHairstyleCorrect: true,
+        characterOutfitCorrect: true, characterAccessoriesCorrect: true, characterIssues: [],
         competitorRemoved: true, gibberishDetected: false,
         missingTexts: [], wrongTexts: [], unexpectedTexts: ['2500mAh'],
         summary: '仍有无证据参数',

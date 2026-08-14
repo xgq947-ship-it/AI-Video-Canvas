@@ -37,6 +37,7 @@ import {
 import {
   cancelDetailRemixJob,
   createDetailRemixJob,
+  regenerateCompletedDetailRemixPage,
   retryFailedDetailRemixPages,
 } from '../../services/detailRemixService';
 import { resolveImageNodeDisplayName } from '../../utils/nodeDisplayName.js';
@@ -175,6 +176,10 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
   const validationFailedPages = pages.filter((page: any) => (
     page?.status === 'failed_validation' || page?.terminalStatus === 'FAILED_VALIDATION'
   ));
+  const completedPages = pages.filter((page: any) => (
+    page?.status === 'completed' && page?.resultReady
+  ));
+  const firstCompletedPage = completedPages[0];
   const safeFailedPages = failedPages.filter((page: any) => (
     !page?.codexImageJobId
     && !page?.plateCodexImageJobId
@@ -440,6 +445,56 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
     }
   };
 
+  const handleRegenerateFirstCompleted = async () => {
+    if (busy || !workflowId || !state.jobId || !firstCompletedPage) return;
+    const pageIndex = Number(firstCompletedPage.index);
+    if (!Number.isInteger(pageIndex)) return;
+    const regenerating = createDetailRemixNodeData({
+      ...stateRef.current,
+      status: 'analyzing',
+      jobStatus: 'pending',
+      stage: 'queued',
+      stageLabel: `准备重新生成第 ${pageIndex + 1} 页（仅此一页）`,
+      errorMessage: undefined,
+    });
+    stateRef.current = regenerating;
+    setLocalError('');
+    setLocalNotice('');
+    onUpdate(data.id, {
+      status: NodeStatus.LOADING,
+      generationStartTime: Date.now(),
+      errorMessage: undefined,
+      detailRemix: regenerating,
+    });
+    try {
+      const job = await regenerateCompletedDetailRemixPage(state.jobId, workflowId, pageIndex);
+      const latest = stateRef.current;
+      onUpdate(data.id, {
+        status: NodeStatus.LOADING,
+        detailRemix: createDetailRemixNodeData({
+          ...latest,
+          jobStatus: job.status,
+          stage: job.stage,
+          stageLabel: job.stageLabel,
+          analysis: { ...latest.analysis, pages: job.pages || [] },
+        }),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '无法重新生成指定详情页';
+      setLocalError(message);
+      onUpdate(data.id, {
+        status: resultCount ? NodeStatus.SUCCESS : NodeStatus.ERROR,
+        generationStartTime: undefined,
+        errorMessage: message,
+        detailRemix: createDetailRemixNodeData({
+          ...stateRef.current,
+          status: resultCount ? 'completed' : 'error',
+          errorMessage: message,
+        }),
+      });
+    }
+  };
+
   const handleExport = async () => {
     if (!workflowId || !state.jobId || !resultCount) return;
     if (!window.evanDesktop?.exportDetailRemix) {
@@ -451,7 +506,7 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
     try {
       const result = await window.evanDesktop.exportDetailRemix({ jobId: state.jobId, workflowId });
       if (!result.canceled) {
-        setLocalNotice(`已按顺序导出 ${result.count} 张：01 至 ${String(result.count).padStart(2, '0')}`);
+        setLocalNotice(`已新建文件夹并导出 ${result.count} 张：${result.destination}`);
       }
     } catch (error) {
       setLocalError(error instanceof Error ? error.message : '详情图导出失败');
@@ -650,7 +705,7 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
               ))}
             </select>
             <p className="mt-1.5 text-[10px] text-neutral-500">
-              开启后，仅在竞品详情原本有人物时，用所选参考图保持同一人物身份；关闭时不会发送人物图。
+              开启后，仅在竞品详情原本有人物时，让人物的脸、发型、服装和可见配饰完整遵循所选参考图；保留竞品人物的姿势与产品交互。关闭时不会发送人物图。
             </p>
           </div>
 
@@ -787,7 +842,7 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
                   disabled={folderImportBusy}
                   onClick={() => void handleExport()}
                   className={`flex shrink-0 items-center justify-center gap-1.5 rounded-xl border px-3 py-2.5 text-xs font-semibold ${dark ? 'border-cyan-700 text-cyan-300 hover:bg-cyan-500/10' : 'border-cyan-300 text-cyan-700 hover:bg-cyan-50'} disabled:opacity-45`}
-                  title="选择文件夹，按页面顺序导出为 01、02……"
+                  title="选择保存位置，自动新建结果文件夹，并按页面顺序导出为 01、02……"
                 >
                   <Download size={14} />一键导出 {resultCount} 张
                 </button>
@@ -801,6 +856,17 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
                 />
               )}
             </div>
+            {!generationBusy && firstCompletedPage && (
+              <button
+                type="button"
+                disabled={folderImportBusy}
+                onClick={() => void handleRegenerateFirstCompleted()}
+                className={`mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-lg border px-2 py-1.5 text-[10px] font-medium ${dark ? 'border-amber-700/70 text-amber-300 hover:bg-amber-500/10' : 'border-amber-300 text-amber-700 hover:bg-amber-50'} disabled:opacity-40`}
+                title="只再次提交首张成功结果对应的页面；其他页面不生图，旧文件保留在项目中"
+              >
+                <RefreshCw size={11} />重新生成第 {Number(firstCompletedPage.index) + 1} 页（仅此一页）
+              </button>
+            )}
             {!generationBusy && safeFailedPages.length > 0 && (
               <button
                 type="button"

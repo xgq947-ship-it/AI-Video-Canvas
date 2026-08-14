@@ -5,12 +5,31 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
+  createDetailRemixExportDirectory,
   exportDetailRemixFiles,
   findDetailRemixExportCollisions,
   planDetailRemixExport,
 } from '../electron/detailRemixExport.js';
 
-test('最终详情按页面顺序连续编号为 01、02…并导出到用户选择的文件夹', t => {
+test('选择保存位置后始终新建独立结果文件夹，同秒重复导出也不会覆盖', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'detail-remix-export-folder-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const now = new Date(2026, 7, 14, 9, 8, 7);
+  const first = createDetailRemixExportDirectory(root, {
+    projectName: '制作新详情',
+    now,
+  });
+  const second = createDetailRemixExportDirectory(root, {
+    projectName: '制作新详情',
+    now,
+  });
+  assert.equal(path.basename(first), '制作新详情_最终详情_20260814_090807');
+  assert.equal(path.basename(second), '制作新详情_最终详情_20260814_090807_02');
+  assert.ok(fs.statSync(first).isDirectory());
+  assert.ok(fs.statSync(second).isDirectory());
+});
+
+test('最终详情按页面顺序连续编号为 01、02…并导出到新建结果文件夹', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'detail-remix-export-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const sources = path.join(root, 'sources');

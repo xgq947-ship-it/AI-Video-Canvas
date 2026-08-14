@@ -249,6 +249,9 @@ test('结构化识图解析产品角度与竞品选角，同时禁止编造竞�
   assert.equal(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.additionalProperties, false);
   assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('parameterAlignmentCorrect'));
   assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('unsupportedStrictFactsAbsent'));
+  assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('characterHairstyleCorrect'));
+  assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('characterOutfitCorrect'));
+  assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('characterIssues'));
 });
 
 test('参数页只使用有来源的精确事实，营销卖点和无证据竞品参数不会填入槽位', () => {
@@ -434,6 +437,11 @@ test('成图质检与 AI 定向修复保持全 AI 路径，不产生本地叠字
     productPlacementCorrect: true,
     parameterAlignmentCorrect: false,
     unsupportedStrictFactsAbsent: false,
+    characterIdentityCorrect: true,
+    characterHairstyleCorrect: false,
+    characterOutfitCorrect: false,
+    characterAccessoriesCorrect: true,
+    characterIssues: ['仍保留竞品发型和服装'],
     competitorRemoved: true,
     gibberishDetected: true,
     missingTexts: ['额定功率 16W'],
@@ -443,22 +451,32 @@ test('成图质检与 AI 定向修复保持全 AI 路径，不产生本地叠字
   }));
   assert.equal(validation.passed, false);
   assert.equal(validation.gibberishDetected, true);
+  assert.equal(validation.characterOutfitCorrect, false);
+  assert.deepEqual(validation.characterIssues, ['仍保留竞品发型和服装']);
   const instruction = buildFinalDetailValidationInstruction({
     pageAnalysis: { pageType: 'specification', forbiddenCompetitorElements: ['PHILIPS'] },
     copyPlan: [{ replacementText: '额定功率\n16W' }],
     ownBrandIdentity: { name: 'SUPOR 苏泊尔' },
+    productReferenceCount: 1,
+    hasBrandLogoReference: true,
+    evidenceReferenceCount: 1,
+    characterReferenceCount: 1,
   });
   assert.match(instruction, /参数页只要有一个错误数字/);
+  assert.match(instruction, /参考图5是人物完整造型参考/);
+  assert.match(instruction, /只换脸、仍保留竞品发型或竞品衣服必须判失败/);
   const repair = buildFinalDetailRepairPrompt({
     pageAnalysis: { pageType: 'specification' },
     copyPlan: [{ replacementText: '额定功率\n16W' }],
     validation,
     evidenceReferenceCount: 1,
     hasBrandLogoReference: true,
+    characterReferenceCount: 1,
   });
-  assert.match(repair, /只修复文字与品牌问题/);
   assert.match(repair, /参考图2.*事实证据/);
   assert.match(repair, /参考图3.*真实 Logo/);
+  assert.match(repair, /参考图4是人物完整造型参考/);
+  assert.match(repair, /禁止只换脸/);
   assert.doesNotMatch(repair, /本地|程序叠加/);
 });
 
@@ -519,7 +537,8 @@ test('单阶段提示词一次传入版式、产品和可选人物，并直接�
   });
   assert.match(on, /参考图2至参考图3/);
   assert.match(on, /参考图4是我方真实 Logo 参考/);
-  assert.match(on, /参考图5及之后只用于替换竞品人物身份/);
+  assert.match(on, /参考图5及之后是人物完整外观的最高权威/);
+  assert.match(on, /绝不允许只换脸后保留竞品人物的发型、衣服或配饰/);
   // Legacy prompt builders remain readable for projects created before the
   // single-generation migration.
   assert.match(buildBlankDetailPrompt({ pageAnalysis: analysis }), /商品空间/);

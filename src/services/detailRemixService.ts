@@ -92,6 +92,18 @@ export interface DetailRemixPageResult {
   validation?: Record<string, unknown>;
   validationAttempts?: number;
   repairAttempts?: number;
+  regenerationCount?: number;
+  regenerationRequestedAt?: string;
+  previousResults?: Array<{
+    resultNodeId?: string;
+    rawResultUrl?: string;
+    finalUrl?: string;
+    resultUrl?: string;
+    validation?: Record<string, unknown>;
+    repairAttempts?: number;
+    completedAt?: string;
+    supersededAt?: string;
+  }>;
 }
 
 export interface DetailRemixJob {
@@ -300,6 +312,19 @@ export async function retryFailedDetailRemixPages(
     body: JSON.stringify({ workflowId, ...(pageIndexes?.length ? { pageIndexes } : {}) }),
   });
   return readJson(response, '无法重试失败详情页');
+}
+
+export async function regenerateCompletedDetailRemixPage(
+  jobId: string,
+  workflowId: string,
+  pageIndex: number,
+): Promise<DetailRemixJob> {
+  const response = await fetch(`/api/detail-remix-jobs/${encodeURIComponent(jobId)}/regenerate-page`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workflowId, pageIndex }),
+  });
+  return readJson(response, '无法重新生成指定详情页');
 }
 
 /** Best-effort tombstone: deleting a canvas result must not be undone by recovery. */

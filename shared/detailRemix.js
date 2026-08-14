@@ -315,8 +315,10 @@ export const DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA = Object.freeze({
   required: [
     'passed', 'copyExact', 'brandCorrect', 'productCorrect',
     'logoCorrect', 'productPlacementCorrect', 'parameterAlignmentCorrect',
-    'unsupportedStrictFactsAbsent', 'competitorRemoved', 'gibberishDetected', 'missingTexts',
-    'wrongTexts', 'unexpectedTexts', 'summary',
+    'unsupportedStrictFactsAbsent', 'characterIdentityCorrect', 'characterHairstyleCorrect',
+    'characterOutfitCorrect', 'characterAccessoriesCorrect', 'characterIssues',
+    'competitorRemoved', 'gibberishDetected', 'missingTexts', 'wrongTexts',
+    'unexpectedTexts', 'summary',
   ],
   properties: {
     passed: { type: 'boolean' },
@@ -327,6 +329,11 @@ export const DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA = Object.freeze({
     productPlacementCorrect: { type: 'boolean' },
     parameterAlignmentCorrect: { type: 'boolean' },
     unsupportedStrictFactsAbsent: { type: 'boolean' },
+    characterIdentityCorrect: { type: 'boolean' },
+    characterHairstyleCorrect: { type: 'boolean' },
+    characterOutfitCorrect: { type: 'boolean' },
+    characterAccessoriesCorrect: { type: 'boolean' },
+    characterIssues: { type: 'array', items: { type: 'string' } },
     competitorRemoved: { type: 'boolean' },
     gibberishDetected: { type: 'boolean' },
     missingTexts: { type: 'array', items: { type: 'string' } },
@@ -1375,7 +1382,7 @@ export function buildFinalDetailPrompt({
     '展示文案中禁止出现“图片显示”“图片明确标注”“文案提到”“证据表明”等分析过程用语。不得把 sellingPointId、坐标、JSON、提示词或任何内部说明画进图片。',
     '必须彻底移除竞品产品、包装、品牌、Logo、文案、水印与竞品独有主张；不得残留、变形、混合或臆造竞品元素，也不得生成额外产品。',
     useCharacterReference
-      ? `参考图${characterStart}及之后只用于替换竞品人物身份：保持同一人的脸部、发型和服装特征；人物的位置、姿势、视线和遮挡关系服从参考图1。`
+      ? `参考图${characterStart}及之后是人物完整外观的最高权威。必须把参考图1中的竞品人物完整替换成参考人物：脸型五官、肤色、发际线、发色、发型结构、服装款式、领口袖型、服装颜色材质、可见配饰和身体比例都以人物参考图为准。绝不允许只换脸后保留竞品人物的发型、衣服或配饰。只保留参考图1的人物位置、动作、姿势、视线、构图尺度、与产品的交互及前后遮挡；被产品遮住的衣物区域无需臆造，但所有可见衣物必须属于参考造型。若人物参考是多视图造型板，所有分栏代表同一个人物与同一套造型，应选取和本页角度最接近的分栏。`
       : '不使用人物身份参考；若规格 hasPerson=false，禁止凭空增加人物；若原图有人物，也不得保留可识别的竞品人物身份。',
     '只允许出现替换清单中的我方文案、我方品牌/Logo，以及我方产品自身不可分离的真实标识；不得出现其它文字、乱码、商标或水印。',
     '输出单张完整最终图，不要解释，不要输出中间底图、无字底图、蒙版或排版稿。',
@@ -1394,6 +1401,11 @@ export function parseFinalDetailValidationResponse(value) {
     productPlacementCorrect: parsed.productPlacementCorrect === true,
     parameterAlignmentCorrect: parsed.parameterAlignmentCorrect === true,
     unsupportedStrictFactsAbsent: parsed.unsupportedStrictFactsAbsent === true,
+    characterIdentityCorrect: parsed.characterIdentityCorrect === true,
+    characterHairstyleCorrect: parsed.characterHairstyleCorrect === true,
+    characterOutfitCorrect: parsed.characterOutfitCorrect === true,
+    characterAccessoriesCorrect: parsed.characterAccessoriesCorrect === true,
+    characterIssues: array(parsed.characterIssues).map(text).filter(Boolean),
     competitorRemoved: parsed.competitorRemoved === true,
     gibberishDetected: parsed.gibberishDetected === true,
     missingTexts: array(parsed.missingTexts).map(text).filter(Boolean),
@@ -1407,20 +1419,33 @@ export function buildFinalDetailValidationInstruction({
   pageAnalysis,
   copyPlan = [],
   ownBrandIdentity = {},
+  productReferenceCount = 0,
+  hasBrandLogoReference = false,
+  evidenceReferenceCount = 0,
+  characterReferenceCount = 0,
 } = {}) {
   const page = safePageAnalysis(pageAnalysis);
   const safeCopyPlan = promptSafeCopyPlan(copyPlan);
   const strictMode = isDetailRemixStrictParameterPage(page);
+  const productCount = Math.max(0, Number(productReferenceCount) || 0);
+  const evidenceCount = Math.max(0, Number(evidenceReferenceCount) || 0);
+  const characterCount = Math.max(0, Number(characterReferenceCount) || 0);
+  const brandReferenceIndex = productCount + 2;
+  const evidenceStart = brandReferenceIndex + (hasBrandLogoReference ? 1 : 0);
+  const characterStart = evidenceStart + evidenceCount;
   return [
-    '你是电商详情最终交付质检员。参考图1是待验收成图；其余参考图依次是我方产品、Logo 或事实证据，只能用于比对。',
+    '你是电商详情最终交付质检员。参考图1是待验收成图；其余参考图是我方产品、Logo、事实证据或人物完整造型，只能用于比对。',
+    characterCount > 0
+      ? `参考图${characterStart}${characterCount > 1 ? `至参考图${characterStart + characterCount - 1}` : ''}是人物完整造型参考；必须分别核对人脸身份、发型、服装和可见配饰，不能只核对脸。`
+      : '本页没有人物参考图；人物四项检查字段填 true，characterIssues 留空。',
     `页面类型：${page.pageType}；运行模式：${page.pageMode}。必须逐字、逐位置出现的文案清单：${JSON.stringify(safeCopyPlan)}。我方品牌：${JSON.stringify(object(ownBrandIdentity))}。`,
     '所有不在上述我方文案与品牌白名单中的可读内容，都必须按竞品残留或模型臆造内容报告。',
-    '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 参数名是否仍在 label 区、参数值是否仍在 value 区，不能错栏、合并或串行；3) 是否出现乱码、伪字、重复卖点、提示词或 JSON；4) 品牌与 Logo 是否正确且无竞品残留；5) 产品是否仍是我方产品、位置透视是否正确，而非混合竞品外形或明显错位。',
+    '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 参数名是否仍在 label 区、参数值是否仍在 value 区，不能错栏、合并或串行；3) 是否出现乱码、伪字、重复卖点、提示词或 JSON；4) 品牌与 Logo 是否正确且无竞品残留；5) 产品是否仍是我方产品、位置透视是否正确；6) 有人物参考时，成图人物的脸型五官、发际线与发型结构、服装款式领口袖型与颜色材质、可见配饰是否都来自人物参考。只换脸、仍保留竞品发型或竞品衣服必须判失败，并在 characterIssues 写明。',
     strictMode
       ? `这是 ${DETAIL_REMIX_STRICT_PARAMETER_MODE}。没有列入替换清单的型号、数字、单位、材质、认证、配件或清单内容必须完全不存在；发现一个即 unsupportedStrictFactsAbsent=false，并写入 unexpectedTexts。`
       : '没有列入替换清单的新增参数或功效一律写入 unexpectedTexts。',
-    '只要 missingTexts、wrongTexts 或 unexpectedTexts 任一非空，passed 必须为 false。参数页只要有一个错误数字、单位、型号、参数错栏或乱码，passed 必须为 false。',
-    'passed 只有在 copyExact、brandCorrect、productCorrect、logoCorrect、productPlacementCorrect、parameterAlignmentCorrect、unsupportedStrictFactsAbsent、competitorRemoved 全为 true，gibberishDetected=false，且三个异常数组都为空时才能为 true。只输出符合 Schema 的 JSON。',
+    '只要 missingTexts、wrongTexts、unexpectedTexts 或 characterIssues 任一非空，passed 必须为 false。参数页只要有一个错误数字、单位、型号、参数错栏或乱码，passed 必须为 false。',
+    'passed 只有在 copyExact、brandCorrect、productCorrect、logoCorrect、productPlacementCorrect、parameterAlignmentCorrect、unsupportedStrictFactsAbsent、characterIdentityCorrect、characterHairstyleCorrect、characterOutfitCorrect、characterAccessoriesCorrect、competitorRemoved 全为 true，gibberishDetected=false，且所有异常数组都为空时才能为 true。只输出符合 Schema 的 JSON。',
   ].join('\n');
 }
 
@@ -1431,12 +1456,15 @@ export function buildFinalDetailRepairPrompt({
   validation = {},
   evidenceReferenceCount = 0,
   hasBrandLogoReference = false,
+  characterReferenceCount = 0,
 } = {}) {
   const page = safePageAnalysis(pageAnalysis);
   const safeCopyPlan = promptSafeCopyPlan(copyPlan);
   const evidenceEnd = 1 + Math.max(0, Number(evidenceReferenceCount) || 0);
+  const characterCount = Math.max(0, Number(characterReferenceCount) || 0);
+  const characterStart = evidenceEnd + (hasBrandLogoReference ? 2 : 1);
   return [
-    '直接编辑参考图1，输出修复后的完整最终详情图。参考图1中的产品、人物、背景、构图、颜色、阴影、边界和全部正确区域都必须保持不变，只修复文字与品牌问题。',
+    '直接编辑参考图1，输出修复后的完整最终详情图。只修复质检报告中失败的区域；背景、构图、产品、正确文字和其它已通过区域保持不变。',
     `页面类型：${page.pageType}；运行模式：${page.pageMode}。质检发现：${JSON.stringify(object(validation))}。`,
     `必须逐字生成的最终文案：${JSON.stringify(safeCopyPlan)}。我方品牌：${JSON.stringify(object(ownBrandIdentity))}。`,
     evidenceReferenceCount > 0
@@ -1445,6 +1473,9 @@ export function buildFinalDetailRepairPrompt({
     hasBrandLogoReference
       ? `参考图${evidenceEnd + 1}是我方真实 Logo；需要修复品牌时必须保持其拼写、图形比例和识别特征。`
       : '没有独立 Logo 参考时只允许使用品牌清单中的准确名称，不得臆造 Logo 图形。',
+    characterCount > 0
+      ? `参考图${characterStart}${characterCount > 1 ? `至参考图${characterStart + characterCount - 1}` : ''}是人物完整造型参考。若 characterIdentityCorrect、characterHairstyleCorrect、characterOutfitCorrect 或 characterAccessoriesCorrect 任一为 false，必须换掉参考图1中对应的脸、发型、服装或配饰，完整服从人物参考；只保留原人物的位置、动作、视线、与产品交互和遮挡关系，禁止只换脸。`
+      : '本次没有人物造型参考，不要凭空改动人物。',
     '先擦除所有错误文字、乱码、重复文案、竞品参数和竞品品牌，再严格按 targetRegion/targetPart 在原槽位写入清单中的 replacementText。参数名不得进入 value 区，参数值不得进入 label 区；没有替换项的竞品文字区域保持干净。',
     '中文、数字、型号、单位、正负号、斜杠和大小写必须逐字一致；不得解释，不得输出蒙版或中间稿，只输出单张完整图片。',
   ].join('\n');

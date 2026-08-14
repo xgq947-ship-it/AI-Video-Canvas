@@ -14,6 +14,7 @@ export const DETAIL_REMIX_SCHEMA_VERSION = 1;
 export const DETAIL_REMIX_STRICT_PARAMETER_MODE = 'STRICT_PARAMETER_MODE';
 export const DETAIL_REMIX_MARKETING_MODE = 'MARKETING_MODE';
 export const DETAIL_REMIX_STRICT_FACT_MIN_CONFIDENCE = 0.9;
+export const DETAIL_REMIX_STRICT_PARAMETER_TAIL_PAGE_COUNT = 2;
 export const DETAIL_REMIX_STRICT_PAGE_CATEGORIES = Object.freeze([
   'parameters',
   'specifications',
@@ -22,6 +23,17 @@ export const DETAIL_REMIX_STRICT_PAGE_CATEGORIES = Object.freeze([
   'electrical',
   'packing_list',
 ]);
+
+/**
+ * Product detail folders are ordered. Parameter/specification content is only
+ * allowed in the final two competitor pages; every earlier page is a marketing
+ * page even when it contains an isolated model number or another exact fact.
+ */
+export function detailRemixAllowsStrictParameterMode(pageIndex = 0, pageCount = 1) {
+  const total = Math.max(1, Number(pageCount) || 1);
+  const index = Math.max(0, Math.min(total - 1, Number(pageIndex) || 0));
+  return index >= Math.max(0, total - DETAIL_REMIX_STRICT_PARAMETER_TAIL_PAGE_COUNT);
+}
 // Keep the controller compact enough to fit in a typical 720p canvas. The
 // form itself scrolls inside this fixed geometry, so edges and selection
 // bounds remain deterministic as advanced settings expand.
@@ -415,6 +427,7 @@ const strictCategory = value => {
 /** Program-side classification; an inconsistent model answer always resolves toward the safer strict mode. */
 export function detailRemixPageMode(value = {}) {
   const page = object(value);
+  if (page.strictParameterModeEligible === false) return DETAIL_REMIX_MARKETING_MODE;
   const category = strictCategory(page.strictPageCategory || page.pageCategory);
   const typeText = `${text(page.pageType || page.type)} ${text(page.purpose)}`;
   const strictType = /(?:specification|specifications|parameter|parameters|model|accessor|electrical|packing[ _-]?list|参数页?|规格页?|型号页?|配件页?|电气参数页?|包装清单页?|装箱清单页?)/iu.test(typeText);
@@ -876,9 +889,11 @@ export function parseCompetitorPageResponse(value) {
       strictPageCategory: pageMode === DETAIL_REMIX_STRICT_PARAMETER_MODE
         ? detailRemixStrictPageCategory(normalizedPage)
         : 'none',
-      mappedSellingPoints: pageMode === DETAIL_REMIX_STRICT_PARAMETER_MODE
-        ? []
-        : array(page.mappedSellingPoints || page.sellingPointMapping),
+      // Preserve the model's raw marketing mappings here. The server applies
+      // the page-order lock before deciding whether strict mode may discard
+      // them; dropping them in this generic parser made an early marketing
+      // page unrecoverable when the model mislabeled it as a model/spec page.
+      mappedSellingPoints: array(page.mappedSellingPoints || page.sellingPointMapping),
       mappedFacts: array(page.mappedFacts || page.factMapping),
       copySlots,
       brandSlots: array(page.brandSlots || page.logoSlots),
@@ -913,6 +928,7 @@ export function buildCompetitorPageInstruction({
   ownBrandIdentity = {},
   ownProductViews = [],
   pageIndex = 0,
+  pageCount = 1,
 } = {}) {
   const clip = (value, maximum) => [...text(value)].slice(0, maximum).join('');
   const brand = {
@@ -940,12 +956,22 @@ export function buildCompetitorPageInstruction({
     normalizedValue: clip(fact?.normalizedValue || fact?.value, 120),
     displayText: clip(fact?.displayText || [fact?.label, fact?.value].filter(Boolean).join('\n'), 180),
   })).filter(fact => fact.field && fact.label && fact.value);
+  const totalPages = Math.max(1, Number(pageCount) || 1);
+  const strictParameterModeEligible = detailRemixAllowsStrictParameterMode(pageIndex, totalPages);
+  const firstTailPage = Math.max(1, totalPages - DETAIL_REMIX_STRICT_PARAMETER_TAIL_PAGE_COUNT + 1);
+  const responseExample = strictParameterModeEligible
+    ? `{"page":{"pageType":"specification","pageMode":"${DETAIL_REMIX_STRICT_PARAMETER_MODE}","strictPageCategory":"electrical","purpose":"","reversePrompt":"","layoutSpec":"","palette":"","lighting":"","hasPerson":false,"personaSpec":"","targetProductView":{"viewAngle":"front-left","visibleSides":["front","left"],"orientation":"upright","perspective":"three-quarter"},"selectedProductViewIds":["pv-1"],"productInstances":[{"instanceId":"product-1","x":0.5,"y":0.5,"width":0.3,"height":0.3,"viewAngle":"front-left","contactSurface":"","foregroundOcclusion":""}],"brandSlots":[{"slotId":"brand-1","sourceText":"竞品品牌","visualDescription":"左上角白色品牌标识","x":0.05,"y":0.03,"width":0.2,"height":0.08,"align":"left","color":"#ffffff"}],"copySlots":[{"slotId":"power-label","role":"parameterLabel","field":"power","parameterPart":"label","sourceText":"额定功率","x":0.1,"y":0.08,"width":0.35,"height":0.06,"align":"left","color":"#ffffff","fontWeight":500,"maxChars":8},{"slotId":"power-value","role":"parameterValue","field":"power","parameterPart":"value","sourceText":"20W","x":0.5,"y":0.08,"width":0.2,"height":0.06,"align":"right","color":"#ffffff","fontWeight":500,"maxChars":8}],"mappedSellingPoints":[],"mappedFacts":[{"factId":"fact-1","slotId":"power-label","slotRole":"parameterLabel","displayPart":"label"},{"factId":"fact-1","slotId":"power-value","slotRole":"parameterValue","displayPart":"value"}],"forbiddenCompetitorElements":[]}}`
+    : `{"page":{"pageType":"marketing","pageMode":"${DETAIL_REMIX_MARKETING_MODE}","strictPageCategory":"none","purpose":"","reversePrompt":"","layoutSpec":"","palette":"","lighting":"","hasPerson":false,"personaSpec":"","targetProductView":{"viewAngle":"front-left","visibleSides":["front","left"],"orientation":"upright","perspective":"three-quarter"},"selectedProductViewIds":["pv-1"],"productInstances":[{"instanceId":"product-1","x":0.5,"y":0.5,"width":0.3,"height":0.3,"viewAngle":"front-left","contactSurface":"","foregroundOcclusion":""}],"brandSlots":[],"copySlots":[{"slotId":"headline-1","role":"headline","field":"","parameterPart":"none","sourceText":"竞品主标题","x":0.1,"y":0.08,"width":0.8,"height":0.08,"align":"center","color":"#ffffff","fontWeight":700,"maxChars":10}],"mappedSellingPoints":[{"sellingPointId":"sp-1","slotId":"headline-1","slotRole":"headline","replacementText":"我方真实卖点"}],"mappedFacts":[],"forbiddenCompetitorElements":[]}}`;
   return [
     '你是电商详情页视觉反推与语义槽位规划专家。所附仅一张“竞品详情图”。',
     '反推画面结构、镜头、背景、光线、色彩、人物需求、文字层级、商品区域及前后遮挡关系；完整保留版式位置关系，但不要保留竞品品牌、Logo、商品外观或竞品独有主张。',
     '逐个识别画面里所有竞品产品实例并输出 productInstances；每个实例使用 0~1 归一化 x/y/width/height，并说明观察角度、接触面与需要保留在商品前方的遮挡层。只有单个实例时仍必须输出一项。',
     '识别竞品品牌/Logo 原本占据的位置并输出 brandSlots，记录 sourceText 或 visualDescription，尤其写清原槽位的底色、容器形状、留白、对齐和呈现方式（独立标牌、角标、产品压印等）；后续只替换品牌身份，必须保留该槽位原有的视觉容器。',
-    `先判断页面模式 pageMode。参数页、规格页、型号页、配件页、电气参数页、包装/装箱清单页一律填 ${DETAIL_REMIX_STRICT_PARAMETER_MODE}，并用 strictPageCategory 标明 parameters/specifications/model/accessories/electrical/packing_list；普通卖点、场景和品牌页填 ${DETAIL_REMIX_MARKETING_MODE} 且 strictPageCategory=none。pageType 保留 marketing/scene/brand/specification 等简短类型。`,
+    `当前文件夹共 ${totalPages} 张竞品详情，本页是第 ${pageIndex + 1} 张。业务硬规则：只有最后两张（第 ${firstTailPage} 至 ${totalPages} 张）有资格判断参数模式；此前页面一律填 ${DETAIL_REMIX_MARKETING_MODE} 且 strictPageCategory=none，即使出现型号、功率、温度、数字或对比表也不能把整页判成参数页。`,
+    strictParameterModeEligible
+      ? `本页位于最后两张候选范围内。只有画面主体确实是参数表、规格表、型号表、配件/装箱清单或电气参数表时才填 ${DETAIL_REMIX_STRICT_PARAMETER_MODE}；孤立型号或少量数字仍按 ${DETAIL_REMIX_MARKETING_MODE}。`
+      : `本页已被程序锁定为 ${DETAIL_REMIX_MARKETING_MODE}。精确数字或型号只能作为单独的 mappedFacts 严格事实槽处理，不得改变整页模式。`,
+    `允许进入参数模式时，strictPageCategory 使用 parameters/specifications/model/accessories/electrical/packing_list；普通卖点、场景和品牌页填 ${DETAIL_REMIX_MARKETING_MODE} 且 strictPageCategory=none。pageType 保留 marketing/scene/brand/specification 等简短类型。`,
     '逐个识别竞品原有可读文案并输出 copySlots；每个槽必须包含 slotId、role、field、parameterPart、sourceText、位置、对齐、颜色和字重。普通文案 field 为空且 parameterPart=none。',
     `当 pageMode=${DETAIL_REMIX_STRICT_PARAMETER_MODE} 时，参数名称和参数值必须拆成两个独立 copySlot：名称槽 parameterPart=label，数值槽 parameterPart=value，并填写同一个规范 field。禁止把“额定功率 20W”作为单个替换单元；即使视觉上相邻，也必须分别给出两个紧密区域。`,
     '严格参数模式只能把参数槽映射到 verifiedFacts 的事实 ID，写入 mappedFacts；禁止输出 mappedSellingPoints。displayPart 只允许 label 或 value，并且必须与目标 slot 的 parameterPart 一致；同一事实只有 label/value 两个位置都可靠识别并且 field 一致时才映射。没有我方事实证据的竞品参数槽不映射，后续会彻底删除。',
@@ -953,9 +979,9 @@ export function buildCompetitorPageInstruction({
     '营销页中承担版式层级的所有可读槽都必须逐槽映射：包括胶囊标签/眉题、主标题及其拆分片段、副标题、功能标题、说明正文。若 competitorTrademark 实际占据主标题的一部分，也按主标题槽替换，不能删掉后破坏标题层级。只有水印、页码、法务脚注、免责声明、纯表头/对照栏目名，以及已由 brandSlots 单独承接的孤立品牌字样可以不映射并删除。',
     'mappedSellingPoints 中同一 slotId 恰好一项，每项都必须填写 replacementText。replacementText 必须是所选我方卖点 title/description 的忠实短写，适配该槽 maxChars，不得添加证据外功效；相邻的拆分标题允许选择同一卖点但要写成不同且连贯的片段。不同槽禁止机械重复同一句话。最终要保持原页“眉题/胶囊标签—大标题—副标题/说明”的数量、字号层级和留白节奏。',
     '判断所有竞品产品实例的观察角度、朝向、可见面和透视要求，再从我方产品视角库中选择最匹配的 1~3 个 ID 写入 selectedProductViewIds。必须只选给定 ID；优先覆盖本页出现的不同角度和产品完整度。',
-    `页面序号：${pageIndex + 1}。我方品牌：${JSON.stringify(brand)}。我方卖点库：${JSON.stringify(sellingPoints)}。我方精确事实库：${JSON.stringify(verifiedFacts)}。我方产品视角库：${JSON.stringify(productViews)}`,
+    `页面序号：${pageIndex + 1}/${totalPages}。我方品牌：${JSON.stringify(brand)}。我方卖点库：${JSON.stringify(sellingPoints)}。我方精确事实库：${JSON.stringify(verifiedFacts)}。我方产品视角库：${JSON.stringify(productViews)}`,
     '只输出合法 JSON，不要 Markdown。格式：',
-    `{"page":{"pageType":"specification","pageMode":"${DETAIL_REMIX_STRICT_PARAMETER_MODE}","strictPageCategory":"electrical","purpose":"","reversePrompt":"","layoutSpec":"","palette":"","lighting":"","hasPerson":false,"personaSpec":"","targetProductView":{"viewAngle":"front-left","visibleSides":["front","left"],"orientation":"upright","perspective":"three-quarter"},"selectedProductViewIds":["pv-1"],"productInstances":[{"instanceId":"product-1","x":0.5,"y":0.5,"width":0.3,"height":0.3,"viewAngle":"front-left","contactSurface":"","foregroundOcclusion":""}],"brandSlots":[{"slotId":"brand-1","sourceText":"竞品品牌","visualDescription":"左上角白色品牌标识","x":0.05,"y":0.03,"width":0.2,"height":0.08,"align":"left","color":"#ffffff"}],"copySlots":[{"slotId":"power-label","role":"parameterLabel","field":"power","parameterPart":"label","sourceText":"额定功率","x":0.1,"y":0.08,"width":0.35,"height":0.06,"align":"left","color":"#ffffff","fontWeight":500,"maxChars":8},{"slotId":"power-value","role":"parameterValue","field":"power","parameterPart":"value","sourceText":"20W","x":0.5,"y":0.08,"width":0.2,"height":0.06,"align":"right","color":"#ffffff","fontWeight":500,"maxChars":8}],"mappedSellingPoints":[],"mappedFacts":[{"factId":"fact-1","slotId":"power-label","slotRole":"parameterLabel","displayPart":"label"},{"factId":"fact-1","slotId":"power-value","slotRole":"parameterValue","displayPart":"value"}],"forbiddenCompetitorElements":[]}}`,
+    responseExample,
     '营销映射项格式：{"sellingPointId":"sp-1","slotId":"headline-1","slotRole":"headline","replacementText":"仿人手深层揉捏"}',
   ].join('\n');
 }
@@ -1206,10 +1232,14 @@ const safePageAnalysis = value => {
   const page = object(value);
   const productInstances = array(page.productInstances || page.productRegions);
   const productRegion = object(page.productRegion || page.blankProductRegion || productInstances[0]);
+  const pageMode = detailRemixPageMode(page);
   return {
     pageType: text(page.pageType || page.type) || 'marketing',
-    pageMode: detailRemixPageMode(page),
-    strictPageCategory: detailRemixStrictPageCategory(page),
+    strictParameterModeEligible: page.strictParameterModeEligible !== false,
+    pageMode,
+    strictPageCategory: pageMode === DETAIL_REMIX_STRICT_PARAMETER_MODE
+      ? detailRemixStrictPageCategory(page)
+      : 'none',
     purpose: text(page.purpose),
     reversePrompt: text(page.reversePrompt || page.visualPrompt),
     layoutSpec: text(page.layoutSpec || page.composition),

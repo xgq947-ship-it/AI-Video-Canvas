@@ -262,7 +262,7 @@ test('营销页核心文案槽缺失会在付费生图前重试，完整保留�
 
   assert.equal(competitorCalls.length, 2);
   assert.equal(completed.pages[0].recognitionContractRetries, 1);
-  assert.equal(completed.pages[0].competitorAnalysisVersion, 2);
+  assert.equal(completed.pages[0].competitorAnalysisVersion, 3);
   assert.equal(generationCalls.length, 1);
   assert.match(generationCalls[0].request.prompt, /肩颈按摩器/);
   assert.match(generationCalls[0].request.prompt, /仿人手深层揉捏/);
@@ -270,6 +270,130 @@ test('营销页核心文案槽缺失会在付费生图前重试，完整保留�
   assert.match(generationCalls[0].request.prompt, /胶囊标签—主标题—副标题/);
   assert.match(generationCalls[0].request.prompt, /高级感精修/);
   assert.doesNotMatch(generationCalls[0].request.prompt, /竞品水印/);
+});
+
+test('前序页面即使被识别成型号页也强制按营销页生成，只有最后两张保留参数候选资格', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const competitorInstructions = [];
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      if (meta.kind === 'own-selling-points') {
+        return JSON.stringify({
+          productViews: [{
+            sourceImageIndex: 0, cropRegion: { x: 0, y: 0, width: 1, height: 1 },
+            viewAngle: 'front', visibleSides: ['front'], description: '', quality: 0.95,
+          }],
+          sellingPoints: [{ id: 'sp-1', title: '肩颈深度放松', description: '贴合肩颈斜方肌' }],
+        });
+      }
+      competitorInstructions.push({ pageIndex: meta.pageIndex, instruction: request.systemInstruction });
+      if (meta.pageIndex === 0) {
+        return JSON.stringify({ page: {
+          pageType: '型号页', pageMode: 'STRICT_PARAMETER_MODE', strictPageCategory: 'model',
+          hasPerson: false, selectedProductViewIds: ['pv-1'], productInstances: [],
+          copySlots: [{
+            slotId: 'headline-1', role: 'headline', field: '', parameterPart: 'none',
+            sourceText: '5203N按摩披肩', x: 0.1, y: 0.1, width: 0.8, height: 0.08,
+            align: 'center', color: '#ffffff', fontWeight: 700, maxChars: 8,
+          }],
+          mappedSellingPoints: [{
+            sellingPointId: 'sp-1', slotId: 'headline-1', slotRole: 'headline', replacementText: '肩颈深度放松',
+          }],
+          mappedFacts: [],
+        } });
+      }
+      return JSON.stringify({ page: {
+        pageType: 'marketing', pageMode: 'MARKETING_MODE', strictPageCategory: 'none',
+        hasPerson: false, selectedProductViewIds: ['pv-1'], productInstances: [],
+        copySlots: [], mappedSellingPoints: [], mappedFacts: [],
+      } });
+    },
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from(`tail-mode-${meta.pageIndex}`), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'tail-only-strict-mode-job',
+    competitorDetails: [
+      { nodeId: 'competitor-1', imageUrl: COMPETITOR, order: 0 },
+      { nodeId: 'competitor-2', imageUrl: PIXEL, order: 1 },
+      { nodeId: 'competitor-3', imageUrl: PRODUCT_2, order: 2 },
+    ],
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(completed.pages[0].analysis.pageMode, 'MARKETING_MODE');
+  assert.equal(completed.pages[0].analysis.strictParameterModeEligible, false);
+  assert.equal(completed.pages[1].analysis.strictParameterModeEligible, true);
+  assert.equal(completed.pages[2].analysis.strictParameterModeEligible, true);
+  assert.match(competitorInstructions[0].instruction, /只有最后两张/);
+  assert.match(competitorInstructions[0].instruction, /本页已被程序锁定为 MARKETING_MODE/);
+  assert.match(generationCalls[0].request.prompt, /肩颈深度放松/);
+  assert.deepEqual(generationCalls.map(call => call.meta.pageIndex), [0, 1, 2]);
+});
+
+test('营销文案连续两次重复且超长时由程序确定性缩写和换词，不再把页面判失败', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let competitorCalls = 0;
+  const generationCalls = [];
+  const copySlots = [
+    { slotId: 'eyebrow-1', role: 'eyebrow', sourceText: '竞品眉题', x: 0.2, y: 0.1, width: 0.6, height: 0.04, maxChars: 6 },
+    { slotId: 'headline-1', role: 'headline', sourceText: '竞品主标题', x: 0.1, y: 0.2, width: 0.8, height: 0.08, maxChars: 6 },
+    { slotId: 'subtitle-1', role: 'body', sourceText: '竞品副标题', x: 0.1, y: 0.3, width: 0.8, height: 0.05, maxChars: 6 },
+  ];
+  const context = {
+    ...env.context,
+    runRecognition: async (_request, meta) => {
+      if (meta.kind === 'own-selling-points') {
+        return JSON.stringify({
+          productViews: [{
+            sourceImageIndex: 0, cropRegion: { x: 0, y: 0, width: 1, height: 1 },
+            viewAngle: 'front', visibleSides: ['front'], description: '', quality: 0.95,
+          }],
+          sellingPoints: [
+            { id: 'sp-1', title: '按摩热敷双效', description: '舒缓肩颈疲劳' },
+            { id: 'sp-2', title: '仿人手抓捏', description: '覆盖肩颈斜方肌' },
+            { id: 'sp-3', title: '轻巧便携', description: '办公居家皆适用' },
+          ],
+        });
+      }
+      competitorCalls += 1;
+      return JSON.stringify({ page: {
+        pageType: 'marketing', pageMode: 'MARKETING_MODE', strictPageCategory: 'none',
+        hasPerson: false, selectedProductViewIds: ['pv-1'], productInstances: [], copySlots,
+        mappedSellingPoints: copySlots.map(slot => ({
+          sellingPointId: 'sp-1', slotId: slot.slotId, slotRole: slot.role,
+          replacementText: '按摩热敷双效舒缓',
+        })),
+        mappedFacts: [],
+      } });
+    },
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('auto-repaired-copy'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'auto-repair-marketing-copy-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  const replacements = completed.pages[0].mappedSellingPoints.map(item => item.replacementText);
+  assert.equal(competitorCalls, 2);
+  assert.equal(generationCalls.length, 1);
+  assert.equal(completed.pages[0].recognitionAutoRepairCount, 3);
+  assert.equal(new Set(replacements).size, replacements.length);
+  assert.ok(replacements.every(text => [...text].length <= 6));
+  for (const replacement of replacements) assert.match(generationCalls[0].request.prompt, new RegExp(replacement));
 });
 
 test('只重试尚未进入生图的失败页，保留成功页和稳定结果节点，并按页面顺序导出', async t => {
@@ -319,6 +443,35 @@ test('只重试尚未进入生图的失败页，保留成功页和稳定结果�
   assert.equal(manifest.count, 2);
   assert.deepEqual(manifest.files.map(file => file.pageIndex), [0, 1]);
   assert.deepEqual(manifest.files.map(file => path.basename(file.sourcePath)), stableIds.map(id => `${id}.png`));
+});
+
+test('旧规则已完成识别但未提交生图的失败页仍可安全重规划', t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const context = { ...env.context, autoStart: false };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'retry-completed-recognition-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const persisted = __detailRemixTest.readJob(created.id, 'workflow-1', context.dirs);
+  persisted.status = 'partial_failed';
+  persisted.phase = 'final';
+  persisted.pages[0].status = 'failed';
+  persisted.pages[0].recognitionStatus = 'completed';
+  persisted.pages[0].competitorAnalysisVersion = 2;
+  persisted.pages[0].analysis = { pageMode: 'STRICT_PARAMETER_MODE', strictPageCategory: 'model' };
+  persisted.pages[0].errorCode = 'DETAIL_REMIX_SPEC_FACTS_MISSING';
+  persisted.pages[0].error = '旧版误判参数页';
+  __detailRemixTest.writeJob(persisted, context);
+
+  const retried = retryFailedDetailRemixPages(created.id, 'workflow-1', { pageIndexes: [0] }, context);
+  assert.equal(retried.status, 'pending');
+  assert.equal(retried.pages[0].status, 'waiting');
+  assert.equal(retried.pages[0].recognitionStatus, 'waiting');
+  assert.equal(retried.pages[0].analysis, undefined);
+  assert.equal(retried.pages[0].competitorAnalysisVersion, undefined);
+  assert.equal(retried.pages[0].retryCount, 1);
 });
 
 test('竞品页会从我的详情多角度库中选择匹配视角，而不是固定使用第一张', async t => {
@@ -1334,10 +1487,10 @@ test('单页重新生成只提交首个指定成功页，失败页和已取消�
   assert.ok(fs.existsSync(oldResultPath));
 });
 
-test('严格参数字段错配会安全重试识图并在正式生图前失败', async t => {
+test('严格参数字段错配会被安全删除，页面继续生成且不泄漏错误数值', async t => {
   const env = setup();
   t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
-  let generationCalls = 0;
+  const generationCalls = [];
   const context = {
     ...env.context,
     runRecognition: async (_request, meta) => {
@@ -1371,9 +1524,9 @@ test('严格参数字段错配会安全重试识图并在正式生图前失败',
         ],
       } });
     },
-    generateImage: async () => {
-      generationCalls += 1;
-      return { buffer: Buffer.from('must-not-generate'), extension: 'png' };
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('strict-mismatch-removed'), extension: 'png' };
     },
   };
   const created = createDetailRemixJob(basePayload({
@@ -1381,11 +1534,14 @@ test('严格参数字段错配会安全重试识图并在正式生图前失败',
     productImages: [], productNodeIds: [],
     useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
   }), context);
-  const failed = await waitFor(created.id, context, job => job?.status === 'failed');
-  assert.equal(generationCalls, 0);
-  assert.equal(failed.pages[0].status, 'failed');
-  assert.equal(failed.pages[0].errorCode, 'DETAIL_REMIX_ANALYSIS_CONTRACT');
-  assert.equal(failed.pages[0].recognitionContractRetries, 2);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+  assert.equal(generationCalls.length, 1);
+  assert.equal(completed.pages[0].recognitionAttempts, 2);
+  assert.equal(completed.pages[0].recognitionContractRetries, 1);
+  assert.deepEqual(completed.pages[0].mappedFacts, []);
+  assert.ok(completed.pages[0].factMappingAudit.rejected.some(item => item.reason === 'field_mismatch'));
+  assert.doesNotMatch(generationCalls[0].request.prompt, /24W|16W/);
+  assert.match(generationCalls[0].request.prompt, /没有证据映射的竞品参数栏必须连标签和值一起删除/);
 });
 
 test('质检自称通过但仍报告无证据参数时不得放行，修复一次后标记 FAILED_VALIDATION', async t => {

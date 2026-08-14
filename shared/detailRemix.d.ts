@@ -69,6 +69,7 @@ export const DETAIL_REMIX_SCHEMA_VERSION: 1;
 export const DETAIL_REMIX_STRICT_PARAMETER_MODE: 'STRICT_PARAMETER_MODE';
 export const DETAIL_REMIX_MARKETING_MODE: 'MARKETING_MODE';
 export const DETAIL_REMIX_STRICT_FACT_MIN_CONFIDENCE: number;
+export const DETAIL_REMIX_STRICT_PARAMETER_TAIL_PAGE_COUNT: 2;
 export const DETAIL_REMIX_STRICT_PAGE_CATEGORIES: readonly string[];
 export const DETAIL_REMIX_NODE_WIDTH: 460;
 export const DETAIL_REMIX_NODE_HEIGHT: 620;
@@ -80,6 +81,7 @@ export const DETAIL_REMIX_OWN_KNOWLEDGE_OUTPUT_SCHEMA: Readonly<Record<string, a
 export const DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA: Readonly<Record<string, any>>;
 export function canonicalDetailRemixFactField(value: any, label?: any): string;
 export function normalizeDetailRemixFactValue(value: any): string;
+export function detailRemixAllowsStrictParameterMode(pageIndex?: number, pageCount?: number): boolean;
 export function detailRemixPageMode(value?: any): 'STRICT_PARAMETER_MODE' | 'MARKETING_MODE';
 export function isDetailRemixStrictParameterPage(value?: any): boolean;
 export function detailRemixStrictPageCategory(value?: any): string;

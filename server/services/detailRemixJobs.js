@@ -23,9 +23,11 @@ import {
   DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA,
   DETAIL_REMIX_OWN_KNOWLEDGE_OUTPUT_SCHEMA,
   DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA,
+  DETAIL_REMIX_MARKETING_MODE,
   DETAIL_REMIX_STRICT_FACT_MIN_CONFIDENCE,
   DETAIL_REMIX_STRICT_PARAMETER_MODE,
   canonicalDetailRemixFactField,
+  detailRemixAllowsStrictParameterMode,
   detailRemixPageMode,
   detailRemixStrictPageCategory,
   isDetailRemixMarketingLayoutSlot,
@@ -48,8 +50,8 @@ export const DEFAULT_DETAIL_REMIX_RECOGNITION_PROVIDER = 'gemini-web';
 export const DEFAULT_DETAIL_REMIX_IMAGE_MODEL = 'google-flow-nano-banana-pro';
 export const DETAIL_REMIX_JOB_SCHEMA_VERSION = 7;
 const DETAIL_REMIX_KNOWLEDGE_SCHEMA_VERSION = 3;
-const DETAIL_REMIX_COMPETITOR_ANALYSIS_VERSION = 2;
-const DETAIL_REMIX_PIPELINE_VERSION = 'strict-evidence-layout-brand-qa-v3';
+const DETAIL_REMIX_COMPETITOR_ANALYSIS_VERSION = 3;
+const DETAIL_REMIX_PIPELINE_VERSION = 'tail-strict-auto-copy-qa-v4';
 const MAX_AUTO_PRODUCT_VIEW_REFERENCES = 3;
 const MAX_FINAL_REPAIR_ATTEMPTS = 1;
 const DETAIL_REMIX_RECOGNITION_TIMEOUT_MS = 10 * 60_000;
@@ -752,7 +754,7 @@ function productViewCatalog(job) {
     }));
 }
 
-function normalizePageAnalysis(parsed) {
+function normalizePageAnalysis(parsed, { pageIndex = 0, pageCount = 1 } = {}) {
   const value = parsed?.page || parsed?.pages?.[0] || parsed?.analysis || parsed || {};
   const hasPersonValue = value.hasPerson ?? value.containsPerson ?? value.personPresent
     ?? value.person?.present ?? value.character?.present ?? value.structure?.character?.present;
@@ -784,7 +786,11 @@ function normalizePageAnalysis(parsed) {
       parameterPart,
     };
   }) : [];
-  const pageMode = detailRemixPageMode({ ...value, copySlots });
+  const strictParameterModeEligible = detailRemixAllowsStrictParameterMode(pageIndex, pageCount);
+  const detectedPageMode = detailRemixPageMode({ ...value, copySlots });
+  const pageMode = strictParameterModeEligible
+    ? detectedPageMode
+    : DETAIL_REMIX_MARKETING_MODE;
   const strictMode = pageMode === DETAIL_REMIX_STRICT_PARAMETER_MODE;
   return {
     ...value,
@@ -793,7 +799,10 @@ function normalizePageAnalysis(parsed) {
     originalPageType: String(value.pageType || value.type || '').trim(),
     pageType: strictMode
       ? 'specification'
-      : String(value.pageType || value.type || 'marketing').trim().toLowerCase() || 'marketing',
+      : strictParameterModeEligible
+        ? String(value.pageType || value.type || 'marketing').trim().toLowerCase() || 'marketing'
+        : 'marketing',
+    strictParameterModeEligible,
     pageMode,
     strictPageCategory: strictMode ? detailRemixStrictPageCategory({ ...value, copySlots }) : 'none',
     mappedSellingPoints: strictMode ? [] : (Array.isArray(mapped) ? mapped : []),
@@ -968,7 +977,7 @@ function validateMarketingCopyContract(analysis, ownSellingPoints) {
     if (maximum && [...replacementText].length > maximum) issues.push(`${slotId}:replacement_text_too_long`);
     const normalizedReplacement = replacementText.normalize('NFKC').replace(/\s+/gu, '');
     const previousSlotId = replacementOwners.get(normalizedReplacement);
-    if (previousSlotId && previousSlotId !== slotId) {
+    if (previousSlotId && previousSlotId !== slotId && analysis?.copyMappingAutoRepaired !== true) {
       issues.push(`${slotId}:replacement_text_duplicated_with_${previousSlotId}`);
     } else {
       replacementOwners.set(normalizedReplacement, slotId);
@@ -981,9 +990,153 @@ function validateMarketingCopyContract(analysis, ownSellingPoints) {
   throw error;
 }
 
-function validateCompetitorAnalysisContract(analysis, verifiedFacts, ownSellingPoints) {
+const normalizedMarketingCopy = value => String(value || '')
+  .trim()
+  .normalize('NFKC')
+  .replace(/\s+/gu, ' ');
+
+function fitGroundedMarketingCopy(value, maximum) {
+  const source = normalizedMarketingCopy(value);
+  const limit = Math.max(0, Number(maximum) || 0);
+  if (!source || !limit || [...source].length <= limit) return source;
+  const segments = source
+    .split(/[，,。；;、｜|&＆：:\n]+/u)
+    .map(item => normalizedMarketingCopy(item))
+    .filter(Boolean);
+  const fitting = segments
+    .filter(item => [...item].length <= limit)
+    .sort((left, right) => [...right].length - [...left].length);
+  if (fitting.length) return fitting[0];
+  return [...source].slice(0, limit).join('').replace(/[，,。；;、｜|&＆：:]+$/u, '');
+}
+
+function groundedMarketingCopyCandidates(point, slot, preferredText = '') {
+  const role = String(slot?.role || '').toLowerCase();
+  const wantsSupport = /(?:body|support|description|subtitle|subheadline|caption|说明|副标题)/iu.test(role);
+  const roots = [
+    preferredText,
+    wantsSupport ? point?.description : point?.title,
+    wantsSupport ? point?.title : point?.description,
+  ];
+  const candidates = [];
+  const seen = new Set();
+  for (const root of roots) {
+    const source = normalizedMarketingCopy(root);
+    if (!source) continue;
+    const variants = [
+      source,
+      ...source.split(/[，,。；;、｜|&＆：:\n]+/u),
+    ];
+    for (const variant of variants) {
+      const fitted = fitGroundedMarketingCopy(variant, slot?.maxChars);
+      const key = fitted.normalize('NFKC').replace(/\s+/gu, '');
+      if (!fitted || seen.has(key)) continue;
+      seen.add(key);
+      candidates.push(fitted);
+    }
+  }
+  return candidates;
+}
+
+/**
+ * Recognition remains the semantic planner. If both recognition attempts
+ * violate only the mechanical slot contract, this deterministic fallback
+ * repairs length, duplication, and missing-slot issues using grounded own
+ * selling points. It never invents a claim and runs before paid generation.
+ */
+function repairMarketingCopyContract(analysis, ownSellingPoints) {
+  if (isDetailRemixStrictParameterPage(analysis)) return { analysis, repairs: [] };
+  const slots = Array.isArray(analysis?.copySlots) ? analysis.copySlots : [];
+  const brandSlots = Array.isArray(analysis?.brandSlots) ? analysis.brandSlots : [];
+  const criticalSlots = slots.filter(slot => (
+    isDetailRemixMarketingLayoutSlot(slot)
+    && !isBrandOnlyCopySlot(slot, brandSlots)
+  ));
+  const points = (Array.isArray(ownSellingPoints) ? ownSellingPoints : [])
+    .filter(point => point?.id && (point?.title || point?.description));
+  if (!criticalSlots.length || !points.length) return { analysis, repairs: [] };
+
+  const byId = new Map(points.map(point => [String(point.id), point]));
+  const mappings = Array.isArray(analysis?.mappedSellingPoints)
+    ? analysis.mappedSellingPoints.filter(item => item && typeof item === 'object')
+    : [];
+  const firstMappingBySlot = new Map();
+  for (const mapping of mappings) {
+    const slotId = String(mapping.slotId || '').trim();
+    if (slotId && !firstMappingBySlot.has(slotId)) firstMappingBySlot.set(slotId, mapping);
+  }
+
+  const usedTexts = new Set();
+  const repairedMappings = [];
+  const repairs = [];
+  for (let slotIndex = 0; slotIndex < criticalSlots.length; slotIndex += 1) {
+    const slot = criticalSlots[slotIndex];
+    const slotId = String(slot?.slotId || '').trim();
+    const existing = firstMappingBySlot.get(slotId);
+    const preferredPoint = byId.get(String(existing?.sellingPointId || existing?.pointId || existing?.id || ''));
+    const rotatedPoints = points.map((_, index) => points[(slotIndex + index) % points.length]);
+    const candidatePoints = [
+      ...(preferredPoint ? [preferredPoint] : []),
+      ...rotatedPoints.filter(point => point !== preferredPoint),
+    ];
+    let selected = null;
+    let duplicateFallback = null;
+    for (const point of candidatePoints) {
+      const candidates = groundedMarketingCopyCandidates(
+        point,
+        slot,
+        point === preferredPoint ? existing?.replacementText : '',
+      );
+      for (const replacementText of candidates) {
+        const key = replacementText.normalize('NFKC').replace(/\s+/gu, '');
+        duplicateFallback ||= { point, replacementText, key };
+        if (usedTexts.has(key)) continue;
+        selected = { point, replacementText, key };
+        break;
+      }
+      if (selected) break;
+    }
+    selected ||= duplicateFallback;
+    if (!selected) continue;
+    usedTexts.add(selected.key);
+    repairedMappings.push({
+      ...(existing || {}),
+      sellingPointId: String(selected.point.id),
+      slotId,
+      slotRole: String(slot?.role || existing?.slotRole || 'copy'),
+      replacementText: selected.replacementText,
+    });
+    if (!existing
+        || String(existing.sellingPointId || existing.pointId || existing.id || '') !== String(selected.point.id)
+        || normalizedMarketingCopy(existing.replacementText) !== selected.replacementText) {
+      repairs.push({
+        slotId,
+        sellingPointId: String(selected.point.id),
+        replacementText: selected.replacementText,
+      });
+    }
+  }
+
+  const criticalSlotIds = new Set(criticalSlots.map(slot => String(slot?.slotId || '').trim()));
+  const untouchedMappings = mappings.filter(mapping => !criticalSlotIds.has(String(mapping.slotId || '').trim()));
+  return {
+    analysis: {
+      ...analysis,
+      mappedSellingPoints: [...untouchedMappings, ...repairedMappings],
+      copyMappingAutoRepaired: true,
+    },
+    repairs,
+  };
+}
+
+function validateCompetitorAnalysisContract(
+  analysis,
+  verifiedFacts,
+  ownSellingPoints,
+  { allowRejectedFacts = false } = {},
+) {
   const resolution = resolveMappedFacts(analysis, verifiedFacts);
-  if (resolution.rejected.length > 0) {
+  if (resolution.rejected.length > 0 && !allowRejectedFacts) {
     const reasons = [...new Set(resolution.rejected.map(item => item.reason))];
     const error = new Error(`竞品参数映射未通过严格证据校验：${reasons.join('、')}`);
     error.code = 'DETAIL_REMIX_ANALYSIS_CONTRACT';
@@ -991,22 +1144,11 @@ function validateCompetitorAnalysisContract(analysis, verifiedFacts, ownSellingP
     throw error;
   }
   if (isDetailRemixStrictParameterPage(analysis)) {
-    const mappedSlots = new Set(resolution.mappedFacts.map(item => item.slotId));
-    const unsafeSellingPoints = Array.isArray(analysis.mappedSellingPoints)
-      && analysis.mappedSellingPoints.length > 0;
-    if (unsafeSellingPoints) {
-      const error = new Error('严格参数页禁止映射营销卖点');
-      error.code = 'DETAIL_REMIX_ANALYSIS_CONTRACT';
-      throw error;
-    }
-    for (const factId of new Set(resolution.mappedFacts.map(item => item.factId))) {
-      const pair = resolution.mappedFacts.filter(item => item.factId === factId);
-      if (pair.length !== 2 || !pair.every(item => mappedSlots.has(item.slotId))) {
-        const error = new Error(`严格参数 ${factId} 未拆分为独立的参数名和参数值位置`);
-        error.code = 'DETAIL_REMIX_ANALYSIS_CONTRACT';
-        throw error;
-      }
-    }
+    // Strict pages are closed-world contracts. Invalid, incomplete, or
+    // ungrounded fact mappings are already excluded by resolveMappedFacts;
+    // dropping them is safer than failing the whole page. Marketing mappings
+    // are likewise ignored instead of being allowed to spill into spec cells.
+    analysis.mappedSellingPoints = [];
   } else {
     validateMarketingCopyContract(analysis, ownSellingPoints);
   }
@@ -1545,6 +1687,8 @@ async function analyzeCompetitorPage(job, page, context, signal) {
     page.recognitionAttempts = 0;
     page.recognitionFormatRetries = 0;
     page.recognitionContractRetries = 0;
+    page.recognitionAutoRepairs = undefined;
+    page.recognitionAutoRepairCount = 0;
   }
   if (['submitting', 'processing', 'recovery_required'].includes(page.recognitionStatus)) {
     page.recognitionStatus = 'waiting';
@@ -1568,6 +1712,7 @@ async function analyzeCompetitorPage(job, page, context, signal) {
     ownBrandIdentity: job.brandIdentity,
     ownProductViews: productViewCatalog(job),
     pageIndex: page.index,
+    pageCount: job.pages.length,
   });
   for (let formatAttempt = 0; formatAttempt < 2; formatAttempt += 1) {
     page.recognitionStatus = 'processing';
@@ -1577,8 +1722,8 @@ async function analyzeCompetitorPage(job, page, context, signal) {
     const request = {
       systemInstruction: instruction,
       userPrompt: formatAttempt === 0
-        ? '分析这一张竞品详情图的构图、人物、产品角度和文字层级。先判断 STRICT_PARAMETER_MODE；严格参数的名称和值必须分别定位、同字段配对，并且只映射我方精确事实。营销页的胶囊标签、主标题、拆分标题、副标题和说明必须逐槽映射我方卖点并填写 replacementText，不能删除后压平层级。严格返回指定 JSON。'
-        : '上一次回复未通过 JSON、参数证据或营销版式契约校验。严格参数页把参数名和值拆成独立槽，field 与 displayPart 必须一致，只映射有我方事实 ID 的完整 label/value 对；营销页为每个核心文案槽恰好输出一条已给卖点映射和适配 maxChars 的 replacementText，不能漏掉主标题、胶囊标签或副标题。只返回完全符合 Schema 的单个 JSON 对象，不要解释、不要 Markdown。',
+        ? `分析这一张竞品详情图的构图、人物、产品角度和文字层级。严格遵守页面顺序：只有最后两张有资格判断 STRICT_PARAMETER_MODE，本页是 ${page.index + 1}/${job.pages.length}。严格参数的名称和值必须分别定位、同字段配对，并且只映射我方精确事实。营销页的胶囊标签、主标题、拆分标题、副标题和说明必须逐槽映射我方卖点并填写 replacementText，不能删除后压平层级。严格返回指定 JSON。`
+        : `上一次回复未通过 JSON、参数证据或营销版式契约校验。严格遵守页面顺序：只有最后两张有资格判断 STRICT_PARAMETER_MODE，本页是 ${page.index + 1}/${job.pages.length}。严格参数页把参数名和值拆成独立槽，field 与 displayPart 必须一致，只映射有我方事实 ID 的完整 label/value 对；营销页为每个核心文案槽恰好输出一条已给卖点映射和适配 maxChars 的 replacementText，不能漏掉主标题、胶囊标签或副标题。只返回完全符合 Schema 的单个 JSON 对象，不要解释、不要 Markdown。`,
       imageDataUrls: [imageDataUrl],
       outputSchema: DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA,
       model: job.recognitionModel,
@@ -1598,15 +1743,20 @@ async function analyzeCompetitorPage(job, page, context, signal) {
       });
       assertActive(job, context, signal);
       parsed = parseCompetitorPageResponse(raw);
-      normalizedAnalysis = normalizePageAnalysis(parsed);
+      normalizedAnalysis = normalizePageAnalysis(parsed, {
+        pageIndex: page.index,
+        pageCount: job.pages.length,
+      });
       factResolution = validateCompetitorAnalysisContract(
         normalizedAnalysis,
         job.verifiedFacts,
         job.ownSellingPoints,
+        { allowRejectedFacts: formatAttempt > 0 },
       );
       break;
     } catch (error) {
       if (isOperationCancelled(error)) throw error;
+      let finalError = error;
       page.recognitionLastError = error instanceof Error ? error.message : String(error);
       page.recognitionLastFailedAt = nowIso(context);
       const safelyRetryableRecognitionError = [
@@ -1619,9 +1769,32 @@ async function analyzeCompetitorPage(job, page, context, signal) {
         + (error?.code === 'DETAIL_REMIX_ANALYSIS_CONTRACT' ? 1 : 0);
       writeJob(job, context);
       if (safelyRetryableRecognitionError && formatAttempt === 0) continue;
+      if (error?.code === 'DETAIL_REMIX_ANALYSIS_CONTRACT' && normalizedAnalysis) {
+        const repaired = repairMarketingCopyContract(normalizedAnalysis, job.ownSellingPoints);
+        if (repaired.repairs.length || repaired.analysis?.copyMappingAutoRepaired === true) {
+          try {
+            normalizedAnalysis = repaired.analysis;
+            factResolution = validateCompetitorAnalysisContract(
+              normalizedAnalysis,
+              job.verifiedFacts,
+              job.ownSellingPoints,
+              { allowRejectedFacts: true },
+            );
+            page.recognitionAutoRepairs = repaired.repairs;
+            page.recognitionAutoRepairCount = repaired.repairs.length;
+            break;
+          } catch (repairError) {
+            finalError = repairError;
+            page.recognitionLastError = repairError instanceof Error
+              ? repairError.message
+              : String(repairError);
+            page.recognitionLastFailedAt = nowIso(context);
+          }
+        }
+      }
       page.recognitionStatus = 'failed';
       writeJob(job, context);
-      throw error;
+      throw finalError;
     }
   }
   if (!parsed || !normalizedAnalysis || !factResolution) throw new Error('竞品详情识别没有返回可用的结构化结果');
@@ -2063,11 +2236,6 @@ async function generateFinalPage(job, page, context, signal) {
     ? [...job.characterReferenceImages]
     : [];
   const brandReferences = job.brandLogoUrl ? [job.brandLogoUrl] : [];
-  if (isDetailRemixStrictParameterPage(page.analysis) && !(page.mappedFacts || []).length) {
-    const error = new Error('识别为参数页，但没有任何可由“我的详情”证据核验的参数映射；为避免编造，本页未提交生图');
-    error.code = 'DETAIL_REMIX_SPEC_FACTS_MISSING';
-    throw error;
-  }
   const imageProvider = getImageGenerationProvider(job.imageModel);
   const evidenceCapacity = Math.max(
     0,
@@ -2089,11 +2257,6 @@ async function generateFinalPage(job, page, context, signal) {
       value: item.value,
       reason: 'evidence_reference_limit',
     }));
-  if (isDetailRemixStrictParameterPage(page.analysis) && !page.effectiveMappedFacts.length) {
-    const error = new Error('严格参数页没有可随最终生图一起发送的我方证据；为避免无证据生成，本页未提交生图');
-    error.code = 'DETAIL_REMIX_SPEC_EVIDENCE_UNAVAILABLE';
-    throw error;
-  }
   const selectedProducts = resolvePageProductReferences(
     job,
     page,
@@ -3174,7 +3337,6 @@ export function retryFailedDetailRemixPages(jobId, workflowId, payload, context)
   const retryPages = (job.pages || []).filter(page => (
     page.status === 'failed'
     && !pageHasGenerationSubmission(job, page)
-    && page.recognitionStatus !== 'completed'
     && (!requested || requested.has(Number(page.index)))
   ));
   if (!retryPages.length) {
@@ -3192,23 +3354,28 @@ export function retryFailedDetailRemixPages(jobId, workflowId, payload, context)
     page.failedAt = undefined;
     page.retryCount = Math.max(0, Number(page.retryCount) || 0) + 1;
     page.retryRequestedAt = requestedAt;
-    if (!(page.analysis && page.recognitionStatus === 'completed')) {
-      page.recognitionStatus = 'waiting';
-      page.recognitionAttempts = 0;
-      page.recognitionFormatRetries = 0;
-      page.recognitionStartedAt = undefined;
-      page.recognitionCompletedAt = undefined;
-      page.recognitionLastError = undefined;
-      page.recognitionLastFailedAt = undefined;
-      page.analysis = undefined;
-      page.mappedSellingPoints = undefined;
-      page.mappedFacts = undefined;
-      page.effectiveMappedFacts = undefined;
-      page.omittedMappedFacts = undefined;
-      page.factMappingAudit = undefined;
-      page.selectedProductViewIds = undefined;
-      page.selectedProductViews = undefined;
-    }
+    // Every page here is proven to have never crossed the paid-generation
+    // boundary. Re-run recognition under the current page-order and copy-plan
+    // rules even when an older pipeline had marked recognition completed.
+    page.recognitionStatus = 'waiting';
+    page.recognitionAttempts = 0;
+    page.recognitionFormatRetries = 0;
+    page.recognitionContractRetries = 0;
+    page.recognitionAutoRepairs = undefined;
+    page.recognitionAutoRepairCount = 0;
+    page.recognitionStartedAt = undefined;
+    page.recognitionCompletedAt = undefined;
+    page.recognitionLastError = undefined;
+    page.recognitionLastFailedAt = undefined;
+    page.competitorAnalysisVersion = undefined;
+    page.analysis = undefined;
+    page.mappedSellingPoints = undefined;
+    page.mappedFacts = undefined;
+    page.effectiveMappedFacts = undefined;
+    page.omittedMappedFacts = undefined;
+    page.factMappingAudit = undefined;
+    page.selectedProductViewIds = undefined;
+    page.selectedProductViews = undefined;
     page.finalPrompt = undefined;
     page.generationReferenceCount = undefined;
   }

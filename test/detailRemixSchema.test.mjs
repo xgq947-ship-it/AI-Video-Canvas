@@ -5,6 +5,7 @@ import {
   DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA,
   DETAIL_REMIX_OWN_KNOWLEDGE_OUTPUT_SCHEMA,
   DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA,
+  DETAIL_REMIX_MARKETING_MODE,
   DETAIL_REMIX_STRICT_PARAMETER_MODE,
   activeDetailRemixInputRefs,
   assignDetailRemixInputPort,
@@ -18,6 +19,7 @@ import {
   buildOwnSellingPointsInstruction,
   buildProductComposePrompt,
   createDetailRemixNodeData,
+  detailRemixAllowsStrictParameterMode,
   detailRemixInputFingerprint,
   detailRemixPageMode,
   canonicalDetailRemixFactField,
@@ -339,6 +341,26 @@ test('参数、型号、配件、电气与装箱页面自动进入 STRICT_PARAME
   assert.equal(detailRemixPageMode({ pageType: 'marketing' }), 'MARKETING_MODE');
   assert.equal(canonicalDetailRemixFactField('rated_power', '额定功率'), 'power');
   assert.equal(canonicalDetailRemixFactField('', '充电输入'), 'charging_input');
+});
+
+test('只有文件夹最后两张允许参数模式，前序页面即使出现型号也锁定为营销页', () => {
+  assert.equal(detailRemixAllowsStrictParameterMode(0, 22), false);
+  assert.equal(detailRemixAllowsStrictParameterMode(19, 22), false);
+  assert.equal(detailRemixAllowsStrictParameterMode(20, 22), true);
+  assert.equal(detailRemixAllowsStrictParameterMode(21, 22), true);
+  assert.equal(detailRemixAllowsStrictParameterMode(0, 1), true);
+  assert.equal(detailRemixPageMode({
+    pageType: '型号页',
+    pageMode: DETAIL_REMIX_STRICT_PARAMETER_MODE,
+    strictPageCategory: 'model',
+    strictParameterModeEligible: false,
+  }), DETAIL_REMIX_MARKETING_MODE);
+
+  const earlyInstruction = buildCompetitorPageInstruction({ pageIndex: 1, pageCount: 22 });
+  assert.match(earlyInstruction, /只有最后两张/);
+  assert.match(earlyInstruction, /本页是第 2 张/);
+  assert.match(earlyInstruction, /锁定为 MARKETING_MODE/);
+  assert.match(earlyInstruction, /"pageMode":"MARKETING_MODE"/);
 });
 
 test('低置信度、无证据区域、字段错配或参数名值错栏都不能进入替换计划', () => {

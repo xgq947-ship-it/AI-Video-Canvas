@@ -139,7 +139,11 @@ const NODE_TYPES_NEEDING_ALL_NODES = new Set<NodeType>([
   ...Object.values(NodeType).filter(isMangaNode)
 ]);
 
-type CanvasHistoryState = { nodes: NodeData[]; groups: ReturnType<typeof useGroupManagement>['groups'] };
+type CanvasHistoryState = {
+  nodes: NodeData[];
+  groups: ReturnType<typeof useGroupManagement>['groups'];
+  selectedNodeIds: string[];
+};
 
 type SpecialGenerationKind = 'stickman' | 'cinematic';
 type SpecialRunControl = {
@@ -363,9 +367,10 @@ export default function App() {
     undo,
     redo,
     pushHistory,
+    commitHistoryTransition,
     canUndo,
     canRedo
-  } = useHistory({ nodes, groups }, 50, isSameCanvasHistoryState);
+  } = useHistory({ nodes, groups, selectedNodeIds }, 50, isSameCanvasHistoryState);
   const isApplyingHistory = React.useRef(false);
   const isPushingLocalHistory = React.useRef(false);
   const activeCanvasHistoryTransactionRef = React.useRef<{
@@ -375,6 +380,8 @@ export default function App() {
   } | null>(null);
   const groupsRef = React.useRef(groups);
   groupsRef.current = groups;
+  const selectedNodeIdsRef = React.useRef(selectedNodeIds);
+  selectedNodeIdsRef.current = selectedNodeIds;
   const [activeCanvasHistoryTransactionId, setActiveCanvasHistoryTransactionId] = React.useState<string | null>(null);
   const cancelActiveImportRef = React.useRef<(() => boolean) | null>(null);
 
@@ -384,20 +391,28 @@ export default function App() {
     activeCanvasHistoryTransactionRef.current = {
       id,
       label,
-      before: { nodes, groups: groupsRef.current },
+      before: { nodes, groups: groupsRef.current, selectedNodeIds: selectedNodeIdsRef.current },
     };
     setActiveCanvasHistoryTransactionId(id);
     return id;
   }, [nodes]);
 
-  const commitCanvasHistoryTransaction = React.useCallback((transactionId: string, finalNodes: NodeData[]) => {
+  const commitCanvasHistoryTransaction = React.useCallback((
+    transactionId: string,
+    finalNodes: NodeData[],
+    finalSelectedNodeIds?: string[],
+  ) => {
     const transaction = activeCanvasHistoryTransactionRef.current;
     if (!transaction || transaction.id !== transactionId) return;
     activeCanvasHistoryTransactionRef.current = null;
     setActiveCanvasHistoryTransactionId(null);
     isPushingLocalHistory.current = true;
-    pushHistory({ nodes: finalNodes, groups: groupsRef.current });
-  }, [pushHistory]);
+    commitHistoryTransition(transaction.before, {
+      nodes: finalNodes,
+      groups: groupsRef.current,
+      selectedNodeIds: finalSelectedNodeIds || selectedNodeIdsRef.current,
+    });
+  }, [commitHistoryTransition]);
 
   const rollbackCanvasHistoryTransaction = React.useCallback((transactionId: string) => {
     const transaction = activeCanvasHistoryTransactionRef.current;
@@ -407,7 +422,7 @@ export default function App() {
     isApplyingHistory.current = true;
     setNodes(transaction.before.nodes);
     setGroups(transaction.before.groups);
-    setSelectedNodeIds([]);
+    setSelectedNodeIds(transaction.before.selectedNodeIds);
   }, [setGroups, setNodes, setSelectedNodeIds]);
 
   const handleCanvasUndo = React.useCallback(() => {
@@ -1739,7 +1754,7 @@ export default function App() {
     // 标记本次 historyState 变化来自当前画布，避免下面的同步 effect 在
     // pushHistory 生效前用旧 present 覆盖异步生成刚新增的结果节点。
     isPushingLocalHistory.current = true;
-    pushHistory({ nodes, groups });
+    pushHistory({ nodes, groups, selectedNodeIds });
   }, [nodes, groups, isDragging]);
 
   // Apply history state when undo/redo is triggered
@@ -1758,11 +1773,15 @@ export default function App() {
       return;
     }
 
-    if (historyState.nodes !== nodes) {
+    if (historyState.nodes !== nodes || historyState.groups !== groups) {
       isApplyingHistory.current = true;
-      setNodes(historyState.nodes);
+      if (historyState.nodes !== nodes) setNodes(historyState.nodes);
+      if (historyState.groups !== groups) setGroups(historyState.groups);
+      setSelectedNodeIds(historyState.selectedNodeIds.filter(id => (
+        historyState.nodes.some(node => node.id === id)
+      )));
     }
-  }, [historyState]);
+  }, [historyState, nodes, groups, setGroups, setNodes, setSelectedNodeIds]);
 
   // 撤销把删掉的节点拿回来时，把它的图片文件也从回收站还原回去。
   //

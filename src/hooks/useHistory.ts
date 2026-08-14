@@ -86,6 +86,22 @@ export const useHistory = <T>(
     }, [past, present, maxHistorySize, isEqual]);
 
     /**
+     * Commit an externally managed transaction with its exact before state.
+     * This avoids depending on a possibly stale `present` snapshot while a
+     * batch operation publishes intermediate UI state outside the history.
+     */
+    const commitHistoryTransition = useCallback((previousState: T, newState: T) => {
+        if (!isEqual(previousState, newState)) {
+            setPast(currentPast => [
+                ...currentPast.slice(-maxHistorySize + 1),
+                previousState,
+            ]);
+        }
+        setPresent(newState);
+        setFuture([]);
+    }, [maxHistorySize, isEqual]);
+
+    /**
      * Reset history to a new initial state
      * Clears all history
      * @param newState - New initial state
@@ -105,6 +121,7 @@ export const useHistory = <T>(
         undo,
         redo,
         pushHistory,
+        commitHistoryTransition,
         reset,
         canUndo,
         canRedo

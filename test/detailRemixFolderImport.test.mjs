@@ -156,9 +156,14 @@ test('整批导入由单个历史事务提交，导入中撤销会中止上传�
   assert.match(hook, /rollbackHistoryTransaction/);
   assert.match(hook, /session\.controller\.abort\(\)/);
   assert.match(hook, /body:\s*file,\s*signal,/);
+  assert.match(hook, /replaceableFolderNodeIds/);
+  assert.match(hook, /finishImport\(session, committedNodes, \[controller\.id\]\)/);
   assert.match(app, /activeCanvasHistoryTransactionRef/);
   assert.match(app, /if \(cancelActiveImportRef\.current\?\.\(\)\) return/);
-  assert.match(app, /pushHistory\(\{ nodes: finalNodes, groups:/);
+  assert.match(app, /commitHistoryTransition\(transaction\.before, \{/);
+  assert.match(app, /selectedNodeIds: finalSelectedNodeIds \|\| selectedNodeIdsRef\.current/);
+  assert.match(app, /setSelectedNodeIds\(transaction\.before\.selectedNodeIds\)/);
+  assert.match(app, /setSelectedNodeIds\(historyState\.selectedNodeIds\.filter/);
   assert.match(topBar, /aria-label="撤销"/);
   assert.match(topBar, /aria-label="重做"/);
   assert.match(topBar, /⌘\/Ctrl\+Z/);

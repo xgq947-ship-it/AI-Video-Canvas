@@ -24,7 +24,11 @@ interface UseCanvasImageImportOptions {
     /** 应用内提示；不传时退化为 console，绝不弹原生 alert。 */
     notify?: (message: string, options?: { tone?: 'info' | 'error' }) => void;
     beginHistoryTransaction?: (label: string) => string | null;
-    commitHistoryTransaction?: (transactionId: string, nodes: NodeData[]) => void;
+    commitHistoryTransaction?: (
+        transactionId: string,
+        nodes: NodeData[],
+        selectedNodeIds?: string[],
+    ) => void;
     rollbackHistoryTransaction?: (transactionId: string) => void;
 }
 
@@ -120,7 +124,7 @@ const uploadProjectImageFile = async (
     };
 };
 
-const roleKey = (role: DetailRemixFolderRole) => (
+const roleKey = (role: DetailRemixFolderRole): 'competitorDetailNodeIds' | 'ownDetailNodeIds' => (
     role === 'competitor' ? 'competitorDetailNodeIds' : 'ownDetailNodeIds'
 );
 
@@ -187,10 +191,11 @@ export const useCanvasImageImport = ({
     const finishImport = React.useCallback((
         session: NonNullable<typeof activeImportRef.current>,
         finalNodes: NodeData[],
+        finalSelectedNodeIds: string[],
     ) => {
         if (activeImportRef.current !== session || session.cancelled) return;
         activeImportRef.current = null;
-        commitHistoryTransaction?.(session.id, finalNodes);
+        commitHistoryTransaction?.(session.id, finalNodes, finalSelectedNodeIds);
     }, [commitHistoryTransaction]);
 
     const cancelActiveImport = React.useCallback(() => {
@@ -327,7 +332,7 @@ export const useCanvasImageImport = ({
                 return current;
             });
         });
-        finishImport(session, committedNodes);
+        finishImport(session, committedNodes, placeholders.map(node => node.id));
     }, [workflowId, viewport, canvasRef, setNodes, setSelectedNodeIds, beginImport, finishImport]);
 
     const importDetailRemixFolder = React.useCallback(async (
@@ -387,13 +392,23 @@ export const useCanvasImageImport = ({
         const placeholderIds = placeholders.map(node => node.id);
         let latestNodes: NodeData[] = [];
         setNodes(current => {
-            const controllerExists = current.some(node => node.id === controller.id);
-            if (!controllerExists) {
+            const currentController = current.find(node => node.id === controller.id);
+            if (!currentController) {
                 latestNodes = current;
                 return current;
             }
+            const currentRefs = createDetailRemixNodeData(currentController.detailRemix || {}).inputRefs;
+            const previousRoleIds = new Set(currentRefs[roleKey(role)]);
+            const replaceableFolderNodeIds = new Set(current
+                .filter(node => (
+                    previousRoleIds.has(node.id)
+                    && node.detailRemixImport?.controllerNodeId === controller.id
+                    && node.detailRemixImport?.role === role
+                ))
+                .map(node => node.id));
+            const withoutReplacedFolder = current.filter(node => !replaceableFolderNodeIds.has(node.id));
             const next = [
-                ...current.map(node => node.id === controller.id
+                ...withoutReplacedFolder.map(node => node.id === controller.id
                     ? patchDetailRemixFolderRole(node, role, placeholderIds, {
                         folderName,
                         status: 'uploading',
@@ -494,7 +509,7 @@ export const useCanvasImageImport = ({
                 : `${folderName} 已按文件名顺序导入 ${importedNodeIds.length} 张。`,
             failedNodeIds.length > 0 ? 'error' : 'info',
         );
-        finishImport(session, committedNodes);
+        finishImport(session, committedNodes, [controller.id]);
         return { importedNodeIds, failedNodeIds, folderName };
     }, [workflowId, setNodes, setSelectedNodeIds, beginImport, finishImport]);
 

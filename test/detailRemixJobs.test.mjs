@@ -135,7 +135,7 @@ test('无需单独产品图：自动裁出我方详情产品角度并与竞品�
   const resultNodeId = created.pages[0].resultNodeId;
   const completed = await waitFor(created.id, context, job => job?.stage === 'completed');
 
-  assert.equal(completed.schemaVersion, 6);
+  assert.equal(completed.schemaVersion, 7);
   assert.equal(completed.phase, 'final');
   assert.equal(completed.pages[0].sourceNodeId, 'competitor-node');
   assert.equal(completed.pages[0].resultNodeId, resultNodeId);
@@ -158,7 +158,7 @@ test('无需单独产品图：自动裁出我方详情产品角度并与竞品�
   assert.ok(!call.request.referenceImageInputs.includes(OWN_DETAIL));
   assert.match(call.request.prompt, /自动挑选.*产品参考/);
   assert.match(call.request.prompt, /生成第.*最终图/);
-  assert.match(call.request.prompt, /必须逐字生成的文案替换清单/);
+  assert.match(call.request.prompt, /精确逐位置替换清单/);
   assert.match(call.request.prompt, /深层舒缓/);
   assert.match(call.request.prompt, /后续不会再叠加产品、文字或 Logo/);
   assert.doesNotMatch(call.request.prompt, /稍后由程序/);
@@ -812,9 +812,9 @@ test('参数页把对应我方证据图与精确事实一起交给最终生图�
           }],
           sellingPoints: [{ id: 'sp-1', title: '模拟虎口抓捏', description: '舒缓肩颈' }],
           verifiedFacts: [{
-            id: 'fact-local-1', factType: 'rated_power', label: '额定功率', value: '16W',
-            displayText: '额定功率\n16W', sourceImageIndexes: [0],
-            sourceRegion: { x: 0.1, y: 0.5, width: 0.4, height: 0.1 }, confidence: 0.99,
+            id: 'fact-local-1', field: 'power', label: '额定功率', value: '16W',
+            normalizedValue: '16W', displayText: '额定功率\n16W', evidenceImageIndex: 0,
+            evidenceRegion: { x: 0.1, y: 0.5, width: 0.4, height: 0.1 }, confidence: 0.99,
           }],
         });
       }
@@ -823,9 +823,10 @@ test('参数页把对应我方证据图与精确事实一起交给最终生图�
         selectedProductViewIds: ['pv-1'],
         productInstances: [{ x: 0.1, y: 0.1, width: 0.8, height: 0.3 }],
         copySlots: [
-          { slotId: 'power-label', role: 'parameterLabel', sourceText: '工作功率' },
-          { slotId: 'power-value', role: 'parameterValue', sourceText: '20W' },
-          { slotId: 'capacity', role: 'specification', sourceText: '电池容量 2500mAh' },
+          { slotId: 'power-label', role: 'parameterLabel', field: 'power', parameterPart: 'label', sourceText: '工作功率', x: 0.1, y: 0.4, width: 0.3, height: 0.05 },
+          { slotId: 'power-value', role: 'parameterValue', field: 'power', parameterPart: 'value', sourceText: '20W', x: 0.5, y: 0.4, width: 0.2, height: 0.05 },
+          { slotId: 'capacity-label', role: 'parameterLabel', field: 'battery_capacity', parameterPart: 'label', sourceText: '电池容量', x: 0.1, y: 0.5, width: 0.3, height: 0.05 },
+          { slotId: 'capacity-value', role: 'parameterValue', field: 'battery_capacity', parameterPart: 'value', sourceText: '2500mAh', x: 0.5, y: 0.5, width: 0.2, height: 0.05 },
         ],
         mappedSellingPoints: [{ sellingPointId: 'sp-1', slotId: 'power-label', slotRole: 'parameterLabel' }],
         mappedFacts: [
@@ -878,9 +879,9 @@ test('成图质检失败时只追加一次 AI 修复，通过复检后才发布�
           }],
           sellingPoints: [],
           verifiedFacts: [{
-            id: 'local', factType: 'rated_power', label: '额定功率', value: '16W',
-            displayText: '额定功率\n16W', sourceImageIndexes: [0],
-            sourceRegion: { x: 0, y: 0, width: 1, height: 1 }, confidence: 1,
+            id: 'local', field: 'power', label: '额定功率', value: '16W',
+            normalizedValue: '16W', displayText: '额定功率\n16W', evidenceImageIndex: 0,
+            evidenceRegion: { x: 0, y: 0, width: 1, height: 1 }, confidence: 1,
           }],
         });
       }
@@ -888,18 +889,28 @@ test('成图质检失败时只追加一次 AI 修复，通过复检后才发布�
         return JSON.stringify({ page: {
           pageType: 'specification', hasPerson: false,
           selectedProductViewIds: ['pv-1'], productInstances: [],
-          copySlots: [{ slotId: 'power', role: 'specification', sourceText: '20W' }],
+          copySlots: [
+            { slotId: 'power-label', role: 'parameterLabel', field: 'power', parameterPart: 'label', sourceText: '功率', x: 0.1, y: 0.1, width: 0.3, height: 0.05 },
+            { slotId: 'power-value', role: 'parameterValue', field: 'power', parameterPart: 'value', sourceText: '20W', x: 0.5, y: 0.1, width: 0.2, height: 0.05 },
+          ],
           mappedSellingPoints: [],
-          mappedFacts: [{ factId: 'fact-1', slotId: 'power', slotRole: 'specification', displayPart: 'displayText' }],
+          mappedFacts: [
+            { factId: 'fact-1', slotId: 'power-label', slotRole: 'parameterLabel', displayPart: 'label' },
+            { factId: 'fact-1', slotId: 'power-value', slotRole: 'parameterValue', displayPart: 'value' },
+          ],
         } });
       }
       validationCalls += 1;
       return JSON.stringify(validationCalls === 1 ? {
         passed: false, copyExact: false, brandCorrect: true, productCorrect: true,
+        logoCorrect: true, productPlacementCorrect: true,
+        parameterAlignmentCorrect: false, unsupportedStrictFactsAbsent: true,
         competitorRemoved: true, gibberishDetected: true,
         missingTexts: [], wrongTexts: ['把16W写成16V'], unexpectedTexts: [], summary: '参数错字',
       } : {
         passed: true, copyExact: true, brandCorrect: true, productCorrect: true,
+        logoCorrect: true, productPlacementCorrect: true,
+        parameterAlignmentCorrect: true, unsupportedStrictFactsAbsent: true,
         competitorRemoved: true, gibberishDetected: false,
         missingTexts: [], wrongTexts: [], unexpectedTexts: [], summary: '通过',
       });
@@ -922,4 +933,127 @@ test('成图质检失败时只追加一次 AI 修复，通过复检后才发布�
   assert.match(generationCalls[1].request.prompt, /只修复文字与品牌问题/);
   assert.equal(generationCalls[1].meta.referenceKinds[0], 'quality-failed-final');
   assert.ok(completed.pages[0].finalUrl);
+});
+
+test('严格参数字段错配会安全重试识图并在正式生图前失败', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let generationCalls = 0;
+  const context = {
+    ...env.context,
+    runRecognition: async (_request, meta) => {
+      if (meta.kind === 'own-selling-points') {
+        return JSON.stringify({
+          brandIdentity: {},
+          productViews: [{
+            sourceImageIndex: 0,
+            cropRegion: { x: 0, y: 0, width: 1, height: 1 },
+            viewAngle: 'front', visibleSides: ['front'], description: '', quality: 0.95,
+          }],
+          sellingPoints: [],
+          verifiedFacts: [{
+            id: 'local', field: 'power', label: '额定功率', value: '16W',
+            normalizedValue: '16W', displayText: '额定功率\n16W', evidenceImageIndex: 0,
+            evidenceRegion: { x: 0.1, y: 0.5, width: 0.4, height: 0.1 }, confidence: 0.99,
+          }],
+        });
+      }
+      return JSON.stringify({ page: {
+        pageType: '电气参数页', hasPerson: false,
+        selectedProductViewIds: ['pv-1'], productInstances: [],
+        copySlots: [
+          { slotId: 'power-label', role: 'parameterLabel', field: 'voltage', parameterPart: 'label', sourceText: '额定功率', x: 0.1, y: 0.1, width: 0.3, height: 0.05 },
+          { slotId: 'power-value', role: 'parameterValue', field: 'voltage', parameterPart: 'value', sourceText: '24W', x: 0.5, y: 0.1, width: 0.2, height: 0.05 },
+        ],
+        mappedSellingPoints: [],
+        mappedFacts: [
+          { factId: 'fact-1', slotId: 'power-label', slotRole: 'parameterLabel', displayPart: 'label' },
+          { factId: 'fact-1', slotId: 'power-value', slotRole: 'parameterValue', displayPart: 'value' },
+        ],
+      } });
+    },
+    generateImage: async () => {
+      generationCalls += 1;
+      return { buffer: Buffer.from('must-not-generate'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'strict-field-mismatch-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const failed = await waitFor(created.id, context, job => job?.status === 'failed');
+  assert.equal(generationCalls, 0);
+  assert.equal(failed.pages[0].status, 'failed');
+  assert.equal(failed.pages[0].errorCode, 'DETAIL_REMIX_ANALYSIS_CONTRACT');
+  assert.equal(failed.pages[0].recognitionContractRetries, 2);
+});
+
+test('质检自称通过但仍报告无证据参数时不得放行，修复一次后标记 FAILED_VALIDATION', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let validationCalls = 0;
+  const generationPhases = [];
+  const context = {
+    ...env.context,
+    skipFinalValidation: false,
+    runRecognition: async (_request, meta) => {
+      if (meta.kind === 'own-selling-points') {
+        return JSON.stringify({
+          brandIdentity: {},
+          productViews: [{
+            sourceImageIndex: 0,
+            cropRegion: { x: 0, y: 0, width: 1, height: 1 },
+            viewAngle: 'front', visibleSides: ['front'], description: '', quality: 0.95,
+          }],
+          sellingPoints: [],
+          verifiedFacts: [{
+            id: 'local', field: 'power', label: '额定功率', value: '16W',
+            normalizedValue: '16W', displayText: '额定功率\n16W', evidenceImageIndex: 0,
+            evidenceRegion: { x: 0.1, y: 0.5, width: 0.4, height: 0.1 }, confidence: 0.99,
+          }],
+        });
+      }
+      if (meta.kind === 'competitor-page') {
+        return JSON.stringify({ page: {
+          pageType: 'specification', hasPerson: false,
+          selectedProductViewIds: ['pv-1'], productInstances: [],
+          copySlots: [
+            { slotId: 'power-label', role: 'parameterLabel', field: 'power', parameterPart: 'label', sourceText: '功率', x: 0.1, y: 0.1, width: 0.3, height: 0.05 },
+            { slotId: 'power-value', role: 'parameterValue', field: 'power', parameterPart: 'value', sourceText: '24W', x: 0.5, y: 0.1, width: 0.2, height: 0.05 },
+          ],
+          mappedSellingPoints: [],
+          mappedFacts: [
+            { factId: 'fact-1', slotId: 'power-label', slotRole: 'parameterLabel', displayPart: 'label' },
+            { factId: 'fact-1', slotId: 'power-value', slotRole: 'parameterValue', displayPart: 'value' },
+          ],
+        } });
+      }
+      validationCalls += 1;
+      return JSON.stringify({
+        passed: true, copyExact: true, brandCorrect: true, productCorrect: true,
+        logoCorrect: true, productPlacementCorrect: true,
+        parameterAlignmentCorrect: true, unsupportedStrictFactsAbsent: true,
+        competitorRemoved: true, gibberishDetected: false,
+        missingTexts: [], wrongTexts: [], unexpectedTexts: ['2500mAh'],
+        summary: '仍有无证据参数',
+      });
+    },
+    generateImage: async (_request, meta) => {
+      generationPhases.push(meta.phase);
+      return { buffer: Buffer.from(`validation-${meta.phase}`), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'strict-validation-failure-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const failed = await waitFor(created.id, context, job => job?.stage === 'failed_validation');
+  assert.equal(validationCalls, 2);
+  assert.deepEqual(generationPhases, ['final-detail', 'final-repair']);
+  assert.equal(failed.pages[0].status, 'failed_validation');
+  assert.equal(failed.pages[0].terminalStatus, 'FAILED_VALIDATION');
+  assert.equal(failed.pages[0].validationStatus, 'FAILED_VALIDATION');
+  assert.equal(failed.pages[0].finalUrl, undefined);
 });

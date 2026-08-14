@@ -38,7 +38,7 @@ function expectedResultIds(job: DetailRemixJob) {
 
 function isPollingStage(job: DetailRemixJob) {
   const stage = normalizedStage(job);
-  if (['plates_ready', 'plates_completed', 'plates_partial_failed', 'final_partial_failed', 'composition_completed', 'composition_partial_failed', 'composition_failed', 'completed', 'partial_failed', 'failed', 'cancelled', 'recovery_required'].includes(stage)) {
+  if (['plates_ready', 'plates_completed', 'plates_partial_failed', 'final_partial_failed', 'failed_validation', 'composition_completed', 'composition_partial_failed', 'composition_failed', 'completed', 'partial_failed', 'failed', 'cancelled', 'recovery_required'].includes(stage)) {
     return false;
   }
   return !['plates_ready', 'completed', 'partial_failed', 'failed', 'cancelled', 'recovery_required']
@@ -53,7 +53,7 @@ function canvasWorkflowStatus(job: DetailRemixJob) {
   if (stage === 'generating_plates') return 'generating-plates';
   if (stage === 'completed' || stage === 'composition_completed') return 'completed';
   if (stage === 'cancelled') return 'cancelled';
-  if (stage === 'failed' || stage === 'partial_failed' || stage === 'final_partial_failed' || stage === 'plates_partial_failed' || stage === 'composition_partial_failed' || stage === 'composition_failed' || stage === 'recovery_required') return 'error';
+  if (stage === 'failed' || stage === 'failed_validation' || stage === 'partial_failed' || stage === 'final_partial_failed' || stage === 'plates_partial_failed' || stage === 'composition_partial_failed' || stage === 'composition_failed' || stage === 'recovery_required') return 'error';
   if (stage.startsWith('analyzing') || stage === 'extracting_selling_points' || stage === 'planning' || stage === 'queued') return 'analyzing';
   return isPollingStage(job) ? 'analyzing' : 'ready';
 }
@@ -83,7 +83,7 @@ function queueProgressFromJob(job: DetailRemixJob) {
     .reduce((total, chunk) => total + (Number(chunk.imageCount) || 0), 0);
   const pages = job.pages || [];
   const competitorCompleted = pages.filter(page => page.status === 'completed').length;
-  const competitorFailed = pages.filter(page => ['failed', 'recovery_required', 'cancelled'].includes(String(page.status))).length;
+  const competitorFailed = pages.filter(page => ['failed', 'failed_validation', 'recovery_required', 'cancelled'].includes(String(page.status))).length;
   const competitorFinished = pages.length > 0 && competitorCompleted + competitorFailed >= pages.length;
   const eligibleComposition = pages.filter(page => Boolean(page.rawPlateUrl || page.plateUrl));
   const compositionCompleted = eligibleComposition.filter(page => page.composeStatus === 'completed').length;

@@ -23,6 +23,13 @@ import {
   DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA,
   DETAIL_REMIX_OWN_KNOWLEDGE_OUTPUT_SCHEMA,
   DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA,
+  DETAIL_REMIX_STRICT_FACT_MIN_CONFIDENCE,
+  DETAIL_REMIX_STRICT_PARAMETER_MODE,
+  canonicalDetailRemixFactField,
+  detailRemixPageMode,
+  detailRemixStrictPageCategory,
+  isDetailRemixStrictParameterPage,
+  normalizeDetailRemixFactValue,
   parseOwnSellingPointsResponse,
   parseCompetitorPageResponse,
   parseFinalDetailValidationResponse,
@@ -38,10 +45,9 @@ import {
 
 export const DEFAULT_DETAIL_REMIX_RECOGNITION_PROVIDER = 'gemini-web';
 export const DEFAULT_DETAIL_REMIX_IMAGE_MODEL = 'google-flow-nano-banana-pro';
-export const DETAIL_REMIX_JOB_SCHEMA_VERSION = 6;
-const DETAIL_REMIX_KNOWLEDGE_SCHEMA_VERSION = 2;
+export const DETAIL_REMIX_JOB_SCHEMA_VERSION = 7;
+const DETAIL_REMIX_KNOWLEDGE_SCHEMA_VERSION = 3;
 const MAX_AUTO_PRODUCT_VIEW_REFERENCES = 3;
-const MAX_FACT_EVIDENCE_REFERENCES = 2;
 const MAX_FINAL_REPAIR_ATTEMPTS = 1;
 const DETAIL_REMIX_RECOGNITION_TIMEOUT_MS = 10 * 60_000;
 const MAX_DETAIL_REMIX_RECOGNITION_ATTEMPTS = 2;
@@ -549,29 +555,48 @@ function normalizeVerifiedFacts(parsed, chunkStart, chunkLength, ownDetails) {
     const label = String(fact.label || fact.name || fact.key || '').trim();
     const value = String(fact.value || fact.exactValue || '').trim();
     if (!label || !value) return [];
-    const localIndexes = [...new Set((Array.isArray(fact.sourceImageIndexes)
-      ? fact.sourceImageIndexes
-      : [fact.sourceImageIndex])
-      .map(Number)
-      .filter(index => Number.isInteger(index) && index >= 0 && index < chunkLength))];
-    if (!localIndexes.length) return [];
-    const sourceImageIndexes = localIndexes.map(index => chunkStart + index);
-    const sourceNodeIds = sourceImageIndexes
-      .map(index => String(ownDetails[index]?.sourceNodeId || ''))
-      .filter(Boolean);
-    const factType = String(fact.factType || fact.type || 'other').trim() || 'other';
+    const localIndex = Number(
+      fact.evidenceImageIndex
+      ?? fact.sourceImageIndex
+      ?? fact.sourceImageIndexes?.[0],
+    );
+    const evidenceRegion = normalizeRegion(
+      fact.evidenceRegion || fact.sourceRegion || fact.region || fact.boundingBox,
+    );
+    const confidence = Number(fact.confidence);
+    if (!Number.isInteger(localIndex) || localIndex < 0 || localIndex >= chunkLength) return [];
+    if (!evidenceRegion || !Number.isFinite(confidence)
+        || confidence < DETAIL_REMIX_STRICT_FACT_MIN_CONFIDENCE) return [];
+    const evidenceImageIndex = chunkStart + localIndex;
+    const evidenceImageId = String(ownDetails[evidenceImageIndex]?.sourceNodeId || '').trim();
+    if (!evidenceImageId || !ownDetails[evidenceImageIndex]?.imageUrl) return [];
+    const field = canonicalDetailRemixFactField(fact.field || fact.factType || fact.type, label);
+    if (!field) return [];
+    const normalizedValue = normalizeDetailRemixFactValue(value);
     const displayText = String(fact.displayText || '').trim()
       || `${label}\n${value}`;
-    const confidence = Number(fact.confidence);
+    const evidence = [{
+      evidenceImageIndex,
+      evidenceImageId,
+      evidenceRegion,
+      confidence: Math.max(0, Math.min(1, confidence)),
+      sourceText: displayText,
+    }];
     return [{
-      factType,
+      field,
+      factType: field,
       label,
       value,
+      normalizedValue,
       displayText,
-      sourceImageIndexes,
-      sourceNodeIds,
-      sourceRegion: normalizeRegion(fact.sourceRegion || fact.region || fact.boundingBox) || undefined,
-      confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0.8,
+      evidence,
+      evidenceImageIndex,
+      evidenceImageId,
+      evidenceRegion,
+      sourceImageIndexes: [evidenceImageIndex],
+      sourceNodeIds: [evidenceImageId],
+      sourceRegion: evidenceRegion,
+      confidence: Math.max(0, Math.min(1, confidence)),
       localOrder,
     }];
   });
@@ -583,22 +608,55 @@ function mergeVerifiedFacts(existing, incoming) {
     const label = String(fact?.label || '').trim();
     const value = String(fact?.value || '').trim();
     if (!label || !value) continue;
-    const key = `${String(fact.factType || 'other').toLowerCase()}\n${label.toLowerCase()}\n${value.toLowerCase()}`;
+    const field = canonicalDetailRemixFactField(fact.field || fact.factType, label);
+    const normalizedValue = normalizeDetailRemixFactValue(fact.normalizedValue || value);
+    const evidence = (Array.isArray(fact.evidence) ? fact.evidence : []).filter(item => (
+      item?.evidenceImageId
+      && Number.isInteger(Number(item.evidenceImageIndex))
+      && normalizeRegion(item.evidenceRegion)
+      && Number(item.confidence) >= DETAIL_REMIX_STRICT_FACT_MIN_CONFIDENCE
+    ));
+    if (!field || !normalizedValue || !evidence.length) continue;
+    const key = `${field}\n${normalizedValue.toLowerCase()}`;
     const previous = merged.get(key);
+    const mergedEvidence = [...(previous?.evidence || []), ...evidence]
+      .reduce((items, item) => {
+        const region = normalizeRegion(item.evidenceRegion);
+        const identity = [
+          item.evidenceImageId,
+          region?.x, region?.y, region?.width, region?.height,
+        ].join(':');
+        if (!region || items.some(entry => entry.identity === identity)) return items;
+        items.push({
+          identity,
+          evidenceImageIndex: Number(item.evidenceImageIndex),
+          evidenceImageId: String(item.evidenceImageId),
+          evidenceRegion: region,
+          confidence: Math.max(0, Math.min(1, Number(item.confidence))),
+          sourceText: String(item.sourceText || `${label}\n${value}`).trim(),
+        });
+        return items;
+      }, [])
+      .map(({ identity: _identity, ...item }) => item);
+    const primaryEvidence = [...mergedEvidence]
+      .sort((left, right) => Number(right.confidence) - Number(left.confidence))[0];
     merged.set(key, {
       ...(previous || {}),
       ...fact,
+      field,
+      factType: field,
       label,
       value,
+      normalizedValue,
       displayText: String(fact.displayText || previous?.displayText || `${label}\n${value}`).trim(),
-      sourceImageIndexes: [...new Set([
-        ...(previous?.sourceImageIndexes || []),
-        ...(fact.sourceImageIndexes || []),
-      ].map(Number).filter(Number.isInteger))].sort((left, right) => left - right),
-      sourceNodeIds: [...new Set([
-        ...(previous?.sourceNodeIds || []),
-        ...(fact.sourceNodeIds || []),
-      ].map(String).filter(Boolean))],
+      evidence: mergedEvidence,
+      evidenceImageIndex: primaryEvidence.evidenceImageIndex,
+      evidenceImageId: primaryEvidence.evidenceImageId,
+      evidenceRegion: primaryEvidence.evidenceRegion,
+      sourceImageIndexes: [...new Set(mergedEvidence.map(item => item.evidenceImageIndex))].sort((left, right) => left - right),
+      sourceNodeIds: [...new Set(mergedEvidence.map(item => item.evidenceImageId))],
+      sourceRegion: primaryEvidence.evidenceRegion,
+      confidence: primaryEvidence.confidence,
     });
   }
   return [...merged.values()]
@@ -613,11 +671,12 @@ function mergeVerifiedFacts(existing, incoming) {
 function verifiedFactCatalog(job) {
   return (Array.isArray(job.verifiedFacts) ? job.verifiedFacts : []).map(fact => ({
     id: fact.id,
-    factType: fact.factType || 'other',
+    field: fact.field || fact.factType || '',
     label: fact.label || '',
     value: fact.value || '',
+    normalizedValue: fact.normalizedValue || normalizeDetailRemixFactValue(fact.value),
     displayText: fact.displayText || [fact.label, fact.value].filter(Boolean).join('\n'),
-  })).filter(fact => fact.id && fact.label && fact.value);
+  })).filter(fact => fact.id && fact.field && fact.label && fact.value);
 }
 
 function normalizeProductViews(parsed, chunkStart, chunkLength, ownDetails) {
@@ -699,19 +758,43 @@ function normalizePageAnalysis(parsed) {
       : value.productRegion && typeof value.productRegion === 'object'
         ? [value.productRegion]
         : [];
+  const copySlots = Array.isArray(value.copySlots) ? value.copySlots.map((slot, index) => {
+    const source = slot && typeof slot === 'object' ? slot : {};
+    const role = String(source.role || 'copy').trim() || 'copy';
+    const explicitPart = String(source.parameterPart || '').trim().toLowerCase();
+    const parameterPart = ['label', 'value'].includes(explicitPart)
+      ? explicitPart
+      : /label/iu.test(role) ? 'label' : /value/iu.test(role) ? 'value' : 'none';
+    return {
+      ...source,
+      slotId: String(source.slotId || source.id || `copy-${index + 1}`),
+      role,
+      field: parameterPart === 'none'
+        ? String(source.field || '').trim()
+        : canonicalDetailRemixFactField(source.field, source.sourceText),
+      parameterPart,
+    };
+  }) : [];
+  const pageMode = detailRemixPageMode({ ...value, copySlots });
+  const strictMode = pageMode === DETAIL_REMIX_STRICT_PARAMETER_MODE;
   return {
     ...value,
     // Character references are safety-sensitive: ambiguity means no reference.
     hasPerson: hasPersonValue === true,
-    pageType: String(value.pageType || value.type || 'marketing').trim().toLowerCase() || 'marketing',
-    mappedSellingPoints: Array.isArray(mapped) ? mapped : [],
+    originalPageType: String(value.pageType || value.type || '').trim(),
+    pageType: strictMode
+      ? 'specification'
+      : String(value.pageType || value.type || 'marketing').trim().toLowerCase() || 'marketing',
+    pageMode,
+    strictPageCategory: strictMode ? detailRemixStrictPageCategory({ ...value, copySlots }) : 'none',
+    mappedSellingPoints: strictMode ? [] : (Array.isArray(mapped) ? mapped : []),
     mappedFacts: Array.isArray(mappedFacts) ? mappedFacts : [],
     selectedProductViewIds: Array.isArray(selectedProductViewIds)
       ? [...new Set(selectedProductViewIds.map(item => String(item || '').trim()).filter(Boolean))]
       : [],
     productInstances,
     productRegion: value.productRegion || productInstances[0] || {},
-    copySlots: Array.isArray(value.copySlots) ? value.copySlots : [],
+    copySlots,
     brandSlots: Array.isArray(value.brandSlots || value.logoSlots)
       ? (value.brandSlots || value.logoSlots)
       : [],
@@ -741,7 +824,7 @@ function resolveMappedSellingPoints(analysis, ownSellingPoints, pageIndex) {
     }];
   });
   if (mapped.length) return mapped;
-  if (String(analysis?.pageType || '').toLowerCase() === 'specification') return [];
+  if (isDetailRemixStrictParameterPage(analysis)) return [];
   if (!ownSellingPoints.length) return [];
   return [ownSellingPoints[pageIndex % ownSellingPoints.length]];
 }
@@ -749,22 +832,48 @@ function resolveMappedSellingPoints(analysis, ownSellingPoints, pageIndex) {
 function resolveMappedFacts(analysis, verifiedFacts) {
   const requested = Array.isArray(analysis?.mappedFacts) ? analysis.mappedFacts : [];
   const byId = new Map((verifiedFacts || []).map(fact => [String(fact.id), fact]));
-  return requested.flatMap(entry => {
-    if (typeof entry === 'string') {
-      const known = byId.get(entry);
-      return known ? [known] : [];
+  const slots = new Map((analysis?.copySlots || []).map(slot => [String(slot?.slotId || ''), slot]));
+  const rejected = [];
+  const usedSlots = new Set();
+  const candidates = requested.flatMap(entry => {
+    if (!entry || typeof entry !== 'object') {
+      rejected.push({ reason: 'mapping_not_structured', entry });
+      return [];
     }
-    if (!entry || typeof entry !== 'object') return [];
     const known = byId.get(String(entry.factId || entry.id || ''));
-    if (!known) return [];
-    const displayPart = ['label', 'value', 'displayText'].includes(String(entry.displayPart))
+    if (!known || !Array.isArray(known.evidence) || !known.evidence.length) {
+      rejected.push({ reason: 'own_evidence_missing', entry });
+      return [];
+    }
+    const displayPart = ['label', 'value'].includes(String(entry.displayPart))
       ? String(entry.displayPart)
-      : 'displayText';
+      : '';
+    const slotId = String(entry.slotId || '');
+    const slot = slots.get(slotId);
+    if (!displayPart || !slot || usedSlots.has(slotId)) {
+      rejected.push({ reason: !slot ? 'target_slot_missing' : !displayPart ? 'display_part_invalid' : 'target_slot_duplicate', entry });
+      return [];
+    }
+    const slotPart = String(slot.parameterPart || '').toLowerCase();
+    const factField = canonicalDetailRemixFactField(known.field || known.factType, known.label);
+    const slotField = canonicalDetailRemixFactField(slot.field, slot.sourceText);
+    const targetRegion = normalizeRegion(slot);
+    if (slotPart !== displayPart || !factField || slotField !== factField || !targetRegion) {
+      rejected.push({
+        reason: !targetRegion
+          ? 'target_region_missing'
+          : slotPart !== displayPart ? 'label_value_position_mismatch' : 'field_mismatch',
+        entry,
+        factField,
+        slotField,
+        slotPart,
+      });
+      return [];
+    }
     const replacementText = displayPart === 'label'
       ? known.label
-      : displayPart === 'value'
-        ? known.value
-        : (known.displayText || `${known.label}\n${known.value}`);
+      : known.value;
+    usedSlots.add(slotId);
     return [{
       ...entry,
       ...known,
@@ -775,8 +884,54 @@ function resolveMappedFacts(analysis, verifiedFacts) {
       displayText: known.displayText || `${known.label}\n${known.value}`,
       displayPart,
       replacementText,
+      targetRegion,
     }];
   });
+  const partsByFact = new Map();
+  for (const mapping of candidates) {
+    const parts = partsByFact.get(mapping.factId) || new Set();
+    parts.add(mapping.displayPart);
+    partsByFact.set(mapping.factId, parts);
+  }
+  const completeFactIds = new Set([...partsByFact]
+    .filter(([, parts]) => parts.has('label') && parts.has('value'))
+    .map(([factId]) => factId));
+  const mappedFacts = candidates.filter(mapping => {
+    if (completeFactIds.has(mapping.factId)) return true;
+    rejected.push({ reason: 'label_value_pair_incomplete', entry: mapping });
+    return false;
+  });
+  return { mappedFacts, rejected };
+}
+
+function validateCompetitorAnalysisContract(analysis, verifiedFacts) {
+  const resolution = resolveMappedFacts(analysis, verifiedFacts);
+  if (resolution.rejected.length > 0) {
+    const reasons = [...new Set(resolution.rejected.map(item => item.reason))];
+    const error = new Error(`竞品参数映射未通过严格证据校验：${reasons.join('、')}`);
+    error.code = 'DETAIL_REMIX_ANALYSIS_CONTRACT';
+    error.rejectedMappings = resolution.rejected;
+    throw error;
+  }
+  if (isDetailRemixStrictParameterPage(analysis)) {
+    const mappedSlots = new Set(resolution.mappedFacts.map(item => item.slotId));
+    const unsafeSellingPoints = Array.isArray(analysis.mappedSellingPoints)
+      && analysis.mappedSellingPoints.length > 0;
+    if (unsafeSellingPoints) {
+      const error = new Error('严格参数页禁止映射营销卖点');
+      error.code = 'DETAIL_REMIX_ANALYSIS_CONTRACT';
+      throw error;
+    }
+    for (const factId of new Set(resolution.mappedFacts.map(item => item.factId))) {
+      const pair = resolution.mappedFacts.filter(item => item.factId === factId);
+      if (pair.length !== 2 || !pair.every(item => mappedSlots.has(item.slotId))) {
+        const error = new Error(`严格参数 ${factId} 未拆分为独立的参数名和参数值位置`);
+        error.code = 'DETAIL_REMIX_ANALYSIS_CONTRACT';
+        throw error;
+      }
+    }
+  }
+  return resolution;
 }
 
 function overlayTexts(points, copySlots = [], brandIdentity = {}, brandSlots = [], hasBrandLogo = false) {
@@ -1311,6 +1466,8 @@ async function analyzeCompetitorPage(job, page, context, signal) {
   const imageDataUrl = imageInputToDataUrl(page.sourceImage, context);
   if (!imageDataUrl) throw new Error('无法读取竞品详情图');
   let parsed;
+  let normalizedAnalysis;
+  let factResolution;
   const instruction = buildCompetitorPageInstruction({
     ownSellingPoints: job.ownSellingPoints,
     ownVerifiedFacts: verifiedFactCatalog(job),
@@ -1326,8 +1483,8 @@ async function analyzeCompetitorPage(job, page, context, signal) {
     const request = {
       systemInstruction: instruction,
       userPrompt: formatAttempt === 0
-        ? '分析这一张竞品详情图的构图、人物、产品角度和文字层级。参数页只映射我方精确事实，非参数页映射我方卖点，并从我方产品视角库选择匹配角度；严格返回指定 JSON。'
-        : '上一次回复未通过 JSON 格式校验。请重新分析同一张图，只返回完全符合输出 Schema 的单个 JSON 对象；不要解释、不要 Markdown、不要省略必填字段。',
+        ? '分析这一张竞品详情图的构图、人物、产品角度和文字层级。先判断 STRICT_PARAMETER_MODE；严格参数的名称和值必须分别定位、同字段配对，并且只映射我方精确事实。普通页才映射我方卖点；严格返回指定 JSON。'
+        : '上一次回复未通过 JSON 或严格参数证据契约校验。请重新分析同一张图：参数名与参数值拆成独立槽，field 与 displayPart 必须一致，只映射有我方事实 ID 的完整 label/value 对。只返回完全符合 Schema 的单个 JSON 对象，不要解释、不要 Markdown。',
       imageDataUrls: [imageDataUrl],
       outputSchema: DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA,
       model: job.recognitionModel,
@@ -1347,26 +1504,40 @@ async function analyzeCompetitorPage(job, page, context, signal) {
       });
       assertActive(job, context, signal);
       parsed = parseCompetitorPageResponse(raw);
+      normalizedAnalysis = normalizePageAnalysis(parsed);
+      factResolution = validateCompetitorAnalysisContract(normalizedAnalysis, job.verifiedFacts);
       break;
     } catch (error) {
       if (isOperationCancelled(error)) throw error;
       page.recognitionLastError = error instanceof Error ? error.message : String(error);
       page.recognitionLastFailedAt = nowIso(context);
+      const safelyRetryableRecognitionError = [
+        'DETAIL_REMIX_JSON_FORMAT',
+        'DETAIL_REMIX_ANALYSIS_CONTRACT',
+      ].includes(error?.code);
       page.recognitionFormatRetries = Math.max(0, Number(page.recognitionFormatRetries) || 0)
         + (error?.code === 'DETAIL_REMIX_JSON_FORMAT' ? 1 : 0);
+      page.recognitionContractRetries = Math.max(0, Number(page.recognitionContractRetries) || 0)
+        + (error?.code === 'DETAIL_REMIX_ANALYSIS_CONTRACT' ? 1 : 0);
       writeJob(job, context);
-      if (error?.code === 'DETAIL_REMIX_JSON_FORMAT' && formatAttempt === 0) continue;
+      if (safelyRetryableRecognitionError && formatAttempt === 0) continue;
       page.recognitionStatus = 'failed';
       writeJob(job, context);
       throw error;
     }
   }
-  if (!parsed) throw new Error('竞品详情识别没有返回可用的结构化结果');
-  page.analysis = normalizePageAnalysis(parsed);
+  if (!parsed || !normalizedAnalysis || !factResolution) throw new Error('竞品详情识别没有返回可用的结构化结果');
+  page.analysis = normalizedAnalysis;
   page.analysis.sourceWidth = page.sourceWidth;
   page.analysis.sourceHeight = page.sourceHeight;
   page.mappedSellingPoints = resolveMappedSellingPoints(page.analysis, job.ownSellingPoints, page.index);
-  page.mappedFacts = resolveMappedFacts(page.analysis, job.verifiedFacts);
+  page.mappedFacts = factResolution.mappedFacts;
+  page.factMappingAudit = {
+    pageMode: page.analysis.pageMode,
+    strictPageCategory: page.analysis.strictPageCategory,
+    acceptedCount: page.mappedFacts.length,
+    rejected: factResolution.rejected,
+  };
   page.recognitionStatus = 'completed';
   page.recognitionCompletedAt = nowIso(context);
   page.recognitionLastError = undefined;
@@ -1429,9 +1600,11 @@ function resolvePageProductReferences(job, page, reservedReferenceCount = 0) {
   return selected;
 }
 
-function resolvePageEvidenceReferences(job, page, maximum = MAX_FACT_EVIDENCE_REFERENCES) {
+function resolvePageEvidenceReferences(job, page, maximum) {
   const indexes = [...new Set((page.mappedFacts || [])
-    .flatMap(fact => Array.isArray(fact?.sourceImageIndexes) ? fact.sourceImageIndexes : [])
+    .flatMap(fact => Array.isArray(fact?.evidence)
+      ? fact.evidence.map(item => item?.evidenceImageIndex)
+      : fact?.sourceImageIndexes || [])
     .map(Number)
     .filter(index => Number.isInteger(index) && index >= 0))]
     .sort((left, right) => left - right);
@@ -1444,6 +1617,17 @@ function resolvePageEvidenceReferences(job, page, maximum = MAX_FACT_EVIDENCE_RE
       label: `我的详情第 ${index + 1} 张事实证据`,
     }] : [];
   }).slice(0, Math.max(0, Number(maximum) || 0));
+}
+
+function factsSupportedByEvidenceReferences(mappedFacts, evidenceReferences) {
+  const included = new Set(evidenceReferences.map(item => Number(item.sourceImageIndex)));
+  return (mappedFacts || []).filter(fact => (fact.evidence || []).some(item => (
+    included.has(Number(item.evidenceImageIndex))
+    && String(item.evidenceImageId || '') === String(
+      evidenceReferences.find(reference => Number(reference.sourceImageIndex) === Number(item.evidenceImageIndex))
+        ?.sourceNodeId || '',
+    )
+  )));
 }
 
 async function generateBlankPlate(job, page, context, signal) {
@@ -1533,6 +1717,7 @@ async function generateBlankPlate(job, page, context, signal) {
   page.plateUrl = plate.resultUrl;
   page.resultUrl = plate.resultUrl;
   page.status = 'completed';
+  page.terminalStatus = undefined;
   page.completedAt = nowIso(context);
   page.error = undefined;
   writeResultMetadata(imageTarget, page.plateNodeId, {
@@ -1558,7 +1743,7 @@ function exactCopyPlan(page) {
   return buildDetailCopyReplacementPlan({
     pageAnalysis: page.analysis,
     mappedSellingPoints: page.mappedSellingPoints,
-    mappedFacts: page.mappedFacts,
+    mappedFacts: Array.isArray(page.effectiveMappedFacts) ? page.effectiveMappedFacts : page.mappedFacts,
   });
 }
 
@@ -1629,8 +1814,15 @@ async function validateFinalDetailPage(
     && parsed.copyExact === true
     && parsed.brandCorrect === true
     && parsed.productCorrect === true
+    && parsed.logoCorrect === true
+    && parsed.productPlacementCorrect === true
+    && parsed.parameterAlignmentCorrect === true
+    && parsed.unsupportedStrictFactsAbsent === true
     && parsed.competitorRemoved === true
-    && parsed.gibberishDetected !== true;
+    && parsed.gibberishDetected !== true
+    && parsed.missingTexts.length === 0
+    && parsed.wrongTexts.length === 0
+    && parsed.unexpectedTexts.length === 0;
   const validation = { ...parsed, passed };
   page.validation = validation;
   page.validationStatus = passed ? 'passed' : 'failed';
@@ -1746,12 +1938,37 @@ async function generateFinalPage(job, page, context, signal) {
     ? [...job.characterReferenceImages]
     : [];
   const brandReferences = job.brandLogoUrl ? [job.brandLogoUrl] : [];
-  if (page.analysis?.pageType === 'specification' && !(page.mappedFacts || []).length) {
+  if (isDetailRemixStrictParameterPage(page.analysis) && !(page.mappedFacts || []).length) {
     const error = new Error('识别为参数页，但没有任何可由“我的详情”证据核验的参数映射；为避免编造，本页未提交生图');
     error.code = 'DETAIL_REMIX_SPEC_FACTS_MISSING';
     throw error;
   }
-  const evidenceReferences = resolvePageEvidenceReferences(job, page);
+  const imageProvider = getImageGenerationProvider(job.imageModel);
+  const evidenceCapacity = Math.max(
+    0,
+    Number(imageProvider?.maxReferenceImages || 0)
+      - 1
+      - characterReferences.length
+      - brandReferences.length
+      - 1,
+  );
+  const evidenceReferences = resolvePageEvidenceReferences(job, page, evidenceCapacity);
+  page.effectiveMappedFacts = factsSupportedByEvidenceReferences(page.mappedFacts, evidenceReferences);
+  const effectiveFactIds = new Set(page.effectiveMappedFacts.map(item => item.factId));
+  page.omittedMappedFacts = (page.mappedFacts || [])
+    .filter(item => !effectiveFactIds.has(item.factId))
+    .map(item => ({
+      factId: item.factId,
+      field: item.field,
+      label: item.label,
+      value: item.value,
+      reason: 'evidence_reference_limit',
+    }));
+  if (isDetailRemixStrictParameterPage(page.analysis) && !page.effectiveMappedFacts.length) {
+    const error = new Error('严格参数页没有可随最终生图一起发送的我方证据；为避免无证据生成，本页未提交生图');
+    error.code = 'DETAIL_REMIX_SPEC_EVIDENCE_UNAVAILABLE';
+    throw error;
+  }
   const selectedProducts = resolvePageProductReferences(
     job,
     page,
@@ -1771,7 +1988,7 @@ async function generateFinalPage(job, page, context, signal) {
   const prompt = buildFinalDetailPrompt({
     pageAnalysis: page.analysis,
     mappedSellingPoints: page.mappedSellingPoints,
-    mappedFacts: page.mappedFacts,
+    mappedFacts: page.effectiveMappedFacts,
     pageIndex: page.index,
     productImageCount: productReferences.length,
     selectedProductViews: page.selectedProductViews,
@@ -1833,6 +2050,10 @@ async function generateFinalPage(job, page, context, signal) {
       copyExact: true,
       brandCorrect: true,
       productCorrect: true,
+      logoCorrect: true,
+      productPlacementCorrect: true,
+      parameterAlignmentCorrect: true,
+      unsupportedStrictFactsAbsent: true,
       competitorRemoved: true,
       gibberishDetected: false,
       missingTexts: [],
@@ -1890,12 +2111,20 @@ async function generateFinalPage(job, page, context, signal) {
     ].slice(0, 5).join('；');
     const error = new Error(`AI 成图质检未通过${details ? `：${details}` : validation.summary ? `：${validation.summary}` : ''}`);
     error.code = 'DETAIL_REMIX_QUALITY_FAILED';
+    page.status = 'failed_validation';
+    page.validationStatus = 'FAILED_VALIDATION';
+    page.terminalStatus = 'FAILED_VALIDATION';
+    page.error = error.message;
+    page.errorCode = error.code;
+    page.failedAt = nowIso(context);
+    writeJob(job, context);
     throw error;
   }
   const final = saveImageBuffer(rawBuffer, imageTarget, page.resultNodeId);
   page.finalUrl = final.resultUrl;
   page.resultUrl = final.resultUrl;
   page.status = 'completed';
+  page.terminalStatus = undefined;
   page.completedAt = nowIso(context);
   page.error = undefined;
   writeResultMetadata(imageTarget, page.resultNodeId, {
@@ -1913,7 +2142,8 @@ async function generateFinalPage(job, page, context, signal) {
     detailRemixPhase: 'final',
     rawResultUrl: page.rawResultUrl,
     mappedSellingPoints: page.mappedSellingPoints,
-    mappedFacts: page.mappedFacts,
+    mappedFacts: page.effectiveMappedFacts,
+    omittedMappedFacts: page.omittedMappedFacts,
     copyPlan: exactCopyPlan(page),
     validation: page.validation,
     repairAttempts: page.repairAttempts || 0,
@@ -1931,7 +2161,8 @@ function finishFinalPhase(job, context) {
   const succeeded = job.pages.filter(page => page.status === 'completed' && (page.finalUrl || page.resultUrl)).length;
   const recovery = job.pages.filter(page => page.status === 'recovery_required').length
     + (job.ownRecognition?.status === 'recovery_required' ? 1 : 0);
-  const failed = job.pages.filter(page => page.status === 'failed').length;
+  const failedValidation = job.pages.filter(page => page.status === 'failed_validation').length;
+  const failed = job.pages.filter(page => ['failed', 'failed_validation'].includes(page.status)).length;
   job.resultNodeIds = job.pages
     .filter(page => page.status === 'completed' && (page.finalUrl || page.resultUrl))
     .map(page => page.resultNodeId);
@@ -1949,11 +2180,11 @@ function finishFinalPhase(job, context) {
     job.status = 'partial_failed';
     job.stage = 'final_partial_failed';
     job.stageLabel = `已完成最终详情 ${succeeded} / ${job.pages.length} 页`;
-    job.error = `${failed} 页失败，已保留成功结果`;
+    job.error = `${failed} 页失败${failedValidation ? `（其中 ${failedValidation} 页质检失败）` : ''}，已保留成功结果`;
   } else if (!succeeded) {
     job.status = 'failed';
-    job.stage = 'failed';
-    job.stageLabel = '最终详情生成失败';
+    job.stage = failedValidation ? 'failed_validation' : 'failed';
+    job.stageLabel = failedValidation ? '最终详情质检失败' : '最终详情生成失败';
     job.error = job.error || '没有成功生成任何最终详情页';
   } else {
     job.status = 'completed';
@@ -1979,7 +2210,7 @@ async function executeFinalPhase(job, context) {
 
     for (const page of job.pages) {
       assertActive(job, context, signal);
-      if (['completed', 'failed', 'recovery_required'].includes(page.status)) continue;
+      if (['completed', 'failed', 'failed_validation', 'recovery_required'].includes(page.status)) continue;
       job.currentPageIndex = page.index;
       writeJob(job, context);
       try {
@@ -1988,7 +2219,9 @@ async function executeFinalPhase(job, context) {
         await generateFinalPage(job, page, context, signal);
       } catch (error) {
         if (isOperationCancelled(error) || signal.aborted) throw error;
-        page.status = error?.submitted === true ? 'recovery_required' : 'failed';
+        page.status = error?.submitted === true
+          ? 'recovery_required'
+          : error?.code === 'DETAIL_REMIX_QUALITY_FAILED' ? 'failed_validation' : 'failed';
         page.error = error instanceof Error ? error.message : String(error);
         page.errorCode = error?.code;
         page.failedAt = nowIso(context);
@@ -2453,10 +2686,13 @@ function maybeResume(job, context) {
   if (!job || activeJobs.has(job.id)) return job;
   if (Number(job.schemaVersion) < DETAIL_REMIX_JOB_SCHEMA_VERSION
       && ['pending', 'processing'].includes(job.status)) {
+    const predatesSinglePassPipeline = Number(job.schemaVersion) < 3;
     job.status = 'recovery_required';
     job.stage = 'recovery_required';
     job.stageLabel = '旧版生成方式已停用，请重新生成最终详情';
-    job.error = '该任务创建于本地叠字/二次合成版本。为避免恢复出无字图或重复扣费，系统不会继续旧任务；请点击“重新生成最终详情”创建一次生成的新版本。';
+    job.error = predatesSinglePassPipeline
+      ? '该任务创建于本地叠字/二次合成版本。为避免恢复出无字图或重复扣费，系统不会继续旧任务；请点击“重新生成最终详情”创建一次生成的新版本。'
+      : '该任务创建于旧版参数证据契约。为避免恢复时混入无证据参数、发生参数错栏或重复扣费，系统不会继续旧任务；请点击“重新生成最终详情”创建严格证据链的新版本。';
     writeJob(job, context);
     return job;
   }
@@ -2579,7 +2815,7 @@ export function createDetailRemixJob(payload, context) {
   }));
   const job = {
     schemaVersion: DETAIL_REMIX_JOB_SCHEMA_VERSION,
-    pipelineVersion: 'strict-facts-ai-qa-v1',
+    pipelineVersion: 'strict-evidence-position-qa-v2',
     id: requestedId || newId(context),
     workflowId: String(payload.workflowId),
     nodeId: String(payload.nodeId),
@@ -2666,7 +2902,7 @@ export function composeDetailRemixProducts(jobId, workflowId, payload, context) 
   job.phase = 'composition';
   job.status = 'pending';
   job.schemaVersion = DETAIL_REMIX_JOB_SCHEMA_VERSION;
-  job.pipelineVersion = 'strict-facts-ai-qa-v1';
+  job.pipelineVersion = 'strict-evidence-position-qa-v2';
   job.stage = 'composition_queued';
   job.stageLabel = '产品合成任务已创建';
   job.error = undefined;
@@ -2821,6 +3057,10 @@ export function retryFailedDetailRemixPages(jobId, workflowId, payload, context)
       page.recognitionLastFailedAt = undefined;
       page.analysis = undefined;
       page.mappedSellingPoints = undefined;
+      page.mappedFacts = undefined;
+      page.effectiveMappedFacts = undefined;
+      page.omittedMappedFacts = undefined;
+      page.factMappingAudit = undefined;
       page.selectedProductViewIds = undefined;
       page.selectedProductViews = undefined;
     }

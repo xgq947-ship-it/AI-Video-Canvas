@@ -172,6 +172,9 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
     page?.resultReady || page?.resultUrl || page?.finalUrl || page?.compositeReady || page?.plateReady
   )).length;
   const failedPages = pages.filter((page: any) => page?.status === 'failed');
+  const validationFailedPages = pages.filter((page: any) => (
+    page?.status === 'failed_validation' || page?.terminalStatus === 'FAILED_VALIDATION'
+  ));
   const safeFailedPages = failedPages.filter((page: any) => (
     !page?.codexImageJobId
     && !page?.plateCodexImageJobId
@@ -607,7 +610,7 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
             }}
           />
           <div className={`rounded-xl border px-3 py-2 text-[11px] leading-5 ${dark ? 'border-violet-500/20 bg-violet-500/5 text-neutral-400' : 'border-violet-200 bg-violet-50 text-neutral-600'}`}>
-            导入后，“我的详情”在最上方、“竞品详情”在下方。系统会从我的详情中识别卖点、Logo 和多个产品角度，无需单独上传产品图；再把竞品原图、匹配产品、可选人物及逐位置替换指令一次性交给 AI。AI 直接完成产品、文案和 Logo 的最终图，不做本地叠字或二次合成。结果保持竞品原始像素尺寸，并在控制节点下方水平排列。
+            导入后，“我的详情”在最上方、“竞品详情”在下方。系统会从我的详情中识别卖点、Logo、产品角度与可追溯参数证据，无需单独上传产品图；参数页自动进入严格模式，参数名和值分栏映射，无证据字段直接删除。正式生成时把竞品原图、匹配产品、证据页、可选人物及逐位置替换清单一次性交给 AI，不做本地叠字或多轮拼图。
           </div>
 
           <div className="flex gap-2">
@@ -665,6 +668,11 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
                 {formatFailedPages.length === safeFailedPages.length
                   ? `第 ${failedPageNumbers.join('、')} 页仅识图格式失败，尚未进入生图，可安全重试。`
                   : `第 ${failedPageNumbers.join('、')} 页在生图提交前失败，可只重试这些页面。`}
+              </div>
+            )}
+            {validationFailedPages.length > 0 && !generationBusy && (
+              <div className="mt-1 text-[10px] leading-4 text-red-400">
+                第 {validationFailedPages.map((page: any) => Number(page.index) + 1).join('、')} 页已标记 FAILED_VALIDATION；一次定向修复后仍未通过，不会作为成功结果，也不会自动再次付费生成。
               </div>
             )}
             <div className="mt-2 space-y-2 border-t border-neutral-500/20 pt-2">

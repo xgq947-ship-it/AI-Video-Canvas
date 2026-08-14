@@ -18,6 +18,7 @@ export type DetailRemixJobStage =
   | 'generating_final'
   | 'validating_final'
   | 'repairing_final'
+  | 'failed_validation'
   | 'final_partial_failed'
   // Legacy stages remain in the read contract for existing saved jobs.
   | 'generating_plates'
@@ -87,6 +88,7 @@ export interface DetailRemixPageResult {
   composeCodexImageJobId?: string;
   error?: string;
   validationStatus?: string;
+  terminalStatus?: 'FAILED_VALIDATION' | string;
   validation?: Record<string, unknown>;
   validationAttempts?: number;
   repairAttempts?: number;
@@ -121,11 +123,24 @@ export interface DetailRemixJob {
   }>;
   verifiedFacts?: Array<{
     id?: string;
+    field?: string;
     factType?: string;
     label?: string;
     value?: string;
+    normalizedValue?: string;
     displayText?: string;
     sourceImageIndexes?: number[];
+    evidenceImageIndex?: number;
+    evidenceImageId?: string;
+    evidenceRegion?: { x: number; y: number; width: number; height: number };
+    confidence?: number;
+    evidence?: Array<{
+      evidenceImageIndex?: number;
+      evidenceImageId?: string;
+      evidenceRegion?: { x: number; y: number; width: number; height: number };
+      confidence?: number;
+      sourceText?: string;
+    }>;
   }>;
   useCharacterReference?: boolean;
   characterReferenceEnabled?: boolean;

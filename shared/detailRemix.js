@@ -11,6 +11,17 @@
  */
 
 export const DETAIL_REMIX_SCHEMA_VERSION = 1;
+export const DETAIL_REMIX_STRICT_PARAMETER_MODE = 'STRICT_PARAMETER_MODE';
+export const DETAIL_REMIX_MARKETING_MODE = 'MARKETING_MODE';
+export const DETAIL_REMIX_STRICT_FACT_MIN_CONFIDENCE = 0.9;
+export const DETAIL_REMIX_STRICT_PAGE_CATEGORIES = Object.freeze([
+  'parameters',
+  'specifications',
+  'model',
+  'accessories',
+  'electrical',
+  'packing_list',
+]);
 // Keep the controller compact enough to fit in a typical 720p canvas. The
 // form itself scrolls inside this fixed geometry, so edges and selection
 // bounds remain deterministic as advanced settings expand.
@@ -73,13 +84,21 @@ export const DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA = Object.freeze({
       type: 'object',
       additionalProperties: false,
       required: [
-        'pageType', 'purpose', 'reversePrompt', 'layoutSpec', 'palette', 'lighting',
+        'pageType', 'pageMode', 'strictPageCategory', 'purpose', 'reversePrompt', 'layoutSpec', 'palette', 'lighting',
         'hasPerson', 'personaSpec', 'targetProductView', 'selectedProductViewIds',
         'productInstances', 'brandSlots', 'copySlots', 'mappedSellingPoints', 'mappedFacts',
         'forbiddenCompetitorElements',
       ],
       properties: {
         pageType: { type: 'string' },
+        pageMode: {
+          type: 'string',
+          enum: [DETAIL_REMIX_STRICT_PARAMETER_MODE, DETAIL_REMIX_MARKETING_MODE],
+        },
+        strictPageCategory: {
+          type: 'string',
+          enum: ['none', ...DETAIL_REMIX_STRICT_PAGE_CATEGORIES],
+        },
         purpose: { type: 'string' },
         reversePrompt: { type: 'string' },
         layoutSpec: { type: 'string' },
@@ -142,12 +161,14 @@ export const DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA = Object.freeze({
             type: 'object',
             additionalProperties: false,
             required: [
-              'slotId', 'role', 'sourceText', 'x', 'y', 'width', 'height',
+              'slotId', 'role', 'field', 'parameterPart', 'sourceText', 'x', 'y', 'width', 'height',
               'align', 'color', 'fontWeight', 'maxChars',
             ],
             properties: {
               slotId: { type: 'string' },
               role: { type: 'string' },
+              field: { type: 'string' },
+              parameterPart: { type: 'string', enum: ['none', 'label', 'value'] },
               sourceText: { type: 'string' },
               ...normalizedRegionSchema.properties,
               align: { type: 'string' },
@@ -180,7 +201,7 @@ export const DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA = Object.freeze({
               factId: { type: 'string' },
               slotId: { type: 'string' },
               slotRole: { type: 'string' },
-              displayPart: { type: 'string', enum: ['label', 'value', 'displayText'] },
+              displayPart: { type: 'string', enum: ['label', 'value'] },
             },
           },
         },
@@ -268,17 +289,18 @@ export const DETAIL_REMIX_OWN_KNOWLEDGE_OUTPUT_SCHEMA = Object.freeze({
         type: 'object',
         additionalProperties: false,
         required: [
-          'id', 'factType', 'label', 'value', 'displayText',
-          'sourceImageIndexes', 'sourceRegion', 'confidence',
+          'id', 'field', 'label', 'value', 'normalizedValue', 'displayText',
+          'evidenceImageIndex', 'evidenceRegion', 'confidence',
         ],
         properties: {
           id: { type: 'string' },
-          factType: { type: 'string' },
+          field: { type: 'string' },
           label: { type: 'string' },
           value: { type: 'string' },
+          normalizedValue: { type: 'string' },
           displayText: { type: 'string' },
-          sourceImageIndexes: { type: 'array', items: { type: 'integer', minimum: 0 } },
-          sourceRegion: optionalNormalizedRegionSchema,
+          evidenceImageIndex: { type: 'integer', minimum: 0 },
+          evidenceRegion: normalizedRegionSchema,
           confidence: { type: 'number', minimum: 0, maximum: 1 },
         },
       },
@@ -292,7 +314,8 @@ export const DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA = Object.freeze({
   additionalProperties: false,
   required: [
     'passed', 'copyExact', 'brandCorrect', 'productCorrect',
-    'competitorRemoved', 'gibberishDetected', 'missingTexts',
+    'logoCorrect', 'productPlacementCorrect', 'parameterAlignmentCorrect',
+    'unsupportedStrictFactsAbsent', 'competitorRemoved', 'gibberishDetected', 'missingTexts',
     'wrongTexts', 'unexpectedTexts', 'summary',
   ],
   properties: {
@@ -300,6 +323,10 @@ export const DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA = Object.freeze({
     copyExact: { type: 'boolean' },
     brandCorrect: { type: 'boolean' },
     productCorrect: { type: 'boolean' },
+    logoCorrect: { type: 'boolean' },
+    productPlacementCorrect: { type: 'boolean' },
+    parameterAlignmentCorrect: { type: 'boolean' },
+    unsupportedStrictFactsAbsent: { type: 'boolean' },
     competitorRemoved: { type: 'boolean' },
     gibberishDetected: { type: 'boolean' },
     missingTexts: { type: 'array', items: { type: 'string' } },
@@ -313,6 +340,102 @@ const array = value => (Array.isArray(value) ? value : []);
 const text = value => String(value ?? '').trim();
 const unique = values => [...new Set(array(values).map(text).filter(Boolean))];
 const object = value => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
+
+const normalizedToken = value => text(value)
+  .normalize('NFKC')
+  .toLowerCase()
+  .replace(/[\s_:/\\|()（）\[\]【】,.，。;；-]+/gu, '');
+
+const STRICT_FIELD_ALIASES = Object.freeze([
+  ['product_name', /(?:产品名称|商品名称|品名|productname|itemname)/iu],
+  ['model', /(?:产品型号|商品型号|规格型号|型号|model)/iu],
+  ['charging_input', /(?:充电输入|输入电压|充电电压|charginginput|inputvoltage)/iu],
+  ['battery_capacity', /(?:电池容量|电池电量|batterycapacity|mah)/iu],
+  ['power', /(?:额定功率|工作功率|功率|ratedpower|power)/iu],
+  ['voltage', /(?:额定电压|工作电压|电压|ratedvoltage|voltage)/iu],
+  ['electric_current', /(?:额定电流|工作电流|电流|ratedcurrent|current)/iu],
+  ['frequency', /(?:额定频率|工作频率|频率|frequency|hz)/iu],
+  ['interface', /(?:充电接口|接口类型|接口|port|interface|typec|usb)/iu],
+  ['work_time', /(?:单次工作时间|工作时间|运行时间|续航时间|使用时间|runtime|worktime|workingtime)/iu],
+  ['temperature', /(?:热敷温度|工作温度|温度|temperature|°c|℃)/iu],
+  ['dimensions', /(?:产品尺寸|外形尺寸|包装尺寸|尺寸|规格尺寸|dimensions?|size)/iu],
+  ['weight', /(?:产品重量|净重|毛重|重量|weight|kg|克重)/iu],
+  ['gear', /(?:档位|挡位|模式数量|档数|gears?|levels?)/iu],
+  ['package_contents', /(?:装箱清单|包装清单|包装内容|随箱清单|packinglist|packagecontents)/iu],
+  ['accessories', /(?:配件清单|配件|附件|accessories)/iu],
+  ['certification', /(?:执行标准|认证|证书|certification|certificate)/iu],
+  ['material', /(?:主要材质|材质|面料|material)/iu],
+]);
+
+/** Canonical key used to prove that a competitor slot and an own fact describe the same field. */
+export function canonicalDetailRemixFactField(value, label = '') {
+  const explicit = text(value);
+  const labelText = text(label);
+  for (const source of [explicit, labelText]) {
+    if (!source) continue;
+    const normalized = normalizedToken(source);
+    for (const [field, matcher] of STRICT_FIELD_ALIASES) {
+      if (matcher.test(source) || matcher.test(normalized)) return field;
+    }
+  }
+  const normalized = normalizedToken(explicit || labelText);
+  return normalized ? `custom:${normalized}` : '';
+}
+
+/** Normalization is only for matching/deduplication; the exact `value` remains the display source. */
+export function normalizeDetailRemixFactValue(value) {
+  return text(value).normalize('NFKC').replace(/\s+/gu, ' ');
+}
+
+const strictCategory = value => {
+  const source = normalizedToken(value);
+  if (!source || source === 'none' || source === '无') return 'none';
+  if (/(?:packinglist|packagecontents|装箱|包装清单|随箱)/u.test(source)) return 'packing_list';
+  if (/(?:accessor|配件|附件)/u.test(source)) return 'accessories';
+  if (/(?:electric|electrical|电气|电器参数)/u.test(source)) return 'electrical';
+  if (/(?:model|型号)/u.test(source)) return 'model';
+  if (/(?:specification|specifications|规格)/u.test(source)) return 'specifications';
+  if (/(?:parameter|parameters|参数)/u.test(source)) return 'parameters';
+  return DETAIL_REMIX_STRICT_PAGE_CATEGORIES.includes(text(value)) ? text(value) : 'none';
+};
+
+/** Program-side classification; an inconsistent model answer always resolves toward the safer strict mode. */
+export function detailRemixPageMode(value = {}) {
+  const page = object(value);
+  const category = strictCategory(page.strictPageCategory || page.pageCategory);
+  const typeText = `${text(page.pageType || page.type)} ${text(page.purpose)}`;
+  const strictType = /(?:specification|specifications|parameter|parameters|model|accessor|electrical|packing[ _-]?list|参数页?|规格页?|型号页?|配件页?|电气参数页?|包装清单页?|装箱清单页?)/iu.test(typeText);
+  const explicitStrict = text(page.pageMode).toUpperCase() === DETAIL_REMIX_STRICT_PARAMETER_MODE;
+  const parameterSlots = array(page.copySlots).filter(slot => (
+    ['label', 'value'].includes(text(slot?.parameterPart).toLowerCase())
+    || /parameter(?:label|value)|specification/iu.test(text(slot?.role))
+  ));
+  const pairedFieldParts = new Map();
+  for (const slot of parameterSlots) {
+    const field = canonicalDetailRemixFactField(slot?.field, slot?.sourceText);
+    if (!field) continue;
+    const parts = pairedFieldParts.get(field) || new Set();
+    const role = text(slot?.parameterPart || slot?.role).toLowerCase();
+    if (/label/u.test(role)) parts.add('label');
+    if (/value/u.test(role)) parts.add('value');
+    pairedFieldParts.set(field, parts);
+  }
+  const hasPair = [...pairedFieldParts.values()].some(parts => parts.has('label') && parts.has('value'));
+  return explicitStrict || category !== 'none' || strictType || hasPair
+    ? DETAIL_REMIX_STRICT_PARAMETER_MODE
+    : DETAIL_REMIX_MARKETING_MODE;
+}
+
+export function isDetailRemixStrictParameterPage(value = {}) {
+  return detailRemixPageMode(value) === DETAIL_REMIX_STRICT_PARAMETER_MODE;
+}
+
+export function detailRemixStrictPageCategory(value = {}) {
+  const page = object(value);
+  const explicit = strictCategory(page.strictPageCategory || page.pageCategory);
+  if (explicit !== 'none') return explicit;
+  return strictCategory(`${text(page.pageType || page.type)} ${text(page.purpose)}`);
+}
 
 function normalizeFolderImport(value) {
   const source = object(value);
@@ -663,13 +786,33 @@ function parseJsonPayload(value, label) {
 export function parseOwnSellingPointsResponse(value) {
   const parsed = parseJsonPayload(value, '我方卖点提炼结果');
   const points = array(parsed?.ownSellingPoints ?? parsed?.sellingPoints ?? parsed?.points ?? parsed);
+  const verifiedFacts = array(
+    parsed?.verifiedFacts || parsed?.productFacts || parsed?.specifications || parsed?.facts,
+  ).map((fact, index) => {
+    const item = object(fact);
+    const label = text(item.label || item.name || item.key);
+    const exactValue = text(item.value || item.exactValue);
+    const field = canonicalDetailRemixFactField(item.field || item.factType || item.type, label);
+    const evidenceImageIndex = Number(item.evidenceImageIndex ?? item.sourceImageIndex ?? item.sourceImageIndexes?.[0]);
+    const evidenceRegion = object(item.evidenceRegion || item.sourceRegion || item.region || item.boundingBox);
+    return {
+      ...item,
+      id: text(item.id) || `fact-${index + 1}`,
+      field,
+      factType: field,
+      label,
+      value: exactValue,
+      normalizedValue: normalizeDetailRemixFactValue(item.normalizedValue || exactValue),
+      displayText: text(item.displayText) || [label, exactValue].filter(Boolean).join('\n'),
+      ...(Number.isInteger(evidenceImageIndex) ? { evidenceImageIndex } : {}),
+      ...(Object.keys(evidenceRegion).length ? { evidenceRegion } : {}),
+    };
+  }).filter(fact => fact.field && fact.label && fact.value);
   return {
     ...object(parsed),
     brandIdentity: object(parsed?.brandIdentity || parsed?.brand),
     productViews: array(parsed?.productViews || parsed?.productAngles || parsed?.productCrops),
-    verifiedFacts: array(
-      parsed?.verifiedFacts || parsed?.productFacts || parsed?.specifications || parsed?.facts,
-    ),
+    verifiedFacts,
     sellingPoints: points.map((point, index) => {
       if (typeof point === 'string') return { id: `sp-${index + 1}`, title: text(point), description: '' };
       const item = object(point);
@@ -689,15 +832,42 @@ export function parseCompetitorPageResponse(value) {
   const page = object(parsed.page || parsed.analysis || parsed);
   const productInstances = array(page.productInstances || page.productRegions);
   const productRegion = object(page.productRegion || page.blankProductRegion || productInstances[0]);
+  const copySlots = array(page.copySlots).map((slot, index) => {
+    const item = object(slot);
+    const role = text(item.role) || 'copy';
+    const explicitPart = text(item.parameterPart).toLowerCase();
+    const inferredPart = /label/iu.test(role) ? 'label' : /value/iu.test(role) ? 'value' : 'none';
+    const parameterPart = ['label', 'value'].includes(explicitPart) ? explicitPart : inferredPart;
+    return {
+      ...item,
+      slotId: text(item.slotId || item.id) || `copy-${index + 1}`,
+      role,
+      field: parameterPart === 'none'
+        ? text(item.field)
+        : canonicalDetailRemixFactField(item.field, item.sourceText),
+      parameterPart,
+    };
+  });
+  const normalizedPage = {
+    ...page,
+    copySlots,
+  };
+  const pageMode = detailRemixPageMode(normalizedPage);
   return {
     ...object(parsed),
     page: {
-      ...page,
+      ...normalizedPage,
       hasPerson: page.hasPerson === true,
       pageType: text(page.pageType || page.type) || 'marketing',
-      mappedSellingPoints: array(page.mappedSellingPoints || page.sellingPointMapping),
+      pageMode,
+      strictPageCategory: pageMode === DETAIL_REMIX_STRICT_PARAMETER_MODE
+        ? detailRemixStrictPageCategory(normalizedPage)
+        : 'none',
+      mappedSellingPoints: pageMode === DETAIL_REMIX_STRICT_PARAMETER_MODE
+        ? []
+        : array(page.mappedSellingPoints || page.sellingPointMapping),
       mappedFacts: array(page.mappedFacts || page.factMapping),
-      copySlots: array(page.copySlots),
+      copySlots,
       brandSlots: array(page.brandSlots || page.logoSlots),
       productRegion,
       productInstances: productInstances.length ? productInstances : (Object.keys(productRegion).length ? [productRegion] : []),
@@ -716,10 +886,11 @@ export function buildOwnSellingPointsInstruction({ imageCount = 1, chunkIndex = 
     '同时把图片中清晰、完整、可作为生图参考的我方产品逐个识别为 productViews。每个视角记录所在图片、产品紧致裁剪区域、角度和可见面；排除严重遮挡、过小、模糊或仅有包装的画面。',
     'productViews.cropRegion 使用 0~1 归一化 x/y/width/height，只框产品主体并保留少量完整边缘，不要包含大段详情文案。相同图片中若有多个独立角度，可输出多条。',
     '同时识别我方品牌信息：品牌名、口号、主色，以及 Logo 在哪张图、哪个归一化区域。只有清晰可见时才填写，禁止猜测。',
-    '另外建立 verifiedFacts 精确事实库。产品名称、型号、额定功率、电压、充电电压、接口、工作时间、温度、尺寸、重量、容量、装箱清单等必须逐字抄录原图；label 与 value 分开，displayText 是最终可直接印在详情页上的“label + 换行 + value”。',
-    'verifiedFacts 只能收录清晰可辨且可在 sourceImageIndexes/sourceRegion 回看核验的事实。数字、单位、型号、正负号、斜杠和大小写必须与原图一致；看不清就不要输出，绝不补全或推测。',
+    '另外建立 verifiedFacts 精确事实库。产品名称、型号、额定功率、电压、充电输入、接口、工作时间、温度、尺寸、重量、容量、档位、配件、装箱清单、认证、材质等必须逐字抄录原图；field 使用稳定语义字段，label 与 value 分开，normalizedValue 只做全半角和空格归一化，displayText 使用“label + 换行 + value”。',
+    `verifiedFacts 只能收录清晰可辨、置信度不低于 ${DETAIL_REMIX_STRICT_FACT_MIN_CONFIDENCE}，并且能由 evidenceImageIndex/evidenceRegion 精确回看核验的事实。evidenceRegion 必须紧密框住该条参数证据，宽高都必须大于 0。数字、单位、型号、正负号、斜杠和大小写必须与原图一致；看不清、区域不明确或置信度不足就不要输出，绝不补全或推测。`,
+    '营销卖点不得进入 verifiedFacts；严格参数也不得只凭营销文案、产品外观或常识推断。',
     '只输出合法 JSON，不要 Markdown。格式：',
-    '{"brandIdentity":{"name":"","slogan":"","primaryColors":[],"logoDescription":"","logoSourceImageIndex":0,"logoRegion":{"x":0.05,"y":0.03,"width":0.2,"height":0.08}},"productViews":[{"sourceImageIndex":0,"cropRegion":{"x":0.2,"y":0.15,"width":0.6,"height":0.65},"viewAngle":"front-left","visibleSides":["front","left"],"description":"左前方约30度，产品完整清晰","quality":0.95}],"sellingPoints":[{"id":"sp-1","title":"短标题","description":"可直接上图的简短说明","evidenceSummary":"来源图片中可核验的依据","sourceImageIndexes":[0],"priority":1}],"verifiedFacts":[{"id":"fact-1","factType":"rated_power","label":"额定功率","value":"16W","displayText":"额定功率\\n16W","sourceImageIndexes":[0],"sourceRegion":{"x":0.1,"y":0.55,"width":0.35,"height":0.1},"confidence":0.99}]}',
+    '{"brandIdentity":{"name":"","slogan":"","primaryColors":[],"logoDescription":"","logoSourceImageIndex":0,"logoRegion":{"x":0.05,"y":0.03,"width":0.2,"height":0.08}},"productViews":[{"sourceImageIndex":0,"cropRegion":{"x":0.2,"y":0.15,"width":0.6,"height":0.65},"viewAngle":"front-left","visibleSides":["front","left"],"description":"左前方约30度，产品完整清晰","quality":0.95}],"sellingPoints":[{"id":"sp-1","title":"短标题","description":"可直接上图的简短说明","evidenceSummary":"来源图片中可核验的依据","sourceImageIndexes":[0],"priority":1}],"verifiedFacts":[{"id":"fact-1","field":"power","label":"额定功率","value":"16W","normalizedValue":"16W","displayText":"额定功率\\n16W","evidenceImageIndex":0,"evidenceRegion":{"x":0.1,"y":0.55,"width":0.35,"height":0.1},"confidence":0.99}]}',
   ].join('\n');
 }
 
@@ -750,31 +921,76 @@ export function buildCompetitorPageInstruction({
   })).filter(view => view.id);
   const verifiedFacts = array(ownVerifiedFacts).map((fact, index) => ({
     id: clip(fact?.id || `fact-${index + 1}`, 40),
-    factType: clip(fact?.factType, 50),
+    field: clip(fact?.field || fact?.factType, 80),
     label: clip(fact?.label, 60),
     value: clip(fact?.value, 120),
+    normalizedValue: clip(fact?.normalizedValue || fact?.value, 120),
     displayText: clip(fact?.displayText || [fact?.label, fact?.value].filter(Boolean).join('\n'), 180),
-  })).filter(fact => fact.label && fact.value);
+  })).filter(fact => fact.field && fact.label && fact.value);
   return [
     '你是电商详情页视觉反推与语义槽位规划专家。所附仅一张“竞品详情图”。',
     '反推画面结构、镜头、背景、光线、色彩、人物需求、文字层级、商品区域及前后遮挡关系；完整保留版式位置关系，但不要保留竞品品牌、Logo、商品外观或竞品独有主张。',
     '逐个识别画面里所有竞品产品实例并输出 productInstances；每个实例使用 0~1 归一化 x/y/width/height，并说明观察角度、接触面与需要保留在商品前方的遮挡层。只有单个实例时仍必须输出一项。',
     '识别竞品品牌/Logo 原本占据的位置并输出 brandSlots，记录 sourceText 或 visualDescription，后续 AI 会在相同位置直接换成我方品牌。',
-    '先判断页面类型 pageType：参数/规格/型号/电气信息表必须填 specification；普通卖点页填 marketing；场景页填 scene；品牌页填 brand。',
-    '逐个识别竞品原有可读文案并输出 copySlots；每个槽必须包含 slotId、role、sourceText、位置、对齐、颜色和字重。',
-    '当 pageType=specification 时，只能把参数槽映射到 verifiedFacts 的事实 ID，写入 mappedFacts；禁止用营销卖点填参数栏。每个映射必须填写 displayPart：参数名独立槽用 label，参数值独立槽用 value，单槽同时承载名称和值才用 displayText。同一事实允许分别映射一次 label 和 value。只有语义一致或可合理承载的参数槽才映射，没有我方事实证据的竞品参数槽不映射，后续会彻底删除。',
-    '非参数页可把槽映射到 mappedSellingPoints；只能选择已给卖点，不得新造参数或功效，也不得新造比较结论。',
+    `先判断页面模式 pageMode。参数页、规格页、型号页、配件页、电气参数页、包装/装箱清单页一律填 ${DETAIL_REMIX_STRICT_PARAMETER_MODE}，并用 strictPageCategory 标明 parameters/specifications/model/accessories/electrical/packing_list；普通卖点、场景和品牌页填 ${DETAIL_REMIX_MARKETING_MODE} 且 strictPageCategory=none。pageType 保留 marketing/scene/brand/specification 等简短类型。`,
+    '逐个识别竞品原有可读文案并输出 copySlots；每个槽必须包含 slotId、role、field、parameterPart、sourceText、位置、对齐、颜色和字重。普通文案 field 为空且 parameterPart=none。',
+    `当 pageMode=${DETAIL_REMIX_STRICT_PARAMETER_MODE} 时，参数名称和参数值必须拆成两个独立 copySlot：名称槽 parameterPart=label，数值槽 parameterPart=value，并填写同一个规范 field。禁止把“额定功率 20W”作为单个替换单元；即使视觉上相邻，也必须分别给出两个紧密区域。`,
+    '严格参数模式只能把参数槽映射到 verifiedFacts 的事实 ID，写入 mappedFacts；禁止输出 mappedSellingPoints。displayPart 只允许 label 或 value，并且必须与目标 slot 的 parameterPart 一致；同一事实只有 label/value 两个位置都可靠识别并且 field 一致时才映射。没有我方事实证据的竞品参数槽不映射，后续会彻底删除。',
+    `当 pageMode=${DETAIL_REMIX_MARKETING_MODE} 时可把营销文案槽映射到 mappedSellingPoints；只能选择已给卖点，不得新造参数或功效，也不得新造比较结论。页面中若混有精确数字/型号，只能通过 mappedFacts 使用我方证据，绝不能用营销卖点覆盖。`,
     'mappedSellingPoints 只映射确实适合承载我方卖点的文案槽：同一 slotId 最多选择一个卖点，尽量把不同卖点分配给不同槽；纯栏目标签、竞品对照说明或无法可靠替换的槽不要强行映射，后续会直接删除其竞品文字。',
     '判断所有竞品产品实例的观察角度、朝向、可见面和透视要求，再从我方产品视角库中选择最匹配的 1~3 个 ID 写入 selectedProductViewIds。必须只选给定 ID；优先覆盖本页出现的不同角度和产品完整度。',
     `页面序号：${pageIndex + 1}。我方品牌：${JSON.stringify(brand)}。我方卖点库：${JSON.stringify(sellingPoints)}。我方精确事实库：${JSON.stringify(verifiedFacts)}。我方产品视角库：${JSON.stringify(productViews)}`,
     '只输出合法 JSON，不要 Markdown。格式：',
-    '{"page":{"pageType":"specification","purpose":"","reversePrompt":"","layoutSpec":"","palette":"","lighting":"","hasPerson":false,"personaSpec":"","targetProductView":{"viewAngle":"front-left","visibleSides":["front","left"],"orientation":"upright","perspective":"three-quarter"},"selectedProductViewIds":["pv-1"],"productInstances":[{"instanceId":"product-1","x":0.5,"y":0.5,"width":0.3,"height":0.3,"viewAngle":"front-left","contactSurface":"","foregroundOcclusion":""}],"brandSlots":[{"slotId":"brand-1","sourceText":"竞品品牌","visualDescription":"左上角白色品牌标识","x":0.05,"y":0.03,"width":0.2,"height":0.08,"align":"left","color":"#ffffff"}],"copySlots":[{"slotId":"copy-1","role":"specification","sourceText":"额定功率 20W","x":0.1,"y":0.08,"width":0.8,"height":0.12,"align":"left","color":"#ffffff","fontWeight":500,"maxChars":20}],"mappedSellingPoints":[],"mappedFacts":[{"factId":"fact-1","slotId":"copy-1","slotRole":"specification","displayPart":"displayText"}],"forbiddenCompetitorElements":[]}}',
+    `{"page":{"pageType":"specification","pageMode":"${DETAIL_REMIX_STRICT_PARAMETER_MODE}","strictPageCategory":"electrical","purpose":"","reversePrompt":"","layoutSpec":"","palette":"","lighting":"","hasPerson":false,"personaSpec":"","targetProductView":{"viewAngle":"front-left","visibleSides":["front","left"],"orientation":"upright","perspective":"three-quarter"},"selectedProductViewIds":["pv-1"],"productInstances":[{"instanceId":"product-1","x":0.5,"y":0.5,"width":0.3,"height":0.3,"viewAngle":"front-left","contactSurface":"","foregroundOcclusion":""}],"brandSlots":[{"slotId":"brand-1","sourceText":"竞品品牌","visualDescription":"左上角白色品牌标识","x":0.05,"y":0.03,"width":0.2,"height":0.08,"align":"left","color":"#ffffff"}],"copySlots":[{"slotId":"power-label","role":"parameterLabel","field":"power","parameterPart":"label","sourceText":"额定功率","x":0.1,"y":0.08,"width":0.35,"height":0.06,"align":"left","color":"#ffffff","fontWeight":500,"maxChars":8},{"slotId":"power-value","role":"parameterValue","field":"power","parameterPart":"value","sourceText":"20W","x":0.5,"y":0.08,"width":0.2,"height":0.06,"align":"right","color":"#ffffff","fontWeight":500,"maxChars":8}],"mappedSellingPoints":[],"mappedFacts":[{"factId":"fact-1","slotId":"power-label","slotRole":"parameterLabel","displayPart":"label"},{"factId":"fact-1","slotId":"power-value","slotRole":"parameterValue","displayPart":"value"}],"forbiddenCompetitorElements":[]}}`,
   ].join('\n');
 }
 
 const displayCopy = value => text(value)
   .replace(/^(?:图片(?:中)?(?:明确)?(?:显示|标注|写明|说明)|页面(?:中)?(?:明确)?(?:显示|标注|写明|说明)|文案(?:中)?(?:明确)?(?:提到|写明|显示|说明)|证据(?:显示|表明)|可见文案证据)\s*[：:，,]?\s*/u, '')
   .trim();
+
+const safeNormalizedRegion = value => {
+  const source = object(value);
+  const region = {
+    x: Number(source.x),
+    y: Number(source.y),
+    width: Number(source.width),
+    height: Number(source.height),
+  };
+  return Object.values(region).every(Number.isFinite)
+    && region.x >= 0 && region.y >= 0
+    && region.width > 0 && region.height > 0
+    ? region
+    : null;
+};
+
+const strictFactEvidence = value => {
+  const fact = object(value);
+  const explicit = array(fact.evidence);
+  const legacy = explicit.length ? [] : [{
+    evidenceImageIndex: fact.evidenceImageIndex ?? fact.sourceImageIndexes?.[0],
+    evidenceImageId: fact.evidenceImageId ?? fact.sourceNodeIds?.[0],
+    evidenceRegion: fact.evidenceRegion || fact.sourceRegion,
+    confidence: fact.confidence,
+    sourceText: fact.sourceText || fact.displayText,
+  }];
+  return [...explicit, ...legacy].flatMap(entry => {
+    const item = object(entry);
+    const evidenceImageIndex = Number(item.evidenceImageIndex ?? item.sourceImageIndex);
+    const evidenceImageId = text(item.evidenceImageId || item.sourceNodeId);
+    const evidenceRegion = safeNormalizedRegion(item.evidenceRegion || item.sourceRegion || item.region);
+    const confidence = Number(item.confidence);
+    if ((!Number.isInteger(evidenceImageIndex) || evidenceImageIndex < 0) && !evidenceImageId) return [];
+    if (!evidenceRegion || !Number.isFinite(confidence) || confidence < DETAIL_REMIX_STRICT_FACT_MIN_CONFIDENCE) return [];
+    return [{
+      ...(Number.isInteger(evidenceImageIndex) && evidenceImageIndex >= 0 ? { evidenceImageIndex } : {}),
+      ...(evidenceImageId ? { evidenceImageId } : {}),
+      evidenceRegion,
+      confidence,
+      sourceText: text(item.sourceText || fact.displayText || `${fact.label || ''}\n${fact.value || ''}`),
+    }];
+  });
+};
 
 /** Build the exact, position-aware copy contract sent to the image model. */
 export function buildDetailCopyReplacementPlan({
@@ -787,6 +1003,10 @@ export function buildDetailCopyReplacementPlan({
     ...object(slot),
     slotId: text(slot?.slotId || slot?.id) || `copy-${index + 1}`,
     role: text(slot?.role) || 'copy',
+    field: canonicalDetailRemixFactField(slot?.field, slot?.sourceText),
+    parameterPart: ['label', 'value'].includes(text(slot?.parameterPart).toLowerCase())
+      ? text(slot?.parameterPart).toLowerCase()
+      : /label/iu.test(text(slot?.role)) ? 'label' : /value/iu.test(text(slot?.role)) ? 'value' : 'none',
     sourceText: text(slot?.sourceText || slot?.originalText || slot?.text),
   }));
   const marketingMappings = array(mappedSellingPoints).map((point, index) => {
@@ -807,6 +1027,10 @@ export function buildDetailCopyReplacementPlan({
     const item = object(fact);
     const label = displayCopy(item.label);
     const value = displayCopy(item.value);
+    const displayPart = ['label', 'value'].includes(text(item.displayPart))
+      ? text(item.displayPart)
+      : '';
+    const evidence = strictFactEvidence(item);
     return {
       index: marketingMappings.length + index,
       kind: 'verified-fact',
@@ -815,15 +1039,25 @@ export function buildDetailCopyReplacementPlan({
       factId: text(item.factId || item.id),
       slotId: text(item.slotId),
       role: text(item.slotRole) || 'specification',
-      explicitText: displayCopy(item.replacementText || item.displayText)
-        || [label, value].filter(Boolean).join('\n'),
+      field: canonicalDetailRemixFactField(item.field || item.factType, label),
+      displayPart,
+      evidence,
+      explicitText: displayCopy(item.replacementText)
+        || (displayPart === 'label' ? label : displayPart === 'value' ? value : ''),
       title: label,
       description: value,
     };
-  }).filter(mapping => mapping.factId && mapping.explicitText);
+  }).filter(mapping => (
+    mapping.factId
+    && mapping.field
+    && mapping.displayPart
+    && mapping.explicitText
+    && mapping.evidence.length > 0
+  ));
   // A specification page is a closed factual contract. Never let a marketing
   // selling point spill into a parameter cell just because both have text.
-  const mappings = text(page.pageType).toLowerCase() === 'specification'
+  const strictMode = isDetailRemixStrictParameterPage(page);
+  const mappings = strictMode
     ? factMappings
     : [...factMappings, ...marketingMappings];
   const usage = new Map();
@@ -848,6 +1082,7 @@ export function buildDetailCopyReplacementPlan({
   };
 
   if (!slots.length) {
+    if (strictMode) return [];
     return mappings.slice(0, 3).flatMap((mapping, index) => {
       const replacementText = textFor(mapping, null);
       if (!replacementText) return [];
@@ -859,6 +1094,7 @@ export function buildDetailCopyReplacementPlan({
         sourceKind: mapping.kind,
         role: mapping.role,
         sourceText: '',
+        originalText: '',
         replacementText,
         positionInstruction: `保持参考图1中第 ${index + 1} 个${mapping.role === 'headline' ? '标题' : '说明文字'}的位置和排版层级`,
       }];
@@ -867,7 +1103,16 @@ export function buildDetailCopyReplacementPlan({
 
   const plan = [];
   for (const slot of slots) {
-    const exact = mappings.filter(mapping => mapping.slotId === slot.slotId);
+    const exact = mappings.filter(mapping => (
+      mapping.slotId === slot.slotId
+      && (
+        mapping.kind !== 'verified-fact'
+        || (
+          slot.parameterPart === mapping.displayPart
+          && slot.field === mapping.field
+        )
+      )
+    ));
     const roleMatches = mappings.filter(mapping => (
       !mapping.slotId
       && mapping.role === slot.role
@@ -877,7 +1122,9 @@ export function buildDetailCopyReplacementPlan({
     // replacement plan. The final prompt already instructs the image model to
     // erase such text; filling it with an arbitrary selling point caused the
     // same phrase to be repeated across comparison labels and body copy.
-    const candidates = exact.length ? exact : roleMatches.slice(0, 1);
+    const candidates = exact.length
+      ? (strictMode ? exact.slice(0, 1) : exact)
+      : strictMode ? [] : roleMatches.slice(0, 1);
     if (!candidates.length) continue;
     const parts = [];
     const usedIds = [];
@@ -899,6 +1146,8 @@ export function buildDetailCopyReplacementPlan({
     candidates.filter(mapping => !mapping.slotId)
       .forEach(mapping => usedUnslottedMappings.add(mapping.index));
     for (const id of usedIds) usage.set(id, (usage.get(id) || 0) + 1);
+    const evidence = candidates.flatMap(mapping => mapping.evidence || []);
+    const targetRegion = safeNormalizedRegion(slot);
     plan.push({
       order: plan.length + 1,
       sellingPointIds: [...new Set(usedIds.filter(Boolean))],
@@ -908,7 +1157,18 @@ export function buildDetailCopyReplacementPlan({
         : 'selling-point',
       role: slot.role,
       sourceText: slot.sourceText,
+      originalText: slot.sourceText,
       replacementText,
+      targetRegion,
+      targetSlotId: slot.slotId,
+      sourceField: candidates.find(mapping => mapping.field)?.field || '',
+      targetPart: candidates.find(mapping => mapping.displayPart)?.displayPart || 'none',
+      evidence,
+      evidenceImageId: evidence[0]?.evidenceImageId || '',
+      evidenceRegion: evidence[0]?.evidenceRegion || undefined,
+      confidence: evidence.length
+        ? Math.min(...evidence.map(item => Number(item.confidence) || 0))
+        : undefined,
       slot,
     });
   }
@@ -921,6 +1181,8 @@ const safePageAnalysis = value => {
   const productRegion = object(page.productRegion || page.blankProductRegion || productInstances[0]);
   return {
     pageType: text(page.pageType || page.type) || 'marketing',
+    pageMode: detailRemixPageMode(page),
+    strictPageCategory: detailRemixStrictPageCategory(page),
     purpose: text(page.purpose),
     reversePrompt: text(page.reversePrompt || page.visualPrompt),
     layoutSpec: text(page.layoutSpec || page.composition),
@@ -947,6 +1209,8 @@ const safePromptSlot = (slot, fallbackId) => {
   return {
     slotId: text(source.slotId || source.id) || fallbackId,
     role: text(source.role) || undefined,
+    field: text(source.field) || undefined,
+    parameterPart: text(source.parameterPart) || undefined,
     x: Number.isFinite(Number(source.x)) ? Number(source.x) : undefined,
     y: Number.isFinite(Number(source.y)) ? Number(source.y) : undefined,
     width: Number.isFinite(Number(source.width)) ? Number(source.width) : undefined,
@@ -980,6 +1244,8 @@ const promptSafePageAnalysis = value => {
   });
   return {
     pageType: page.pageType,
+    pageMode: page.pageMode,
+    strictPageCategory: page.strictPageCategory,
     palette: page.palette,
     lighting: page.lighting,
     hasPerson: page.hasPerson,
@@ -997,13 +1263,33 @@ const promptSafePageAnalysis = value => {
 
 const promptSafeCopyPlan = value => array(value).map(item => {
   const source = object(item);
+  const evidence = array(source.evidence).map(entry => {
+    const item = object(entry);
+    return {
+      evidenceImageId: text(item.evidenceImageId) || undefined,
+      evidenceImageIndex: Number.isInteger(Number(item.evidenceImageIndex))
+        ? Number(item.evidenceImageIndex)
+        : undefined,
+      evidenceRegion: safeNormalizedRegion(item.evidenceRegion) || undefined,
+      confidence: Number.isFinite(Number(item.confidence)) ? Number(item.confidence) : undefined,
+    };
+  });
   return {
     order: Number(source.order) || undefined,
     sellingPointIds: array(source.sellingPointIds).map(text).filter(Boolean),
     factIds: array(source.factIds).map(text).filter(Boolean),
     sourceKind: text(source.sourceKind),
     role: text(source.role),
+    originalText: text(source.originalText || source.sourceText),
     replacementText: text(source.replacementText),
+    targetRegion: safeNormalizedRegion(source.targetRegion) || undefined,
+    targetSlotId: text(source.targetSlotId) || undefined,
+    sourceField: text(source.sourceField) || undefined,
+    targetPart: text(source.targetPart) || undefined,
+    evidenceImageId: text(source.evidenceImageId) || evidence[0]?.evidenceImageId || undefined,
+    evidenceRegion: safeNormalizedRegion(source.evidenceRegion) || evidence[0]?.evidenceRegion || undefined,
+    confidence: Number.isFinite(Number(source.confidence)) ? Number(source.confidence) : undefined,
+    evidence,
     positionInstruction: text(source.positionInstruction),
     slot: safePromptSlot(
       source.slot,
@@ -1060,6 +1346,7 @@ export function buildFinalDetailPrompt({
     mappedSellingPoints,
     mappedFacts,
   });
+  const strictMode = isDetailRemixStrictParameterPage(page);
   const safeCopyPlan = promptSafeCopyPlan(copyPlan);
   const brandPlan = {
     brandIdentity: object(ownBrandIdentity),
@@ -1070,7 +1357,7 @@ export function buildFinalDetailPrompt({
     `直接编辑参考图1，生成第 ${pageIndex + 1} 张可立即交付的电商详情页最终图。这次模型输出就是最终成品，后续不会再叠加产品、文字或 Logo。`,
     `目标尺寸继承竞品原图：${page.sourceWidth || '自动'} × ${page.sourceHeight || '自动'} 像素；不得改成统一画幅。`,
     `视觉反推规格（仅含版式坐标，不含任何竞品原文）：${JSON.stringify(promptPage)}`,
-    `必须逐字生成的文案替换清单：${JSON.stringify(safeCopyPlan)}`,
+    `精确逐位置替换清单（originalText 只用于定位并擦除，replacementText 才是唯一允许写入的文字）：${JSON.stringify(safeCopyPlan)}`,
     `必须完成的品牌与 Logo 替换清单：${JSON.stringify(brandPlan)}`,
     `系统已从“我的详情”自动挑选与本页角度最匹配的产品参考：${JSON.stringify(selectedProductViews)}`,
     '参考图1是需要直接修改的竞品原图，不是只供自由发挥的风格参考。锁定它的画布、构图、背景、区域边界、人物姿势、商品位置、文字位置与视觉层级；除明确要求替换的区域外，不得重新设计页面。',
@@ -1081,8 +1368,8 @@ export function buildFinalDetailPrompt({
     ownEvidenceReferenceCount > 0
       ? `参考图${evidenceStart}${evidenceEnd > evidenceStart ? `至参考图${evidenceEnd}` : ''}是“我的详情”中与本页文案直接对应的事实证据页。参数、型号、数字、单位、正负号和大小写必须同时服从这些证据图与文案替换清单；不得从竞品原图抄回任何参数。`
       : '本页没有额外事实证据图；只能生成文案替换清单中已经核验的文字，其它竞品文字必须删除，禁止猜测补全。',
-    page.pageType === 'specification'
-      ? '本页是严格参数页：每个 replacementText 都是不可改写的事实。禁止把营销卖点填入参数栏；没有 mappedFacts 的竞品参数栏必须连标签和值一起删除并自然修复背景。'
+    strictMode
+      ? `本页已由程序锁定为 ${DETAIL_REMIX_STRICT_PARAMETER_MODE}：每个 replacementText 都是不可改写的事实，sourceField、targetPart、targetRegion、evidenceImageId、evidenceRegion 与 confidence 构成证据链。参数名只能写入 label 位置，参数值只能写入 value 位置。禁止把营销卖点填入参数栏；没有证据映射的竞品参数栏必须连标签和值一起删除并自然修复背景。`
       : '本页是营销/场景详情页：只能使用已经映射的我方卖点，不得擅自添加型号、功率、电压、认证或效果数据。',
     '先彻底擦除参考图1的全部竞品文案，再依据“文案替换清单”在对应 slot 原位置直接生成 replacementText。中文必须逐字一致，不得改写、缩写、增字、漏字、重复、错别字或乱码；保持原槽位的字号层级、对齐、颜色和留白，不得让新旧文字重叠。没有分配替换文案的竞品文字槽必须删除并自然修复背景。',
     '展示文案中禁止出现“图片显示”“图片明确标注”“文案提到”“证据表明”等分析过程用语。不得把 sellingPointId、坐标、JSON、提示词或任何内部说明画进图片。',
@@ -1103,6 +1390,10 @@ export function parseFinalDetailValidationResponse(value) {
     copyExact: parsed.copyExact === true,
     brandCorrect: parsed.brandCorrect === true,
     productCorrect: parsed.productCorrect === true,
+    logoCorrect: parsed.logoCorrect === true,
+    productPlacementCorrect: parsed.productPlacementCorrect === true,
+    parameterAlignmentCorrect: parsed.parameterAlignmentCorrect === true,
+    unsupportedStrictFactsAbsent: parsed.unsupportedStrictFactsAbsent === true,
     competitorRemoved: parsed.competitorRemoved === true,
     gibberishDetected: parsed.gibberishDetected === true,
     missingTexts: array(parsed.missingTexts).map(text).filter(Boolean),
@@ -1119,13 +1410,17 @@ export function buildFinalDetailValidationInstruction({
 } = {}) {
   const page = safePageAnalysis(pageAnalysis);
   const safeCopyPlan = promptSafeCopyPlan(copyPlan);
+  const strictMode = isDetailRemixStrictParameterPage(page);
   return [
     '你是电商详情最终交付质检员。参考图1是待验收成图；其余参考图依次是我方产品、Logo 或事实证据，只能用于比对。',
-    `页面类型：${page.pageType}。必须逐字出现的文案清单：${JSON.stringify(safeCopyPlan)}。我方品牌：${JSON.stringify(object(ownBrandIdentity))}。`,
+    `页面类型：${page.pageType}；运行模式：${page.pageMode}。必须逐字、逐位置出现的文案清单：${JSON.stringify(safeCopyPlan)}。我方品牌：${JSON.stringify(object(ownBrandIdentity))}。`,
     '所有不在上述我方文案与品牌白名单中的可读内容，都必须按竞品残留或模型臆造内容报告。',
-    '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 是否出现乱码、伪字、重复卖点、提示词或 JSON；3) 品牌/Logo 是否正确且无竞品残留；4) 产品是否仍是我方产品而非混合竞品外形。',
-    '没有列入替换清单的新增参数或功效一律视为 unexpectedTexts。参数页只要有一个错误数字、单位、型号或乱码，passed 必须为 false。',
-    'passed 只有在 copyExact、brandCorrect、productCorrect、competitorRemoved 全为 true 且 gibberishDetected=false 时才能为 true。只输出符合 Schema 的 JSON。',
+    '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 参数名是否仍在 label 区、参数值是否仍在 value 区，不能错栏、合并或串行；3) 是否出现乱码、伪字、重复卖点、提示词或 JSON；4) 品牌与 Logo 是否正确且无竞品残留；5) 产品是否仍是我方产品、位置透视是否正确，而非混合竞品外形或明显错位。',
+    strictMode
+      ? `这是 ${DETAIL_REMIX_STRICT_PARAMETER_MODE}。没有列入替换清单的型号、数字、单位、材质、认证、配件或清单内容必须完全不存在；发现一个即 unsupportedStrictFactsAbsent=false，并写入 unexpectedTexts。`
+      : '没有列入替换清单的新增参数或功效一律写入 unexpectedTexts。',
+    '只要 missingTexts、wrongTexts 或 unexpectedTexts 任一非空，passed 必须为 false。参数页只要有一个错误数字、单位、型号、参数错栏或乱码，passed 必须为 false。',
+    'passed 只有在 copyExact、brandCorrect、productCorrect、logoCorrect、productPlacementCorrect、parameterAlignmentCorrect、unsupportedStrictFactsAbsent、competitorRemoved 全为 true，gibberishDetected=false，且三个异常数组都为空时才能为 true。只输出符合 Schema 的 JSON。',
   ].join('\n');
 }
 
@@ -1142,7 +1437,7 @@ export function buildFinalDetailRepairPrompt({
   const evidenceEnd = 1 + Math.max(0, Number(evidenceReferenceCount) || 0);
   return [
     '直接编辑参考图1，输出修复后的完整最终详情图。参考图1中的产品、人物、背景、构图、颜色、阴影、边界和全部正确区域都必须保持不变，只修复文字与品牌问题。',
-    `页面类型：${page.pageType}。质检发现：${JSON.stringify(object(validation))}。`,
+    `页面类型：${page.pageType}；运行模式：${page.pageMode}。质检发现：${JSON.stringify(object(validation))}。`,
     `必须逐字生成的最终文案：${JSON.stringify(safeCopyPlan)}。我方品牌：${JSON.stringify(object(ownBrandIdentity))}。`,
     evidenceReferenceCount > 0
       ? `参考图2${evidenceEnd > 2 ? `至参考图${evidenceEnd}` : ''}是我方事实证据，必须据此核对型号、数字、单位、符号和品牌。`
@@ -1150,7 +1445,7 @@ export function buildFinalDetailRepairPrompt({
     hasBrandLogoReference
       ? `参考图${evidenceEnd + 1}是我方真实 Logo；需要修复品牌时必须保持其拼写、图形比例和识别特征。`
       : '没有独立 Logo 参考时只允许使用品牌清单中的准确名称，不得臆造 Logo 图形。',
-    '先擦除所有错误文字、乱码、重复文案、竞品参数和竞品品牌，再在原槽位写入清单中的 replacementText。没有替换项的竞品文字区域保持干净。',
+    '先擦除所有错误文字、乱码、重复文案、竞品参数和竞品品牌，再严格按 targetRegion/targetPart 在原槽位写入清单中的 replacementText。参数名不得进入 value 区，参数值不得进入 label 区；没有替换项的竞品文字区域保持干净。',
     '中文、数字、型号、单位、正负号、斜杠和大小写必须逐字一致；不得解释，不得输出蒙版或中间稿，只输出单张完整图片。',
   ].join('\n');
 }

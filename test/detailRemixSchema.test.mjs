@@ -5,6 +5,7 @@ import {
   DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA,
   DETAIL_REMIX_OWN_KNOWLEDGE_OUTPUT_SCHEMA,
   DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA,
+  DETAIL_REMIX_STRICT_PARAMETER_MODE,
   activeDetailRemixInputRefs,
   assignDetailRemixInputPort,
   buildBlankDetailPrompt,
@@ -18,6 +19,9 @@ import {
   buildProductComposePrompt,
   createDetailRemixNodeData,
   detailRemixInputFingerprint,
+  detailRemixPageMode,
+  canonicalDetailRemixFactField,
+  isDetailRemixStrictParameterPage,
   markDetailRemixDependentsStale,
   parseCompetitorPageResponse,
   parseFinalDetailValidationResponse,
@@ -235,21 +239,30 @@ test('结构化识图解析产品角度与竞品选角，同时禁止编造竞�
   assert.ok(DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.properties.page.properties.mappedFacts.items.required.includes('displayPart'));
   assert.deepEqual(
     DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.properties.page.properties.mappedFacts.items.properties.displayPart.enum,
-    ['label', 'value', 'displayText'],
+    ['label', 'value'],
   );
+  assert.ok(DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.properties.page.required.includes('pageMode'));
+  assert.ok(DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.properties.page.properties.copySlots.items.required.includes('field'));
+  assert.ok(DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.properties.page.properties.copySlots.items.required.includes('parameterPart'));
   assert.ok(DETAIL_REMIX_OWN_KNOWLEDGE_OUTPUT_SCHEMA.required.includes('verifiedFacts'));
+  assert.ok(DETAIL_REMIX_OWN_KNOWLEDGE_OUTPUT_SCHEMA.properties.verifiedFacts.items.required.includes('evidenceRegion'));
   assert.equal(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.additionalProperties, false);
+  assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('parameterAlignmentCorrect'));
+  assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('unsupportedStrictFactsAbsent'));
 });
 
 test('参数页只使用有来源的精确事实，营销卖点和无证据竞品参数不会填入槽位', () => {
   const parsed = parseOwnSellingPointsResponse(JSON.stringify({
     verifiedFacts: [{
       id: 'fact-1',
-      factType: 'rated_power',
+      field: 'power',
       label: '额定功率',
       value: '16W',
+      normalizedValue: '16W',
       displayText: '额定功率\n16W',
-      sourceImageIndexes: [2],
+      evidenceImageIndex: 2,
+      evidenceRegion: { x: 0.1, y: 0.5, width: 0.4, height: 0.1 },
+      confidence: 0.99,
     }],
     sellingPoints: [{ id: 'sp-1', title: '模拟虎口抓捏', description: '舒缓肩颈' }],
   }));
@@ -257,42 +270,158 @@ test('参数页只使用有来源的精确事实，营销卖点和无证据竞�
 
   const pageAnalysis = {
     pageType: 'specification',
+    pageMode: DETAIL_REMIX_STRICT_PARAMETER_MODE,
+    strictPageCategory: 'electrical',
     copySlots: [
-      { slotId: 'power', role: 'specification', sourceText: '工作功率 20W' },
-      { slotId: 'capacity', role: 'specification', sourceText: '电池容量 2500mAh' },
+      { slotId: 'power-label', role: 'parameterLabel', field: 'power', parameterPart: 'label', sourceText: '工作功率', x: 0.1, y: 0.1, width: 0.3, height: 0.05 },
+      { slotId: 'power-value', role: 'parameterValue', field: 'power', parameterPart: 'value', sourceText: '20W', x: 0.5, y: 0.1, width: 0.2, height: 0.05 },
+      { slotId: 'capacity-label', role: 'parameterLabel', field: 'battery_capacity', parameterPart: 'label', sourceText: '电池容量', x: 0.1, y: 0.2, width: 0.3, height: 0.05 },
+      { slotId: 'capacity-value', role: 'parameterValue', field: 'battery_capacity', parameterPart: 'value', sourceText: '2500mAh', x: 0.5, y: 0.2, width: 0.2, height: 0.05 },
     ],
   };
+  const evidence = [{
+    evidenceImageIndex: 2,
+    evidenceImageId: 'own-parameter-page',
+    evidenceRegion: { x: 0.1, y: 0.5, width: 0.4, height: 0.1 },
+    confidence: 0.99,
+    sourceText: '额定功率\n16W',
+  }];
   const plan = buildDetailCopyReplacementPlan({
     pageAnalysis,
-    mappedSellingPoints: [{ id: 'sp-1', slotId: 'power', title: '模拟虎口抓捏' }],
-    mappedFacts: [{
-      ...parsed.verifiedFacts[0],
-      factId: 'fact-1',
-      slotId: 'power',
-      slotRole: 'specification',
-    }],
+    mappedSellingPoints: [{ id: 'sp-1', slotId: 'power-label', title: '模拟虎口抓捏' }],
+    mappedFacts: [
+      { ...parsed.verifiedFacts[0], evidence, factId: 'fact-1', slotId: 'power-label', slotRole: 'parameterLabel', displayPart: 'label', replacementText: '额定功率' },
+      { ...parsed.verifiedFacts[0], evidence, factId: 'fact-1', slotId: 'power-value', slotRole: 'parameterValue', displayPart: 'value', replacementText: '16W' },
+    ],
   });
-  assert.deepEqual(plan.map(item => [item.sourceText, item.replacementText, item.sourceKind]), [
-    ['工作功率 20W', '额定功率\n16W', 'verified-fact'],
+  assert.deepEqual(plan.map(item => [item.originalText, item.replacementText, item.sourceField, item.targetPart]), [
+    ['工作功率', '额定功率', 'power', 'label'],
+    ['20W', '16W', 'power', 'value'],
   ]);
+  assert.equal(plan[0].evidenceImageId, 'own-parameter-page');
+  assert.deepEqual(plan[1].targetRegion, { x: 0.5, y: 0.1, width: 0.2, height: 0.05 });
   assert.doesNotMatch(JSON.stringify(plan), /模拟虎口|2500mAh/);
 
   const prompt = buildFinalDetailPrompt({
     pageAnalysis,
-    mappedSellingPoints: [{ id: 'sp-1', slotId: 'power', title: '模拟虎口抓捏' }],
-    mappedFacts: [{
-      ...parsed.verifiedFacts[0],
-      factId: 'fact-1',
-      slotId: 'power',
-      slotRole: 'specification',
-    }],
+    mappedSellingPoints: [{ id: 'sp-1', slotId: 'power-label', title: '模拟虎口抓捏' }],
+    mappedFacts: [
+      { ...parsed.verifiedFacts[0], evidence, factId: 'fact-1', slotId: 'power-label', slotRole: 'parameterLabel', displayPart: 'label', replacementText: '额定功率' },
+      { ...parsed.verifiedFacts[0], evidence, factId: 'fact-1', slotId: 'power-value', slotRole: 'parameterValue', displayPart: 'value', replacementText: '16W' },
+    ],
     ownEvidenceReferenceCount: 1,
     productImageCount: 1,
   });
-  assert.match(prompt, /严格参数页/);
-  assert.match(prompt, /额定功率\\n16W/);
+  assert.match(prompt, /STRICT_PARAMETER_MODE/);
+  assert.match(prompt, /"replacementText":"额定功率"/);
+  assert.match(prompt, /"replacementText":"16W"/);
+  assert.match(prompt, /"evidenceImageId":"own-parameter-page"/);
   assert.match(prompt, /事实证据页/);
   assert.doesNotMatch(prompt, /"replacementText":"模拟虎口抓捏"/);
+});
+
+test('参数、型号、配件、电气与装箱页面自动进入 STRICT_PARAMETER_MODE', () => {
+  for (const pageType of ['参数页', '规格页', '型号页', '配件页', '电气参数页', '包装清单页', 'packing-list']) {
+    assert.equal(detailRemixPageMode({ pageType }), DETAIL_REMIX_STRICT_PARAMETER_MODE);
+    assert.equal(isDetailRemixStrictParameterPage({ pageType }), true);
+  }
+  assert.equal(detailRemixPageMode({ pageType: 'marketing' }), 'MARKETING_MODE');
+  assert.equal(canonicalDetailRemixFactField('rated_power', '额定功率'), 'power');
+  assert.equal(canonicalDetailRemixFactField('', '充电输入'), 'charging_input');
+});
+
+test('低置信度、无证据区域、字段错配或参数名值错栏都不能进入替换计划', () => {
+  const basePage = {
+    pageType: 'specification',
+    pageMode: DETAIL_REMIX_STRICT_PARAMETER_MODE,
+    copySlots: [
+      { slotId: 'power-label', role: 'parameterLabel', field: 'power', parameterPart: 'label', sourceText: '功率', x: 0.1, y: 0.1, width: 0.2, height: 0.05 },
+    ],
+  };
+  const baseFact = {
+    id: 'fact-1', factId: 'fact-1', field: 'power', label: '额定功率', value: '16W',
+    slotId: 'power-label', displayPart: 'label', replacementText: '额定功率',
+  };
+  assert.deepEqual(buildDetailCopyReplacementPlan({
+    pageAnalysis: basePage,
+    mappedFacts: [{
+      ...baseFact,
+      evidence: [{ evidenceImageId: 'own-1', evidenceRegion: { x: 0.1, y: 0.1, width: 0.2, height: 0.1 }, confidence: 0.89 }],
+    }],
+  }), []);
+  assert.deepEqual(buildDetailCopyReplacementPlan({
+    pageAnalysis: basePage,
+    mappedFacts: [{ ...baseFact, evidence: [{ evidenceImageId: 'own-1', confidence: 0.99 }] }],
+  }), []);
+  assert.deepEqual(buildDetailCopyReplacementPlan({
+    pageAnalysis: basePage,
+    mappedFacts: [{
+      ...baseFact,
+      field: 'voltage',
+      evidence: [{ evidenceImageId: 'own-1', evidenceRegion: { x: 0.1, y: 0.1, width: 0.2, height: 0.1 }, confidence: 0.99 }],
+    }],
+  }), []);
+  assert.deepEqual(buildDetailCopyReplacementPlan({
+    pageAnalysis: basePage,
+    mappedFacts: [{
+      ...baseFact,
+      displayPart: 'value', replacementText: '16W',
+      evidence: [{ evidenceImageId: 'own-1', evidenceRegion: { x: 0.1, y: 0.1, width: 0.2, height: 0.1 }, confidence: 0.99 }],
+    }],
+  }), []);
+});
+
+test('苏泊尔参数证据页只生成已确认字段，2500mAh、1.2kg 与无证据清单保持删除', () => {
+  const facts = [
+    ['product_name', '产品名称', '苏泊尔颈部按摩器'],
+    ['model', '型号', 'PJA4001 / PJA4101'],
+    ['power', '额定功率', '16W'],
+    ['voltage', '额定电压', 'DC 7.4V'],
+    ['charging_input', '充电输入', 'DC 5V'],
+    ['work_time', '单次工作时间', '10分钟'],
+    ['interface', '接口', 'TYPE-C'],
+    ['temperature', 'L档温度', '45°C ± 3°C'],
+    ['temperature', 'H档温度', '50°C ± 3°C'],
+  ].map(([field, label, value], index) => ({
+    id: `fact-${index + 1}`,
+    factId: `fact-${index + 1}`,
+    field,
+    label,
+    value,
+    evidence: [{
+      evidenceImageIndex: 0,
+      evidenceImageId: 'own-parameter-page',
+      evidenceRegion: { x: 0.05, y: 0.05 + index * 0.08, width: 0.9, height: 0.06 },
+      confidence: 0.99,
+    }],
+  }));
+  const copySlots = facts.flatMap((fact, index) => [
+    { slotId: `${fact.id}-label`, role: 'parameterLabel', field: fact.field, parameterPart: 'label', sourceText: `竞品${fact.label}`, x: 0.05, y: 0.05 + index * 0.08, width: 0.4, height: 0.03 },
+    { slotId: `${fact.id}-value`, role: 'parameterValue', field: fact.field, parameterPart: 'value', sourceText: `竞品值${index + 1}`, x: 0.55, y: 0.05 + index * 0.08, width: 0.4, height: 0.03 },
+  ]);
+  copySlots.push(
+    { slotId: 'unsupported-capacity', role: 'parameterValue', field: 'battery_capacity', parameterPart: 'value', sourceText: '2500mAh', x: 0.55, y: 0.8, width: 0.2, height: 0.03 },
+    { slotId: 'unsupported-weight', role: 'parameterValue', field: 'weight', parameterPart: 'value', sourceText: '约1.2kg', x: 0.55, y: 0.84, width: 0.2, height: 0.03 },
+    { slotId: 'unsupported-list', role: 'parameterLabel', field: 'package_contents', parameterPart: 'label', sourceText: '装箱清单', x: 0.05, y: 0.88, width: 0.3, height: 0.03 },
+  );
+  const mappedFacts = facts.flatMap(fact => [
+    { ...fact, slotId: `${fact.id}-label`, slotRole: 'parameterLabel', displayPart: 'label', replacementText: fact.label },
+    { ...fact, slotId: `${fact.id}-value`, slotRole: 'parameterValue', displayPart: 'value', replacementText: fact.value },
+  ]);
+  const plan = buildDetailCopyReplacementPlan({
+    pageAnalysis: {
+      pageType: '参数页',
+      pageMode: DETAIL_REMIX_STRICT_PARAMETER_MODE,
+      strictPageCategory: 'parameters',
+      copySlots,
+    },
+    mappedSellingPoints: [{ id: 'sp-1', title: '深层按摩' }],
+    mappedFacts,
+  });
+  assert.equal(plan.length, facts.length * 2);
+  assert.deepEqual(plan.map(item => item.replacementText), facts.flatMap(fact => [fact.label, fact.value]));
+  assert.ok(plan.every(item => item.evidenceImageId === 'own-parameter-page' && item.confidence === 0.99));
+  assert.doesNotMatch(JSON.stringify(plan), /2500mAh|1\.2kg|装箱清单|深层按摩/);
 });
 
 test('成图质检与 AI 定向修复保持全 AI 路径，不产生本地叠字指令', () => {
@@ -301,6 +430,10 @@ test('成图质检与 AI 定向修复保持全 AI 路径，不产生本地叠字
     copyExact: false,
     brandCorrect: true,
     productCorrect: true,
+    logoCorrect: true,
+    productPlacementCorrect: true,
+    parameterAlignmentCorrect: false,
+    unsupportedStrictFactsAbsent: false,
     competitorRemoved: true,
     gibberishDetected: true,
     missingTexts: ['额定功率 16W'],
@@ -369,7 +502,8 @@ test('单阶段提示词一次传入版式、产品和可选人物，并直接�
   assert.match(off, /参考图3是我方真实 Logo 参考/);
   assert.match(off, /front-left/);
   assert.match(off, /生成第.*最终图/);
-  assert.doesNotMatch(off, /竞品原标题|竞品说明|竞品牌/);
+  assert.match(off, /"originalText":"竞品原标题"/);
+  assert.doesNotMatch(off, /竞品说明|竞品牌/);
   assert.match(off, /仅含版式坐标，不含任何竞品原文/);
   assert.match(off, /深层舒缓/);
   assert.doesNotMatch(off, /"replacementText":"双档热敷"/);

@@ -12,6 +12,7 @@ export const NODE = {
   AUDIO: 'Audio',
   IMAGE_EDITOR: 'Image Editor',
   PRODUCT_SCENE_REPLACE: 'Product Scene Replace',
+  DETAIL_PAGE_REMIX: 'Detail Page Remix',
   VIDEO_ANALYSIS: 'Video Analysis',
   VIDEO_REMIX: 'Video Remix',
   REFERENCE_VIDEO: 'Reference Video',
@@ -79,6 +80,17 @@ export const isValidNodeConnection = (parentType, childType) => {
   // guards the node-level type boundary.
   if (childType === NODE.VIDEO_ANALYSIS) {
     return parentType === NODE.VIDEO || parentType === NODE.REFERENCE_VIDEO || parentType === NODE.IMAGE || parentType === NODE.IMAGE_EDITOR;
+  }
+
+  // 商品详情复刻通过固定端口区分竞品详情、我方详情、人物和产品参考。
+  // 端口映射负责具体语义；这里仅允许可预览的图片节点进入控制节点。
+  if (childType === NODE.DETAIL_PAGE_REMIX) {
+    return parentType === NODE.IMAGE || parentType === NODE.IMAGE_EDITOR;
+  }
+
+  // 详情复刻的实际产物是普通 Image 节点，控制节点自身不作为通用参考图。
+  if (parentType === NODE.DETAIL_PAGE_REMIX) {
+    return childType === NODE.IMAGE || childType === NODE.IMAGE_EDITOR;
   }
 
   // The analysis result is a workflow source for ordinary image/video nodes

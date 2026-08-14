@@ -2,9 +2,54 @@ import AppKit
 import Combine
 import SwiftUI
 
-private let projectPath = "/Users/dasheng/Desktop/AI-Video-Canvas"
-private let launcherPath = "\(projectPath)/scripts/desktop-launcher.mjs"
-private let launcherLogPath = "\(projectPath)/runtime/desktop-launcher/launcher.log"
+private enum ProjectLocator {
+    private static let launcherRelativePath = "scripts/desktop-launcher.mjs"
+
+    static func resolve() -> URL? {
+        let fileManager = FileManager.default
+
+        if let override = ProcessInfo.processInfo.environment["EVAN_PROJECT_ROOT"],
+           !override.isEmpty {
+            let overrideURL = URL(fileURLWithPath: override, isDirectory: true)
+                .standardizedFileURL
+            if containsLauncher(overrideURL, fileManager: fileManager) {
+                return overrideURL
+            }
+        }
+
+        // 成品 App 默认放在项目根目录。继续向上查找可同时兼容自定义输出到
+        // runtime/controller-build 等项目子目录的开发场景。
+        var candidate = Bundle.main.bundleURL
+            .deletingLastPathComponent()
+            .standardizedFileURL
+        while candidate.path != "/" {
+            if containsLauncher(candidate, fileManager: fileManager) {
+                return candidate
+            }
+            candidate.deleteLastPathComponent()
+        }
+
+        return nil
+    }
+
+    private static func containsLauncher(
+        _ directory: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        fileManager.fileExists(
+            atPath: directory.appendingPathComponent(launcherRelativePath).path
+        )
+    }
+}
+
+private var projectURL: URL? { ProjectLocator.resolve() }
+private var projectPath: String? { projectURL?.path }
+private var launcherPath: String? {
+    projectURL?.appendingPathComponent("scripts/desktop-launcher.mjs").path
+}
+private var launcherLogURL: URL? {
+    projectURL?.appendingPathComponent("runtime/desktop-launcher/launcher.log")
+}
 
 private struct LauncherResponse: Decodable, Sendable {
     let status: String
@@ -20,7 +65,7 @@ private enum ControllerAction: String, Sendable {
         switch self {
         case .start: return "正在构建并启动 Evan…"
         case .restart: return "正在安全重启 Evan…"
-        case .stop: return "正在停止 Evan…"
+        case .stop: return "正在关闭 Evan…"
         }
     }
 }
@@ -35,6 +80,7 @@ private enum RuntimePhase: Equatable {
 
 private enum LauncherError: LocalizedError {
     case missingProject
+    case missingNode
     case invalidResponse(String)
     case commandFailed(String)
 
@@ -42,6 +88,8 @@ private enum LauncherError: LocalizedError {
         switch self {
         case .missingProject:
             return "找不到 AI-Video-Canvas 项目目录"
+        case .missingNode:
+            return "找不到 Node.js，请先在项目目录完成开发环境安装"
         case .invalidResponse(let detail):
             return "启动器返回了无效结果\(detail.isEmpty ? "" : "：\(detail)")"
         case .commandFailed(let detail):
@@ -52,22 +100,28 @@ private enum LauncherError: LocalizedError {
 
 private enum Launcher {
     static func run(_ command: String) throws -> LauncherResponse {
-        guard FileManager.default.fileExists(atPath: launcherPath) else {
+        guard let projectPath,
+              let launcherPath,
+              FileManager.default.fileExists(atPath: launcherPath) else {
             throw LauncherError.missingProject
+        }
+        guard let nodeURL = resolveNodeExecutable() else {
+            throw LauncherError.missingNode
         }
 
         let process = Process()
         let outputPipe = Pipe()
         let errorPipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["node", launcherPath, command]
+        process.executableURL = nodeURL
+        process.arguments = [launcherPath, command]
         process.currentDirectoryURL = URL(fileURLWithPath: projectPath, isDirectory: true)
         process.standardOutput = outputPipe
         process.standardError = errorPipe
 
         var environment = ProcessInfo.processInfo.environment
         let inheritedPath = environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
-        environment["PATH"] = "/usr/local/bin:/opt/homebrew/bin:\(inheritedPath)"
+        let nodeDirectory = nodeURL.deletingLastPathComponent().path
+        environment["PATH"] = "\(nodeDirectory):/opt/homebrew/bin:/usr/local/bin:\(inheritedPath)"
         process.environment = environment
 
         try process.run()
@@ -97,6 +151,30 @@ private enum Launcher {
         }
         return response
     }
+
+    private static func resolveNodeExecutable() -> URL? {
+        let environment = ProcessInfo.processInfo.environment
+        let home = environment["HOME"] ?? NSHomeDirectory()
+        let inheritedDirectories = (environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map(String.init)
+        let candidates = [
+            environment["EVAN_NODE_PATH"],
+            "\(home)/.local/bin/node",
+            "\(home)/.volta/bin/node",
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node",
+            "/usr/bin/node",
+        ].compactMap { $0 } + inheritedDirectories.map { "\($0)/node" }
+
+        for candidate in candidates {
+            let standardizedPath = URL(fileURLWithPath: candidate).standardizedFileURL.path
+            if FileManager.default.isExecutableFile(atPath: standardizedPath) {
+                return URL(fileURLWithPath: standardizedPath)
+            }
+        }
+        return nil
+    }
 }
 
 @MainActor
@@ -110,7 +188,8 @@ private final class ControllerModel: ObservableObject {
     var isBusy: Bool { activeAction != nil || phase == .checking }
 
     func refresh() {
-        guard activeAction == nil else { return }
+        // 操作失败后保留具体原因，直到用户再次操作或重新打开控制器。
+        guard activeAction == nil, phase != .failed else { return }
         execute("status", action: nil)
     }
 
@@ -123,21 +202,34 @@ private final class ControllerModel: ObservableObject {
     }
 
     func openProject() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: projectPath, isDirectory: true))
+        guard let projectURL else {
+            phase = .failed
+            detail = LauncherError.missingProject.localizedDescription
+            return
+        }
+        NSWorkspace.shared.open(projectURL)
     }
 
     func openLog() {
+        guard let projectURL else {
+            phase = .failed
+            detail = LauncherError.missingProject.localizedDescription
+            return
+        }
         let manager = FileManager.default
-        let target = manager.fileExists(atPath: launcherLogPath)
-            ? launcherLogPath
-            : "\(projectPath)/runtime/desktop-launcher"
-        if !manager.fileExists(atPath: target) {
+        let logDirectory = projectURL.appendingPathComponent(
+            "runtime/desktop-launcher",
+            isDirectory: true
+        )
+        let target = launcherLogURL.flatMap { manager.fileExists(atPath: $0.path) ? $0 : nil }
+            ?? logDirectory
+        if !manager.fileExists(atPath: target.path) {
             try? manager.createDirectory(
-                at: URL(fileURLWithPath: target, isDirectory: true),
+                at: logDirectory,
                 withIntermediateDirectories: true
             )
         }
-        NSWorkspace.shared.open(URL(fileURLWithPath: target))
+        NSWorkspace.shared.open(target)
     }
 
     private func execute(_ command: String, action: ControllerAction?) {
@@ -173,7 +265,7 @@ private final class ControllerModel: ObservableObject {
             phase = .stopped
             pid = nil
             detail = action == .stop
-                ? "Evan 已安全停止，共用浏览器保持独立管理"
+                ? "Evan 已安全关闭，共用浏览器保持独立管理"
                 : "Evan 当前未运行"
         default:
             phase = .failed
@@ -204,8 +296,14 @@ private struct WindowConfigurator: NSViewRepresentable {
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.isMovableByWindowBackground = true
-            window.isOpaque = false
-            window.backgroundColor = .clear
+            // 固定标题栏底色，避免半透明区域透出控制器后方窗口的文字。
+            window.isOpaque = true
+            window.backgroundColor = NSColor(
+                calibratedRed: 0.05,
+                green: 0.06,
+                blue: 0.10,
+                alpha: 1
+            )
             window.center()
         }
         return view
@@ -381,7 +479,7 @@ private struct ControllerView: View {
                         disabled: model.isBusy
                     ) { model.perform(.restart) }
                     ActionButton(
-                        title: "停止",
+                        title: "关闭",
                         systemImage: "stop.fill",
                         tint: Color(red: 0.92, green: 0.29, blue: 0.36),
                         prominent: false,
@@ -423,8 +521,16 @@ private struct ControllerView: View {
     }
 }
 
+private final class ControllerAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
+    }
+}
+
 @main
 private struct EvanProjectControllerApp: App {
+    @NSApplicationDelegateAdaptor(ControllerAppDelegate.self) private var appDelegate
+
     var body: some Scene {
         WindowGroup {
             ControllerView()

@@ -5,6 +5,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 import test from 'node:test';
 import {
+    cancelCodexImageJob,
     claimCodexImageJob,
     completeCodexImageJob,
     createCodexImageJob,
@@ -83,6 +84,65 @@ test('claims and completes a job without overwriting another attempt', async t =
     assert.deepEqual(await sharp(completedOne.resultPath).metadata().then(({ width, height }) => ({ width, height })), { width: 64, height: 64 });
     assert.deepEqual(await sharp(completedTwo.resultPath).metadata().then(({ width, height }) => ({ width, height })), { width: 80, height: 48 });
     assert.equal(getCodexImageJob(dirs.jobsDir, first.id).resultUrl, completedOne.resultUrl);
+});
+
+test('creates a missing compatibility metadata directory before completing', async t => {
+    const dirs = fixture();
+    t.after(() => fs.rmSync(dirs.root, { recursive: true, force: true }));
+
+    const projectsDir = path.join(dirs.libraryDir, 'projects');
+    const job = createCodexImageJob({
+        ...dirs,
+        projectsDir,
+        projectDirName: '首次生图项目',
+        nodeId: 'fresh-library-node',
+        prompt: '首次生成'
+    });
+    fs.rmSync(dirs.imagesDir, { recursive: true, force: true });
+
+    const source = path.join(dirs.root, 'fresh-library-result.png');
+    await sharp({
+        create: { width: 64, height: 96, channels: 3, background: '#123456' }
+    }).png().toFile(source);
+
+    const completed = await completeCodexImageJob({
+        jobsDir: dirs.jobsDir,
+        imagesDir: dirs.imagesDir,
+        projectsDir,
+        jobId: job.id,
+        sourceImage: source
+    });
+
+    assert.equal(completed.status, 'completed');
+    assert.equal(fs.existsSync(path.join(dirs.imagesDir, `${job.id}.json`)), true);
+    assert.equal(fs.existsSync(completed.resultPath), true);
+});
+
+test('cancels pending/processing jobs durably and never accepts a cancelled result', async t => {
+    const dirs = fixture();
+    t.after(() => fs.rmSync(dirs.root, { recursive: true, force: true }));
+
+    const pending = createCodexImageJob({ ...dirs, nodeId: 'cancel-pending', prompt: '不会执行' });
+    const processing = createCodexImageJob({ ...dirs, nodeId: 'cancel-processing', prompt: '停止写回' });
+    claimCodexImageJob(dirs.jobsDir, processing.id);
+
+    assert.equal(cancelCodexImageJob(dirs.jobsDir, pending.id, '用户取消').status, 'cancelled');
+    assert.equal(cancelCodexImageJob(dirs.jobsDir, processing.id, '用户取消').status, 'cancelled');
+    assert.deepEqual(listCodexImageJobs(dirs.jobsDir, 'pending'), []);
+    assert.deepEqual(listCodexImageJobs(dirs.jobsDir, 'processing'), []);
+    assert.equal(failCodexImageJob(dirs.jobsDir, processing.id, '迟到失败').status, 'cancelled');
+
+    const source = path.join(dirs.root, 'late-result.png');
+    await sharp({ create: { width: 32, height: 32, channels: 3, background: '#123456' } }).png().toFile(source);
+    await assert.rejects(
+        completeCodexImageJob({
+            jobsDir: dirs.jobsDir,
+            imagesDir: dirs.imagesDir,
+            jobId: processing.id,
+            sourceImage: source
+        }),
+        /cannot be completed from status: cancelled/
+    );
 });
 
 test('removes frozen references after success but preserves them after failure', async t => {

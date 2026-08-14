@@ -20,6 +20,11 @@ import { createAuthManager } from './auth/authManager.js';
 import { createLicenseManager } from './license/licenseManager.js';
 import { createActivityReporter } from './activityReporter.js';
 import { AUTH_BASE_URL, GOOGLE_LOGIN_ENABLED } from './authConfig.js';
+import {
+    exportDetailRemixFiles,
+    findDetailRemixExportCollisions,
+    planDetailRemixExport
+} from './detailRemixExport.js';
 
 const ELECTRON_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(ELECTRON_DIR, '..');
@@ -375,6 +380,65 @@ ipcMain.handle('project:reveal', async (_event, workflowId) => {
         });
     } catch (error) {
         return { ok: false, error: error.message || '无法打开项目目录' };
+    }
+});
+
+ipcMain.handle('detail-remix:export', async (_event, { jobId, workflowId } = {}) => {
+    try {
+        const safeJobId = String(jobId || '').trim();
+        const safeWorkflowId = String(workflowId || '').trim();
+        if (!safeJobId || !safeWorkflowId) return { ok: false, error: '缺少详情任务或项目信息' };
+        if (!backendOrigin) return { ok: false, error: '本地后端尚未启动，请稍后重试' };
+
+        const response = await fetch(
+            `${backendOrigin}/api/detail-remix-jobs/${encodeURIComponent(safeJobId)}/export-manifest?workflowId=${encodeURIComponent(safeWorkflowId)}`,
+            { headers: { 'X-Evan-Desktop-Token': desktopApiToken } }
+        );
+        const manifest = await response.json().catch(() => ({}));
+        if (!response.ok) return { ok: false, error: manifest.error || '无法准备详情图导出清单' };
+
+        const options = {
+            title: `导出 ${Number(manifest.count) || 0} 张最终详情图`,
+            buttonLabel: '导出到此文件夹',
+            defaultPath: app.getPath('desktop'),
+            properties: ['openDirectory', 'createDirectory']
+        };
+        const selected = mainWindow
+            ? await dialog.showOpenDialog(mainWindow, options)
+            : await dialog.showOpenDialog(options);
+        if (selected.canceled || !selected.filePaths[0]) {
+            return { ok: true, data: { canceled: true } };
+        }
+
+        const destination = path.resolve(selected.filePaths[0]);
+        const plan = planDetailRemixExport(manifest.files, destination);
+        const collisions = findDetailRemixExportCollisions(plan);
+        if (collisions.length > 0) {
+            const confirmation = mainWindow
+                ? await dialog.showMessageBox(mainWindow, {
+                    type: 'warning',
+                    title: '发现同名详情图',
+                    message: `所选文件夹已有 ${collisions.length} 个同名编号文件。`,
+                    detail: '继续后会覆盖这些文件；其他文件不会改动。',
+                    buttons: ['取消', '覆盖并导出'],
+                    defaultId: 0,
+                    cancelId: 0
+                })
+                : await dialog.showMessageBox({
+                    type: 'warning',
+                    title: '发现同名详情图',
+                    message: `所选文件夹已有 ${collisions.length} 个同名编号文件。`,
+                    detail: '继续后会覆盖这些文件；其他文件不会改动。',
+                    buttons: ['取消', '覆盖并导出'],
+                    defaultId: 0,
+                    cancelId: 0
+                });
+            if (confirmation.response !== 1) return { ok: true, data: { canceled: true } };
+        }
+        const exported = exportDetailRemixFiles(manifest.files, destination);
+        return { ok: true, data: { canceled: false, ...exported } };
+    } catch (error) {
+        return { ok: false, error: error.message || '详情图导出失败' };
     }
 });
 

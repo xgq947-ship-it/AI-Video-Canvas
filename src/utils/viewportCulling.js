@@ -19,7 +19,7 @@
 
 /** 节点世界尺寸的保守估计。留白够大，不需要精确值。 */
 const ASSUMED_NODE_WIDTH = 400;
-const ASSUMED_NODE_HEIGHT = 620;
+const ASSUMED_NODE_HEIGHT = 780;
 
 /**
  * 计算当前应当渲染的节点 id 集合。

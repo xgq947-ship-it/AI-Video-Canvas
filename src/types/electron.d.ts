@@ -73,6 +73,10 @@ declare global {
         viewport: { x: number; y: number; zoom: number };
       }>;
       revealProject: (workflowId: string) => Promise<{ ok: true; path: string }>;
+      exportDetailRemix: (input: { jobId: string; workflowId: string }) => Promise<
+        | { canceled: true }
+        | { canceled: false; count: number; destination: string; filenames: string[] }
+      >;
       getAppInfo: () => Promise<AppInfo>;
       uninstall: {
         plan: (keepUserData: boolean) => Promise<UninstallPlan>;

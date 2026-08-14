@@ -25,6 +25,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "desktop:dev": "npm run build && node scripts/prepare-browser-hub.mjs && electron .",
+    "desktop:controller": "scripts/build-evan-project-controller.sh",
     "desktop:icons": "node scripts/generate-desktop-icons.mjs",
     "desktop:runtime": "node scripts/prepare-desktop-runtime.mjs && node scripts/prepare-browser-hub.mjs",
     "desktop:verify": "node scripts/verify-desktop-runtime.mjs",

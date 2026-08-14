@@ -51,6 +51,15 @@ test('产品短视频节点接收两张图片与短视频文本，输出可继�
   assert.equal(isValidNodeConnection(NODE.PRODUCT_SCENE_REPLACE, NODE.VIDEO), true);
 });
 
+test('商品详情复刻只接收图片输入并输出普通图片', () => {
+  assert.equal(isValidNodeConnection(NODE.IMAGE, NODE.DETAIL_PAGE_REMIX), true);
+  assert.equal(isValidNodeConnection(NODE.IMAGE_EDITOR, NODE.DETAIL_PAGE_REMIX), true);
+  assert.equal(isValidNodeConnection(NODE.TEXT, NODE.DETAIL_PAGE_REMIX), false);
+  assert.equal(isValidNodeConnection(NODE.VIDEO, NODE.DETAIL_PAGE_REMIX), false);
+  assert.equal(isValidNodeConnection(NODE.DETAIL_PAGE_REMIX, NODE.IMAGE), true);
+  assert.equal(isValidNodeConnection(NODE.DETAIL_PAGE_REMIX, NODE.VIDEO), false);
+});
+
 test('项目级视频复刻不再参与任何画布连线', () => {
   assert.equal(isValidNodeConnection(NODE.VIDEO, NODE.VIDEO_REMIX), false);
   assert.equal(isValidNodeConnection(NODE.IMAGE, NODE.VIDEO_REMIX), false);

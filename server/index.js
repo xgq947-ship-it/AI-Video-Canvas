@@ -16,6 +16,7 @@ import codexImageJobRoutes from './routes/codex-image-jobs.js';
 import settingsRoutes from './routes/settings.js';
 import videoRemixRoutes from './routes/video-remix.js';
 import videoAnalysisRoutes from './routes/video-analysis.js';
+import detailRemixRoutes from './routes/detail-remix.js';
 import stickmanDirectorRoutes from './routes/stickman-director.js';
 import cinematicDirectorRoutes from './routes/cinematic-director.js';
 import trashRoutes from './routes/trash.js';
@@ -172,6 +173,8 @@ app.use('/api/video-remix', videoRemixRoutes);
 // Canvas-native video analysis reuses the Video Remix HTTP analyzer but writes
 // only the lightweight result consumed by ordinary canvas nodes.
 app.use('/api/video-analysis', videoAnalysisRoutes);
+// 商品详情复刻先从我方详情识别卖点和产品角度，再按竞品页自动选角、一次生成最终图。
+app.use('/api', detailRemixRoutes);
 // Internal Stickman Video Director skill, Flow batch orchestration and merge jobs.
 app.use('/api', stickmanDirectorRoutes);
 app.use('/api', cinematicDirectorRoutes);

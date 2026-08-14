@@ -93,7 +93,10 @@ async function runDeepSeek({ systemInstruction, userPrompt, apiKey, model, tempe
 
 // 通用子进程执行：隔离在临时目录运行避免文件副作用；继承环境变量以复用 CLI 的本机登录；
 // 立即关闭 stdin 发送 EOF —— 否则像 codex 这类会读 stdin 的 CLI 会一直卡住等待输入。
-function runCli(bin, args, label, signal) {
+function runCli(bin, args, label, signal, timeoutMs = CLI_TIMEOUT_MS) {
+    const normalizedTimeoutMs = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
+        ? Math.round(Number(timeoutMs))
+        : CLI_TIMEOUT_MS;
     return new Promise((resolve, reject) => {
         if (signal?.aborted) {
             reject(operationCancelledError(label));
@@ -104,7 +107,7 @@ function runCli(bin, args, label, signal) {
             const invocation = buildCliInvocation(bin, args);
             child = execFile(invocation.command, invocation.args, {
                 cwd: os.tmpdir(),
-                timeout: CLI_TIMEOUT_MS,
+                timeout: normalizedTimeoutMs,
                 maxBuffer: 32 * 1024 * 1024,
                 encoding: 'buffer',
                 env: process.env,
@@ -121,7 +124,7 @@ function runCli(bin, args, label, signal) {
                         return;
                     }
                     if (error.killed) {
-                        reject(upstreamError(`${label} 调用超时（${Math.round(CLI_TIMEOUT_MS / 1000)}s）`, 504));
+                        reject(upstreamError(`${label} 调用超时（${Math.round(normalizedTimeoutMs / 1000)}s）`, 504));
                         return;
                     }
                     const detail = (decodeProcessOutput(stderr) || error.message || '').trim();
@@ -146,7 +149,7 @@ function runCli(bin, args, label, signal) {
 // Claude Code CLI（`claude -p`）：无头文本生成，用本机已登录的 Claude 账号，无需 API key。
 // 不传 --dangerously-skip-permissions 时，print 模式下任何工具调用都无法被批准，因而不会读写项目文件，
 // 本调用是纯文本改写。默认从 PATH 找 claude，可用 CLAUDE_CLI_PATH 指定绝对路径。
-async function runClaudeCli({ systemInstruction, userPrompt, model, effort, signal }) {
+async function runClaudeCli({ systemInstruction, userPrompt, model, effort, signal, timeoutMs }) {
     const bin = resolveClaudeBin();
     const args = [
         '-p', userPrompt,
@@ -155,18 +158,14 @@ async function runClaudeCli({ systemInstruction, userPrompt, model, effort, sign
     ];
     if (model) args.push('--model', model);
     if (effort) args.push('--effort', effort); // low / medium / high / xhigh / max
-    return runCli(bin, args, 'Claude CLI', signal);
+    return runCli(bin, args, 'Claude CLI', signal, timeoutMs);
 }
 
 // Codex CLI（`codex exec`）：无头一次性执行，用本机已登录的 ChatGPT 账号，无需 API key。
 // Codex 没有独立的系统提示词参数，故把系统指令与待优化内容合并为单条 prompt。
 // read-only 沙箱 + 临时目录，纯文本改写不会触碰项目；--output-last-message 把最终答复单独写到文件，
 // 避免解析夹杂 agent 日志的 stdout。默认走 ChatGPT.app 内置 codex，可用 CODEX_CLI_PATH 指定绝对路径。
-async function runCodexCli({ systemInstruction, userPrompt, model, effort, imageDataUrl, imageDataUrls, signal }) {
-    const bin = resolveCodexBin();
-    const combined = `${systemInstruction}\n\n【待优化内容】\n${userPrompt}`;
-    const outFile = path.join(os.tmpdir(), `codex-optimize-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.txt`);
-    const imageFiles = [];
+export function buildCodexExecArgs({ prompt, outFile, model, effort, outputSchemaFile = '' }) {
     const args = [
         'exec',
         '--sandbox', 'read-only',
@@ -175,31 +174,60 @@ async function runCodexCli({ systemInstruction, userPrompt, model, effort, image
         '--output-last-message', outFile
     ];
     if (model) args.push('--model', model);
-    if (effort) args.push('-c', `model_reasoning_effort=${effort}`); // minimal / low / medium / high / xhigh
+    if (effort) args.push('-c', `model_reasoning_effort=${effort}`);
+    if (outputSchemaFile) args.push('--output-schema', outputSchemaFile);
     // `--image` accepts a variable number of values, so the positional prompt
     // must appear before it or Codex will consume the prompt as another filename.
-    args.push(combined);
+    args.push(prompt);
+    return args;
+}
 
-    const requestedImages = (Array.isArray(imageDataUrls) ? imageDataUrls : [imageDataUrl]).filter(Boolean);
-    for (const dataUrl of requestedImages) {
-        const match = dataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/s);
-        if (!match) throw upstreamError('Codex CLI 收到不支持的图片格式', 400);
-        const extension = match[1] === 'image/jpeg' ? 'jpg' : match[1].split('/')[1];
-        const imageFile = path.join(os.tmpdir(), `codex-prompt-image-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${extension}`);
-        await fs.writeFile(imageFile, Buffer.from(match[2], 'base64'), { mode: 0o600 });
-        imageFiles.push(imageFile);
-    }
-    if (imageFiles.length > 0) {
-        args.push('--image', ...imageFiles);
-    }
-
+async function runCodexCli({
+    systemInstruction,
+    userPrompt,
+    model,
+    effort,
+    imageDataUrl,
+    imageDataUrls,
+    outputSchema,
+    signal,
+    timeoutMs
+}) {
+    const bin = resolveCodexBin();
+    const combined = `${systemInstruction}\n\n【待优化内容】\n${userPrompt}`;
+    const outFile = path.join(os.tmpdir(), `codex-optimize-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.txt`);
+    const outputSchemaFile = outputSchema && typeof outputSchema === 'object'
+        ? path.join(os.tmpdir(), `codex-output-schema-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.json`)
+        : '';
+    const imageFiles = [];
     try {
-        const stdout = await runCli(bin, args, 'Codex CLI', signal);
+        if (outputSchemaFile) {
+            await fs.writeFile(outputSchemaFile, JSON.stringify(outputSchema), { mode: 0o600 });
+        }
+        const args = buildCodexExecArgs({
+            prompt: combined,
+            outFile,
+            model,
+            effort,
+            outputSchemaFile,
+        });
+        const requestedImages = (Array.isArray(imageDataUrls) ? imageDataUrls : [imageDataUrl]).filter(Boolean);
+        for (const dataUrl of requestedImages) {
+            const match = dataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/s);
+            if (!match) throw upstreamError('Codex CLI 收到不支持的图片格式', 400);
+            const extension = match[1] === 'image/jpeg' ? 'jpg' : match[1].split('/')[1];
+            const imageFile = path.join(os.tmpdir(), `codex-prompt-image-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${extension}`);
+            await fs.writeFile(imageFile, Buffer.from(match[2], 'base64'), { mode: 0o600 });
+            imageFiles.push(imageFile);
+        }
+        if (imageFiles.length > 0) args.push('--image', ...imageFiles);
+        const stdout = await runCli(bin, args, 'Codex CLI', signal, timeoutMs);
         const fileText = await fs.readFile(outFile, 'utf8').catch(() => '');
         // 优先用 --output-last-message 的干净结果；万一没写成功再退回 stdout。
         return (fileText || stdout).trim();
     } finally {
         fs.unlink(outFile).catch(() => {});
+        if (outputSchemaFile) fs.unlink(outputSchemaFile).catch(() => {});
         imageFiles.forEach(imageFile => fs.unlink(imageFile).catch(() => {}));
     }
 }

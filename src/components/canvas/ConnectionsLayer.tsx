@@ -9,6 +9,7 @@ import React from 'react';
 import { NodeData, NodeStatus, NodeType, Viewport } from '../../types';
 import { calculateConnectionPath } from '../../utils/connectionHelpers';
 import { VIDEO_ANALYSIS_INPUT_PORTS } from '../../../shared/videoAnalysis.js';
+import { DETAIL_REMIX_INPUT_PORTS, DETAIL_REMIX_NODE_HEIGHT, DETAIL_REMIX_NODE_WIDTH } from '../../../shared/detailRemix.js';
 import { VIDEO_ANALYSIS_NODE_HEIGHT } from '../../features/video-analysis/VideoAnalysisNode';
 import { getFlowBatchVideoNodeHeight, getStickmanStoryboardNodeHeight, SCRIPT_INPUT_NODE_HEIGHT, SCRIPT_INPUT_REFERENCE_NODE_HEIGHT } from '../../features/stickman-director/StickmanWorkflowNodes';
 import { CINEMATIC_CAST_NODE_HEIGHT, CINEMATIC_DIRECTOR_NODE_HEIGHT, CINEMATIC_VIDEO_MERGE_NODE_HEIGHT, getCinematicStoryboardNodeHeight } from '../../features/cinematic-director/CinematicWorkflowNodes';
@@ -48,6 +49,7 @@ export const getNodeWidth = (node: NodeData, parentNode?: NodeData): number => {
     // Camera Angle nodes have fixed width
     if (node.type === NodeType.CAMERA_ANGLE) return 340;
     if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 460;
+    if (node.type === NodeType.DETAIL_PAGE_REMIX) return DETAIL_REMIX_NODE_WIDTH;
     if (node.type === NodeType.VIDEO_REMIX) return 420;
     if (node.type === NodeType.VIDEO_ANALYSIS) return 420;
     if ([NodeType.REFERENCE_VIDEO, NodeType.SCRIPT_INPUT, NodeType.STICKMAN_DIRECTOR, NodeType.STORYBOARD, NodeType.STORYBOARD_COMPARE, NodeType.FLOW_BATCH_VIDEO, NodeType.VIDEO_MERGE, NodeType.CINEMATIC_CAST, NodeType.CINEMATIC_DIRECTOR, NodeType.CINEMATIC_STORYBOARD, NodeType.CINEMATIC_VIDEO_MERGE].includes(node.type)) return 430;
@@ -109,6 +111,7 @@ export const getNodeHeight = (node: NodeData, parentNode?: NodeData): number => 
     // 控制节点固定高度：成图落在它自动创建的子 Image 节点上，自身不展示结果。
     // 716 是浏览器里实测的卡片高度，改动节点表单后要重新量，否则连线端点会偏。
     if (node.type === NodeType.PRODUCT_SCENE_REPLACE) return 716;
+    if (node.type === NodeType.DETAIL_PAGE_REMIX) return DETAIL_REMIX_NODE_HEIGHT;
     if (node.type === NodeType.VIDEO_REMIX) return 306;
     if (node.type === NodeType.VIDEO_ANALYSIS) return VIDEO_ANALYSIS_NODE_HEIGHT;
     if (node.type === NodeType.REFERENCE_VIDEO) return 300;
@@ -177,6 +180,17 @@ const videoAnalysisPortCenterY = (node: NodeData, portId?: string) => {
     return index >= 0 ? node.y + 90 + index * 36 : undefined;
 };
 
+const detailRemixPortCenterY = (node: NodeData, portId?: string) => {
+    const index = DETAIL_REMIX_INPUT_PORTS.indexOf(String(portId || '') as typeof DETAIL_REMIX_INPUT_PORTS[number]);
+    return index >= 0 ? node.y + 90 + index * 36 : undefined;
+};
+
+const fixedInputPortCenterY = (node: NodeData, portId?: string) => {
+    if (node.type === NodeType.VIDEO_ANALYSIS) return videoAnalysisPortCenterY(node, portId);
+    if (node.type === NodeType.DETAIL_PAGE_REMIX) return detailRemixPortCenterY(node, portId);
+    return undefined;
+};
+
 export const ConnectionsLayer: React.FC<ConnectionsLayerProps> = ({
     nodes,
     viewport,
@@ -201,8 +215,8 @@ export const ConnectionsLayer: React.FC<ConnectionsLayerProps> = ({
             const startX = parent.x + getNodeWidth(parent);
             const startY = parent.y + getNodeHeight(parent) / 2;
             const endX = node.x;
-            const endY = node.type === NodeType.VIDEO_ANALYSIS
-                ? videoAnalysisPortCenterY(node, node.inputPortByParentId?.[parentId])
+            const endY = node.type === NodeType.VIDEO_ANALYSIS || node.type === NodeType.DETAIL_PAGE_REMIX
+                ? fixedInputPortCenterY(node, node.inputPortByParentId?.[parentId])
                     || node.y + getNodeHeight(node, parent) / 2
                 : node.y + getNodeHeight(node, parent) / 2;
 
@@ -253,8 +267,8 @@ export const ConnectionsLayer: React.FC<ConnectionsLayerProps> = ({
         const startNode = nodes.find(n => n.id === connectionStart.nodeId);
         if (startNode) {
             const startX = connectionStart.handle === 'right' ? startNode.x + getNodeWidth(startNode) : startNode.x;
-            const startY = startNode.type === NodeType.VIDEO_ANALYSIS && connectionStart.handle === 'left'
-                ? videoAnalysisPortCenterY(startNode, connectionStart.portId)
+            const startY = (startNode.type === NodeType.VIDEO_ANALYSIS || startNode.type === NodeType.DETAIL_PAGE_REMIX) && connectionStart.handle === 'left'
+                ? fixedInputPortCenterY(startNode, connectionStart.portId)
                     || startNode.y + getNodeHeight(startNode) / 2
                 : startNode.y + getNodeHeight(startNode) / 2;
             const endX = (tempConnectionEnd.x - canvasOffset.left - viewport.x) / viewport.zoom;

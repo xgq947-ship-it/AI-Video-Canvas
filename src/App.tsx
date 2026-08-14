@@ -44,6 +44,7 @@ import { ToastStack } from './components/ToastStack';
 import { ShortcutHelpModal } from './components/modals/ShortcutHelpModal';
 import { useAutoSave } from './hooks/useAutoSave';
 import { useGenerationRecovery } from './hooks/useGenerationRecovery';
+import { useDetailRemixRecovery } from './hooks/useDetailRemixRecovery';
 import { useVideoFrameExtraction } from './hooks/useVideoFrameExtraction';
 import { extractVideoLastFrame } from './utils/videoHelpers';
 import { createAdditionalImagePlacements } from './utils/imageBatchLayout';
@@ -69,9 +70,11 @@ import { CanvasMinimap } from './components/canvas/CanvasMinimap';
 import { CanvasZoomControl } from './components/canvas/CanvasZoomControl';
 import { collectNodeReferences, type NodeReference } from './utils/nodeReferences.js';
 import { upsertProductSceneResultNode } from './utils/productSceneResult.js';
+import { upsertDetailRemixResultNodes } from './utils/detailRemixResult.js';
 import { getImageGenerationProvider } from '@/shared/generationProviders.js';
 import { listVideoGenerationProviders } from '@/shared/generationProviders.js';
 import { assignProductSceneInputOnConnect } from './utils/productSceneInputMapping.js';
+import { dismissDetailRemixResultNodes } from './services/detailRemixService';
 import {
   normalizeVideoRemixProjects,
   type VideoRemixProject,
@@ -83,6 +86,10 @@ import {
   createVideoAnalysisNodeData,
   markVideoAnalysisDependentsStale,
 } from '../shared/videoAnalysis.js';
+import {
+  assignDetailRemixInputPort,
+  markDetailRemixDependentsStale,
+} from '../shared/detailRemix.js';
 import type { VideoAnalysisNodeData } from '../shared/videoAnalysis.js';
 import {
   generateStickmanShotVideo,
@@ -116,6 +123,7 @@ import type { CinematicDirectorOutput, CinematicShot } from '../shared/cinematic
 // 其余节点不该拿到这个每帧都变的数组，否则 CanvasNode 的 memo 形同虚设。
 const NODE_TYPES_NEEDING_ALL_NODES = new Set<NodeType>([
   NodeType.PRODUCT_SCENE_REPLACE,
+  NodeType.DETAIL_PAGE_REMIX,
   NodeType.VIDEO_ANALYSIS,
   NodeType.REFERENCE_VIDEO,
   NodeType.SCRIPT_INPUT,
@@ -358,6 +366,59 @@ export default function App() {
     canUndo,
     canRedo
   } = useHistory({ nodes, groups }, 50, isSameCanvasHistoryState);
+  const isApplyingHistory = React.useRef(false);
+  const isPushingLocalHistory = React.useRef(false);
+  const activeCanvasHistoryTransactionRef = React.useRef<{
+    id: string;
+    label: string;
+    before: CanvasHistoryState;
+  } | null>(null);
+  const groupsRef = React.useRef(groups);
+  groupsRef.current = groups;
+  const [activeCanvasHistoryTransactionId, setActiveCanvasHistoryTransactionId] = React.useState<string | null>(null);
+  const cancelActiveImportRef = React.useRef<(() => boolean) | null>(null);
+
+  const beginCanvasHistoryTransaction = React.useCallback((label: string) => {
+    if (activeCanvasHistoryTransactionRef.current) return null;
+    const id = crypto.randomUUID();
+    activeCanvasHistoryTransactionRef.current = {
+      id,
+      label,
+      before: { nodes, groups: groupsRef.current },
+    };
+    setActiveCanvasHistoryTransactionId(id);
+    return id;
+  }, [nodes]);
+
+  const commitCanvasHistoryTransaction = React.useCallback((transactionId: string, finalNodes: NodeData[]) => {
+    const transaction = activeCanvasHistoryTransactionRef.current;
+    if (!transaction || transaction.id !== transactionId) return;
+    activeCanvasHistoryTransactionRef.current = null;
+    setActiveCanvasHistoryTransactionId(null);
+    isPushingLocalHistory.current = true;
+    pushHistory({ nodes: finalNodes, groups: groupsRef.current });
+  }, [pushHistory]);
+
+  const rollbackCanvasHistoryTransaction = React.useCallback((transactionId: string) => {
+    const transaction = activeCanvasHistoryTransactionRef.current;
+    if (!transaction || transaction.id !== transactionId) return;
+    activeCanvasHistoryTransactionRef.current = null;
+    setActiveCanvasHistoryTransactionId(null);
+    isApplyingHistory.current = true;
+    setNodes(transaction.before.nodes);
+    setGroups(transaction.before.groups);
+    setSelectedNodeIds([]);
+  }, [setGroups, setNodes, setSelectedNodeIds]);
+
+  const handleCanvasUndo = React.useCallback(() => {
+    if (cancelActiveImportRef.current?.()) return;
+    undo();
+  }, [undo]);
+
+  const handleCanvasRedo = React.useCallback(() => {
+    if (activeCanvasHistoryTransactionRef.current) return;
+    redo();
+  }, [redo]);
 
   // Mark as dirty when nodes or title change
   const isInitialMount = React.useRef(true);
@@ -455,6 +516,7 @@ export default function App() {
     // 视频节点走不到下面的回收站分支，所以这一步必须在分支之前做。
     if (workflowId) {
       void dismissProductSceneResultNodes(uniqueIds, workflowId);
+      void dismissDetailRemixResultNodes(uniqueIds, workflowId);
     }
 
     if (!hasProjectMedia) {
@@ -798,7 +860,11 @@ export default function App() {
         // nodes, not a generatable media dependency. Keep its canvas edge so
         // the relationship remains visible, but do not recurse into the
         // analysis node when a keyframe is generated.
-        return parent && parent.type !== NodeType.TEXT && parent.type !== NodeType.VIDEO_ANALYSIS;
+        return parent
+          && parent.type !== NodeType.TEXT
+          && parent.type !== NodeType.VIDEO_ANALYSIS
+          && parent.type !== NodeType.PRODUCT_SCENE_REPLACE
+          && parent.type !== NodeType.DETAIL_PAGE_REMIX;
       });
 
       for (const parentId of parentIds) {
@@ -988,6 +1054,13 @@ export default function App() {
             parentIds: Object.keys(mapped.inputPortByParentId || {}),
           };
         }
+        if (node.type === NodeType.DETAIL_PAGE_REMIX) {
+          const mapped = assignDetailRemixInputPort(node, parent);
+          return {
+            ...mapped,
+            parentIds: Object.keys(mapped.inputPortByParentId || {}),
+          };
+        }
         const parentIds = node.parentIds || [];
         return parentIds.includes(parent.id)
           ? node
@@ -1050,14 +1123,18 @@ export default function App() {
     setNodes(prev => prev.map(node => positions.has(node.id) ? { ...node, ...positions.get(node.id)! } : node));
   }, [nodes, selectedNodeIds, setNodes]);
 
-  const { importImageFiles } = useCanvasImageImport({
+  const { importImageFiles, importDetailRemixFolder, cancelActiveImport } = useCanvasImageImport({
     workflowId,
     viewport,
     canvasRef,
     setNodes,
     setSelectedNodeIds,
-    notify: showToast
+    notify: showToast,
+    beginHistoryTransaction: beginCanvasHistoryTransaction,
+    commitHistoryTransaction: commitCanvasHistoryTransaction,
+    rollbackHistoryTransaction: rollbackCanvasHistoryTransaction,
   });
+  cancelActiveImportRef.current = cancelActiveImport;
 
   /**
    * 侧边栏点击「画布元素」→ 跳转到该节点：居中并缩放到刚好铺满画布可视区。
@@ -1164,8 +1241,8 @@ export default function App() {
     deleteSelectedConnection,
     clearSelection,
     clearSelectionBox,
-    undo,
-    redo,
+    undo: handleCanvasUndo,
+    redo: handleCanvasRedo,
     groupSelected,
     ungroupSelected,
     connectSelected,
@@ -1191,12 +1268,23 @@ export default function App() {
     setNodes(previous => upsertProductSceneResultNode(previous, sourceNode, job));
   }, [setNodes]);
 
+  const handleDetailRemixResults = React.useCallback((sourceNode: NodeData, job: import('./services/detailRemixService').DetailRemixJob) => {
+    setNodes(previous => upsertDetailRemixResultNodes(previous, sourceNode, job));
+  }, [setNodes]);
+
   // Generation Recovery Management
   useGenerationRecovery({
     nodes,
     updateNode,
     workflowId,
     onProductSceneCompleted: handleProductSceneCompleted,
+  });
+
+  useDetailRemixRecovery({
+    nodes,
+    updateNode,
+    workflowId,
+    onResults: handleDetailRemixResults,
   });
 
   // Video Frame Extraction (auto-extract lastFrame for videos missing thumbnails)
@@ -1276,6 +1364,12 @@ export default function App() {
     addCinematicWorkflow(paneX, paneY, viewport);
     showToast('已创建电影短片工作流：填写剧本、准备角色参考图后执行导演');
   }, [addCinematicWorkflow, canvasEditLock, contextMenu.canvasX, contextMenu.canvasY, contextMenu.x, contextMenu.y, showToast, viewport]);
+
+  const handleCreateDetailRemixWorkflow = React.useCallback(() => {
+    if (!canvasEditLock.guard()) return;
+    handleContextMenuSelect(NodeType.DETAIL_PAGE_REMIX);
+    showToast('已创建商品详情复刻：导入两组详情，系统会自动匹配我方产品角度并生成最终详情');
+  }, [canvasEditLock, handleContextMenuSelect, showToast]);
 
   const handleSidebarAssetPreview = (asset: SidebarAssetPreview, anchor: HTMLElement) => {
     const rect = anchor.getBoundingClientRect();
@@ -1623,9 +1717,6 @@ export default function App() {
   }, [nodes, cleanupInvalidGroups]);
 
   // Track state changes for undo/redo (only after drag ends, not during)
-  const isApplyingHistory = React.useRef(false);
-  const isPushingLocalHistory = React.useRef(false);
-
   useEffect(() => {
     // Don't push to history if we're currently applying history (undo/redo)
     if (isApplyingHistory.current) {
@@ -1635,6 +1726,12 @@ export default function App() {
 
     // Don't push to history while dragging (wait until drag ends)
     if (isDragging) {
+      return;
+    }
+
+    // Folder/batch imports publish several LOADING/progress updates. They are
+    // committed as one history entry when the import transaction finishes.
+    if (activeCanvasHistoryTransactionRef.current) {
       return;
     }
 
@@ -1728,7 +1825,10 @@ export default function App() {
       || updates.editorBackgroundUrl !== undefined
       || updates.characterReferenceUrls !== undefined
     ) {
-      setNodes(current => markVideoAnalysisDependentsStale(current, id));
+      setNodes(current => markDetailRemixDependentsStale(
+        markVideoAnalysisDependentsStale(current, id),
+        id,
+      ));
     }
   }, [nodes, setNodes, updateNode]);
 
@@ -3120,6 +3220,14 @@ export default function App() {
         videoAnalysis: mapped.videoAnalysis,
       };
     }
+    if (childNode.type === NodeType.DETAIL_PAGE_REMIX) {
+      const mapped = assignDetailRemixInputPort(childNode, parentNode, targetPortId);
+      return {
+        parentIds: Object.keys(mapped.inputPortByParentId || {}),
+        inputPortByParentId: mapped.inputPortByParentId,
+        detailRemix: mapped.detailRemix,
+      };
+    }
     if (parentNode.type === NodeType.TEXT && parentNode.prompt) {
       updates.prompt = parentNode.prompt;
     }
@@ -3294,6 +3402,7 @@ export default function App() {
     pauseCinematicBatch,
     resumeCinematicBatch,
     handleMergeCinematicVideos,
+    importDetailRemixFolder,
     handleDuplicate,
     handleNodePointerDown,
     setSelectedNodeIds,
@@ -3352,6 +3461,11 @@ export default function App() {
     onPauseCinematicBatch: (id: string) => nodeCallbacksRef.current.pauseCinematicBatch(id),
     onResumeCinematicBatch: (id: string) => nodeCallbacksRef.current.resumeCinematicBatch(id),
     onMergeCinematicVideos: (id: string) => nodeCallbacksRef.current.handleMergeCinematicVideos(id),
+    onImportDetailRemixFolder: (
+      controller: Pick<NodeData, 'id' | 'x' | 'y'>,
+      role: 'competitor' | 'own',
+      files: File[],
+    ) => nodeCallbacksRef.current.importDetailRemixFolder(controller, role, files),
     onNodePointerDown: (e: React.PointerEvent, id: string) => {
       setSelectedConnection(null);
       const current = nodeCallbacksRef.current;
@@ -3498,6 +3612,10 @@ export default function App() {
           onRefresh={handleRefreshCurrentCanvas}
           onNew={handleRequestNewProject}
           onOpenExistingProject={handleOpenExistingProject}
+          onUndo={handleCanvasUndo}
+          onRedo={handleCanvasRedo}
+          canUndo={canUndo || Boolean(activeCanvasHistoryTransactionId)}
+          canRedo={canRedo && !activeCanvasHistoryTransactionId}
           hasUnsavedChanges={hasUnsavedChanges}
           canvasTheme={canvasTheme}
           onToggleTheme={() => setCanvasTheme(prev => prev === 'dark' ? 'light' : 'dark')}
@@ -3631,6 +3749,7 @@ export default function App() {
                 onPauseCinematicBatch={stableNodeHandlers.onPauseCinematicBatch}
                 onResumeCinematicBatch={stableNodeHandlers.onResumeCinematicBatch}
                 onMergeCinematicVideos={stableNodeHandlers.onMergeCinematicVideos}
+                onImportDetailRemixFolder={stableNodeHandlers.onImportDetailRemixFolder}
                 zoom={viewport.zoom}
                 onMouseEnter={handleNodeMouseEnter}
                 onMouseLeave={handleNodeMouseLeave}
@@ -3727,8 +3846,8 @@ export default function App() {
         onClose={() => setContextMenu(prev => ({ ...prev, isOpen: false }))}
         onSelectType={handleContextMenuSelect}
         onUpload={handleContextUpload}
-        onUndo={undo}
-        onRedo={redo}
+        onUndo={handleCanvasUndo}
+        onRedo={handleCanvasRedo}
         onPaste={canvasEditLock.withGuard(handlePaste)}
         onCopy={handleCopy}
         onDuplicate={handleDuplicate}
@@ -3741,10 +3860,11 @@ export default function App() {
         )}
         onCreateStickmanWorkflow={handleCreateStickmanWorkflow}
         onCreateCinematicWorkflow={handleCreateCinematicWorkflow}
+        onCreateDetailRemixWorkflow={handleCreateDetailRemixWorkflow}
         onAddAssets={handleContextMenuAddAssets}
         onOpenHistory={handleContextMenuOpenHistory}
-        canUndo={canUndo}
-        canRedo={canRedo}
+        canUndo={canUndo || Boolean(activeCanvasHistoryTransactionId)}
+        canRedo={canRedo && !activeCanvasHistoryTransactionId}
         canvasTheme={canvasTheme}
       />
 

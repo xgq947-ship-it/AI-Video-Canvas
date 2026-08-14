@@ -17,6 +17,7 @@ import { ChangeAnglePanel } from './ChangeAnglePanel';
 import { NodeHoverToolbar, NodeHoverToolbarAction } from './NodeHoverToolbar';
 import type { NodeReference } from '../../utils/nodeReferences.js';
 import { ProductSceneReplaceNode } from './ProductSceneReplaceNode';
+import { DetailRemixNode } from '../../features/detail-remix/DetailRemixNode';
 import { VideoRemixNode } from '../../features/video-remix/VideoRemixNode';
 import { VideoAnalysisNode } from '../../features/video-analysis/VideoAnalysisNode';
 import {
@@ -82,6 +83,11 @@ interface CanvasNodeProps {
   onPauseCinematicBatch?: (nodeId: string) => void;
   onResumeCinematicBatch?: (nodeId: string) => void;
   onMergeCinematicVideos?: (nodeId: string) => void;
+  onImportDetailRemixFolder?: (
+    controller: Pick<NodeData, 'id' | 'x' | 'y'>,
+    role: 'competitor' | 'own',
+    files: File[],
+  ) => Promise<unknown>;
   zoom: number;
   // 悬停回调带上 nodeId，调用方才能传稳定的引用（否则每次 render 都是新箭头函数，
   // React.memo 会全部失效）。
@@ -99,6 +105,7 @@ const NODE_TYPE_LABELS: Record<NodeType, string> = {
   [NodeType.IMAGE_EDITOR]: '图片编辑器',
   [NodeType.CAMERA_ANGLE]: '镜头角度',
   [NodeType.PRODUCT_SCENE_REPLACE]: '产品短视频生成',
+  [NodeType.DETAIL_PAGE_REMIX]: '商品详情复刻',
   [NodeType.VIDEO_ANALYSIS]: '视频分析',
   [NodeType.VIDEO_REMIX]: '视频复刻',
   [NodeType.REFERENCE_VIDEO]: '参考视频',
@@ -163,6 +170,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   onPauseCinematicBatch,
   onResumeCinematicBatch,
   onMergeCinematicVideos,
+  onImportDetailRemixFolder,
   zoom,
   onMouseEnter,
   onMouseLeave,
@@ -393,6 +401,23 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
         onNodePointerDown={onNodePointerDown}
         onContextMenu={onContextMenu}
         onConnectorDown={onConnectorDown}
+      />
+    );
+  }
+
+  if (data.type === NodeType.DETAIL_PAGE_REMIX) {
+    return (
+      <DetailRemixNode
+        workflowId={workflowId}
+        data={data}
+        allNodes={allNodes || []}
+        selected={selected}
+        canvasTheme={canvasTheme}
+        onUpdate={onUpdate}
+        onNodePointerDown={onNodePointerDown}
+        onContextMenu={onContextMenu}
+        onConnectorDown={onConnectorDown}
+        onImportFolder={onImportDetailRemixFolder}
       />
     );
   }

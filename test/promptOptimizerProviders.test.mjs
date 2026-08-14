@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+    buildCodexExecArgs,
     buildCliInvocation,
     getPromptOptimizerProvider,
     listPromptOptimizerProviders
@@ -16,6 +17,21 @@ test('只有 Codex CLI 提示词后端声明支持当前节点图片识别', () 
     assert.equal(codex?.supportsImage, true);
     assert.equal(codex?.defaultModel, 'gpt-5.6-luna');
     assert.equal(codex?.defaultEffort, 'xhigh');
+});
+
+test('Codex 结构化识图把 output schema 放在位置参数提示词之前', () => {
+    const args = buildCodexExecArgs({
+        prompt: '只返回 JSON',
+        outFile: '/tmp/result.txt',
+        model: 'gpt-5.6-luna',
+        effort: 'high',
+        outputSchemaFile: '/tmp/schema.json'
+    });
+    assert.deepEqual(args.slice(args.indexOf('--output-schema'), args.indexOf('--output-schema') + 2), [
+        '--output-schema', '/tmp/schema.json'
+    ]);
+    assert.ok(args.indexOf('/tmp/schema.json') < args.indexOf('只返回 JSON'));
+    assert.equal(args.at(-1), '只返回 JSON');
 });
 
 test('Windows 的 npm CLI 包装脚本必须通过 ComSpec 启动', () => {

@@ -259,6 +259,10 @@ export async function completeCodexImageJob({ jobsDir, imagesDir, projectsDir, j
     const extension = path.extname(absoluteSource).toLowerCase();
     if (!IMAGE_EXTENSIONS.has(extension)) throw new Error(`Unsupported image extension: ${extension}`);
 
+    // A project-scoped Codex job writes its image into the project directory,
+    // but still keeps the compatibility metadata sidecar under library/images.
+    // Fresh/isolated libraries may not have that legacy directory yet.
+    fs.mkdirSync(imagesDir, { recursive: true });
     const destinationDir = job.projectDirName && projectsDir
         ? path.join(projectsDir, job.projectDirName, 'images')
         : imagesDir;
@@ -330,6 +334,7 @@ export function failCodexImageJob(jobsDir, jobId, message) {
     const job = getCodexImageJob(jobsDir, jobId);
     if (!job) throw new Error(`Job not found: ${jobId}`);
     if (job.status === 'completed') throw new Error('Completed jobs cannot be failed');
+    if (job.status === 'cancelled') return job;
 
     const now = new Date().toISOString();
     const updated = {
@@ -337,6 +342,31 @@ export function failCodexImageJob(jobsDir, jobId, message) {
         status: 'failed',
         error: String(message || 'Codex image generation failed'),
         failedAt: now,
+        updatedAt: now
+    };
+    writeJsonAtomic(jobPath(jobsDir, jobId), updated);
+    return updated;
+}
+
+/**
+ * Cancel a queued Codex image job without deleting its durable audit record.
+ *
+ * Pending jobs are guaranteed not to be claimed after this transition. A
+ * processing job may already be inside the built-in image tool, so cancellation
+ * prevents its result from being attached to the canvas but cannot promise that
+ * the remote computation stops immediately.
+ */
+export function cancelCodexImageJob(jobsDir, jobId, message = 'Codex image generation cancelled') {
+    const job = getCodexImageJob(jobsDir, jobId);
+    if (!job) return null;
+    if (['completed', 'failed', 'cancelled'].includes(job.status)) return job;
+
+    const now = new Date().toISOString();
+    const updated = {
+        ...job,
+        status: 'cancelled',
+        error: String(message || 'Codex image generation cancelled'),
+        cancelledAt: now,
         updatedAt: now
     };
     writeJsonAtomic(jobPath(jobsDir, jobId), updated);

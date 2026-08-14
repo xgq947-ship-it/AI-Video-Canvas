@@ -5,7 +5,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, CircleHelp, FolderOpen, Globe2, KeyRound, Loader2, Plus, RefreshCw, Save, Settings, ShieldCheck, Trash2 } from 'lucide-react';
+import { ChevronDown, CircleHelp, FolderOpen, Globe2, KeyRound, Loader2, Plus, Redo2, RefreshCw, Save, Settings, ShieldCheck, Trash2, Undo2 } from 'lucide-react';
 import { NodeData } from '../types';
 import { ApiKeySettingsModal } from './modals/ApiKeySettingsModal';
 import { StartupSetupGuideModal } from './modals/StartupSetupGuideModal';
@@ -33,6 +33,10 @@ interface TopBarProps {
     onRefresh: () => void | Promise<void>;
     onNew: () => void;
     onOpenExistingProject: () => void;
+    onUndo: () => void;
+    onRedo: () => void;
+    canUndo: boolean;
+    canRedo: boolean;
     hasUnsavedChanges: boolean;
     lastAutoSaveTime?: number;
     workflowId?: string | null;
@@ -56,6 +60,10 @@ export const TopBar: React.FC<TopBarProps> = ({
     onRefresh,
     onNew,
     onOpenExistingProject,
+    onUndo,
+    onRedo,
+    canUndo,
+    canRedo,
     hasUnsavedChanges,
     lastAutoSaveTime,
     workflowId,
@@ -228,6 +236,37 @@ export const TopBar: React.FC<TopBarProps> = ({
                         </span>
                       )}
                     </>}
+                    <div className={`ml-2 flex items-center gap-1 rounded-xl border p-1 ${canvasTheme === 'dark'
+                        ? 'border-neutral-700/80 bg-neutral-900/80'
+                        : 'border-neutral-200 bg-neutral-50'
+                        }`}>
+                        <button
+                            type="button"
+                            onClick={onUndo}
+                            disabled={!canUndo}
+                            className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-30 ${canvasTheme === 'dark'
+                                ? 'text-neutral-300 hover:bg-neutral-700 hover:text-white'
+                                : 'text-neutral-600 hover:bg-neutral-200 hover:text-neutral-950'
+                                }`}
+                            title="撤销（⌘/Ctrl+Z）"
+                            aria-label="撤销"
+                        >
+                            <Undo2 size={17} />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={onRedo}
+                            disabled={!canRedo}
+                            className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-30 ${canvasTheme === 'dark'
+                                ? 'text-neutral-300 hover:bg-neutral-700 hover:text-white'
+                                : 'text-neutral-600 hover:bg-neutral-200 hover:text-neutral-950'
+                                }`}
+                            title="重做（⇧⌘Z / Ctrl+Y）"
+                            aria-label="重做"
+                        >
+                            <Redo2 size={17} />
+                        </button>
+                    </div>
                 </div>
 
                 {/* Right: Actions */}

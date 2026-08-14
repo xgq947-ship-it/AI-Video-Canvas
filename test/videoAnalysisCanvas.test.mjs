@@ -184,9 +184,12 @@ test('选定人物资产作为引用边界，不把人物三图父链展开到�
   assert.match(generation, /if \(!parent\.videoAnalysisAssetReferenceBoundary\)/);
 });
 
-test('关键帧依赖执行不会把已完成的视频分析节点当成可生成媒体', () => {
+test('关键帧依赖执行不会把语义控制节点当成可生成媒体', () => {
   const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
-  assert.match(app, /parent\.type !== NodeType\.TEXT && parent\.type !== NodeType\.VIDEO_ANALYSIS/);
+  assert.match(app, /parent\.type !== NodeType\.TEXT/);
+  assert.match(app, /parent\.type !== NodeType\.VIDEO_ANALYSIS/);
+  assert.match(app, /parent\.type !== NodeType\.PRODUCT_SCENE_REPLACE/);
+  assert.match(app, /parent\.type !== NodeType\.DETAIL_PAGE_REMIX/);
 });
 
 test('普通视频节点提供参考视频链接解析导入', () => {

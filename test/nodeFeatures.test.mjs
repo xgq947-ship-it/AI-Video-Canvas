@@ -21,7 +21,7 @@ const PREMIUM = [
 // 不调用云端模型，属于文档 §14.4 允许试用到期后继续用的“导出已有文件”
 // （见 shared/nodeFeatures.js 顶部注释）。
 const FREE = [
-  'Text', 'Image', 'Video', 'Audio', 'Video Analysis', 'Video Merge',
+  'Text', 'Image', 'Video', 'Audio', 'Video Analysis', 'Detail Page Remix', 'Video Merge',
   'Video Remix', 'Flow Batch Video', 'Storyboard', 'Reference Video', 'Render',
   'Cinematic Video Merge',
 ];

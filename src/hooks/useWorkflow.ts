@@ -21,6 +21,7 @@ import {
   type VideoRemixProject,
 } from '@/shared/videoRemixProjects.js';
 import { migrateLegacyRemixProjectsToCanvas } from '../features/video-analysis/migrateLegacyRemix';
+import { migrateDetailRemixFolderLayouts } from '../utils/detailRemixFolderImport.js';
 
 interface WorkflowData {
     id: string | null;
@@ -185,7 +186,7 @@ export const useWorkflow = ({
                     groups: workflow.groups || [],
                     videoRemixes: migrated.videoRemixes,
                 });
-                const loadedNodes: NodeData[] = canvasMigration.nodes;
+                const loadedNodes: NodeData[] = migrateDetailRemixFolderLayouts(canvasMigration.nodes);
                 setNodes(loadedNodes);
                 setVideoRemixes(canvasMigration.videoRemixes);
                 setGroups(canvasMigration.groups); // Restore groups and one-time canvas migration

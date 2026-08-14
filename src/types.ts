@@ -4,6 +4,7 @@ import type {
   VideoAnalysisInputPort,
   VideoAnalysisNodeData,
 } from '../shared/videoAnalysis.js';
+import type { DetailRemixNodeData } from '../shared/detailRemix.js';
 import type {
   StickmanDirectorOutput,
   StickmanDirectorSettings,
@@ -24,6 +25,7 @@ export enum NodeType {
   IMAGE_EDITOR = 'Image Editor',
   CAMERA_ANGLE = 'Camera Angle',
   PRODUCT_SCENE_REPLACE = 'Product Scene Replace',
+  DETAIL_PAGE_REMIX = 'Detail Page Remix',
   VIDEO_ANALYSIS = 'Video Analysis',
   VIDEO_REMIX = 'Video Remix',
   REFERENCE_VIDEO = 'Reference Video',
@@ -348,6 +350,24 @@ export interface NodeData {
   productSceneBatchJobId?: string;
   productSceneBatchVersion?: number;
   productSceneLayoutRowStep?: number;
+
+  // 商品详情复刻：分析卖点与竞品版式后，每页一次生成最终详情图。
+  // 输入角色和有序批次保存在 detailRemix.inputRefs；parentIds 只表示画布边。
+  detailRemix?: DetailRemixNodeData;
+  detailRemixSourceJobId?: string;
+  detailRemixSourceNodeId?: string;
+  detailRemixPageId?: string;
+  detailRemixResultKind?: 'final' | 'plate' | 'composite';
+  detailRemixBatchVersion?: number;
+  detailRemixLayoutVersion?: number;
+  detailRemixImport?: {
+    controllerNodeId: string;
+    role: 'competitor' | 'own';
+    folderName: string;
+    relativePath: string;
+    order: number;
+    layoutVersion?: number;
+  };
 
   // 仅兼容旧项目与项目级工作台适配器；新状态持久化在 workflow.videoRemixes[]。
   videoRemix?: VideoRemixState;

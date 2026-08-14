@@ -22,6 +22,7 @@ const controllerBuild = fs.readFileSync(
   new URL('../scripts/build-evan-project-controller.sh', import.meta.url),
   'utf8'
 );
+const gitignore = fs.readFileSync(new URL('../.gitignore', import.meta.url), 'utf8');
 
 test('桌面启动器位于项目内，不依赖会被清空的用户数据目录', () => {
   assert.match(startApp, /AI-Video-Canvas.*desktop-launcher\.mjs/s);
@@ -76,12 +77,23 @@ test('启动器提供可查询状态和单命令重启，PID 只信任精确 Ele
 
 test('原生控制器统一调用项目启动器，并提供启动、重启、停止和状态刷新', () => {
   assert.match(controller, /desktop-launcher\.mjs/);
+  assert.match(controller, /Bundle\.main\.bundleURL/);
+  assert.match(controller, /EVAN_PROJECT_ROOT/);
+  assert.match(controller, /EVAN_NODE_PATH/);
+  assert.match(controller, /\.local\/bin\/node/);
+  assert.match(controller, /process\.executableURL = nodeURL/);
+  assert.doesNotMatch(controller, /\/Users\//);
   assert.match(controller, /case \.start/);
   assert.match(controller, /case \.restart/);
   assert.match(controller, /case \.stop/);
+  assert.match(controller, /title: "关闭"/);
   assert.match(controller, /model\.refresh\(\)/);
   assert.match(controller, /Task\.sleep\(nanoseconds: 3_000_000_000\)/);
+  assert.match(controller, /phase != \.failed/);
+  assert.match(controller, /applicationShouldTerminateAfterLastWindowClosed/);
   assert.match(controllerBuild, /xcrun swiftc/);
   assert.match(controllerBuild, /codesign --force --deep --sign -/);
+  assert.match(controllerBuild, /project_root}\/Evan 项目控制器\.app/);
+  assert.match(gitignore, /\/Evan 项目控制器\.app\//);
   assert.doesNotMatch(controller, /osascript|display dialog/);
 });

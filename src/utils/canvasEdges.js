@@ -1,5 +1,6 @@
 import { productSceneInputMappingPatch } from './productSceneInputMapping.js';
 import { createVideoAnalysisNodeData, syncVideoAnalysisInputRefs } from '../../shared/videoAnalysis.js';
+import { createDetailRemixNodeData, syncDetailRemixInputRefs } from '../../shared/detailRemix.js';
 
 export function removeCanvasConnection(nodes, connection) {
   if (!connection?.parentId || !connection?.childId) return nodes;
@@ -19,6 +20,14 @@ export function removeCanvasConnection(nodes, connection) {
       delete mapping[connection.parentId];
       return syncVideoAnalysisInputRefs(
         { ...updated, videoAnalysis: createVideoAnalysisNodeData(node.videoAnalysis || {}) },
+        mapping
+      );
+    }
+    if (node.type === 'Detail Page Remix') {
+      const mapping = { ...(node.inputPortByParentId || {}) };
+      delete mapping[connection.parentId];
+      return syncDetailRemixInputRefs(
+        { ...updated, detailRemix: createDetailRemixNodeData(node.detailRemix || {}) },
         mapping
       );
     }

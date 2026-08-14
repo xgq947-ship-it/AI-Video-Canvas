@@ -36,12 +36,16 @@ npm run build
 开发服务器使用前端 `5173`、后端 `3001`。桌面版后端由 Electron 分配随机 loopback
 端口，不使用这两个固定端口。
 
-开发机桌面的“启动 Evan.app / 关闭 Evan.app”统一调用
-`scripts/desktop-launcher.mjs`。两个 AppleScript Applet 只向当前用户的 `launchd` 提交
-一次性任务，实际启动器结束后任务会自行注销；不要改回由 Applet 同步等待 Node，否则
-macOS 可能在访问桌面项目时出现隐藏权限死锁。启动/关闭结果分别写入
-`~/Library/Logs/Evan/desktop-start.*.log` 与 `desktop-stop.*.log`，成功时不发送系统通知。
+macOS 开发机可运行 `npm run desktop:controller`，在项目根目录生成可双击打开的
+`Evan 项目控制器.app`。控制器集中提供启动、关闭、重启、状态刷新和日志入口，并统一调用
+`scripts/desktop-launcher.mjs`；它会从 App 所在目录向上定位项目，不写死某台电脑的用户路径。
 关闭器只结束 Evan Electron，共享 Chrome 继续由 AI Browser Hub 管理。
+项目位于“桌面”或“文稿”时，macOS 首次打开会询问文件夹访问权限；允许一次即可。
+
+旧的“启动 Evan.app / 关闭 Evan.app”AppleScript 入口仍保留兼容。两个 Applet 只向当前
+用户的 `launchd` 提交一次性任务，实际启动器结束后任务会自行注销；不要改回由 Applet
+同步等待 Node，否则 macOS 可能在访问桌面项目时出现隐藏权限死锁。启动/关闭结果分别写入
+`~/Library/Logs/Evan/desktop-start.*.log` 与 `desktop-stop.*.log`，成功时不发送系统通知。
 
 ## 统一画布短视频复刻
 

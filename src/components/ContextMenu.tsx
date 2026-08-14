@@ -40,6 +40,7 @@ interface ContextMenuProps {
   onCreateAsset?: () => void;
   onCreateStickmanWorkflow?: (mode: 'script' | 'reference_video') => void;
   onCreateCinematicWorkflow?: () => void;
+  onCreateDetailRemixWorkflow?: () => void;
   onUseAsReferenceVideo?: () => void;
   canUseAsReferenceVideo?: boolean;
   onAddAssets?: () => void;
@@ -62,6 +63,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onCreateAsset,
   onCreateStickmanWorkflow,
   onCreateCinematicWorkflow,
+  onCreateDetailRemixWorkflow,
   onUseAsReferenceVideo,
   canUseAsReferenceVideo = false,
   onAddAssets,
@@ -136,7 +138,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   if (!state.isOpen) return null;
 
   const menuLeft = Math.max(12, Math.min(state.x, window.innerWidth - 312));
-  const menuHeight = state.type === 'global' && view === 'main' ? 470 : 620;
+  const menuHeight = state.type === 'global' && view === 'main' ? 520 : 620;
   // 节点“＋”菜单以点击位置作为左上角。底部空间不足时让菜单内部滚动，
   // 不再按预估高度把整张菜单向上回推。
   const menuTop = state.type === 'node-connector'
@@ -277,6 +279,15 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
             一键工作流
           </div>
           <MenuItem
+            icon={<Layers size={16} />}
+            label="商品详情一键复刻"
+            onClick={() => {
+              onCreateDetailRemixWorkflow?.();
+              onClose();
+            }}
+            canvasTheme={canvasTheme}
+          />
+          <MenuItem
             icon={<Clapperboard size={16} />}
             label="火柴人剧本工作流"
             onClick={() => {
@@ -384,6 +395,10 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
             onCreateCinematicWorkflow?.();
             onClose();
           }} canvasTheme={canvasTheme} />
+          <AddNodeMenuItem icon={<Layers size={19} />} label="商品详情一键复刻" badge="快捷" badgeTone="cyan" onClick={() => {
+            onCreateDetailRemixWorkflow?.();
+            onClose();
+          }} canvasTheme={canvasTheme} />
 
           <div className={`mb-1 mt-2 px-2 py-1 text-sm font-semibold ${canvasTheme === 'dark' ? 'text-neutral-400' : 'text-neutral-500'}`}>
             单独添加节点
@@ -392,6 +407,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           <AddNodeMenuItem icon={<Type size={19} />} label="文本" onClick={() => onSelectType(NodeType.TEXT)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<ImageIcon size={19} />} label="图片" onClick={() => onSelectType(NodeType.IMAGE)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<Layers size={19} />} label="产品短视频生成" badge="NEW" badgeTone="cyan" onClick={() => onSelectType(NodeType.PRODUCT_SCENE_REPLACE)} canvasTheme={canvasTheme} />
+          <AddNodeMenuItem icon={<Layers size={19} />} label="商品详情复刻" badge="NEW" badgeTone="cyan" onClick={() => onSelectType(NodeType.DETAIL_PAGE_REMIX)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<Video size={19} />} label="视频" onClick={() => onSelectType(NodeType.VIDEO)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<AudioLines size={19} />} label="音频" onClick={() => onSelectType(NodeType.AUDIO)} canvasTheme={canvasTheme} />
           <AddNodeMenuItem icon={<Film size={19} />} label="脚本" rightSlot={<ChevronRight size={16} />} onClick={() => onSelectType(NodeType.TEXT)} canvasTheme={canvasTheme} />
@@ -478,6 +494,12 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           icon={<Layers size={18} />}
           label="产品短视频生成"
           onClick={() => onSelectType(NodeType.PRODUCT_SCENE_REPLACE)}
+          canvasTheme={canvasTheme}
+        />
+        <MenuItem
+          icon={<Layers size={18} />}
+          label="商品详情复刻"
+          onClick={() => onSelectType(NodeType.DETAIL_PAGE_REMIX)}
           canvasTheme={canvasTheme}
         />
         <MenuItem

@@ -9,6 +9,12 @@ import { useCallback, useState } from 'react';
 import { NodeData, NodeType, NodeStatus, Viewport } from '../types';
 import { DEFAULT_NODE_WIDTH, paneToCanvas } from '@/shared/canvasCoords.js';
 import { assignVideoAnalysisInputPort, createVideoAnalysisNodeData } from '../../shared/videoAnalysis.js';
+import {
+    assignDetailRemixInputPort,
+    createDetailRemixNodeData,
+    DETAIL_REMIX_NODE_HEIGHT,
+    DETAIL_REMIX_NODE_WIDTH,
+} from '../../shared/detailRemix.js';
 import { listVideoGenerationProviders } from '../../shared/generationProviders.js';
 import { normalizeStickmanSettings } from '../../shared/stickmanDirector.js';
 import {
@@ -123,6 +129,15 @@ const createNodeData = (
         node.productSceneVideoDuration = 10;
         node.productSceneVideoGenerateAudio = true;
     }
+    if (type === NodeType.DETAIL_PAGE_REMIX) {
+        node.title = '商品详情一键复刻';
+        node.model = 'detail-remix';
+        node.imageModel = 'google-flow-nano-banana-pro';
+        node.resolution = '2K';
+        node.aspectRatio = '9:16';
+        node.detailRemix = createDetailRemixNodeData();
+        node.outputPortId = 'detail-remix-output';
+    }
     if (type === NodeType.VIDEO_ANALYSIS) {
         node.title = '视频分析';
         node.model = 'video-analysis';
@@ -167,14 +182,21 @@ export const useNodeManagement = () => {
         if (type === NodeType.VIDEO_REMIX) return '';
         // x/y 是面板坐标（相对画布容器，已扣除侧边栏），由 contextMenu.canvasX/canvasY 提供
         const { x: canvasX, y: canvasY } = paneToCanvas(x, y, viewport);
-        // 新建节点居中于点击处：横向用卡片真实宽度（365，此前硬编码 340 导致偏 12.5px）；
-        // 纵向沿用历史常量 100 —— 节点高度随类型与内容变化（待生成 ~214、出图后 auto），无统一值。
-        const halfWidth = DEFAULT_NODE_WIDTH / 2;
+        // Most cards use the historical approximate height because their
+        // media content is fluid. The detail-remix controller has fixed
+        // geometry, so center it using its real size; otherwise its primary
+        // actions are created below the visible canvas on 720p displays.
+        const halfWidth = type === NodeType.DETAIL_PAGE_REMIX
+            ? DETAIL_REMIX_NODE_WIDTH / 2
+            : DEFAULT_NODE_WIDTH / 2;
+        const halfHeight = type === NodeType.DETAIL_PAGE_REMIX
+            ? DETAIL_REMIX_NODE_HEIGHT / 2
+            : 100;
 
         const newNode = createNodeData(
             type,
             parentId ? canvasX : canvasX - halfWidth,
-            parentId ? canvasY : canvasY - 100,
+            parentId ? canvasY : canvasY - halfHeight,
             parentId ? [parentId] : [],
         );
 
@@ -435,10 +457,16 @@ export const useNodeManagement = () => {
                 const direction = contextMenu.connectorSide || 'right';
                 const GAP = 100;
                 const NODE_WIDTH = 340;
+                // Semantic controllers consume the source image/video. Even
+                // if their menu was opened from the source's left handle,
+                // placing them as a parent would create a reversed edge (and
+                // assigning the semantic input below would form a cycle).
+                const consumesSource = type === NodeType.VIDEO_ANALYSIS
+                    || type === NodeType.DETAIL_PAGE_REMIX;
 
                 let newNode: NodeData;
 
-                if (direction === 'right') {
+                if (direction === 'right' || consumesSource) {
                     // Append: Source -> New
                     newNode = createNodeData(
                         type,
@@ -459,6 +487,9 @@ export const useNodeManagement = () => {
                         const mapped = assignVideoAnalysisInputPort(newNode, sourceNode);
                         newNode = mapped;
                     }
+                }
+                if (type === NodeType.DETAIL_PAGE_REMIX && sourceNode) {
+                    newNode = assignDetailRemixInputPort(newNode, sourceNode);
                 }
 
                 setNodes(prev => [...prev, newNode]);

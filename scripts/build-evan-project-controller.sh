@@ -3,12 +3,7 @@ set -euo pipefail
 
 script_dir="${0:A:h}"
 project_root="${script_dir:h}"
-output_path="${1:-${project_root}/runtime/controller-build/Evan项目控制器.app}"
-
-if [[ -e "$output_path" ]]; then
-  print -u2 "目标已存在，请先移走后再构建：$output_path"
-  exit 2
-fi
+output_path="${1:-${project_root}/Evan 项目控制器.app}"
 
 build_root="$(mktemp -d "${TMPDIR:-/tmp}/evan-controller.XXXXXX")"
 trap 'rm -rf "$build_root"' EXIT
@@ -55,5 +50,17 @@ iconutil -c icns "$iconset_path" -o "$resources_path/EvanController.icns"
 codesign --force --deep --sign - "$app_path" >/dev/null
 
 mkdir -p "${output_path:h}"
-mv "$app_path" "$output_path"
+previous_app=""
+if [[ -e "$output_path" ]]; then
+  previous_app="$build_root/previous.app"
+  mv "$output_path" "$previous_app"
+fi
+
+if ! mv "$app_path" "$output_path"; then
+  if [[ -n "$previous_app" && -e "$previous_app" ]]; then
+    mv "$previous_app" "$output_path"
+  fi
+  print -u2 "无法写入控制器 App：$output_path"
+  exit 1
+fi
 print "$output_path"

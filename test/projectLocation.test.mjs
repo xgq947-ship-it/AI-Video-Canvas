@@ -182,7 +182,29 @@ test('desktop project API creates, serves, saves and deletes a custom-location p
         body: JSON.stringify({
             id: created.id,
             title: created.title,
-            nodes: [{ id: 'node-1', type: 'Text', x: 0, y: 0 }],
+            nodes: [{ id: 'node-1', type: 'Text', x: 0, y: 0 }, {
+                id: 'detail-remix-1',
+                type: 'Detail Page Remix',
+                x: 400,
+                y: 0,
+                parentIds: ['competitor-1', 'own-1', 'person-1'],
+                inputPortByParentId: {
+                    'competitor-1': 'competitor-detail',
+                    'own-1': 'own-detail',
+                    'person-1': 'character-reference'
+                },
+                detailRemix: {
+                    schemaVersion: 1,
+                    status: 'plates-ready',
+                    inputRefs: {
+                        competitorDetailNodeIds: ['competitor-1'],
+                        ownDetailNodeIds: ['own-1'],
+                        characterReference: { enabled: false, nodeIds: ['person-1'] },
+                        productNodeIds: []
+                    },
+                    analysis: { ownSellingPoints: [{ id: 'sp-1', title: '真实卖点' }], pages: [] }
+                }
+            }],
             groups: [],
             viewport: { x: 0, y: 0, zoom: 1 }
         })
@@ -190,6 +212,11 @@ test('desktop project API creates, serves, saves and deletes a custom-location p
     assert.equal(savedResponse.status, 200);
     const projectCopy = JSON.parse(fs.readFileSync(path.join(projectRoot, 'project.json'), 'utf8'));
     assert.equal(projectCopy.nodes[0].id, 'node-1');
+    assert.deepEqual(projectCopy.nodes[1].detailRemix.inputRefs.characterReference, {
+        enabled: false,
+        nodeIds: ['person-1']
+    });
+    assert.equal(projectCopy.nodes[1].detailRemix.analysis.ownSellingPoints[0].title, '真实卖点');
     assert.equal(projectCopy.projectPath, projectRoot);
 
     const deleted = await fetch(`${origin}/api/workflows/${created.id}`, { method: 'DELETE' });

@@ -23,6 +23,11 @@ contextBridge.exposeInMainWorld('evanDesktop', {
         if (!result?.ok) throw new Error(result?.error || '无法打开项目目录');
         return result;
     },
+    exportDetailRemix: async (input) => {
+        const result = await ipcRenderer.invoke('detail-remix:export', input);
+        if (!result?.ok) throw new Error(result?.error || '详情图导出失败');
+        return result.data;
+    },
     getAppInfo: () => ipcRenderer.invoke('app:info'),
     uninstall: {
         /** 只算路径不动手，用于在界面上如实列出会被扔掉的东西。 */

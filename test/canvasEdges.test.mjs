@@ -79,6 +79,32 @@ test('显式 input mapping 为空时不会因旧标量字段而复活已经断�
   assert.equal(next[0].productSceneInputMapping.promptSourceNodeId, undefined);
 });
 
+test('删除商品详情复刻 Edge 会同步移除对应语义角色并保留人物开关', () => {
+  const nodes = [{
+    id: 'detail',
+    type: 'Detail Page Remix',
+    parentIds: ['competitor', 'person'],
+    inputPortByParentId: {
+      competitor: 'competitor-detail',
+      person: 'character-reference',
+    },
+    detailRemix: {
+      schemaVersion: 1,
+      status: 'ready',
+      inputRefs: {
+        competitorDetailNodeIds: ['competitor'],
+        ownDetailNodeIds: [],
+        characterReference: { enabled: false, nodeIds: ['person'] },
+        productNodeIds: [],
+      },
+    },
+  }];
+  const next = removeCanvasConnection(nodes, { parentId: 'person', childId: 'detail' });
+  assert.deepEqual(next[0].parentIds, ['competitor']);
+  assert.deepEqual(next[0].detailRemix.inputRefs.characterReference, { enabled: false, nodeIds: [] });
+  assert.deepEqual(next[0].detailRemix.inputRefs.competitorDetailNodeIds, ['competitor']);
+});
+
 test('wouldCreateCycle：直接回连 A→B→A 会成环', () => {
   const nodes = [
     { id: 'a', type: 'Image' },

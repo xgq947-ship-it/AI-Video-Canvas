@@ -90,6 +90,7 @@ const typeLabel: Record<string, string> = {
   [NodeType.IMAGE_EDITOR]: '图片编辑',
   [NodeType.CAMERA_ANGLE]: '镜头角度',
   [NodeType.PRODUCT_SCENE_REPLACE]: '产品短视频生成',
+  [NodeType.DETAIL_PAGE_REMIX]: '商品详情复刻',
   [NodeType.VIDEO_REMIX]: '视频复刻',
   [NodeType.REFERENCE_VIDEO]: '参考视频',
   [NodeType.SCRIPT_INPUT]: '剧本输入',

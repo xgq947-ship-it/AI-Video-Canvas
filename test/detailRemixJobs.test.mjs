@@ -206,6 +206,72 @@ test('竞品识图 JSON 格式失败会在生图前用同一严格 Schema 安全
   assert.equal(generationCalls, 1);
 });
 
+test('营销页核心文案槽缺失会在付费生图前重试，完整保留胶囊标签、主标题和副标题', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const competitorCalls = [];
+  const generationCalls = [];
+  const copySlots = [
+    { slotId: 'badge', role: 'featureBadge', sourceText: '竞品按摩披肩', x: 0.35, y: 0.1, width: 0.3, height: 0.04, maxChars: 8 },
+    { slotId: 'headline', role: 'headline', sourceText: '竞品核心大标题', x: 0.1, y: 0.2, width: 0.8, height: 0.08, maxChars: 10 },
+    { slotId: 'subheadline', role: 'featureSubheadline', sourceText: '竞品副标题', x: 0.15, y: 0.3, width: 0.7, height: 0.05, maxChars: 10 },
+    { slotId: 'watermark', role: 'watermark', sourceText: '竞品水印', x: 0.8, y: 0.95, width: 0.15, height: 0.02, maxChars: 8 },
+  ];
+  const context = {
+    ...env.context,
+    runRecognition: async (_request, meta) => {
+      if (meta.kind === 'own-selling-points') {
+        return JSON.stringify({
+          productViews: [{
+            sourceImageIndex: 0, cropRegion: { x: 0, y: 0, width: 1, height: 1 },
+            viewAngle: 'front', visibleSides: ['front'], description: '', quality: 0.95,
+          }],
+          sellingPoints: [
+            { id: 'sp-1', title: '肩颈按摩器', description: '轻松覆盖肩颈' },
+            { id: 'sp-2', title: '仿人手深层揉捏', description: '贴合肩颈斜方肌' },
+            { id: 'sp-3', title: '按摩热敷双效', description: '舒缓肩颈疲劳' },
+          ],
+        });
+      }
+      competitorCalls.push(meta);
+      const complete = competitorCalls.length > 1;
+      return JSON.stringify({ page: {
+        pageType: 'marketing', hasPerson: false,
+        selectedProductViewIds: ['pv-1'], productInstances: [], copySlots,
+        mappedSellingPoints: complete ? [
+          { sellingPointId: 'sp-1', slotId: 'badge', slotRole: 'featureBadge', replacementText: '肩颈按摩器' },
+          { sellingPointId: 'sp-2', slotId: 'headline', slotRole: 'headline', replacementText: '仿人手深层揉捏' },
+          { sellingPointId: 'sp-3', slotId: 'subheadline', slotRole: 'featureSubheadline', replacementText: '按摩热敷双效' },
+        ] : [
+          { sellingPointId: 'sp-3', slotId: 'subheadline', slotRole: 'featureSubheadline', replacementText: '按摩热敷双效' },
+        ],
+        mappedFacts: [],
+      } });
+    },
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('marketing-layout-final'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'marketing-layout-contract-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(competitorCalls.length, 2);
+  assert.equal(completed.pages[0].recognitionContractRetries, 1);
+  assert.equal(completed.pages[0].competitorAnalysisVersion, 2);
+  assert.equal(generationCalls.length, 1);
+  assert.match(generationCalls[0].request.prompt, /肩颈按摩器/);
+  assert.match(generationCalls[0].request.prompt, /仿人手深层揉捏/);
+  assert.match(generationCalls[0].request.prompt, /按摩热敷双效/);
+  assert.match(generationCalls[0].request.prompt, /胶囊标签—主标题—副标题/);
+  assert.match(generationCalls[0].request.prompt, /高级感精修/);
+  assert.doesNotMatch(generationCalls[0].request.prompt, /竞品水印/);
+});
+
 test('只重试尚未进入生图的失败页，保留成功页和稳定结果节点，并按页面顺序导出', async t => {
   const env = setup();
   t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
@@ -745,7 +811,8 @@ test('从我方详情提取品牌 Logo，作为参考交给 AI 直接替换且�
     'own-product-auto-angle',
     'own-brand-logo',
   ]);
-  assert.match(generationCalls[0].request.prompt, /参考图3是我方真实 Logo 参考/);
+  assert.match(generationCalls[0].request.prompt, /参考图3只提供我方 Logo 的身份/);
+  assert.match(generationCalls[0].request.prompt, /严禁把.*深色背景.*矩形裁剪边界复制/);
   assert.match(generationCalls[0].request.prompt, /我方品牌/);
   assert.match(generationCalls[0].request.prompt, /真实卖点/);
   const finalPath = path.join(env.root, 'library', 'projects', '详情复刻测试', 'images', `${completed.pages[0].resultNodeId}.png`);
@@ -755,6 +822,60 @@ test('从我方详情提取品牌 Logo，作为参考交给 AI 直接替换且�
   const offset = (sampleY * info.width + sampleX) * info.channels;
   assert.ok(data[offset] < 40 && data[offset + 1] < 40 && data[offset + 2] < 40,
     'the local pipeline must preserve the AI result instead of pasting the red logo crop itself');
+});
+
+test('Codex 生图最多发送五张参考图，并由程序确定性保留版式、双产品角度、Logo 与人物', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    runRecognition: async (_request, meta) => meta.kind === 'own-selling-points'
+      ? JSON.stringify({
+        brandIdentity: {
+          name: 'SUPOR', logoSourceImageIndex: 0,
+          logoRegion: { x: 0, y: 0, width: 1, height: 1 },
+        },
+        productViews: [1, 2, 3].map(index => ({
+          sourceImageIndex: 0,
+          cropRegion: { x: (index - 1) * 0.1, y: 0, width: 0.8, height: 1 },
+          viewAngle: `angle-${index}`,
+          visibleSides: ['front'],
+          description: `角度 ${index}`,
+          quality: 1 - index * 0.01,
+        })),
+        sellingPoints: [{ id: 'sp-1', title: '肩颈放松' }],
+      })
+      : JSON.stringify({ page: {
+        pageType: 'marketing', hasPerson: true,
+        selectedProductViewIds: ['pv-1', 'pv-2', 'pv-3'],
+        productInstances: [], copySlots: [], mappedSellingPoints: [], mappedFacts: [],
+      } }),
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('codex-five-reference-final'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'codex-five-reference-limit-job',
+    imageModel: 'codex-imagegen',
+    ownDetails: [{ nodeId: 'own-node', imageUrl: PIXEL, order: 0 }],
+    productImages: [],
+    productNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(generationCalls.length, 1);
+  assert.equal(generationCalls[0].request.referenceImageInputs.length, 5);
+  assert.deepEqual(generationCalls[0].meta.referenceKinds, [
+    'competitor-layout',
+    'own-product-auto-angle',
+    'own-product-auto-angle',
+    'own-brand-logo',
+    'character',
+  ]);
+  assert.equal(completed.pages[0].selectedProductViews.length, 2);
+  assert.equal(completed.pages[0].generationReferenceCount, 5);
 });
 
 test('项目文件夹改名后，单阶段输入与结果 URL 按当前项目目录恢复', t => {
@@ -904,7 +1025,9 @@ test('成图质检失败时只追加一次 AI 修复，通过复检后才发布�
       validationCalls += 1;
       return JSON.stringify(validationCalls === 1 ? {
         passed: false, copyExact: false, brandCorrect: true, productCorrect: true,
-        logoCorrect: true, productPlacementCorrect: true,
+        logoCorrect: true, logoPresentationCorrect: true,
+        layoutHierarchyCorrect: true, visualPolishCorrect: true, layoutIssues: [],
+        productPlacementCorrect: true,
         parameterAlignmentCorrect: false, unsupportedStrictFactsAbsent: true,
         characterIdentityCorrect: true, characterHairstyleCorrect: true,
         characterOutfitCorrect: true, characterAccessoriesCorrect: true, characterIssues: [],
@@ -912,7 +1035,9 @@ test('成图质检失败时只追加一次 AI 修复，通过复检后才发布�
         missingTexts: [], wrongTexts: ['把16W写成16V'], unexpectedTexts: [], summary: '参数错字',
       } : {
         passed: true, copyExact: true, brandCorrect: true, productCorrect: true,
-        logoCorrect: true, productPlacementCorrect: true,
+        logoCorrect: true, logoPresentationCorrect: true,
+        layoutHierarchyCorrect: true, visualPolishCorrect: true, layoutIssues: [],
+        productPlacementCorrect: true,
         parameterAlignmentCorrect: true, unsupportedStrictFactsAbsent: true,
         characterIdentityCorrect: true, characterHairstyleCorrect: true,
         characterOutfitCorrect: true, characterAccessoriesCorrect: true, characterIssues: [],
@@ -938,6 +1063,100 @@ test('成图质检失败时只追加一次 AI 修复，通过复检后才发布�
   assert.match(generationCalls[1].request.prompt, /只修复质检报告中失败的区域/);
   assert.equal(generationCalls[1].meta.referenceKinds[0], 'quality-failed-final');
   assert.ok(completed.pages[0].finalUrl);
+});
+
+test('文案层级或 Logo 容器破坏时不得误判通过，定向修复携带竞品原图恢复高级感版式', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let validationCalls = 0;
+  const validationRequests = [];
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    skipFinalValidation: false,
+    runRecognition: async (request, meta) => {
+      if (meta.kind === 'own-selling-points') {
+        return JSON.stringify({
+          productViews: [{
+            sourceImageIndex: 0, cropRegion: { x: 0, y: 0, width: 1, height: 1 },
+            viewAngle: 'front', visibleSides: ['front'], description: '', quality: 0.95,
+          }],
+          sellingPoints: [
+            { id: 'sp-1', title: '肩颈按摩器' },
+            { id: 'sp-2', title: '仿人手深层揉捏' },
+            { id: 'sp-3', title: '按摩热敷双效' },
+          ],
+        });
+      }
+      if (meta.kind === 'competitor-page') {
+        return JSON.stringify({ page: {
+          pageType: 'marketing', hasPerson: false,
+          selectedProductViewIds: ['pv-1'], productInstances: [],
+          copySlots: [
+            { slotId: 'badge', role: 'featureBadge', sourceText: '竞品标签', x: 0.35, y: 0.1, width: 0.3, height: 0.04, maxChars: 8 },
+            { slotId: 'headline', role: 'headline', sourceText: '竞品大标题', x: 0.1, y: 0.2, width: 0.8, height: 0.08, maxChars: 10 },
+            { slotId: 'subheadline', role: 'featureSubheadline', sourceText: '竞品副标题', x: 0.15, y: 0.3, width: 0.7, height: 0.05, maxChars: 10 },
+          ],
+          mappedSellingPoints: [
+            { sellingPointId: 'sp-1', slotId: 'badge', slotRole: 'featureBadge', replacementText: '肩颈按摩器' },
+            { sellingPointId: 'sp-2', slotId: 'headline', slotRole: 'headline', replacementText: '仿人手深层揉捏' },
+            { sellingPointId: 'sp-3', slotId: 'subheadline', slotRole: 'featureSubheadline', replacementText: '按摩热敷双效' },
+          ],
+          mappedFacts: [],
+        } });
+      }
+      validationCalls += 1;
+      validationRequests.push(request);
+      const repaired = validationCalls > 1;
+      return JSON.stringify({
+        passed: true,
+        copyExact: true,
+        brandCorrect: true,
+        productCorrect: true,
+        logoCorrect: true,
+        logoPresentationCorrect: repaired,
+        layoutHierarchyCorrect: repaired,
+        visualPolishCorrect: repaired,
+        layoutIssues: repaired ? [] : ['主标题层级消失', 'Logo 被生成为深色矩形贴片'],
+        productPlacementCorrect: true,
+        parameterAlignmentCorrect: true,
+        unsupportedStrictFactsAbsent: true,
+        characterIdentityCorrect: true,
+        characterHairstyleCorrect: true,
+        characterOutfitCorrect: true,
+        characterAccessoriesCorrect: true,
+        characterIssues: [],
+        competitorRemoved: true,
+        gibberishDetected: false,
+        missingTexts: [],
+        wrongTexts: [],
+        unexpectedTexts: [],
+        summary: repaired ? '通过' : '版式与 Logo 呈现失败',
+      });
+    },
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from(`layout-${meta.phase}`), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'layout-logo-validation-repair-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(validationCalls, 2);
+  assert.deepEqual(generationCalls.map(call => call.meta.phase), ['final-detail', 'final-repair']);
+  assert.deepEqual(generationCalls[1].meta.referenceKinds, [
+    'quality-failed-final', 'competitor-layout-original',
+  ]);
+  assert.equal(generationCalls[1].request.referenceImageInputs[1], COMPETITOR);
+  assert.equal(validationRequests[0].imageDataUrls[1], COMPETITOR);
+  assert.match(generationCalls[1].request.prompt, /恢复胶囊标签、主标题、副标题/);
+  assert.match(generationCalls[1].request.prompt, /贴图方块和脏底/);
+  assert.equal(completed.pages[0].validation.layoutHierarchyCorrect, true);
+  assert.equal(completed.pages[0].validation.visualPolishCorrect, true);
 });
 
 test('人物只换脸但发型服装不符时质检失败，定向修复继续携带完整人物参考', async t => {
@@ -976,6 +1195,10 @@ test('人物只换脸但发型服装不符时质检失败，定向修复继续�
         brandCorrect: true,
         productCorrect: true,
         logoCorrect: true,
+        logoPresentationCorrect: true,
+        layoutHierarchyCorrect: true,
+        visualPolishCorrect: true,
+        layoutIssues: [],
         productPlacementCorrect: true,
         parameterAlignmentCorrect: true,
         unsupportedStrictFactsAbsent: true,
@@ -1008,11 +1231,14 @@ test('人物只换脸但发型服装不符时质检失败，定向修复继续�
   assert.deepEqual(generationCalls[0].meta.referenceKinds, [
     'competitor-layout', 'own-product-auto-angle', 'character',
   ]);
-  assert.deepEqual(generationCalls[1].meta.referenceKinds, ['quality-failed-final', 'character']);
+  assert.deepEqual(generationCalls[1].meta.referenceKinds, [
+    'quality-failed-final', 'competitor-layout-original', 'character',
+  ]);
   assert.equal(generationCalls[1].request.referenceImageInputs.at(-1), CHARACTER);
   assert.match(generationCalls[0].request.prompt, /绝不允许只换脸/);
   assert.match(generationCalls[1].request.prompt, /发型、服装或配饰/);
-  assert.match(validationRequests[0].systemInstruction, /参考图3是人物完整造型参考/);
+  assert.match(validationRequests[0].systemInstruction, /参考图4是人物完整造型参考/);
+  assert.equal(validationRequests[0].imageDataUrls[1], COMPETITOR);
   assert.equal(validationRequests[0].imageDataUrls.at(-1), CHARACTER);
   assert.equal(completed.pages[0].validation.characterOutfitCorrect, true);
   assert.deepEqual(completed.pages[0].validation.characterIssues, []);

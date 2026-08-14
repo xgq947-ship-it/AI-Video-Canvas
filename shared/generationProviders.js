@@ -13,7 +13,10 @@ export const IMAGE_GENERATION_PROVIDERS = Object.freeze([
     browserProvider: null,
     supportsImageToImage: true,
     supportsMultipleReferenceImages: true,
-    maxReferenceImages: 14,
+    // The ChatGPT image editor accepts at most five referenced image paths.
+    // Keep the shared capability honest so callers prioritize references
+    // deterministically instead of asking the queue worker to drop one.
+    maxReferenceImages: 5,
     supportsMultipleOutputs: false,
     maxOutputCount: 1,
     resolutions: ['Auto'],

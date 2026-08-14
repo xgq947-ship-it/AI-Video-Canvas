@@ -46,7 +46,7 @@ test('Video Remix 一致性图片模型包含 Codex CLI 生图', () => {
   assert.ok(codex);
   assert.equal(codex.name, 'Codex CLI · ChatGPT 生图');
   assert.equal(codex.supportsImageToImage, true);
-  assert.equal(codex.maxReferenceImages, 14);
+  assert.equal(codex.maxReferenceImages, 5);
 });
 
 test('Flow 能力表覆盖文本、首帧、多参考图，且只展示可路由模型', () => {

@@ -28,6 +28,7 @@ import {
   canonicalDetailRemixFactField,
   detailRemixPageMode,
   detailRemixStrictPageCategory,
+  isDetailRemixMarketingLayoutSlot,
   isDetailRemixStrictParameterPage,
   normalizeDetailRemixFactValue,
   parseOwnSellingPointsResponse,
@@ -47,6 +48,8 @@ export const DEFAULT_DETAIL_REMIX_RECOGNITION_PROVIDER = 'gemini-web';
 export const DEFAULT_DETAIL_REMIX_IMAGE_MODEL = 'google-flow-nano-banana-pro';
 export const DETAIL_REMIX_JOB_SCHEMA_VERSION = 7;
 const DETAIL_REMIX_KNOWLEDGE_SCHEMA_VERSION = 3;
+const DETAIL_REMIX_COMPETITOR_ANALYSIS_VERSION = 2;
+const DETAIL_REMIX_PIPELINE_VERSION = 'strict-evidence-layout-brand-qa-v3';
 const MAX_AUTO_PRODUCT_VIEW_REFERENCES = 3;
 const MAX_FINAL_REPAIR_ATTEMPTS = 1;
 const DETAIL_REMIX_RECOGNITION_TIMEOUT_MS = 10 * 60_000;
@@ -910,7 +913,75 @@ function resolveMappedFacts(analysis, verifiedFacts) {
   return { mappedFacts, rejected };
 }
 
-function validateCompetitorAnalysisContract(analysis, verifiedFacts) {
+function isBrandOnlyCopySlot(slot, brandSlots) {
+  const sourceText = String(slot?.sourceText || '').trim().normalize('NFKC').toLowerCase();
+  const role = String(slot?.role || '').trim().toLowerCase();
+  const brandTexts = (Array.isArray(brandSlots) ? brandSlots : [])
+    .map(item => String(item?.sourceText || '').trim().normalize('NFKC').toLowerCase())
+    .filter(Boolean);
+  return (sourceText && brandTexts.includes(sourceText))
+    || (/(?:brand|logo|品牌|标识)/iu.test(role) && !/(?:headline|title|标题)/iu.test(role));
+}
+
+function validateMarketingCopyContract(analysis, ownSellingPoints) {
+  if (isDetailRemixStrictParameterPage(analysis)) return;
+  const slots = Array.isArray(analysis?.copySlots) ? analysis.copySlots : [];
+  const brandSlots = Array.isArray(analysis?.brandSlots) ? analysis.brandSlots : [];
+  const criticalSlots = slots.filter(slot => (
+    isDetailRemixMarketingLayoutSlot(slot)
+    && !isBrandOnlyCopySlot(slot, brandSlots)
+  ));
+  if (!criticalSlots.length) return;
+
+  const knownIds = new Set((Array.isArray(ownSellingPoints) ? ownSellingPoints : [])
+    .map(point => String(point?.id || '').trim())
+    .filter(Boolean));
+  const mappings = Array.isArray(analysis?.mappedSellingPoints)
+    ? analysis.mappedSellingPoints.filter(item => item && typeof item === 'object')
+    : [];
+  const mappingsBySlot = new Map();
+  for (const mapping of mappings) {
+    const slotId = String(mapping.slotId || '').trim();
+    const entries = mappingsBySlot.get(slotId) || [];
+    entries.push(mapping);
+    mappingsBySlot.set(slotId, entries);
+  }
+
+  const issues = [];
+  const replacementOwners = new Map();
+  for (const slot of criticalSlots) {
+    const slotId = String(slot?.slotId || '').trim();
+    const entries = mappingsBySlot.get(slotId) || [];
+    if (entries.length !== 1) {
+      issues.push(`${slotId || 'unknown'}:${entries.length ? 'duplicate_mapping' : 'mapping_missing'}`);
+      continue;
+    }
+    const mapping = entries[0];
+    const sellingPointId = String(mapping.sellingPointId || mapping.pointId || mapping.id || '').trim();
+    const replacementText = String(mapping.replacementText || '').trim();
+    if (!knownIds.has(sellingPointId)) issues.push(`${slotId}:selling_point_unknown`);
+    if (!replacementText) {
+      issues.push(`${slotId}:replacement_text_missing`);
+      continue;
+    }
+    const maximum = Math.max(0, Number(slot?.maxChars) || 0);
+    if (maximum && [...replacementText].length > maximum) issues.push(`${slotId}:replacement_text_too_long`);
+    const normalizedReplacement = replacementText.normalize('NFKC').replace(/\s+/gu, '');
+    const previousSlotId = replacementOwners.get(normalizedReplacement);
+    if (previousSlotId && previousSlotId !== slotId) {
+      issues.push(`${slotId}:replacement_text_duplicated_with_${previousSlotId}`);
+    } else {
+      replacementOwners.set(normalizedReplacement, slotId);
+    }
+  }
+  if (!issues.length) return;
+  const error = new Error(`营销页核心文案槽未完整保留：${issues.join('、')}`);
+  error.code = 'DETAIL_REMIX_ANALYSIS_CONTRACT';
+  error.copyMappingIssues = issues;
+  throw error;
+}
+
+function validateCompetitorAnalysisContract(analysis, verifiedFacts, ownSellingPoints) {
   const resolution = resolveMappedFacts(analysis, verifiedFacts);
   if (resolution.rejected.length > 0) {
     const reasons = [...new Set(resolution.rejected.map(item => item.reason))];
@@ -936,6 +1007,8 @@ function validateCompetitorAnalysisContract(analysis, verifiedFacts) {
         throw error;
       }
     }
+  } else {
+    validateMarketingCopyContract(analysis, ownSellingPoints);
   }
   return resolution;
 }
@@ -1457,7 +1530,22 @@ async function extractOwnSellingPoints(job, context, signal) {
 }
 
 async function analyzeCompetitorPage(job, page, context, signal) {
-  if (page.analysis && page.recognitionStatus === 'completed') return;
+  if (page.analysis
+      && page.recognitionStatus === 'completed'
+      && Number(page.competitorAnalysisVersion) >= DETAIL_REMIX_COMPETITOR_ANALYSIS_VERSION) return;
+  if (page.analysis && page.recognitionStatus === 'completed') {
+    // Recognition is inexpensive compared with image generation. Refresh old
+    // analyses so a previously sparse copy map cannot silently flatten layout.
+    page.analysis = undefined;
+    page.mappedSellingPoints = undefined;
+    page.mappedFacts = undefined;
+    page.effectiveMappedFacts = undefined;
+    page.factMappingAudit = undefined;
+    page.recognitionStatus = 'waiting';
+    page.recognitionAttempts = 0;
+    page.recognitionFormatRetries = 0;
+    page.recognitionContractRetries = 0;
+  }
   if (['submitting', 'processing', 'recovery_required'].includes(page.recognitionStatus)) {
     page.recognitionStatus = 'waiting';
     if (['analyzing', 'recovery_required'].includes(page.status)) page.status = 'waiting';
@@ -1489,8 +1577,8 @@ async function analyzeCompetitorPage(job, page, context, signal) {
     const request = {
       systemInstruction: instruction,
       userPrompt: formatAttempt === 0
-        ? '分析这一张竞品详情图的构图、人物、产品角度和文字层级。先判断 STRICT_PARAMETER_MODE；严格参数的名称和值必须分别定位、同字段配对，并且只映射我方精确事实。普通页才映射我方卖点；严格返回指定 JSON。'
-        : '上一次回复未通过 JSON 或严格参数证据契约校验。请重新分析同一张图：参数名与参数值拆成独立槽，field 与 displayPart 必须一致，只映射有我方事实 ID 的完整 label/value 对。只返回完全符合 Schema 的单个 JSON 对象，不要解释、不要 Markdown。',
+        ? '分析这一张竞品详情图的构图、人物、产品角度和文字层级。先判断 STRICT_PARAMETER_MODE；严格参数的名称和值必须分别定位、同字段配对，并且只映射我方精确事实。营销页的胶囊标签、主标题、拆分标题、副标题和说明必须逐槽映射我方卖点并填写 replacementText，不能删除后压平层级。严格返回指定 JSON。'
+        : '上一次回复未通过 JSON、参数证据或营销版式契约校验。严格参数页把参数名和值拆成独立槽，field 与 displayPart 必须一致，只映射有我方事实 ID 的完整 label/value 对；营销页为每个核心文案槽恰好输出一条已给卖点映射和适配 maxChars 的 replacementText，不能漏掉主标题、胶囊标签或副标题。只返回完全符合 Schema 的单个 JSON 对象，不要解释、不要 Markdown。',
       imageDataUrls: [imageDataUrl],
       outputSchema: DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA,
       model: job.recognitionModel,
@@ -1511,7 +1599,11 @@ async function analyzeCompetitorPage(job, page, context, signal) {
       assertActive(job, context, signal);
       parsed = parseCompetitorPageResponse(raw);
       normalizedAnalysis = normalizePageAnalysis(parsed);
-      factResolution = validateCompetitorAnalysisContract(normalizedAnalysis, job.verifiedFacts);
+      factResolution = validateCompetitorAnalysisContract(
+        normalizedAnalysis,
+        job.verifiedFacts,
+        job.ownSellingPoints,
+      );
       break;
     } catch (error) {
       if (isOperationCancelled(error)) throw error;
@@ -1545,6 +1637,7 @@ async function analyzeCompetitorPage(job, page, context, signal) {
     rejected: factResolution.rejected,
   };
   page.recognitionStatus = 'completed';
+  page.competitorAnalysisVersion = DETAIL_REMIX_COMPETITOR_ANALYSIS_VERSION;
   page.recognitionCompletedAt = nowIso(context);
   page.recognitionLastError = undefined;
   page.recognitionLastFailedAt = undefined;
@@ -1767,13 +1860,18 @@ async function validateFinalDetailPage(
   const provider = getPromptOptimizerProvider(job.recognitionProvider);
   const copyPlan = exactCopyPlan(page);
   const generatedDataUrl = imageInputToDataUrl(buffer, context);
+  const competitorLayoutDataUrl = imageInputToDataUrl(page.sourceImage, context);
   const supporting = [
+    competitorLayoutDataUrl,
     ...selectedProducts.map(item => item.imageUrl),
     ...brandReferences,
     ...evidenceReferences.map(item => item.imageUrl),
     ...characterReferences,
-  ].map(value => imageInputToDataUrl(value, context)).filter(Boolean);
+  ].map(value => String(value || '').startsWith('data:image/')
+    ? value
+    : imageInputToDataUrl(value, context)).filter(Boolean);
   if (!generatedDataUrl) throw new Error('无法读取待质检的最终详情图');
+  if (!competitorLayoutDataUrl) throw new Error('无法读取用于版式质检的竞品原图');
   page.validationStatus = 'processing';
   page.validationAttempts = Math.max(0, Number(page.validationAttempts) || 0) + 1;
   job.stage = 'validating_final';
@@ -1827,6 +1925,9 @@ async function validateFinalDetailPage(
     && parsed.brandCorrect === true
     && parsed.productCorrect === true
     && parsed.logoCorrect === true
+    && parsed.logoPresentationCorrect === true
+    && parsed.layoutHierarchyCorrect === true
+    && parsed.visualPolishCorrect === true
     && parsed.productPlacementCorrect === true
     && parsed.parameterAlignmentCorrect === true
     && parsed.unsupportedStrictFactsAbsent === true
@@ -1839,7 +1940,8 @@ async function validateFinalDetailPage(
     && parsed.missingTexts.length === 0
     && parsed.wrongTexts.length === 0
     && parsed.unexpectedTexts.length === 0
-    && parsed.characterIssues.length === 0;
+    && parsed.characterIssues.length === 0
+    && parsed.layoutIssues.length === 0;
   const validation = { ...parsed, passed };
   page.validation = validation;
   page.validationStatus = passed ? 'passed' : 'failed';
@@ -1878,6 +1980,7 @@ async function repairFinalDetailPage(
   page.qualityFailedCandidateUrl = current.resultUrl;
   const repairReferences = [
     current.resultUrl,
+    page.sourceImage,
     ...evidenceReferences.map(item => item.imageUrl),
     ...brandReferences,
     ...characterReferences,
@@ -1913,6 +2016,7 @@ async function repairFinalDetailPage(
     pageIndex: page.index,
     referenceKinds: [
       'quality-failed-final',
+      'competitor-layout-original',
       ...evidenceReferences.map(() => 'own-fact-evidence'),
       ...brandReferences.map(() => 'own-brand-logo'),
       ...characterReferences.map(() => 'character'),
@@ -2072,6 +2176,10 @@ async function generateFinalPage(job, page, context, signal) {
       brandCorrect: true,
       productCorrect: true,
       logoCorrect: true,
+      logoPresentationCorrect: true,
+      layoutHierarchyCorrect: true,
+      visualPolishCorrect: true,
+      layoutIssues: [],
       productPlacementCorrect: true,
       parameterAlignmentCorrect: true,
       unsupportedStrictFactsAbsent: true,
@@ -2138,6 +2246,7 @@ async function generateFinalPage(job, page, context, signal) {
       ...validation.wrongTexts,
       ...validation.unexpectedTexts,
       ...validation.characterIssues,
+      ...validation.layoutIssues,
     ].slice(0, 5).join('；');
     const error = new Error(`AI 成图质检未通过${details ? `：${details}` : validation.summary ? `：${validation.summary}` : ''}`);
     error.code = 'DETAIL_REMIX_QUALITY_FAILED';
@@ -2845,7 +2954,7 @@ export function createDetailRemixJob(payload, context) {
   }));
   const job = {
     schemaVersion: DETAIL_REMIX_JOB_SCHEMA_VERSION,
-    pipelineVersion: 'strict-evidence-position-qa-v2',
+    pipelineVersion: DETAIL_REMIX_PIPELINE_VERSION,
     id: requestedId || newId(context),
     workflowId: String(payload.workflowId),
     nodeId: String(payload.nodeId),
@@ -2932,7 +3041,7 @@ export function composeDetailRemixProducts(jobId, workflowId, payload, context) 
   job.phase = 'composition';
   job.status = 'pending';
   job.schemaVersion = DETAIL_REMIX_JOB_SCHEMA_VERSION;
-  job.pipelineVersion = 'strict-evidence-position-qa-v2';
+  job.pipelineVersion = DETAIL_REMIX_PIPELINE_VERSION;
   job.stage = 'composition_queued';
   job.stageLabel = '产品合成任务已创建';
   job.error = undefined;
@@ -3105,6 +3214,7 @@ export function retryFailedDetailRemixPages(jobId, workflowId, payload, context)
   }
   job.status = 'pending';
   job.phase = 'final';
+  job.pipelineVersion = DETAIL_REMIX_PIPELINE_VERSION;
   job.stage = 'queued';
   job.stageLabel = `准备仅重试失败页（${retryPages.length} 页）`;
   job.error = undefined;
@@ -3202,6 +3312,7 @@ export function regenerateCompletedDetailRemixPage(jobId, workflowId, payload, c
 
   job.status = 'pending';
   job.phase = 'final';
+  job.pipelineVersion = DETAIL_REMIX_PIPELINE_VERSION;
   job.stage = 'queued';
   job.stageLabel = `准备重新生成第 ${pageIndex + 1} 页（仅此一页）`;
   job.error = undefined;

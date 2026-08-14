@@ -236,6 +236,10 @@ test('结构化识图解析产品角度与竞品选角，同时禁止编造竞�
   assert.ok(DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.properties.page.required.includes('copySlots'));
   assert.equal(DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.properties.page.properties.copySlots.items.additionalProperties, false);
   assert.ok(DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.properties.page.required.includes('mappedFacts'));
+  assert.ok(
+    DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.properties.page.properties.mappedSellingPoints.items.required
+      .includes('replacementText'),
+  );
   assert.ok(DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.properties.page.properties.mappedFacts.items.required.includes('displayPart'));
   assert.deepEqual(
     DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.properties.page.properties.mappedFacts.items.properties.displayPart.enum,
@@ -252,6 +256,10 @@ test('结构化识图解析产品角度与竞品选角，同时禁止编造竞�
   assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('characterHairstyleCorrect'));
   assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('characterOutfitCorrect'));
   assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('characterIssues'));
+  assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('layoutHierarchyCorrect'));
+  assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('logoPresentationCorrect'));
+  assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('visualPolishCorrect'));
+  assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('layoutIssues'));
 });
 
 test('参数页只使用有来源的精确事实，营销卖点和无证据竞品参数不会填入槽位', () => {
@@ -434,6 +442,10 @@ test('成图质检与 AI 定向修复保持全 AI 路径，不产生本地叠字
     brandCorrect: true,
     productCorrect: true,
     logoCorrect: true,
+    logoPresentationCorrect: false,
+    layoutHierarchyCorrect: false,
+    visualPolishCorrect: false,
+    layoutIssues: ['主标题层级丢失', 'Logo 出现深色裁剪贴片'],
     productPlacementCorrect: true,
     parameterAlignmentCorrect: false,
     unsupportedStrictFactsAbsent: false,
@@ -453,6 +465,8 @@ test('成图质检与 AI 定向修复保持全 AI 路径，不产生本地叠字
   assert.equal(validation.gibberishDetected, true);
   assert.equal(validation.characterOutfitCorrect, false);
   assert.deepEqual(validation.characterIssues, ['仍保留竞品发型和服装']);
+  assert.equal(validation.layoutHierarchyCorrect, false);
+  assert.deepEqual(validation.layoutIssues, ['主标题层级丢失', 'Logo 出现深色裁剪贴片']);
   const instruction = buildFinalDetailValidationInstruction({
     pageAnalysis: { pageType: 'specification', forbiddenCompetitorElements: ['PHILIPS'] },
     copyPlan: [{ replacementText: '额定功率\n16W' }],
@@ -463,7 +477,8 @@ test('成图质检与 AI 定向修复保持全 AI 路径，不产生本地叠字
     characterReferenceCount: 1,
   });
   assert.match(instruction, /参数页只要有一个错误数字/);
-  assert.match(instruction, /参考图5是人物完整造型参考/);
+  assert.match(instruction, /参考图2是原始竞品页/);
+  assert.match(instruction, /参考图6是人物完整造型参考/);
   assert.match(instruction, /只换脸、仍保留竞品发型或竞品衣服必须判失败/);
   const repair = buildFinalDetailRepairPrompt({
     pageAnalysis: { pageType: 'specification' },
@@ -473,9 +488,11 @@ test('成图质检与 AI 定向修复保持全 AI 路径，不产生本地叠字
     hasBrandLogoReference: true,
     characterReferenceCount: 1,
   });
-  assert.match(repair, /参考图2.*事实证据/);
-  assert.match(repair, /参考图3.*真实 Logo/);
-  assert.match(repair, /参考图4是人物完整造型参考/);
+  assert.match(repair, /参考图2是原始竞品页/);
+  assert.match(repair, /参考图3.*事实证据/);
+  assert.match(repair, /参考图4只提供我方 Logo/);
+  assert.match(repair, /参考图5是人物完整造型参考/);
+  assert.match(repair, /恢复胶囊标签、主标题、副标题/);
   assert.match(repair, /禁止只换脸/);
   assert.doesNotMatch(repair, /本地|程序叠加/);
 });
@@ -517,7 +534,7 @@ test('单阶段提示词一次传入版式、产品和可选人物，并直接�
   assert.match(off, /直接编辑参考图1/);
   assert.match(off, /目标尺寸继承竞品原图/);
   assert.match(off, /参考图2是同一款我方真实产品/);
-  assert.match(off, /参考图3是我方真实 Logo 参考/);
+  assert.match(off, /参考图3只提供我方 Logo 的身份/);
   assert.match(off, /front-left/);
   assert.match(off, /生成第.*最终图/);
   assert.match(off, /"originalText":"竞品原标题"/);
@@ -536,7 +553,7 @@ test('单阶段提示词一次传入版式、产品和可选人物，并直接�
     useCharacterReference: true,
   });
   assert.match(on, /参考图2至参考图3/);
-  assert.match(on, /参考图4是我方真实 Logo 参考/);
+  assert.match(on, /参考图4只提供我方 Logo 的身份/);
   assert.match(on, /参考图5及之后是人物完整外观的最高权威/);
   assert.match(on, /绝不允许只换脸后保留竞品人物的发型、衣服或配饰/);
   // Legacy prompt builders remain readable for projects created before the

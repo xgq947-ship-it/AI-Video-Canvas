@@ -183,11 +183,12 @@ export const DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA = Object.freeze({
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['sellingPointId', 'slotId', 'slotRole'],
+            required: ['sellingPointId', 'slotId', 'slotRole', 'replacementText'],
             properties: {
               sellingPointId: { type: 'string' },
               slotId: { type: 'string' },
               slotRole: { type: 'string' },
+              replacementText: { type: 'string' },
             },
           },
         },
@@ -314,7 +315,8 @@ export const DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA = Object.freeze({
   additionalProperties: false,
   required: [
     'passed', 'copyExact', 'brandCorrect', 'productCorrect',
-    'logoCorrect', 'productPlacementCorrect', 'parameterAlignmentCorrect',
+    'logoCorrect', 'logoPresentationCorrect', 'layoutHierarchyCorrect',
+    'visualPolishCorrect', 'layoutIssues', 'productPlacementCorrect', 'parameterAlignmentCorrect',
     'unsupportedStrictFactsAbsent', 'characterIdentityCorrect', 'characterHairstyleCorrect',
     'characterOutfitCorrect', 'characterAccessoriesCorrect', 'characterIssues',
     'competitorRemoved', 'gibberishDetected', 'missingTexts', 'wrongTexts',
@@ -326,6 +328,10 @@ export const DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA = Object.freeze({
     brandCorrect: { type: 'boolean' },
     productCorrect: { type: 'boolean' },
     logoCorrect: { type: 'boolean' },
+    logoPresentationCorrect: { type: 'boolean' },
+    layoutHierarchyCorrect: { type: 'boolean' },
+    visualPolishCorrect: { type: 'boolean' },
+    layoutIssues: { type: 'array', items: { type: 'string' } },
     productPlacementCorrect: { type: 'boolean' },
     parameterAlignmentCorrect: { type: 'boolean' },
     unsupportedStrictFactsAbsent: { type: 'boolean' },
@@ -938,23 +944,37 @@ export function buildCompetitorPageInstruction({
     '你是电商详情页视觉反推与语义槽位规划专家。所附仅一张“竞品详情图”。',
     '反推画面结构、镜头、背景、光线、色彩、人物需求、文字层级、商品区域及前后遮挡关系；完整保留版式位置关系，但不要保留竞品品牌、Logo、商品外观或竞品独有主张。',
     '逐个识别画面里所有竞品产品实例并输出 productInstances；每个实例使用 0~1 归一化 x/y/width/height，并说明观察角度、接触面与需要保留在商品前方的遮挡层。只有单个实例时仍必须输出一项。',
-    '识别竞品品牌/Logo 原本占据的位置并输出 brandSlots，记录 sourceText 或 visualDescription，后续 AI 会在相同位置直接换成我方品牌。',
+    '识别竞品品牌/Logo 原本占据的位置并输出 brandSlots，记录 sourceText 或 visualDescription，尤其写清原槽位的底色、容器形状、留白、对齐和呈现方式（独立标牌、角标、产品压印等）；后续只替换品牌身份，必须保留该槽位原有的视觉容器。',
     `先判断页面模式 pageMode。参数页、规格页、型号页、配件页、电气参数页、包装/装箱清单页一律填 ${DETAIL_REMIX_STRICT_PARAMETER_MODE}，并用 strictPageCategory 标明 parameters/specifications/model/accessories/electrical/packing_list；普通卖点、场景和品牌页填 ${DETAIL_REMIX_MARKETING_MODE} 且 strictPageCategory=none。pageType 保留 marketing/scene/brand/specification 等简短类型。`,
     '逐个识别竞品原有可读文案并输出 copySlots；每个槽必须包含 slotId、role、field、parameterPart、sourceText、位置、对齐、颜色和字重。普通文案 field 为空且 parameterPart=none。',
     `当 pageMode=${DETAIL_REMIX_STRICT_PARAMETER_MODE} 时，参数名称和参数值必须拆成两个独立 copySlot：名称槽 parameterPart=label，数值槽 parameterPart=value，并填写同一个规范 field。禁止把“额定功率 20W”作为单个替换单元；即使视觉上相邻，也必须分别给出两个紧密区域。`,
     '严格参数模式只能把参数槽映射到 verifiedFacts 的事实 ID，写入 mappedFacts；禁止输出 mappedSellingPoints。displayPart 只允许 label 或 value，并且必须与目标 slot 的 parameterPart 一致；同一事实只有 label/value 两个位置都可靠识别并且 field 一致时才映射。没有我方事实证据的竞品参数槽不映射，后续会彻底删除。',
-    `当 pageMode=${DETAIL_REMIX_MARKETING_MODE} 时可把营销文案槽映射到 mappedSellingPoints；只能选择已给卖点，不得新造参数或功效，也不得新造比较结论。页面中若混有精确数字/型号，只能通过 mappedFacts 使用我方证据，绝不能用营销卖点覆盖。`,
-    'mappedSellingPoints 只映射确实适合承载我方卖点的文案槽：同一 slotId 最多选择一个卖点，尽量把不同卖点分配给不同槽；纯栏目标签、竞品对照说明或无法可靠替换的槽不要强行映射，后续会直接删除其竞品文字。',
+    `当 pageMode=${DETAIL_REMIX_MARKETING_MODE} 时，把营销文案槽映射到 mappedSellingPoints；只能选择已给卖点，不得新造参数或功效，也不得新造比较结论。页面中若混有精确数字/型号，只能通过 mappedFacts 使用我方证据，绝不能用营销卖点覆盖。`,
+    '营销页中承担版式层级的所有可读槽都必须逐槽映射：包括胶囊标签/眉题、主标题及其拆分片段、副标题、功能标题、说明正文。若 competitorTrademark 实际占据主标题的一部分，也按主标题槽替换，不能删掉后破坏标题层级。只有水印、页码、法务脚注、免责声明、纯表头/对照栏目名，以及已由 brandSlots 单独承接的孤立品牌字样可以不映射并删除。',
+    'mappedSellingPoints 中同一 slotId 恰好一项，每项都必须填写 replacementText。replacementText 必须是所选我方卖点 title/description 的忠实短写，适配该槽 maxChars，不得添加证据外功效；相邻的拆分标题允许选择同一卖点但要写成不同且连贯的片段。不同槽禁止机械重复同一句话。最终要保持原页“眉题/胶囊标签—大标题—副标题/说明”的数量、字号层级和留白节奏。',
     '判断所有竞品产品实例的观察角度、朝向、可见面和透视要求，再从我方产品视角库中选择最匹配的 1~3 个 ID 写入 selectedProductViewIds。必须只选给定 ID；优先覆盖本页出现的不同角度和产品完整度。',
     `页面序号：${pageIndex + 1}。我方品牌：${JSON.stringify(brand)}。我方卖点库：${JSON.stringify(sellingPoints)}。我方精确事实库：${JSON.stringify(verifiedFacts)}。我方产品视角库：${JSON.stringify(productViews)}`,
     '只输出合法 JSON，不要 Markdown。格式：',
     `{"page":{"pageType":"specification","pageMode":"${DETAIL_REMIX_STRICT_PARAMETER_MODE}","strictPageCategory":"electrical","purpose":"","reversePrompt":"","layoutSpec":"","palette":"","lighting":"","hasPerson":false,"personaSpec":"","targetProductView":{"viewAngle":"front-left","visibleSides":["front","left"],"orientation":"upright","perspective":"three-quarter"},"selectedProductViewIds":["pv-1"],"productInstances":[{"instanceId":"product-1","x":0.5,"y":0.5,"width":0.3,"height":0.3,"viewAngle":"front-left","contactSurface":"","foregroundOcclusion":""}],"brandSlots":[{"slotId":"brand-1","sourceText":"竞品品牌","visualDescription":"左上角白色品牌标识","x":0.05,"y":0.03,"width":0.2,"height":0.08,"align":"left","color":"#ffffff"}],"copySlots":[{"slotId":"power-label","role":"parameterLabel","field":"power","parameterPart":"label","sourceText":"额定功率","x":0.1,"y":0.08,"width":0.35,"height":0.06,"align":"left","color":"#ffffff","fontWeight":500,"maxChars":8},{"slotId":"power-value","role":"parameterValue","field":"power","parameterPart":"value","sourceText":"20W","x":0.5,"y":0.08,"width":0.2,"height":0.06,"align":"right","color":"#ffffff","fontWeight":500,"maxChars":8}],"mappedSellingPoints":[],"mappedFacts":[{"factId":"fact-1","slotId":"power-label","slotRole":"parameterLabel","displayPart":"label"},{"factId":"fact-1","slotId":"power-value","slotRole":"parameterValue","displayPart":"value"}],"forbiddenCompetitorElements":[]}}`,
+    '营销映射项格式：{"sellingPointId":"sp-1","slotId":"headline-1","slotRole":"headline","replacementText":"仿人手深层揉捏"}',
   ].join('\n');
 }
 
 const displayCopy = value => text(value)
   .replace(/^(?:图片(?:中)?(?:明确)?(?:显示|标注|写明|说明)|页面(?:中)?(?:明确)?(?:显示|标注|写明|说明)|文案(?:中)?(?:明确)?(?:提到|写明|显示|说明)|证据(?:显示|表明)|可见文案证据)\s*[：:，,]?\s*/u, '')
   .trim();
+
+const REMOVABLE_MARKETING_COPY_ROLE = /(?:watermark|page.?number|copyright|legal|disclaimer|fine.?print|footnote|table.?header|column.?label|comparison.?label|legend|navigation|二维码|水印|页码|版权|法务|免责声明|脚注|表头|栏目名|对照标签)/iu;
+
+/** Marketing copy that visually carries the page hierarchy must never vanish. */
+export function isDetailRemixMarketingLayoutSlot(value) {
+  const slot = object(value);
+  const role = text(slot.role);
+  const sourceText = text(slot.sourceText || slot.originalText || slot.text);
+  const parameterPart = text(slot.parameterPart).toLowerCase();
+  if (!sourceText || ['label', 'value'].includes(parameterPart)) return false;
+  return !REMOVABLE_MARKETING_COPY_ROLE.test(`${role} ${sourceText}`);
+}
 
 const safeNormalizedRegion = value => {
   const source = object(value);
@@ -1355,6 +1375,11 @@ export function buildFinalDetailPrompt({
   });
   const strictMode = isDetailRemixStrictParameterPage(page);
   const safeCopyPlan = promptSafeCopyPlan(copyPlan);
+  const marketingLayoutSlots = strictMode
+    ? []
+    : array(page.copySlots)
+      .filter(isDetailRemixMarketingLayoutSlot)
+      .map((slot, index) => safePromptSlot(slot, `marketing-layout-${index + 1}`));
   const brandPlan = {
     brandIdentity: object(ownBrandIdentity),
     sourceSlots: promptPage.brandSlots,
@@ -1370,15 +1395,17 @@ export function buildFinalDetailPrompt({
     '参考图1是需要直接修改的竞品原图，不是只供自由发挥的风格参考。锁定它的画布、构图、背景、区域边界、人物姿势、商品位置、文字位置与视觉层级；除明确要求替换的区域外，不得重新设计页面。',
     `${productRange}是同一款我方真实产品的角度参考。逐个用我方产品替换参考图1中 productInstances 列出的全部竞品产品实例；为每个实例选择最接近的我方角度，保持我方产品真实结构、材质、颜色、比例和产品自身标识，并匹配原位置的透视、接触面、阴影、反射、肢体交互与前景遮挡。不得遗漏重复出现的小产品或混入竞品外形。`,
     hasBrandLogoReference
-      ? `参考图${brandReferenceIndex}是我方真实 Logo 参考。删除参考图1全部竞品 Logo 和品牌字样，再在 brandSlots 指定的原位置生成该我方 Logo；保持 Logo 的拼写、图形比例和识别特征，不得用普通文字假冒 Logo。`
+      ? `参考图${brandReferenceIndex}只提供我方 Logo 的身份、拼写和图形结构，不提供 Logo 容器样式。严禁把该裁剪图周围的产品材质、压印底纹、深色背景、光影或矩形裁剪边界复制到页面。删除参考图1全部竞品 Logo 和品牌字样，再在 brandSlots 原位置生成我方 Logo；每个槽位的底色、容器形状、尺寸、留白、对齐与呈现方式严格继承参考图1，例如独立白色标牌仍是干净白色标牌，产品表面压印仍是自然压印，不能把一种呈现方式套到所有位置。`
       : `删除参考图1全部竞品 Logo 和品牌字样，并根据 brandIdentity 在 brandSlots 指定的原位置生成我方品牌；品牌名必须逐字正确。若 brandIdentity 为空，则该位置保持干净，不得保留或猜测竞品品牌。`,
     ownEvidenceReferenceCount > 0
       ? `参考图${evidenceStart}${evidenceEnd > evidenceStart ? `至参考图${evidenceEnd}` : ''}是“我的详情”中与本页文案直接对应的事实证据页。参数、型号、数字、单位、正负号和大小写必须同时服从这些证据图与文案替换清单；不得从竞品原图抄回任何参数。`
       : '本页没有额外事实证据图；只能生成文案替换清单中已经核验的文字，其它竞品文字必须删除，禁止猜测补全。',
     strictMode
       ? `本页已由程序锁定为 ${DETAIL_REMIX_STRICT_PARAMETER_MODE}：每个 replacementText 都是不可改写的事实，sourceField、targetPart、targetRegion、evidenceImageId、evidenceRegion 与 confidence 构成证据链。参数名只能写入 label 位置，参数值只能写入 value 位置。禁止把营销卖点填入参数栏；没有证据映射的竞品参数栏必须连标签和值一起删除并自然修复背景。`
-      : '本页是营销/场景详情页：只能使用已经映射的我方卖点，不得擅自添加型号、功率、电压、认证或效果数据。',
+      : `本页是营销/场景详情页：只能使用已经映射的我方卖点，不得擅自添加型号、功率、电压、认证或效果数据。以下槽位共同承担原页的核心文案层级，必须与替换清单逐槽对应、全部保留，任何一个都不得消失或合并：${JSON.stringify(marketingLayoutSlots)}。`,
     '先彻底擦除参考图1的全部竞品文案，再依据“文案替换清单”在对应 slot 原位置直接生成 replacementText。中文必须逐字一致，不得改写、缩写、增字、漏字、重复、错别字或乱码；保持原槽位的字号层级、对齐、颜色和留白，不得让新旧文字重叠。没有分配替换文案的竞品文字槽必须删除并自然修复背景。',
+    '保留参考图1原有的“眉题/胶囊标签—主标题—副标题/说明”视觉层级：主标题仍然是视觉中心，副标题不得抢级，胶囊标签不得变成散落小字；禁止把多级文案压成同字号的两行文字，也禁止随意改变字体区域宽度、基线、行距和组间距。',
+    '在不改变原版式骨架的前提下完成高级感精修：Logo 边缘清晰、文字字形干净、字距行距稳定、光学对齐准确、留白克制、色彩和圆角一致；不得出现贴图感、脏底色、廉价描边、发光滥用、粗糙阴影或突兀矩形补丁。高级感只用于提高完成度，不允许自由改版。',
     '展示文案中禁止出现“图片显示”“图片明确标注”“文案提到”“证据表明”等分析过程用语。不得把 sellingPointId、坐标、JSON、提示词或任何内部说明画进图片。',
     '必须彻底移除竞品产品、包装、品牌、Logo、文案、水印与竞品独有主张；不得残留、变形、混合或臆造竞品元素，也不得生成额外产品。',
     useCharacterReference
@@ -1398,6 +1425,10 @@ export function parseFinalDetailValidationResponse(value) {
     brandCorrect: parsed.brandCorrect === true,
     productCorrect: parsed.productCorrect === true,
     logoCorrect: parsed.logoCorrect === true,
+    logoPresentationCorrect: parsed.logoPresentationCorrect === true,
+    layoutHierarchyCorrect: parsed.layoutHierarchyCorrect === true,
+    visualPolishCorrect: parsed.visualPolishCorrect === true,
+    layoutIssues: array(parsed.layoutIssues).map(text).filter(Boolean),
     productPlacementCorrect: parsed.productPlacementCorrect === true,
     parameterAlignmentCorrect: parsed.parameterAlignmentCorrect === true,
     unsupportedStrictFactsAbsent: parsed.unsupportedStrictFactsAbsent === true,
@@ -1430,22 +1461,29 @@ export function buildFinalDetailValidationInstruction({
   const productCount = Math.max(0, Number(productReferenceCount) || 0);
   const evidenceCount = Math.max(0, Number(evidenceReferenceCount) || 0);
   const characterCount = Math.max(0, Number(characterReferenceCount) || 0);
-  const brandReferenceIndex = productCount + 2;
+  const productStart = 3;
+  const brandReferenceIndex = productCount + productStart;
   const evidenceStart = brandReferenceIndex + (hasBrandLogoReference ? 1 : 0);
   const characterStart = evidenceStart + evidenceCount;
+  const marketingLayoutSlots = strictMode
+    ? []
+    : array(page.copySlots)
+      .filter(isDetailRemixMarketingLayoutSlot)
+      .map((slot, index) => safePromptSlot(slot, `marketing-layout-${index + 1}`));
   return [
-    '你是电商详情最终交付质检员。参考图1是待验收成图；其余参考图是我方产品、Logo、事实证据或人物完整造型，只能用于比对。',
+    '你是电商详情最终交付质检员。参考图1是待验收成图；参考图2是原始竞品页，只能用于比对画布、构图、品牌容器和文案版式，绝不能把其中的竞品品牌、产品或文案判为应保留内容。参考图3及之后才是我方产品、Logo、事实证据或人物完整造型。',
     characterCount > 0
       ? `参考图${characterStart}${characterCount > 1 ? `至参考图${characterStart + characterCount - 1}` : ''}是人物完整造型参考；必须分别核对人脸身份、发型、服装和可见配饰，不能只核对脸。`
       : '本页没有人物参考图；人物四项检查字段填 true，characterIssues 留空。',
-    `页面类型：${page.pageType}；运行模式：${page.pageMode}。必须逐字、逐位置出现的文案清单：${JSON.stringify(safeCopyPlan)}。我方品牌：${JSON.stringify(object(ownBrandIdentity))}。`,
+    `页面类型：${page.pageType}；运行模式：${page.pageMode}。必须逐字、逐位置出现的文案清单：${JSON.stringify(safeCopyPlan)}。营销页必须保留的核心文案层级槽：${JSON.stringify(marketingLayoutSlots)}。我方品牌：${JSON.stringify(object(ownBrandIdentity))}。`,
     '所有不在上述我方文案与品牌白名单中的可读内容，都必须按竞品残留或模型臆造内容报告。',
-    '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 参数名是否仍在 label 区、参数值是否仍在 value 区，不能错栏、合并或串行；3) 是否出现乱码、伪字、重复卖点、提示词或 JSON；4) 品牌与 Logo 是否正确且无竞品残留；5) 产品是否仍是我方产品、位置透视是否正确；6) 有人物参考时，成图人物的脸型五官、发际线与发型结构、服装款式领口袖型与颜色材质、可见配饰是否都来自人物参考。只换脸、仍保留竞品发型或竞品衣服必须判失败，并在 characterIssues 写明。',
+    '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 参数名是否仍在 label 区、参数值是否仍在 value 区，不能错栏、合并或串行；3) 是否出现乱码、伪字、重复卖点、提示词或 JSON；4) 品牌与 Logo 身份是否正确且无竞品残留；5) 对照参考图2，Logo 是否只替换标识身份而保留原槽位容器，不能把 Logo 参考图的深色产品材质、压印纹理或矩形裁剪底复制成贴片；6) 对照参考图2，营销页的胶囊标签、主标题、副标题/说明是否逐层保留，不能缺层、合并、缩成同字号小字或大幅漂移；7) 产品是否仍是我方产品、位置透视是否正确；8) 有人物参考时，成图人物的脸型五官、发际线与发型结构、服装款式领口袖型与颜色材质、可见配饰是否都来自人物参考。只换脸、仍保留竞品发型或竞品衣服必须判失败，并在 characterIssues 写明。',
+    '视觉完成度检查：只有 Logo 清晰、字体层级明确、字距行距稳定、对齐与留白统一，并且没有贴图方块、脏底、廉价描边、滥用发光、粗糙阴影或明显 AI 排版破损时，visualPolishCorrect 才能为 true。不要因正常风格差异苛刻判错，但任何肉眼明显不专业的排版都必须判失败并写入 layoutIssues。',
     strictMode
       ? `这是 ${DETAIL_REMIX_STRICT_PARAMETER_MODE}。没有列入替换清单的型号、数字、单位、材质、认证、配件或清单内容必须完全不存在；发现一个即 unsupportedStrictFactsAbsent=false，并写入 unexpectedTexts。`
       : '没有列入替换清单的新增参数或功效一律写入 unexpectedTexts。',
-    '只要 missingTexts、wrongTexts、unexpectedTexts 或 characterIssues 任一非空，passed 必须为 false。参数页只要有一个错误数字、单位、型号、参数错栏或乱码，passed 必须为 false。',
-    'passed 只有在 copyExact、brandCorrect、productCorrect、logoCorrect、productPlacementCorrect、parameterAlignmentCorrect、unsupportedStrictFactsAbsent、characterIdentityCorrect、characterHairstyleCorrect、characterOutfitCorrect、characterAccessoriesCorrect、competitorRemoved 全为 true，gibberishDetected=false，且所有异常数组都为空时才能为 true。只输出符合 Schema 的 JSON。',
+    '只要 missingTexts、wrongTexts、unexpectedTexts、characterIssues 或 layoutIssues 任一非空，passed 必须为 false。参数页只要有一个错误数字、单位、型号、参数错栏或乱码，passed 必须为 false。营销页核心文案层级缺失，或 Logo 出现深色纹理方块/裁剪贴片，必须为 false。',
+    'passed 只有在 copyExact、brandCorrect、productCorrect、logoCorrect、logoPresentationCorrect、layoutHierarchyCorrect、visualPolishCorrect、productPlacementCorrect、parameterAlignmentCorrect、unsupportedStrictFactsAbsent、characterIdentityCorrect、characterHairstyleCorrect、characterOutfitCorrect、characterAccessoriesCorrect、competitorRemoved 全为 true，gibberishDetected=false，且所有异常数组都为空时才能为 true。只输出符合 Schema 的 JSON。',
   ].join('\n');
 }
 
@@ -1460,23 +1498,26 @@ export function buildFinalDetailRepairPrompt({
 } = {}) {
   const page = safePageAnalysis(pageAnalysis);
   const safeCopyPlan = promptSafeCopyPlan(copyPlan);
-  const evidenceEnd = 1 + Math.max(0, Number(evidenceReferenceCount) || 0);
+  const evidenceStart = 3;
+  const evidenceEnd = evidenceStart + Math.max(0, Number(evidenceReferenceCount) || 0) - 1;
   const characterCount = Math.max(0, Number(characterReferenceCount) || 0);
-  const characterStart = evidenceEnd + (hasBrandLogoReference ? 2 : 1);
+  const brandReferenceIndex = evidenceEnd + 1;
+  const characterStart = brandReferenceIndex + (hasBrandLogoReference ? 1 : 0);
   return [
-    '直接编辑参考图1，输出修复后的完整最终详情图。只修复质检报告中失败的区域；背景、构图、产品、正确文字和其它已通过区域保持不变。',
+    '直接编辑参考图1，输出修复后的完整最终详情图。参考图2是原始竞品页，只用于恢复画布、构图、品牌容器和文案层级，严禁恢复其中的竞品品牌、产品或文案。只修复质检报告中失败的区域；产品、正确文字和其它已通过区域保持不变。',
     `页面类型：${page.pageType}；运行模式：${page.pageMode}。质检发现：${JSON.stringify(object(validation))}。`,
     `必须逐字生成的最终文案：${JSON.stringify(safeCopyPlan)}。我方品牌：${JSON.stringify(object(ownBrandIdentity))}。`,
     evidenceReferenceCount > 0
-      ? `参考图2${evidenceEnd > 2 ? `至参考图${evidenceEnd}` : ''}是我方事实证据，必须据此核对型号、数字、单位、符号和品牌。`
+      ? `参考图${evidenceStart}${evidenceEnd > evidenceStart ? `至参考图${evidenceEnd}` : ''}是我方事实证据，必须据此核对型号、数字、单位、符号和品牌。`
       : '没有额外事实证据图，严禁在清单之外猜测或新增文字。',
     hasBrandLogoReference
-      ? `参考图${evidenceEnd + 1}是我方真实 Logo；需要修复品牌时必须保持其拼写、图形比例和识别特征。`
+      ? `参考图${brandReferenceIndex}只提供我方 Logo 的身份、拼写和图形结构；不得复制其产品材质、压印底纹、深色背景或矩形裁剪边界。修复品牌时必须恢复参考图2原品牌槽的底色、容器形状、尺寸、留白和对齐，只替换 Logo 身份。`
       : '没有独立 Logo 参考时只允许使用品牌清单中的准确名称，不得臆造 Logo 图形。',
     characterCount > 0
       ? `参考图${characterStart}${characterCount > 1 ? `至参考图${characterStart + characterCount - 1}` : ''}是人物完整造型参考。若 characterIdentityCorrect、characterHairstyleCorrect、characterOutfitCorrect 或 characterAccessoriesCorrect 任一为 false，必须换掉参考图1中对应的脸、发型、服装或配饰，完整服从人物参考；只保留原人物的位置、动作、视线、与产品交互和遮挡关系，禁止只换脸。`
       : '本次没有人物造型参考，不要凭空改动人物。',
     '先擦除所有错误文字、乱码、重复文案、竞品参数和竞品品牌，再严格按 targetRegion/targetPart 在原槽位写入清单中的 replacementText。参数名不得进入 value 区，参数值不得进入 label 区；没有替换项的竞品文字区域保持干净。',
+    '若 layoutHierarchyCorrect=false，按参考图2逐层恢复胶囊标签、主标题、副标题/说明的原位置、字号比例、对齐和留白，禁止把多级文案压成同字号小字。若 logoPresentationCorrect=false，去掉贴图方块和脏底，只保留干净、清晰且适配原容器的我方 Logo。若 visualPolishCorrect=false，修正字距、行距、光学对齐、边缘、底色与阴影，使页面精致高级，但不得自由改版。',
     '中文、数字、型号、单位、正负号、斜杠和大小写必须逐字一致；不得解释，不得输出蒙版或中间稿，只输出单张完整图片。',
   ].join('\n');
 }

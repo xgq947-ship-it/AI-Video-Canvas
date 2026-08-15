@@ -2604,3 +2604,53 @@ test('规划识图只被允许使用真实存在的格号，不得给出包含�
   assert.match(competitorInstructions[0], /只能使用这些编号：1、3、4/);
   assert.doesNotMatch(competitorInstructions[0], /1~4/);
 });
+
+test('取消发生在预提交途中时不得再排入付费子任务', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const context = { ...env.context, autoStart: false };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'presubmit-cancel-race-job',
+    imageModel: 'codex-imagegen',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+    competitorDetails: [
+      { nodeId: 'competitor-a', imageUrl: COMPETITOR, order: 0, sourceWidth: 600, sourceHeight: 800 },
+      { nodeId: 'competitor-b', imageUrl: COMPETITOR, order: 1, sourceWidth: 600, sourceHeight: 800 },
+    ],
+  }), context);
+
+  const persisted = __detailRemixTest.readJob(created.id, 'workflow-1', context.dirs);
+  persisted.productViews = [{
+    id: 'pv-1', sourceImageIndex: 0, imageUrl: OWN_DETAIL,
+    viewAngle: 'front', visibleSides: ['front'], description: '', quality: 0.9,
+  }];
+  // Page 2 is analysed and ready to be queued ahead of time.
+  persisted.pages[1] = {
+    ...persisted.pages[1],
+    recognitionStatus: 'completed',
+    competitorAnalysisVersion: 99,
+    analysis: {
+      pageType: 'marketing', hasPerson: false, copySlots: [],
+      productInstances: [], selectedProductViewIds: ['pv-1'],
+      sourceWidth: 600, sourceHeight: 800,
+    },
+    mappedSellingPoints: [],
+    mappedFacts: [],
+  };
+  // The user cancelled while page 1 was being judged.
+  persisted.status = 'cancelled';
+  persisted.cancelRequested = true;
+  __detailRemixTest.writeJob(persisted, context);
+
+  const inMemory = __detailRemixTest.readJob(created.id, 'workflow-1', context.dirs);
+  // The in-flight loop still believes it is running, exactly as it would in the race.
+  inMemory.status = 'processing';
+  await assert.rejects(
+    () => __detailRemixTest.presubmitNextPageGeneration(inMemory, inMemory.pages[0], context),
+    error => error?.code === 'OPERATION_CANCELLED' || /取消/.test(String(error?.message || '')),
+  );
+
+  assert.equal(listCodexImageJobs(context.codexJobsDir).length, 0);
+  assert.equal(inMemory.pages[1].codexImageJobId, undefined);
+});

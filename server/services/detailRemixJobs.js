@@ -2451,7 +2451,7 @@ function resolveStructuralRegenerationBudget(job, context) {
  * rejected candidate. An edit pass can fix a wrong word; it cannot undo garbled
  * type or a collapsed layout, because the damage is in the render itself.
  */
-async function regenerateFinalDetailPage(job, page, basePrompt, references, validation, context, signal) {
+async function regenerateFinalDetailPage(job, page, basePrompt, references, validation, rejectedBuffer, context, signal) {
   const pendingAttempt = Number(page.structuralRegenerationAttempts || 0);
   const resuming = Boolean(
     pendingAttempt > 0
@@ -2467,13 +2467,16 @@ async function regenerateFinalDetailPage(job, page, basePrompt, references, vali
   job.stageLabel = `正在重新生成第 ${page.index + 1} 页（质检结构性失败第 ${attempt} 次）`;
   writeJob(job, context);
   // The rejected candidate stays on disk so a later manual review can compare it
-  // against whatever this attempt produces.
-  const rejected = saveImageBuffer(
-    imageInputToBuffer(page.rawResultUrl, context),
-    imageTarget,
-    `${page.resultNodeId}-quality-failed-regen-${attempt}`,
-  );
-  page.qualityFailedCandidateUrl = rejected.resultUrl;
+  // against whatever this attempt produces. Archiving is a convenience, never a
+  // precondition: losing the old candidate must not cost the page its retry.
+  if (rejectedBuffer) {
+    const rejected = saveImageBuffer(
+      rejectedBuffer,
+      imageTarget,
+      `${page.resultNodeId}-quality-failed-regen-${attempt}`,
+    );
+    page.qualityFailedCandidateUrl = rejected.resultUrl;
+  }
   const prompt = buildFinalDetailRegenerationPrompt({ basePrompt, validation, attempt });
   page.structuralRegenerationPrompt = prompt;
   page.status = 'submitting';
@@ -2614,9 +2617,10 @@ function prepareFinalPageGeneration(job, page) {
  * page's validation, repair and re-judge. Every submission is recorded on its own
  * page, which is what makes it recoverable and cancellable.
  */
-async function presubmitNextPageGeneration(job, page, context) {
+async function presubmitNextPageGeneration(job, page, context, signal) {
   if (job.imageModel !== 'codex-imagegen' || !context.codexJobsDir) return;
   if (context.generateImage) return;
+  if (signal?.aborted) return;
   const next = (job.pages || []).find(candidate => (
     Number(candidate.index) > Number(page.index)
       // Only a current analysis may be pre-submitted. A stale one would be
@@ -2638,6 +2642,10 @@ async function presubmitNextPageGeneration(job, page, context) {
     const provider = getImageGenerationProvider(job.imageModel);
     if (!provider || references.length > provider.maxReferenceImages) return;
     const { imageTarget } = getStorage(job.workflowId, context.dirs);
+    // Cancellation sweeps every page pointer once and then stops looking. A
+    // child queued after that sweep would be a paid render nobody reaps, so the
+    // window between this check and recording the pointer must stay closed.
+    assertActive(job, context, signal);
     const codexJob = createCodexImageJob({
       jobsDir: context.codexJobsDir,
       libraryDir: context.libraryDir,
@@ -2656,11 +2664,25 @@ async function presubmitNextPageGeneration(job, page, context) {
     // Remembered verbatim: this is the text the paid render was made from, and
     // it is what the page must report no matter what a later rebuild produces.
     next.presubmittedPrompt = prompt;
+    try {
+      // Cancel may still have landed while the queue file was being written.
+      assertActive(job, context, signal);
+    } catch (error) {
+      cancelCodexImageJob(context.codexJobsDir, codexJob.id, '所属商品详情复刻任务已取消');
+      next.codexImageJobId = undefined;
+      next.presubmittedAt = undefined;
+      next.presubmittedPrompt = undefined;
+      next.submittingAt = undefined;
+      next.status = 'waiting';
+      throw error;
+    }
     writeJob(job, context);
     context.codexAutomation?.notify?.();
-  } catch {
+  } catch (error) {
     // Pre-submission is an optimization. If preparing or queueing fails, the
     // page is left untouched and submitted normally when the loop reaches it.
+    // Cancellation is not such a failure and must keep unwinding.
+    if (isOperationCancelled(error) || signal?.aborted) throw error;
   }
 }
 
@@ -2732,7 +2754,7 @@ async function generateFinalPage(job, page, context, signal) {
     // This page's render is safely on disk and everything that follows for it —
     // validation, re-judge, repair — needs no image worker. Hand the worker the
     // next page now so it is not idle for that whole stretch.
-    await presubmitNextPageGeneration(job, page, context);
+    await presubmitNextPageGeneration(job, page, context, signal);
   }
 
   rawBuffer = await matchPageDimensions(rawBuffer, page, context);
@@ -2844,6 +2866,7 @@ async function generateFinalPage(job, page, context, signal) {
         prompt,
         references,
         validation,
+        rawBuffer,
         context,
         signal,
       );
@@ -2939,6 +2962,13 @@ function finishFinalPhase(job, context) {
     + (job.ownRecognition?.status === 'recovery_required' ? 1 : 0);
   const failedValidation = job.pages.filter(page => page.status === 'failed_validation').length;
   const failed = job.pages.filter(page => ['failed', 'failed_validation'].includes(page.status)).length;
+  // Pages that shipped with an unresolved polish complaint are deliverable but
+  // deserve a human glance. Counting them as plain successes hides exactly the
+  // pages worth checking.
+  // Not stored on the job: the node already derives the page numbers it needs
+  // straight from `pages`, and a second copy would be state nobody reads.
+  const warned = job.pages.filter(page => page.status === 'completed' && page.deliveredWithWarnings).length;
+  const warnedSuffix = warned ? `（其中 ${warned} 页带质检提示）` : '';
   job.resultNodeIds = job.pages
     .filter(page => page.status === 'completed' && (page.finalUrl || page.resultUrl))
     .map(page => page.resultNodeId);
@@ -2955,7 +2985,7 @@ function finishFinalPhase(job, context) {
   } else if (failed && succeeded) {
     job.status = 'partial_failed';
     job.stage = 'final_partial_failed';
-    job.stageLabel = `已完成最终详情 ${succeeded} / ${job.pages.length} 页`;
+    job.stageLabel = `已完成最终详情 ${succeeded} / ${job.pages.length} 页${warnedSuffix}`;
     job.error = `${failed} 页失败${failedValidation ? `（其中 ${failedValidation} 页质检失败）` : ''}，已保留成功结果`;
   } else if (!succeeded) {
     job.status = 'failed';
@@ -2965,7 +2995,7 @@ function finishFinalPhase(job, context) {
   } else {
     job.status = 'completed';
     job.stage = 'completed';
-    job.stageLabel = `${succeeded} 页最终详情已完成`;
+    job.stageLabel = `${succeeded} 页最终详情已完成${warnedSuffix}`;
     job.error = undefined;
   }
   writeJob(job, context);

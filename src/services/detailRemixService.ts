@@ -246,13 +246,6 @@ export interface CreateDetailRemixJobParams {
   productSheet?: DetailRemixProductSheet | null;
 }
 
-export interface ComposeDetailRemixProductsParams {
-  workflowId: string;
-  productImage?: string;
-  productImages?: string[];
-  productNodeIds?: string[];
-}
-
 async function readJson<T>(response: Response, fallback: string): Promise<T> {
   const data = await response.json().catch(() => ({})) as T & { error?: string };
   if (!response.ok) throw new Error(data?.error || fallback);
@@ -298,18 +291,6 @@ export async function getLatestDetailRemixJob(
   );
   if (response.status === 404) return null;
   return readJson(response, '无法读取最新详情复刻任务');
-}
-
-export async function composeDetailRemixProducts(
-  jobId: string,
-  params: ComposeDetailRemixProductsParams,
-): Promise<DetailRemixJob> {
-  const response = await fetch(`/api/detail-remix-jobs/${encodeURIComponent(jobId)}/compose-products`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  });
-  return readJson(response, '无法开始产品合成');
 }
 
 export async function cancelDetailRemixJob(

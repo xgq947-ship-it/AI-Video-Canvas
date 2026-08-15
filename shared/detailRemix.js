@@ -1510,29 +1510,6 @@ const promptSafeCopyPlan = value => array(value).map(item => {
   };
 });
 
-export function buildBlankDetailPrompt({
-  pageAnalysis,
-  mappedSellingPoints = [],
-  pageIndex = 0,
-  useCharacterReference = false,
-} = {}) {
-  const page = safePageAnalysis(pageAnalysis);
-  return [
-    `以参考图1为版式母版，生成第 ${pageIndex + 1} 张电商详情页底图。`,
-    `目标尺寸继承竞品原图：${page.sourceWidth || '自动'} × ${page.sourceHeight || '自动'} 像素；不得改成统一画幅。`,
-    `视觉反推规格：${JSON.stringify(page)}`,
-    `后续确定性排版将使用的我方卖点（现在不要画字）：${JSON.stringify(mappedSellingPoints)}`,
-    '参考图1只提供构图、版式、场景、光线、色彩节奏、人物位置和各视觉区域坐标；尽量保持相同的空间关系与视觉层级。',
-    '必须彻底移除参考图1中的竞品产品、竞品人物身份、全部竞品文案、品牌和 Logo；不得把这些元素残留、变形或重绘回来。',
-    '必须按 productRegion 留出真实、干净、可合成的商品空间；保留接触面、投影条件和正确的前后遮挡层。该区域不得出现任何产品、产品轮廓、包装、占位模型或水印。',
-    '整张图暂时不得出现任何可读文字、乱码、字母、数字、商标或 Logo；我方卖点和品牌稍后由程序精确叠加到原版式槽位。',
-    useCharacterReference
-      ? '参考图2及之后的人物图只用于替换竞品人物身份：锁定同一人的脸部、发型和服装特征；人物的位置、姿势、视线和遮挡关系服从竞品版式。'
-      : '不使用人物身份参考；若规格 hasPerson=false，禁止凭空增加人物。',
-    '输出单张完整成图，不要解释。',
-  ].join('\n');
-}
-
 export function buildFinalDetailPrompt({
   pageAnalysis,
   mappedSellingPoints = [],
@@ -1864,17 +1841,4 @@ export function buildFinalDetailRegenerationPrompt({
     report.summary ? `质检结论原文：${text(report.summary)}` : '',
     '重点复查：文字必须是清晰可读的真实汉字与数字，不得出现乱码、伪字或重复段落；竞品品牌、产品、文案与水印必须完全消失；胶囊标签、主标题、副标题的字号层级与位置必须按竞品原图逐层保留，不得压成同字号小字。',
   ].filter(Boolean).join('\n');
-}
-
-export function buildProductComposePrompt({ pageAnalysis, mappedSellingPoints = [], productImageCount = 1 } = {}) {
-  const page = safePageAnalysis(pageAnalysis);
-  return [
-    '参考图1是已经生成好的无文字详情底图；其余参考图全部是我方真实产品。',
-    `只把我方产品自然合成到参考图1预留的 productRegion 中（产品参考共 ${productImageCount} 张）。`,
-    `区域与遮挡规格：${JSON.stringify(page.productRegion)}；前景遮挡：${page.foregroundOcclusion || '按底图现有关系保持' }。`,
-    '严格保持底图的构图、人物身份、姿势、环境、光线、色彩和所有非商品像素；匹配透视、真实尺寸感、接触阴影与反射。',
-    '保留我方产品的真实结构、材质、颜色和标识，不得混入竞品产品、包装或品牌元素。',
-    `后续程序将重新叠加这些我方卖点，现在不要生成文字：${JSON.stringify(mappedSellingPoints)}`,
-    '不得出现任何新增可读文字、乱码、水印或额外产品。输出单张完整成图，不要解释。',
-  ].join('\n');
 }

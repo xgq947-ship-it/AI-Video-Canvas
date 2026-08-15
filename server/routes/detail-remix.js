@@ -2,7 +2,6 @@ import express from 'express';
 
 import {
   cancelDetailRemixJob,
-  composeDetailRemixProducts,
   createDetailRemixJob,
   dismissDetailRemixResultNodes,
   getDetailRemixExportManifest,
@@ -129,23 +128,6 @@ router.get('/detail-remix-jobs/:jobId/export-manifest', (req, res) => {
     return res.json(manifest);
   } catch (error) {
     return sendError(res, error, '无法准备详情图导出清单');
-  }
-});
-
-router.post('/detail-remix-jobs/:jobId/compose-products', (req, res) => {
-  try {
-    const workflowId = String(req.body?.workflowId || '');
-    if (!workflowId) return res.status(400).json({ error: '缺少 workflowId' });
-    const job = composeDetailRemixProducts(
-      req.params.jobId,
-      workflowId,
-      req.body || {},
-      requestContext(req.app.locals)
-    );
-    if (!job) return res.status(404).json({ error: '商品详情复刻任务不存在' });
-    return res.status(202).json(job);
-  } catch (error) {
-    return sendError(res, error, '无法开始产品合成');
   }
 });
 

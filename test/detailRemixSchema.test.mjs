@@ -11,7 +11,6 @@ import {
   describeDetailRemixProductSheet,
   normalizeDetailRemixProductSheet,
   assignDetailRemixInputPort,
-  buildBlankDetailPrompt,
   buildCompetitorPageInstruction,
   buildDetailCopyReplacementPlan,
   buildDetailRemixInputMapping,
@@ -19,7 +18,6 @@ import {
   buildFinalDetailRepairPrompt,
   buildFinalDetailValidationInstruction,
   buildOwnSellingPointsInstruction,
-  buildProductComposePrompt,
   createDetailRemixNodeData,
   detailRemixAllowsStrictParameterMode,
   detailRemixInputFingerprint,
@@ -580,10 +578,6 @@ test('单阶段提示词一次传入版式、产品和可选人物，并直接�
   assert.match(on, /参考图4只提供我方 Logo 的身份/);
   assert.match(on, /参考图5及之后是人物完整外观的最高权威/);
   assert.match(on, /绝不允许只换脸后保留竞品人物的发型、衣服或配饰/);
-  // Legacy prompt builders remain readable for projects created before the
-  // single-generation migration.
-  assert.match(buildBlankDetailPrompt({ pageAnalysis: analysis }), /商品空间/);
-  assert.match(buildProductComposePrompt({ pageAnalysis: analysis }), /只把我方产品自然合成/);
 });
 
 test('真实多卖点映射严格收敛为一个槽位一条文案，不产生无位置重复文字', () => {

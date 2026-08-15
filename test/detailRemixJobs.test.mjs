@@ -8,7 +8,6 @@ import sharp from 'sharp';
 import {
   __detailRemixTest,
   cancelDetailRemixJob,
-  composeDetailRemixProducts,
   createDetailRemixJob,
   dismissDetailRemixResultNodes,
   getDetailRemixJob,
@@ -52,9 +51,6 @@ function setup() {
       codexJobsDir,
       recognitionModel: 'test-model',
       skipFinalValidation: true,
-      applyTextOverlay: async () => {
-        throw new Error('current detail-remix jobs must never use a local text/logo overlay');
-      },
       matchDetailRemixDimensions: async ({ sourceBuffer }) => sourceBuffer,
     },
   };
@@ -166,10 +162,6 @@ test('无需单独产品图：自动裁出我方详情产品角度并与竞品�
   assert.match(call.request.prompt, /后续不会再叠加产品、文字或 Logo/);
   assert.doesNotMatch(call.request.prompt, /稍后由程序/);
   assert.match(call.request.prompt, /不要输出中间底图/);
-  assert.throws(
-    () => composeDetailRemixProducts(created.id, 'workflow-1', { productImages: [PRODUCT] }, context),
-    error => error?.code === 'SINGLE_STAGE_JOB' && error?.status === 409,
-  );
   assert.ok(fs.existsSync(path.join(env.jobsDir, `${created.id}.json`)));
 });
 
@@ -879,7 +871,6 @@ test('每一页按竞品原始像素尺寸输出，模型请求选择最接近�
   const context = {
     ...env.context,
     matchDetailRemixDimensions: undefined,
-    applyTextOverlay: async ({ sourceBuffer }) => sourceBuffer,
     runRecognition: completeRecognition({ hasPerson: false }),
     generateImage: async (request, meta) => {
       generationCalls.push({ request, meta });

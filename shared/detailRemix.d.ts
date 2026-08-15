@@ -141,5 +141,3 @@ export function buildDetailCopyReplacementPlan(options?: any): any[];
 export function buildFinalDetailPrompt(options?: any): string;
 export function buildFinalDetailValidationInstruction(options?: any): string;
 export function buildFinalDetailRepairPrompt(options?: any): string;
-export function buildBlankDetailPrompt(options?: any): string;
-export function buildProductComposePrompt(options?: any): string;

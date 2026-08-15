@@ -137,7 +137,7 @@ export const DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA = Object.freeze({
             additionalProperties: false,
             required: [
               'instanceId', 'x', 'y', 'width', 'height', 'viewAngle',
-              'contactSurface', 'foregroundOcclusion',
+              'contactSurface', 'foregroundOcclusion', 'productSheetCell',
             ],
             properties: {
               instanceId: { type: 'string' },
@@ -145,6 +145,9 @@ export const DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA = Object.freeze({
               viewAngle: { type: 'string' },
               contactSurface: { type: 'string' },
               foregroundOcclusion: { type: 'string' },
+              // Which cell of the own product reference sheet this instance must
+              // copy. 0 when no sheet was supplied.
+              productSheetCell: { type: 'integer' },
             },
           },
         },
@@ -584,6 +587,11 @@ export function createDetailRemixNodeData(overrides = {}) {
     recognitionProvider: ['gemini-web', 'codex-cli'].includes(source.recognitionProvider)
       ? source.recognitionProvider
       : 'gemini-web',
+    maxStructuralRegenerations: [0, 1, 2, 3].includes(Number(source.maxStructuralRegenerations))
+      ? Number(source.maxStructuralRegenerations)
+      : 1,
+    preferSuppliedProductReferences: source.preferSuppliedProductReferences === true,
+    productSheet: normalizeDetailRemixProductSheet(source.productSheet),
     status,
     ...(text(source.errorMessage) ? { errorMessage: text(source.errorMessage) } : {}),
   };
@@ -922,14 +930,68 @@ export function buildOwnSellingPointsInstruction({ imageCount = 1, chunkIndex = 
   ].join('\n');
 }
 
+export const MAX_DETAIL_REMIX_PRODUCT_SHEET_CELLS = 12;
+
+/**
+ * A hand-built contact sheet of the user's own product: one reference image
+ * carrying many angles in a labelled grid. Providers cap reference images (five
+ * on the ChatGPT image editor), so a sheet is the only way to give the model
+ * every angle a multi-instance page needs without losing the layout, logo,
+ * evidence and character slots.
+ */
+export function normalizeDetailRemixProductSheet(value) {
+  const source = object(value);
+  if (!array(source.cells).length) return null;
+  const cells = array(source.cells)
+    .map((entry, index) => {
+      const cell = object(entry);
+      const cellIndex = Number(cell.index ?? cell.cell ?? index + 1);
+      return {
+        index: Number.isInteger(cellIndex) && cellIndex > 0 ? cellIndex : index + 1,
+        label: text(cell.label || cell.name || cell.description),
+      };
+    })
+    .filter(cell => cell.label)
+    .slice(0, MAX_DETAIL_REMIX_PRODUCT_SHEET_CELLS);
+  if (!cells.length) return null;
+  const seen = new Set();
+  const unique = cells.filter(cell => {
+    if (seen.has(cell.index)) return false;
+    seen.add(cell.index);
+    return true;
+  }).sort((left, right) => left.index - right.index);
+  // Guard the fallback before clamping: Math.max(1, …) is always truthy, so a
+  // `|| default` after it can never fire and every sheet would be described as
+  // a single row of one column no matter how it is actually laid out.
+  const declaredColumns = Number(source.columns);
+  const columns = Number.isFinite(declaredColumns) && declaredColumns > 0
+    ? Math.floor(declaredColumns)
+    : Math.min(3, unique.length);
+  const declaredRows = Number(source.rows);
+  const rows = Number.isFinite(declaredRows) && declaredRows > 0
+    ? Math.floor(declaredRows)
+    : Math.ceil(unique.length / columns);
+  return { rows, columns, cells: unique };
+}
+
+/** Human-readable grid description handed to both the planner and the renderer. */
+export function describeDetailRemixProductSheet(sheet, referenceLabel = '该产品参考板') {
+  const normalized = normalizeDetailRemixProductSheet(sheet);
+  if (!normalized) return '';
+  const cells = normalized.cells.map(cell => `${cell.index}=${cell.label}`).join('、');
+  return `${referenceLabel}是同一台我方产品的 ${normalized.rows} 行 × ${normalized.columns} 列角度板，按从左到右、从上到下编号：${cells}。板上的编号数字与分格线只是索引，绝不能画进详情页。`;
+}
+
 export function buildCompetitorPageInstruction({
   ownSellingPoints = [],
   ownVerifiedFacts = [],
   ownBrandIdentity = {},
   ownProductViews = [],
+  ownProductSheet = null,
   pageIndex = 0,
   pageCount = 1,
 } = {}) {
+  const productSheet = normalizeDetailRemixProductSheet(ownProductSheet);
   const clip = (value, maximum) => [...text(value)].slice(0, maximum).join('');
   const brand = {
     name: clip(ownBrandIdentity?.name, 40),
@@ -960,8 +1022,8 @@ export function buildCompetitorPageInstruction({
   const strictParameterModeEligible = detailRemixAllowsStrictParameterMode(pageIndex, totalPages);
   const firstTailPage = Math.max(1, totalPages - DETAIL_REMIX_STRICT_PARAMETER_TAIL_PAGE_COUNT + 1);
   const responseExample = strictParameterModeEligible
-    ? `{"page":{"pageType":"specification","pageMode":"${DETAIL_REMIX_STRICT_PARAMETER_MODE}","strictPageCategory":"electrical","purpose":"","reversePrompt":"","layoutSpec":"","palette":"","lighting":"","hasPerson":false,"personaSpec":"","targetProductView":{"viewAngle":"front-left","visibleSides":["front","left"],"orientation":"upright","perspective":"three-quarter"},"selectedProductViewIds":["pv-1"],"productInstances":[{"instanceId":"product-1","x":0.5,"y":0.5,"width":0.3,"height":0.3,"viewAngle":"front-left","contactSurface":"","foregroundOcclusion":""}],"brandSlots":[{"slotId":"brand-1","sourceText":"竞品品牌","visualDescription":"左上角白色品牌标识","x":0.05,"y":0.03,"width":0.2,"height":0.08,"align":"left","color":"#ffffff"}],"copySlots":[{"slotId":"power-label","role":"parameterLabel","field":"power","parameterPart":"label","sourceText":"额定功率","x":0.1,"y":0.08,"width":0.35,"height":0.06,"align":"left","color":"#ffffff","fontWeight":500,"maxChars":8},{"slotId":"power-value","role":"parameterValue","field":"power","parameterPart":"value","sourceText":"20W","x":0.5,"y":0.08,"width":0.2,"height":0.06,"align":"right","color":"#ffffff","fontWeight":500,"maxChars":8}],"mappedSellingPoints":[],"mappedFacts":[{"factId":"fact-1","slotId":"power-label","slotRole":"parameterLabel","displayPart":"label"},{"factId":"fact-1","slotId":"power-value","slotRole":"parameterValue","displayPart":"value"}],"forbiddenCompetitorElements":[]}}`
-    : `{"page":{"pageType":"marketing","pageMode":"${DETAIL_REMIX_MARKETING_MODE}","strictPageCategory":"none","purpose":"","reversePrompt":"","layoutSpec":"","palette":"","lighting":"","hasPerson":false,"personaSpec":"","targetProductView":{"viewAngle":"front-left","visibleSides":["front","left"],"orientation":"upright","perspective":"three-quarter"},"selectedProductViewIds":["pv-1"],"productInstances":[{"instanceId":"product-1","x":0.5,"y":0.5,"width":0.3,"height":0.3,"viewAngle":"front-left","contactSurface":"","foregroundOcclusion":""}],"brandSlots":[],"copySlots":[{"slotId":"headline-1","role":"headline","field":"","parameterPart":"none","sourceText":"竞品主标题","x":0.1,"y":0.08,"width":0.8,"height":0.08,"align":"center","color":"#ffffff","fontWeight":700,"maxChars":10}],"mappedSellingPoints":[{"sellingPointId":"sp-1","slotId":"headline-1","slotRole":"headline","replacementText":"我方真实卖点"}],"mappedFacts":[],"forbiddenCompetitorElements":[]}}`;
+    ? `{"page":{"pageType":"specification","pageMode":"${DETAIL_REMIX_STRICT_PARAMETER_MODE}","strictPageCategory":"electrical","purpose":"","reversePrompt":"","layoutSpec":"","palette":"","lighting":"","hasPerson":false,"personaSpec":"","targetProductView":{"viewAngle":"front-left","visibleSides":["front","left"],"orientation":"upright","perspective":"three-quarter"},"selectedProductViewIds":["pv-1"],"productInstances":[{"instanceId":"product-1","x":0.5,"y":0.5,"width":0.3,"height":0.3,"viewAngle":"front-left","contactSurface":"","foregroundOcclusion":"","productSheetCell":0}],"brandSlots":[{"slotId":"brand-1","sourceText":"竞品品牌","visualDescription":"左上角白色品牌标识","x":0.05,"y":0.03,"width":0.2,"height":0.08,"align":"left","color":"#ffffff"}],"copySlots":[{"slotId":"power-label","role":"parameterLabel","field":"power","parameterPart":"label","sourceText":"额定功率","x":0.1,"y":0.08,"width":0.35,"height":0.06,"align":"left","color":"#ffffff","fontWeight":500,"maxChars":8},{"slotId":"power-value","role":"parameterValue","field":"power","parameterPart":"value","sourceText":"20W","x":0.5,"y":0.08,"width":0.2,"height":0.06,"align":"right","color":"#ffffff","fontWeight":500,"maxChars":8}],"mappedSellingPoints":[],"mappedFacts":[{"factId":"fact-1","slotId":"power-label","slotRole":"parameterLabel","displayPart":"label"},{"factId":"fact-1","slotId":"power-value","slotRole":"parameterValue","displayPart":"value"}],"forbiddenCompetitorElements":[]}}`
+    : `{"page":{"pageType":"marketing","pageMode":"${DETAIL_REMIX_MARKETING_MODE}","strictPageCategory":"none","purpose":"","reversePrompt":"","layoutSpec":"","palette":"","lighting":"","hasPerson":false,"personaSpec":"","targetProductView":{"viewAngle":"front-left","visibleSides":["front","left"],"orientation":"upright","perspective":"three-quarter"},"selectedProductViewIds":["pv-1"],"productInstances":[{"instanceId":"product-1","x":0.5,"y":0.5,"width":0.3,"height":0.3,"viewAngle":"front-left","contactSurface":"","foregroundOcclusion":"","productSheetCell":0}],"brandSlots":[],"copySlots":[{"slotId":"headline-1","role":"headline","field":"","parameterPart":"none","sourceText":"竞品主标题","x":0.1,"y":0.08,"width":0.8,"height":0.08,"align":"center","color":"#ffffff","fontWeight":700,"maxChars":10}],"mappedSellingPoints":[{"sellingPointId":"sp-1","slotId":"headline-1","slotRole":"headline","replacementText":"我方真实卖点"}],"mappedFacts":[],"forbiddenCompetitorElements":[]}}`;
   return [
     '你是电商详情页视觉反推与语义槽位规划专家。所附仅一张“竞品详情图”。',
     '反推画面结构、镜头、背景、光线、色彩、人物需求、文字层级、商品区域及前后遮挡关系；完整保留版式位置关系，但不要保留竞品品牌、Logo、商品外观或竞品独有主张。',
@@ -979,11 +1041,14 @@ export function buildCompetitorPageInstruction({
     '营销页中承担版式层级的所有可读槽都必须逐槽映射：包括胶囊标签/眉题、主标题及其拆分片段、副标题、功能标题、说明正文。若 competitorTrademark 实际占据主标题的一部分，也按主标题槽替换，不能删掉后破坏标题层级。只有水印、页码、法务脚注、免责声明、纯表头/对照栏目名，以及已由 brandSlots 单独承接的孤立品牌字样可以不映射并删除。',
     'mappedSellingPoints 中同一 slotId 恰好一项，每项都必须填写 replacementText。replacementText 必须是所选我方卖点 title/description 的忠实短写，适配该槽 maxChars，不得添加证据外功效；相邻的拆分标题允许选择同一卖点但要写成不同且连贯的片段。不同槽禁止机械重复同一句话。最终要保持原页“眉题/胶囊标签—大标题—副标题/说明”的数量、字号层级和留白节奏。',
     '判断所有竞品产品实例的观察角度、朝向、可见面和透视要求，再从我方产品视角库中选择最匹配的 1~3 个 ID 写入 selectedProductViewIds。必须只选给定 ID；优先覆盖本页出现的不同角度和产品完整度。',
+    productSheet
+      ? `${describeDetailRemixProductSheet(productSheet, '我方已提供一张产品角度板，生成时它就是产品参考图')}为每个 productInstance 判断它最该照抄哪一格，把该格编号写入 productSheetCell。必须落在 1~${productSheet.cells[productSheet.cells.length - 1].index} 之间；同一格可以被多个实例引用；实在无法判断时填最接近整机角度的那一格，不要填 0。`
+      : '本次没有产品角度板，所有 productInstance 的 productSheetCell 一律填 0。',
     `页面序号：${pageIndex + 1}/${totalPages}。我方品牌：${JSON.stringify(brand)}。我方卖点库：${JSON.stringify(sellingPoints)}。我方精确事实库：${JSON.stringify(verifiedFacts)}。我方产品视角库：${JSON.stringify(productViews)}`,
     '只输出合法 JSON，不要 Markdown。格式：',
     responseExample,
     '营销映射项格式：{"sellingPointId":"sp-1","slotId":"headline-1","slotRole":"headline","replacementText":"仿人手深层揉捏"}',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 const displayCopy = value => text(value)
@@ -1297,6 +1362,7 @@ const promptSafePageAnalysis = value => {
       viewAngle: text(source.viewAngle),
       contactSurface: text(source.contactSurface),
       foregroundOcclusion: text(source.foregroundOcclusion),
+      productSheetCell: Math.max(0, Number(source.productSheetCell) || 0),
     };
   });
   return {
@@ -1389,11 +1455,24 @@ export function buildFinalDetailPrompt({
   hasBrandLogoReference = false,
   ownEvidenceReferenceCount = 0,
   useCharacterReference = false,
+  productSheet = null,
 } = {}) {
   const page = safePageAnalysis(pageAnalysis);
   const promptPage = promptSafePageAnalysis(page);
   const productCount = Math.max(1, Number(productImageCount) || 1);
   const productRange = productCount === 1 ? '参考图2' : `参考图2至参考图${productCount + 1}`;
+  const sheet = normalizeDetailRemixProductSheet(productSheet);
+  const sheetCells = new Set(array(sheet?.cells).map(cell => cell.index));
+  // Binding the planner's per-instance choice into the render prompt is what
+  // stops the model from picking an angle itself on a page full of small tiles.
+  const sheetBindings = sheet
+    ? array(promptPage.productInstances)
+      .map(instance => ({
+        instanceId: instance.instanceId,
+        cell: Number(instance.productSheetCell) || 0,
+      }))
+      .filter(binding => sheetCells.has(binding.cell))
+    : [];
   const brandReferenceIndex = productCount + 2;
   const evidenceStart = brandReferenceIndex + (hasBrandLogoReference ? 1 : 0);
   const evidenceEnd = evidenceStart + Math.max(0, Number(ownEvidenceReferenceCount) || 0) - 1;
@@ -1421,9 +1500,22 @@ export function buildFinalDetailPrompt({
     `视觉反推规格（仅含版式坐标，不含任何竞品原文）：${JSON.stringify(promptPage)}`,
     `精确逐位置替换清单（originalText 只用于定位并擦除，replacementText 才是唯一允许写入的文字）：${JSON.stringify(safeCopyPlan)}`,
     `必须完成的品牌与 Logo 替换清单：${JSON.stringify(brandPlan)}`,
-    `系统已从“我的详情”自动挑选与本页角度最匹配的产品参考：${JSON.stringify(selectedProductViews)}`,
+    sheet
+      ? describeDetailRemixProductSheet(sheet, '参考图2')
+      : `系统已从“我的详情”自动挑选与本页角度最匹配的产品参考：${JSON.stringify(selectedProductViews)}`,
+    // Only the first supplied image carries a declared grid. Any further product
+    // references must still be named, or they arrive as undescribed pixels.
+    sheet && productCount > 1
+      ? `参考图3${productCount > 2 ? `至参考图${productCount + 1}` : ''}是同一台产品的补充实拍，用于补齐角度板没有拍到的结构；它们不是角度板，没有分格编号，也不改变上面的板格指派。`
+      : '',
+    sheetBindings.length
+      ? `本页每个产品实例必须使用的板格已经指定，不得自行改用其它格：${JSON.stringify(sheetBindings)}。指定格里没有拍到的结构，从相邻格补全，禁止凭空发明。`
+      : '',
     '参考图1是需要直接修改的竞品原图，不是只供自由发挥的风格参考。锁定它的画布、构图、背景、区域边界、人物姿势、商品位置、文字位置与视觉层级；除明确要求替换的区域外，不得重新设计页面。',
-    `${productRange}是同一款我方真实产品的角度参考。逐个用我方产品替换参考图1中 productInstances 列出的全部竞品产品实例；为每个实例选择最接近的我方角度，保持我方产品真实结构、材质、颜色、比例和产品自身标识，并匹配原位置的透视、接触面、阴影、反射、肢体交互与前景遮挡。不得遗漏重复出现的小产品或混入竞品外形。`,
+    `${sheet ? '参考图2 的各个分格' : productRange}是同一款我方真实产品的角度参考。逐个用我方产品替换参考图1中 productInstances 列出的全部竞品产品实例；${sheet ? '每个实例使用上面指定的板格' : '为每个实例选择最接近的我方角度'}，保持我方产品真实结构、材质、颜色、比例和产品自身标识，并匹配原位置的透视、接触面、阴影、反射、肢体交互与前景遮挡。不得遗漏重复出现的小产品或混入竞品外形。`,
+    sheet
+      ? '参考图2 是角度索引板，不是版式参考：禁止把它的网格、分格线、编号数字、背景底色或多格并排的布局搬进详情页，每个产品实例只呈现单一产品本身。'
+      : '',
     hasBrandLogoReference
       ? `参考图${brandReferenceIndex}只提供我方 Logo 的身份、拼写和图形结构，不提供 Logo 容器样式。严禁把该裁剪图周围的产品材质、压印底纹、深色背景、光影或矩形裁剪边界复制到页面。删除参考图1全部竞品 Logo 和品牌字样，再在 brandSlots 原位置生成我方 Logo；每个槽位的底色、容器形状、尺寸、留白、对齐与呈现方式严格继承参考图1，例如独立白色标牌仍是干净白色标牌，产品表面压印仍是自然压印，不能把一种呈现方式套到所有位置。`
       : `删除参考图1全部竞品 Logo 和品牌字样，并根据 brandIdentity 在 brandSlots 指定的原位置生成我方品牌；品牌名必须逐字正确。若 brandIdentity 为空，则该位置保持干净，不得保留或猜测竞品品牌。`,
@@ -1443,7 +1535,7 @@ export function buildFinalDetailPrompt({
       : '不使用人物身份参考；若规格 hasPerson=false，禁止凭空增加人物；若原图有人物，也不得保留可识别的竞品人物身份。',
     '只允许出现替换清单中的我方文案、我方品牌/Logo，以及我方产品自身不可分离的真实标识；不得出现其它文字、乱码、商标或水印。',
     '输出单张完整最终图，不要解释，不要输出中间底图、无字底图、蒙版或排版稿。',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 export function parseFinalDetailValidationResponse(value) {
@@ -1476,6 +1568,102 @@ export function parseFinalDetailValidationResponse(value) {
   };
 }
 
+/**
+ * Facts a page must get right to be deliverable at all. Every one of these is a
+ * verifiable claim about the image — a wrong model number or a competitor logo
+ * is wrong no matter who looks at it — so a single judge report is enough to
+ * block, and no amount of re-judging may waive them.
+ */
+const DETAIL_REMIX_BLOCKING_VALIDATION_KEYS = Object.freeze([
+  'copyExact',
+  'brandCorrect',
+  'productCorrect',
+  'logoCorrect',
+  'logoPresentationCorrect',
+  'productPlacementCorrect',
+  'parameterAlignmentCorrect',
+  'unsupportedStrictFactsAbsent',
+  'characterIdentityCorrect',
+  'characterHairstyleCorrect',
+  'characterOutfitCorrect',
+  'characterAccessoriesCorrect',
+  'competitorRemoved',
+]);
+
+/**
+ * Aesthetic judgments. These are real quality signals, but one picky judge call
+ * should not permanently destroy a paid page over them, so they are confirmed by
+ * a second look and — only after the repair budget is spent — may ship as a
+ * warning instead of a discarded result.
+ */
+export const DETAIL_REMIX_ADVISORY_VALIDATION_KEYS = Object.freeze([
+  'visualPolishCorrect',
+  'layoutHierarchyCorrect',
+]);
+
+export const DETAIL_REMIX_VALIDATION_FAILURE_LABELS = Object.freeze({
+  copyExact: '文案未逐字一致',
+  brandCorrect: '品牌不正确',
+  productCorrect: '产品不正确',
+  logoCorrect: 'Logo 身份不正确',
+  logoPresentationCorrect: 'Logo 呈现方式不正确',
+  productPlacementCorrect: '产品位置或透视不正确',
+  parameterAlignmentCorrect: '参数名值错栏',
+  unsupportedStrictFactsAbsent: '出现无证据参数',
+  characterIdentityCorrect: '人物身份不符',
+  characterHairstyleCorrect: '人物发型不符',
+  characterOutfitCorrect: '人物服装不符',
+  characterAccessoriesCorrect: '人物配饰不符',
+  competitorRemoved: '竞品元素残留',
+  gibberishDetected: '出现乱码或伪字',
+  missingTexts: '缺少应有文案',
+  wrongTexts: '文案写错',
+  unexpectedTexts: '出现多余文案',
+  characterIssues: '人物问题',
+  visualPolishCorrect: '视觉精修不足',
+  layoutHierarchyCorrect: '文案层级被压缩',
+  layoutIssues: '版式问题',
+  selfReportedFailure: '质检未说明原因的整体不通过',
+});
+
+/**
+ * Splits a judge report into what must block delivery and what merely warrants a
+ * second look. `passed` keeps today's meaning: nothing at all was reported.
+ */
+export function classifyFinalDetailValidation(validation = {}) {
+  const report = object(validation);
+  const blocking = [];
+  const advisory = [];
+  for (const key of DETAIL_REMIX_BLOCKING_VALIDATION_KEYS) {
+    if (report[key] !== true) blocking.push(key);
+  }
+  if (report.gibberishDetected === true) blocking.push('gibberishDetected');
+  for (const key of ['missingTexts', 'wrongTexts', 'unexpectedTexts', 'characterIssues']) {
+    if (array(report[key]).length) blocking.push(key);
+  }
+  for (const key of DETAIL_REMIX_ADVISORY_VALIDATION_KEYS) {
+    if (report[key] !== true) advisory.push(key);
+  }
+  if (array(report.layoutIssues).length) advisory.push('layoutIssues');
+  // A judge that rejects the page without naming a single concrete defect gets a
+  // second look rather than the last word.
+  if (report.passed !== true && !blocking.length && !advisory.length) {
+    advisory.push('selfReportedFailure');
+  }
+  return {
+    blocking,
+    advisory,
+    passed: blocking.length === 0 && advisory.length === 0,
+    advisoryOnly: blocking.length === 0 && advisory.length > 0,
+  };
+}
+
+export function describeFinalDetailValidationFailures(keys = []) {
+  return array(keys)
+    .map(key => DETAIL_REMIX_VALIDATION_FAILURE_LABELS[text(key)] || text(key))
+    .filter(Boolean);
+}
+
 export function buildFinalDetailValidationInstruction({
   pageAnalysis,
   copyPlan = [],
@@ -1484,8 +1672,10 @@ export function buildFinalDetailValidationInstruction({
   hasBrandLogoReference = false,
   evidenceReferenceCount = 0,
   characterReferenceCount = 0,
+  productSheet = null,
 } = {}) {
   const page = safePageAnalysis(pageAnalysis);
+  const sheet = normalizeDetailRemixProductSheet(productSheet);
   const safeCopyPlan = promptSafeCopyPlan(copyPlan);
   const strictMode = isDetailRemixStrictParameterPage(page);
   const productCount = Math.max(0, Number(productReferenceCount) || 0);
@@ -1505,6 +1695,9 @@ export function buildFinalDetailValidationInstruction({
     characterCount > 0
       ? `参考图${characterStart}${characterCount > 1 ? `至参考图${characterStart + characterCount - 1}` : ''}是人物完整造型参考；必须分别核对人脸身份、发型、服装和可见配饰，不能只核对脸。`
       : '本页没有人物参考图；人物四项检查字段填 true，characterIssues 留空。',
+    sheet
+      ? `${describeDetailRemixProductSheet(sheet, `参考图${productStart}`)}它只是角度索引，成图里本来就不该出现网格、分格线或编号；只有当成图真的把网格或编号画了进去，才判 productCorrect=false。核对产品时用各分格逐一比对成图中每一处产品的结构、比例与材质。`
+      : '',
     `页面类型：${page.pageType}；运行模式：${page.pageMode}。必须逐字、逐位置出现的文案清单：${JSON.stringify(safeCopyPlan)}。营销页必须保留的核心文案层级槽：${JSON.stringify(marketingLayoutSlots)}。我方品牌：${JSON.stringify(object(ownBrandIdentity))}。`,
     '所有不在上述我方文案与品牌白名单中的可读内容，都必须按竞品残留或模型臆造内容报告。',
     '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 参数名是否仍在 label 区、参数值是否仍在 value 区，不能错栏、合并或串行；3) 是否出现乱码、伪字、重复卖点、提示词或 JSON；4) 品牌与 Logo 身份是否正确且无竞品残留；5) 对照参考图2，Logo 是否只替换标识身份而保留原槽位容器，不能把 Logo 参考图的深色产品材质、压印纹理或矩形裁剪底复制成贴片；6) 对照参考图2，营销页的胶囊标签、主标题、副标题/说明是否逐层保留，不能缺层、合并、缩成同字号小字或大幅漂移；7) 产品是否仍是我方产品、位置透视是否正确；8) 有人物参考时，成图人物的脸型五官、发际线与发型结构、服装款式领口袖型与颜色材质、可见配饰是否都来自人物参考。只换脸、仍保留竞品发型或竞品衣服必须判失败，并在 characterIssues 写明。',
@@ -1514,7 +1707,7 @@ export function buildFinalDetailValidationInstruction({
       : '没有列入替换清单的新增参数或功效一律写入 unexpectedTexts。',
     '只要 missingTexts、wrongTexts、unexpectedTexts、characterIssues 或 layoutIssues 任一非空，passed 必须为 false。参数页只要有一个错误数字、单位、型号、参数错栏或乱码，passed 必须为 false。营销页核心文案层级缺失，或 Logo 出现深色纹理方块/裁剪贴片，必须为 false。',
     'passed 只有在 copyExact、brandCorrect、productCorrect、logoCorrect、logoPresentationCorrect、layoutHierarchyCorrect、visualPolishCorrect、productPlacementCorrect、parameterAlignmentCorrect、unsupportedStrictFactsAbsent、characterIdentityCorrect、characterHairstyleCorrect、characterOutfitCorrect、characterAccessoriesCorrect、competitorRemoved 全为 true，gibberishDetected=false，且所有异常数组都为空时才能为 true。只输出符合 Schema 的 JSON。',
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 export function buildFinalDetailRepairPrompt({
@@ -1550,6 +1743,38 @@ export function buildFinalDetailRepairPrompt({
     '若 layoutHierarchyCorrect=false，按参考图2逐层恢复胶囊标签、主标题、副标题/说明的原位置、字号比例、对齐和留白，禁止把多级文案压成同字号小字。若 logoPresentationCorrect=false，去掉贴图方块和脏底，只保留干净、清晰且适配原容器的我方 Logo。若 visualPolishCorrect=false，修正字距、行距、光学对齐、边缘、底色与阴影，使页面精致高级，但不得自由改版。',
     '中文、数字、型号、单位、正负号、斜杠和大小写必须逐字一致；不得解释，不得输出蒙版或中间稿，只输出单张完整图片。',
   ].join('\n');
+}
+
+/**
+ * A fresh generation for a page whose targeted repair could not save it. The base
+ * prompt is unchanged — it already encodes the whole contract — and the judge's
+ * findings are appended as a do-not-repeat list so the same damage is not redrawn.
+ */
+export function buildFinalDetailRegenerationPrompt({
+  basePrompt = '',
+  validation = {},
+  attempt = 1,
+} = {}) {
+  const report = object(validation);
+  const failures = describeFinalDetailValidationFailures([
+    ...array(report.blockingFailures),
+    ...array(report.advisoryFailures),
+  ]);
+  const findings = [
+    ...array(report.missingTexts).map(item => `缺少文案：${item}`),
+    ...array(report.wrongTexts).map(item => `文案写错：${item}`),
+    ...array(report.unexpectedTexts).map(item => `多余文案：${item}`),
+    ...array(report.characterIssues).map(item => `人物问题：${item}`),
+    ...array(report.layoutIssues).map(item => `版式问题：${item}`),
+  ];
+  return [
+    basePrompt,
+    `本页上一版成品经过一次定向修复后仍未通过质检（第 ${attempt} 次整页重新生成）。这一次必须整张重新生成，不要延续上一版的错误结构。`,
+    failures.length ? `上一版失败类别：${failures.join('、')}。` : '',
+    findings.length ? `上一版的具体问题（必须全部消除）：${JSON.stringify(findings.slice(0, 20))}。` : '',
+    report.summary ? `质检结论原文：${text(report.summary)}` : '',
+    '重点复查：文字必须是清晰可读的真实汉字与数字，不得出现乱码、伪字或重复段落；竞品品牌、产品、文案与水印必须完全消失；胶囊标签、主标题、副标题的字号层级与位置必须按竞品原图逐层保留，不得压成同字号小字。',
+  ].filter(Boolean).join('\n');
 }
 
 export function buildProductComposePrompt({ pageAnalysis, mappedSellingPoints = [], productImageCount = 1 } = {}) {

@@ -14,10 +14,12 @@ import {
   getDetailRemixJob,
   getDetailRemixExportManifest,
   getLatestDetailRemixJob,
-  regenerateCompletedDetailRemixPage,
+  regenerateDetailRemixPages,
   retryFailedDetailRemixPages,
 } from '../server/services/detailRemixJobs.js';
 import {
+  claimCodexImageJob,
+  completeCodexImageJob,
   createCodexImageJob,
   getCodexImageJob,
   listCodexImageJobs,
@@ -1454,7 +1456,7 @@ test('单页重新生成只提交首个指定成功页，失败页和已取消�
     newId: () => 'fresh-regenerated-result-node',
     autoStart: false,
   };
-  const queued = regenerateCompletedDetailRemixPage(
+  const queued = regenerateDetailRemixPages(
     created.id,
     'workflow-1',
     { pageIndex: 1 },
@@ -1544,7 +1546,7 @@ test('严格参数字段错配会被安全删除，页面继续生成且不泄�
   assert.match(generationCalls[0].request.prompt, /没有证据映射的竞品参数栏必须连标签和值一起删除/);
 });
 
-test('质检自称通过但仍报告无证据参数时不得放行，修复一次后标记 FAILED_VALIDATION', async t => {
+test('质检自称通过但仍报告无证据参数时不得放行，修复与整页重生成都用尽后标记 FAILED_VALIDATION', async t => {
   const env = setup();
   t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
   let validationCalls = 0;
@@ -1607,10 +1609,700 @@ test('质检自称通过但仍报告无证据参数时不得放行，修复一�
     useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
   }), context);
   const failed = await waitFor(created.id, context, job => job?.stage === 'failed_validation');
-  assert.equal(validationCalls, 2);
-  assert.deepEqual(generationPhases, ['final-detail', 'final-repair']);
+  // Hard facts survived the targeted edit, so the page escalates to one full
+  // re-generation before the gate gives up on it.
+  assert.equal(validationCalls, 3);
+  assert.deepEqual(generationPhases, ['final-detail', 'final-repair', 'final-regenerate-1']);
+  assert.equal(failed.pages[0].structuralRegenerationAttempts, 1);
   assert.equal(failed.pages[0].status, 'failed_validation');
   assert.equal(failed.pages[0].terminalStatus, 'FAILED_VALIDATION');
   assert.equal(failed.pages[0].validationStatus, 'FAILED_VALIDATION');
   assert.equal(failed.pages[0].finalUrl, undefined);
+});
+
+/** Marketing-page recognition with three copy slots; enough to exercise the quality gate. */
+const marketingRecognition = async (_request, meta) => {
+  if (meta.kind === 'own-selling-points') {
+    return JSON.stringify({
+      productViews: [{
+        sourceImageIndex: 0, cropRegion: { x: 0, y: 0, width: 1, height: 1 },
+        viewAngle: 'front', visibleSides: ['front'], description: '', quality: 0.95,
+      }],
+      sellingPoints: [
+        { id: 'sp-1', title: '肩颈按摩器' },
+        { id: 'sp-2', title: '仿人手深层揉捏' },
+      ],
+    });
+  }
+  return JSON.stringify({ page: {
+    pageType: 'marketing', hasPerson: false,
+    selectedProductViewIds: ['pv-1'], productInstances: [],
+    copySlots: [
+      { slotId: 'badge', role: 'featureBadge', sourceText: '竞品标签', x: 0.35, y: 0.1, width: 0.3, height: 0.04, maxChars: 8 },
+      { slotId: 'headline', role: 'headline', sourceText: '竞品大标题', x: 0.1, y: 0.2, width: 0.8, height: 0.08, maxChars: 10 },
+    ],
+    mappedSellingPoints: [
+      { sellingPointId: 'sp-1', slotId: 'badge', slotRole: 'featureBadge', replacementText: '肩颈按摩器' },
+      { sellingPointId: 'sp-2', slotId: 'headline', slotRole: 'headline', replacementText: '仿人手深层揉捏' },
+    ],
+    mappedFacts: [],
+  } });
+};
+
+const cleanValidation = (overrides = {}) => ({
+  passed: true, copyExact: true, brandCorrect: true, productCorrect: true,
+  logoCorrect: true, logoPresentationCorrect: true,
+  layoutHierarchyCorrect: true, visualPolishCorrect: true, layoutIssues: [],
+  productPlacementCorrect: true,
+  parameterAlignmentCorrect: true, unsupportedStrictFactsAbsent: true,
+  characterIdentityCorrect: true, characterHairstyleCorrect: true,
+  characterOutfitCorrect: true, characterAccessoriesCorrect: true, characterIssues: [],
+  competitorRemoved: true, gibberishDetected: false,
+  missingTexts: [], wrongTexts: [], unexpectedTexts: [], summary: '通过',
+  ...overrides,
+});
+
+test('只报告主观问题时先复核一次；复核通过则直接交付，不额外付费生图', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let validationCalls = 0;
+  const generationPhases = [];
+  const context = {
+    ...env.context,
+    skipFinalValidation: false,
+    runRecognition: async (request, meta) => {
+      if (meta.kind !== 'final-detail-validation') return marketingRecognition(request, meta);
+      validationCalls += 1;
+      return JSON.stringify(validationCalls === 1
+        ? cleanValidation({
+          passed: false, visualPolishCorrect: false,
+          layoutIssues: ['字距略松'], summary: '精修不足',
+        })
+        : cleanValidation());
+    },
+    generateImage: async (_request, meta) => {
+      generationPhases.push(meta.phase);
+      return { buffer: Buffer.from(`advisory-${meta.phase}`), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'advisory-rejudge-pass-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(validationCalls, 2);
+  assert.deepEqual(generationPhases, ['final-detail']);
+  assert.equal(completed.pages[0].validationRejudgeCount, 1);
+  assert.equal(completed.pages[0].repairAttempts || 0, 0);
+  assert.equal(completed.pages[0].deliveredWithWarnings, undefined);
+  assert.ok(completed.pages[0].finalUrl);
+});
+
+test('主观问题被复核确认后仍只修复一次，修复无效则带质检提示交付而非作废', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let validationCalls = 0;
+  const generationPhases = [];
+  const context = {
+    ...env.context,
+    skipFinalValidation: false,
+    runRecognition: async (request, meta) => {
+      if (meta.kind !== 'final-detail-validation') return marketingRecognition(request, meta);
+      validationCalls += 1;
+      return JSON.stringify(cleanValidation({
+        passed: false, visualPolishCorrect: false,
+        layoutIssues: ['字距略松'], summary: '精修不足',
+      }));
+    },
+    generateImage: async (_request, meta) => {
+      generationPhases.push(meta.phase);
+      return { buffer: Buffer.from(`advisory-${meta.phase}`), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'advisory-warning-delivery-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  // First report, one re-judge, then one re-check after the single repair.
+  assert.equal(validationCalls, 3);
+  // No paid re-generation: nothing factual was ever wrong with the page.
+  assert.deepEqual(generationPhases, ['final-detail', 'final-repair']);
+  assert.equal(completed.pages[0].structuralRegenerationAttempts || 0, 0);
+  assert.equal(completed.pages[0].status, 'completed');
+  assert.equal(completed.pages[0].deliveredWithWarnings, true);
+  assert.equal(completed.pages[0].validationStatus, 'passed_with_warnings');
+  assert.deepEqual(completed.pages[0].validationWarnings, ['视觉精修不足', '版式问题']);
+  assert.ok(completed.pages[0].finalUrl);
+});
+
+test('文案写错等硬性问题不触发复核，直接进入定向修复', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let validationCalls = 0;
+  const generationPhases = [];
+  const context = {
+    ...env.context,
+    skipFinalValidation: false,
+    runRecognition: async (request, meta) => {
+      if (meta.kind !== 'final-detail-validation') return marketingRecognition(request, meta);
+      validationCalls += 1;
+      return JSON.stringify(validationCalls === 1
+        ? cleanValidation({
+          passed: false, copyExact: false,
+          wrongTexts: ['把揉捏写成柔捏'], summary: '文案写错',
+        })
+        : cleanValidation());
+    },
+    generateImage: async (_request, meta) => {
+      generationPhases.push(meta.phase);
+      return { buffer: Buffer.from(`blocking-${meta.phase}`), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'blocking-no-rejudge-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(validationCalls, 2);
+  assert.equal(completed.pages[0].validationRejudgeCount, undefined);
+  assert.deepEqual(generationPhases, ['final-detail', 'final-repair']);
+  assert.ok(completed.pages[0].finalUrl);
+});
+
+test('整页重生成次数可调为 0，保持旧的一次修复即终止行为', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const generationPhases = [];
+  const context = {
+    ...env.context,
+    skipFinalValidation: false,
+    maxStructuralRegenerations: 0,
+    runRecognition: async (request, meta) => {
+      if (meta.kind !== 'final-detail-validation') return marketingRecognition(request, meta);
+      return JSON.stringify(cleanValidation({
+        passed: false, copyExact: false,
+        wrongTexts: ['把揉捏写成柔捏'], summary: '文案写错',
+      }));
+    },
+    generateImage: async (_request, meta) => {
+      generationPhases.push(meta.phase);
+      return { buffer: Buffer.from(`nobudget-${meta.phase}`), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'no-regeneration-budget-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const failed = await waitFor(created.id, context, job => job?.stage === 'failed_validation');
+
+  assert.deepEqual(generationPhases, ['final-detail', 'final-repair']);
+  assert.equal(failed.pages[0].terminalStatus, 'FAILED_VALIDATION');
+});
+
+test('质检失败页可以单独重新生成，旧候选保留在历史结果中', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let failEverything = true;
+  const generationPhases = [];
+  const context = {
+    ...env.context,
+    skipFinalValidation: false,
+    maxStructuralRegenerations: 0,
+    runRecognition: async (request, meta) => {
+      if (meta.kind !== 'final-detail-validation') return marketingRecognition(request, meta);
+      return JSON.stringify(failEverything
+        ? cleanValidation({ passed: false, copyExact: false, wrongTexts: ['错字'], summary: '文案写错' })
+        : cleanValidation());
+    },
+    generateImage: async (_request, meta) => {
+      generationPhases.push(meta.phase);
+      return { buffer: Buffer.from(`retry-${meta.phase}`), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'validation-failed-regenerate-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const failed = await waitFor(created.id, context, job => job?.stage === 'failed_validation');
+  const supersededNodeId = failed.pages[0].resultNodeId;
+  assert.equal(failed.pages[0].status, 'failed_validation');
+
+  failEverything = false;
+  generationPhases.length = 0;
+  regenerateDetailRemixPages(created.id, 'workflow-1', { pageIndexes: [0] }, context);
+  const recovered = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.deepEqual(generationPhases, ['final-detail']);
+  assert.equal(recovered.pages[0].status, 'completed');
+  assert.ok(recovered.pages[0].finalUrl);
+  assert.notEqual(recovered.pages[0].resultNodeId, supersededNodeId);
+  assert.equal(recovered.pages[0].previousResults.length, 1);
+  assert.equal(recovered.pages[0].previousResults[0].status, 'failed_validation');
+  assert.ok(recovered.pages[0].previousResults[0].qualityFailedCandidateUrl);
+});
+
+test('导出清单默认只含已验收结果，开启候选后按页码补齐未过检页', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const context = {
+    ...env.context,
+    skipFinalValidation: false,
+    maxStructuralRegenerations: 0,
+    runRecognition: async (request, meta) => {
+      if (meta.kind !== 'final-detail-validation') return marketingRecognition(request, meta);
+      return JSON.stringify(cleanValidation({
+        passed: false, copyExact: false, wrongTexts: ['错字'], summary: '文案写错',
+      }));
+    },
+    generateImage: async () => ({ buffer: Buffer.from('candidate-page'), extension: 'png' }),
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'candidate-export-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const failed = await waitFor(created.id, context, job => job?.stage === 'failed_validation');
+  assert.equal(failed.pages[0].status, 'failed_validation');
+  assert.ok(failed.pages[0].qualityFailedCandidateUrl);
+
+  assert.throws(
+    () => getDetailRemixExportManifest(created.id, 'workflow-1', context),
+    error => error.code === 'DETAIL_REMIX_EXPORT_EMPTY',
+  );
+  const withCandidates = getDetailRemixExportManifest(
+    created.id,
+    'workflow-1',
+    context,
+    { includeCandidates: true },
+  );
+  assert.equal(withCandidates.count, 1);
+  assert.equal(withCandidates.candidateCount, 1);
+  assert.equal(withCandidates.files[0].candidate, true);
+  assert.equal(withCandidates.files[0].pageIndex, 0);
+  assert.ok(fs.existsSync(withCandidates.files[0].sourcePath));
+});
+
+/** Two competitor pages sharing one own-detail source; enough to observe overlap. */
+function twoPagePayload(overrides = {}) {
+  return basePayload({
+    competitorDetails: [
+      { nodeId: 'competitor-node', imageUrl: COMPETITOR, order: 0, sourceWidth: 600, sourceHeight: 800 },
+      { nodeId: 'competitor-node-2', imageUrl: COMPETITOR, order: 1, sourceWidth: 600, sourceHeight: 800 },
+    ],
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+    ...overrides,
+  });
+}
+
+test('Codex CLI 识图时竞品分析先并发预跑，生图仍逐张串行', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let liveRecognitions = 0;
+  let peakRecognitions = 0;
+  let liveGenerations = 0;
+  let peakGenerations = 0;
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      if (meta.kind !== 'competitor-page') return marketingRecognition(request, meta);
+      liveRecognitions += 1;
+      peakRecognitions = Math.max(peakRecognitions, liveRecognitions);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      liveRecognitions -= 1;
+      return marketingRecognition(request, meta);
+    },
+    generateImage: async () => {
+      liveGenerations += 1;
+      peakGenerations = Math.max(peakGenerations, liveGenerations);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      liveGenerations -= 1;
+      return { buffer: Buffer.from('concurrent-page'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(twoPagePayload({
+    jobId: 'recognition-prefetch-job',
+    recognitionProvider: 'codex-cli',
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed', 'prefetch job stuck');
+
+  assert.equal(peakRecognitions, 2);
+  // Paid generations stay strictly one at a time; only the unpaid step overlaps.
+  assert.equal(peakGenerations, 1);
+  assert.equal(completed.pages.length, 2);
+  assert.ok(completed.pages.every(page => page.status === 'completed'));
+});
+
+test('Gemini Web 识图共用同一个浏览器，必须保持串行不预跑', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let liveRecognitions = 0;
+  let peakRecognitions = 0;
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      if (meta.kind !== 'competitor-page') return marketingRecognition(request, meta);
+      liveRecognitions += 1;
+      peakRecognitions = Math.max(peakRecognitions, liveRecognitions);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      liveRecognitions -= 1;
+      return marketingRecognition(request, meta);
+    },
+    generateImage: async () => ({ buffer: Buffer.from('serial-page'), extension: 'png' }),
+  };
+  const created = createDetailRemixJob(twoPagePayload({
+    jobId: 'recognition-serial-job',
+    recognitionProvider: 'gemini-web',
+  }), context);
+  await waitFor(created.id, context, job => job?.status === 'completed', 'serial job stuck');
+
+  assert.equal(peakRecognitions, 1);
+});
+
+test('提交阶段按页判定：预提交的下一页不会被别页的修复边界误判为待核对', t => {
+  const presubmitted = {
+    index: 1,
+    status: 'submitting',
+    codexImageJobId: 'child-next-page',
+  };
+  const repairing = {
+    index: 0,
+    status: 'submitting',
+    repairAttempts: 1,
+    repairCodexImageJobId: 'child-repair',
+  };
+  const regenerating = {
+    index: 2,
+    status: 'submitting',
+    structuralRegenerationAttempts: 2,
+    regenerateCodexImageJobId2: 'child-regen-2',
+  };
+  assert.equal(__detailRemixTest.interruptedPhaseForPage(presubmitted), 'final-detail');
+  assert.equal(__detailRemixTest.interruptedPhaseForPage(repairing), 'final-repair');
+  assert.equal(__detailRemixTest.interruptedPhaseForPage(regenerating), 'final-regenerate-2');
+  // A finished repair falls back to the plain generation phase.
+  assert.equal(
+    __detailRemixTest.interruptedPhaseForPage({ ...repairing, repairCompletedAt: '2026-08-14T00:00:00.000Z' }),
+    'final-detail',
+  );
+});
+
+test('Codex 生图时在质检期间预提交下一页，且每页各自记录子任务便于取消与恢复', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const context = { ...env.context, autoStart: false };
+  const created = createDetailRemixJob(twoPagePayload({
+    jobId: 'presubmit-pipeline-job',
+    imageModel: 'codex-imagegen',
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+  }), context);
+
+  const job = __detailRemixTest.readJob(created.id, 'workflow-1', context.dirs);
+  // Both analyses are already done; page 1 is mid-validation with its raw image saved.
+  for (const page of job.pages) {
+    page.recognitionStatus = 'completed';
+    page.competitorAnalysisVersion = 3;
+    page.analysis = {
+      pageType: 'marketing', hasPerson: false, copySlots: [], productInstances: [],
+      // analyzeCompetitorPage stamps the source size onto the analysis; the
+      // prompt reads it from there, so a realistic stub must carry it too.
+      sourceWidth: 600, sourceHeight: 800,
+    };
+  }
+  job.pages[0].status = 'normalizing_output';
+  job.pages[0].rawResultUrl = '/library/projects/x/images/page-1-raw.png';
+  await __detailRemixTest.presubmitNextPageGeneration(job, job.pages[0], context);
+
+  const queued = listCodexImageJobs(context.codexJobsDir);
+  assert.equal(queued.length, 1);
+  assert.equal(job.pages[1].codexImageJobId, queued[0].id);
+  assert.equal(job.pages[1].status, 'submitting');
+  assert.ok(job.pages[1].presubmittedAt);
+  // The job-wide boundary still points at nothing; the pointer that matters lives on the page.
+  assert.equal(job.currentSubmission, undefined);
+
+  // A second call must not queue the same page twice.
+  await __detailRemixTest.presubmitNextPageGeneration(job, job.pages[0], context);
+  assert.equal(listCodexImageJobs(context.codexJobsDir).length, 1);
+
+  // Cancelling reaps the pre-submitted child even though it was never the awaited submission.
+  job.status = 'processing';
+  __detailRemixTest.writeJob(job, context);
+  const cancelled = cancelDetailRemixJob(created.id, 'workflow-1', context);
+  assert.deepEqual(cancelled.cancelledChildJobIds, [queued[0].id]);
+  assert.equal(getCodexImageJob(context.codexJobsDir, queued[0].id).status, 'cancelled');
+});
+
+test('质检调用崩溃可安全重试，不让判图故障作废已付费的成图', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let validationCalls = 0;
+  let generationCalls = 0;
+  const context = {
+    ...env.context,
+    skipFinalValidation: false,
+    validationRetryDelayMs: 0,
+    runRecognition: async (request, meta) => {
+      if (meta.kind !== 'final-detail-validation') return marketingRecognition(request, meta);
+      validationCalls += 1;
+      if (validationCalls === 1) throw new Error('Codex CLI 进程退出码 1');
+      return JSON.stringify(cleanValidation());
+    },
+    generateImage: async () => {
+      generationCalls += 1;
+      return { buffer: Buffer.from('flaky-judge'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'flaky-validation-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed', 'flaky judge job stuck');
+
+  assert.equal(validationCalls, 2);
+  // The image was never regenerated: only the unpaid judgement was repeated.
+  assert.equal(generationCalls, 1);
+  assert.ok(completed.pages[0].finalUrl);
+});
+
+test('浏览器生图失败绝不自动重试，避免无法确认是否已扣费的重复提交', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let generationCalls = 0;
+  const context = {
+    ...env.context,
+    runRecognition: marketingRecognition,
+    generateImage: async () => {
+      generationCalls += 1;
+      throw new Error('浏览器任务中断');
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'browser-no-retry-job',
+    imageModel: 'google-flow-nano-banana-pro',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const failed = await waitFor(created.id, context, job => job?.status === 'failed', 'browser failure job stuck');
+
+  assert.equal(generationCalls, 1);
+  assert.equal(failed.pages[0].status, 'failed');
+});
+
+test('预提交的下一页会被直接等待并采用，绝不重复提交第二次付费任务', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  // No generateImage override: this test must exercise the real Codex submission path.
+  const context = { ...env.context, autoStart: false, runRecognition: marketingRecognition };
+  const created = createDetailRemixJob(twoPagePayload({
+    jobId: 'presubmit-await-job',
+    imageModel: 'codex-imagegen',
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+  }), context);
+
+  const job = __detailRemixTest.readJob(created.id, 'workflow-1', context.dirs);
+  for (const page of job.pages) {
+    page.recognitionStatus = 'completed';
+    page.competitorAnalysisVersion = 3;
+    page.analysis = {
+      pageType: 'marketing', hasPerson: false, copySlots: [], productInstances: [],
+      // analyzeCompetitorPage stamps the source size onto the analysis; the
+      // prompt reads it from there, so a realistic stub must carry it too.
+      sourceWidth: 600, sourceHeight: 800,
+    };
+  }
+  // Page 1 is already delivered, so only the pre-submitted page 2 is left to run.
+  job.pages[0].status = 'completed';
+  job.pages[0].finalUrl = '/library/projects/%E8%AF%A6%E6%83%85%E5%A4%8D%E5%88%BB%E6%B5%8B%E8%AF%95/images/page-1.png';
+  job.pages[0].resultUrl = job.pages[0].finalUrl;
+  await __detailRemixTest.presubmitNextPageGeneration(job, job.pages[0], context);
+  __detailRemixTest.writeJob(job, context);
+
+  const presubmitted = listCodexImageJobs(context.codexJobsDir);
+  assert.equal(presubmitted.length, 1);
+  const childId = presubmitted[0].id;
+  const presubmittedPrompt = presubmitted[0].prompt;
+  // Pre-submission must resolve the page's pixel size first, or the paid render
+  // is asked for at "自动" instead of following its competitor original.
+  assert.match(presubmittedPrompt, /目标尺寸继承竞品原图：600 × 800 像素/);
+
+  // The single worker finishes the pre-submitted render while page 1 was being judged.
+  const generated = path.join(env.root, 'presubmitted-result.png');
+  await sharp({ create: { width: 6, height: 8, channels: 3, background: '#204060' } })
+    .png().toFile(generated);
+  claimCodexImageJob(context.codexJobsDir, childId);
+  await completeCodexImageJob({
+    jobsDir: context.codexJobsDir,
+    imagesDir: path.join(env.context.libraryDir, 'images'),
+    projectsDir: env.context.dirs.projectsDir,
+    jobId: childId,
+    sourceImage: generated,
+  });
+
+  await __detailRemixTest.executeFinalPhase(
+    __detailRemixTest.readJob(created.id, 'workflow-1', context.dirs),
+    context,
+  );
+  const finished = __detailRemixTest.readJob(created.id, 'workflow-1', context.dirs);
+
+  // The whole point: no second paid job was created for a page already queued.
+  assert.equal(listCodexImageJobs(context.codexJobsDir).length, 1);
+  assert.equal(finished.pages[1].codexImageJobId, childId);
+  assert.equal(finished.pages[1].status, 'completed');
+  assert.ok(finished.pages[1].finalUrl);
+  assert.ok(finished.pages[1].presubmittedAt);
+  // Metadata must describe the prompt the paid child actually carried.
+  assert.equal(finished.pages[1].finalPrompt, presubmittedPrompt);
+  assert.equal(finished.status, 'completed');
+});
+
+const PRODUCT_SHEET = {
+  rows: 2,
+  columns: 3,
+  cells: [
+    { index: 1, label: '正面整机' },
+    { index: 2, label: '左前 3/4' },
+    { index: 3, label: '侧面' },
+    { index: 4, label: '背面' },
+    { index: 5, label: '机芯抓捏机构' },
+    { index: 6, label: '按键卡扣材质' },
+  ],
+};
+
+test('开启产品参考板优先后，我提供的板子独占产品参考位，自动裁图不再顶掉它', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    runRecognition: completeRecognition({ hasPerson: false }),
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('sheet-final'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'product-sheet-priority-job',
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+    preferSuppliedProductReferences: true,
+    productSheet: PRODUCT_SHEET,
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  const productKinds = generationCalls[0].meta.referenceKinds
+    .filter(kind => kind.startsWith('own-product'));
+  assert.deepEqual(productKinds, ['own-product-supplement']);
+  assert.equal(generationCalls[0].request.referenceImageInputs[1], PRODUCT);
+  assert.equal(completed.pages[0].productSheetActive, true);
+  assert.equal(completed.pages[0].selectedProductViews[0].supplemental, true);
+});
+
+test('关闭开关时保持原有优先级，自动裁出的角度仍排在用户补充图之前', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    runRecognition: completeRecognition({ hasPerson: false }),
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('auto-final'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'product-sheet-disabled-job',
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(generationCalls[0].meta.referenceKinds[1], 'own-product-auto-angle');
+  assert.equal(completed.pages[0].productSheetActive, false);
+});
+
+test('角度板会写进识图与生成提示词，并按实例绑定具体格位', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const recognitionRequests = [];
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      recognitionRequests.push({ request, meta });
+      if (meta.kind === 'own-selling-points') {
+        return JSON.stringify({
+          productViews: [{
+            sourceImageIndex: 0, cropRegion: { x: 0, y: 0, width: 1, height: 1 },
+            viewAngle: 'front', visibleSides: ['front'], description: '', quality: 0.9,
+          }],
+          sellingPoints: [{ id: 'sp-1', title: '仿人手深层揉捏' }],
+        });
+      }
+      return JSON.stringify({ page: {
+        pageType: 'marketing', hasPerson: false,
+        selectedProductViewIds: ['pv-1'],
+        productInstances: [
+          { instanceId: 'product-1', x: 0.2, y: 0.2, width: 0.2, height: 0.2, viewAngle: 'detail', contactSurface: '', foregroundOcclusion: '', productSheetCell: 5 },
+          { instanceId: 'product-2', x: 0.6, y: 0.2, width: 0.2, height: 0.2, viewAngle: 'back', contactSurface: '', foregroundOcclusion: '', productSheetCell: 4 },
+        ],
+        copySlots: [{ slotId: 'headline', role: 'headline', sourceText: '竞品大标题', x: 0.1, y: 0.5, width: 0.8, height: 0.08, maxChars: 10 }],
+        mappedSellingPoints: [{ sellingPointId: 'sp-1', slotId: 'headline', slotRole: 'headline', replacementText: '仿人手深层揉捏' }],
+        mappedFacts: [],
+      } });
+    },
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('bound-final'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'product-sheet-binding-job',
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+    preferSuppliedProductReferences: true,
+    productSheet: PRODUCT_SHEET,
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  // The planner is told the grid exists so it can assign a cell per instance.
+  const competitorInstruction = recognitionRequests
+    .find(entry => entry.meta.kind === 'competitor-page').request.systemInstruction;
+  assert.match(competitorInstruction, /5=机芯抓捏机构/);
+  assert.match(competitorInstruction, /productSheetCell/);
+
+  // The renderer gets the same grid plus the resolved per-instance binding.
+  const prompt = generationCalls[0].request.prompt;
+  assert.match(prompt, /2 行 × 3 列角度板/);
+  assert.match(prompt, /"instanceId":"product-1","cell":5/);
+  assert.match(prompt, /"instanceId":"product-2","cell":4/);
+  assert.match(prompt, /禁止把它的网格、分格线、编号数字/);
+  assert.equal(completed.pages[0].analysis.productInstances[0].productSheetCell, 5);
+});
+
+test('没有连接产品参考图时填写角度板会被明确拒绝', t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  assert.throws(() => createDetailRemixJob(basePayload({
+    jobId: 'product-sheet-missing-image-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+    preferSuppliedProductReferences: true,
+    productSheet: PRODUCT_SHEET,
+  }), { ...env.context, autoStart: false }), /没有连接对应的产品参考图/);
 });

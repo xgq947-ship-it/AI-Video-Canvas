@@ -16,7 +16,9 @@ codex-home/
 # 这正是 v0.2.15 发布时 CI 报 Cannot find module 的原因。
 /runtime/
 # 本机双击使用的开发控制器，由 npm run desktop:controller 生成。
+# 脚本产出过带空格和不带空格两种名字，两个都要忽略。
 /Evan 项目控制器.app/
+/Evan项目控制器.app/
 # Playwright 调试时存的页面快照，一次性现场，不入库
 .playwright-cli/
 dist

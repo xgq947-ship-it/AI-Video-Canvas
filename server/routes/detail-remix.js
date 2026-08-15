@@ -8,7 +8,7 @@ import {
   getDetailRemixExportManifest,
   getDetailRemixJob,
   getLatestDetailRemixJob,
-  regenerateCompletedDetailRemixPage,
+  regenerateDetailRemixPages,
   retryFailedDetailRemixPages,
 } from '../services/detailRemixJobs.js';
 
@@ -122,7 +122,8 @@ router.get('/detail-remix-jobs/:jobId/export-manifest', (req, res) => {
     const manifest = getDetailRemixExportManifest(
       req.params.jobId,
       workflowId,
-      requestContext(req.app.locals)
+      requestContext(req.app.locals),
+      { includeCandidates: ['1', 'true'].includes(String(req.query.includeCandidates || '')) }
     );
     if (!manifest) return res.status(404).json({ error: '商品详情复刻任务不存在' });
     return res.json(manifest);
@@ -182,7 +183,7 @@ router.post('/detail-remix-jobs/:jobId/regenerate-page', (req, res) => {
     if (!existing) return res.status(404).json({ error: '商品详情复刻任务不存在' });
     const unavailable = codexUnavailableResponse(req, existing);
     if (unavailable) return res.status(unavailable.status).json({ error: unavailable.error });
-    const job = regenerateCompletedDetailRemixPage(
+    const job = regenerateDetailRemixPages(
       req.params.jobId,
       workflowId,
       req.body || {},

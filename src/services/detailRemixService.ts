@@ -1,5 +1,7 @@
 /** Frontend contract for the single-generation e-commerce detail remix job. */
 
+import type { DetailRemixProductSheet } from '../../shared/detailRemix';
+
 export type DetailRemixRecognitionProvider = 'auto' | 'codex-cli' | 'gemini-web';
 
 export type DetailRemixJobStatus =
@@ -17,7 +19,9 @@ export type DetailRemixJobStage =
   | 'analyzing_competitor'
   | 'generating_final'
   | 'validating_final'
+  | 'revalidating_final'
   | 'repairing_final'
+  | 'regenerating_final'
   | 'failed_validation'
   | 'final_partial_failed'
   // Legacy stages remain in the read contract for existing saved jobs.
@@ -91,7 +95,13 @@ export interface DetailRemixPageResult {
   terminalStatus?: 'FAILED_VALIDATION' | string;
   validation?: Record<string, unknown>;
   validationAttempts?: number;
+  validationRejudgeCount?: number;
+  /** Advisory-only findings the page shipped with after the repair budget was spent. */
+  validationWarnings?: string[];
+  deliveredWithWarnings?: boolean;
+  qualityFailedCandidateUrl?: string;
   repairAttempts?: number;
+  structuralRegenerationAttempts?: number;
   regenerationCount?: number;
   regenerationRequestedAt?: string;
   previousResults?: Array<{
@@ -99,6 +109,9 @@ export interface DetailRemixPageResult {
     rawResultUrl?: string;
     finalUrl?: string;
     resultUrl?: string;
+    qualityFailedCandidateUrl?: string;
+    status?: string;
+    terminalStatus?: string;
     validation?: Record<string, unknown>;
     repairAttempts?: number;
     completedAt?: string;
@@ -221,6 +234,12 @@ export interface CreateDetailRemixJobParams {
   sizingMode?: 'match-competitor';
   aspectRatio?: string;
   resolution?: string;
+  /** Paid full re-generations allowed after a targeted repair still fails quality control. */
+  maxStructuralRegenerations?: number;
+  /** Rank supplied product references ahead of auto-cropped views from the own detail pages. */
+  preferSuppliedProductReferences?: boolean;
+  /** Grid manifest describing the first supplied product reference. */
+  productSheet?: DetailRemixProductSheet | null;
 }
 
 export interface ComposeDetailRemixProductsParams {
@@ -314,15 +333,16 @@ export async function retryFailedDetailRemixPages(
   return readJson(response, '无法重试失败详情页');
 }
 
-export async function regenerateCompletedDetailRemixPage(
+/** Accepts delivered pages and quality-failed pages alike; both already cost a paid generation. */
+export async function regenerateDetailRemixPages(
   jobId: string,
   workflowId: string,
-  pageIndex: number,
+  pageIndexes: number[],
 ): Promise<DetailRemixJob> {
   const response = await fetch(`/api/detail-remix-jobs/${encodeURIComponent(jobId)}/regenerate-page`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workflowId, pageIndex }),
+    body: JSON.stringify({ workflowId, pageIndexes }),
   });
   return readJson(response, '无法重新生成指定详情页');
 }

@@ -63,7 +63,10 @@ export function planDetailRemixExport(files, destinationDir) {
     const digits = Math.max(2, String(ordered.length).length);
     return ordered.map((file, index) => {
         const sourcePath = path.resolve(String(file?.sourcePath || ''));
-        const filename = `${String(index + 1).padStart(digits, '0')}${supportedExtension(sourcePath)}`;
+        // A page the quality gate rejected keeps its slot in the sequence but is
+        // named so it can never be mistaken for a verified deliverable.
+        const marker = file?.candidate ? '_待确认' : '';
+        const filename = `${String(index + 1).padStart(digits, '0')}${marker}${supportedExtension(sourcePath)}`;
         return {
             ...file,
             sourcePath,

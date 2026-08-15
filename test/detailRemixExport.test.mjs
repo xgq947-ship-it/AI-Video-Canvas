@@ -67,3 +67,24 @@ test('导出至少保留两位编号，超过 99 张时自动扩大位数', t =>
   assert.equal(plan[0].filename, '001.png');
   assert.equal(plan.at(-1).filename, '101.png');
 });
+
+test('未过检候选保留页码顺序，但文件名带「待确认」以免被当成已验收成品', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'detail-remix-export-candidate-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const sources = path.join(root, 'sources');
+  const destination = path.join(root, 'destination');
+  fs.mkdirSync(sources);
+  fs.mkdirSync(destination);
+  const delivered = path.join(sources, 'ok.png');
+  const candidate = path.join(sources, 'rejected.png');
+  fs.writeFileSync(delivered, 'page-one');
+  fs.writeFileSync(candidate, 'page-two-candidate');
+
+  const files = [
+    { order: 0, pageIndex: 0, sourcePath: delivered },
+    { order: 1, pageIndex: 1, sourcePath: candidate, candidate: true, candidateReason: 'AI 成图质检未通过' },
+  ];
+  const result = exportDetailRemixFiles(files, destination);
+  assert.deepEqual(result.filenames, ['01.png', '02_待确认.png']);
+  assert.equal(fs.readFileSync(path.join(destination, '02_待确认.png'), 'utf8'), 'page-two-candidate');
+});

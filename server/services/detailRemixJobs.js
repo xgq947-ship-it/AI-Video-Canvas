@@ -36,12 +36,16 @@ import {
   parseOwnSellingPointsResponse,
   parseCompetitorPageResponse,
   parseFinalDetailValidationResponse,
+  normalizeDetailRemixProductSheet,
+  classifyFinalDetailValidation,
+  describeFinalDetailValidationFailures,
   buildOwnSellingPointsInstruction,
   buildCompetitorPageInstruction,
   buildFinalDetailPrompt,
   buildDetailCopyReplacementPlan,
   buildFinalDetailValidationInstruction,
   buildFinalDetailRepairPrompt,
+  buildFinalDetailRegenerationPrompt,
   buildBlankDetailPrompt,
   buildProductComposePrompt,
 } from '../../shared/detailRemix.js';
@@ -54,8 +58,21 @@ const DETAIL_REMIX_COMPETITOR_ANALYSIS_VERSION = 3;
 const DETAIL_REMIX_PIPELINE_VERSION = 'tail-strict-auto-copy-qa-v4';
 const MAX_AUTO_PRODUCT_VIEW_REFERENCES = 3;
 const MAX_FINAL_REPAIR_ATTEMPTS = 1;
+/** Second opinions are recognition calls, not paid generations, so one is enough and cheap. */
+const MAX_VALIDATION_REJUDGE_ATTEMPTS = 1;
+/** Fresh re-generations after a structural failure. Each one costs a paid image. */
+const DEFAULT_MAX_STRUCTURAL_REGENERATIONS = 1;
+const MAX_STRUCTURAL_REGENERATIONS_LIMIT = 3;
 const DETAIL_REMIX_RECOGNITION_TIMEOUT_MS = 10 * 60_000;
 const MAX_DETAIL_REMIX_RECOGNITION_ATTEMPTS = 2;
+const DEFAULT_RECOGNITION_CONCURRENCY = 2;
+const MAX_RECOGNITION_CONCURRENCY = 3;
+/** The quality gate submits nothing, so a failed call is always safe to repeat. */
+const MAX_VALIDATION_CALL_ATTEMPTS = 3;
+const VALIDATION_RETRY_DELAY_MS = 1_500;
+/** Only applies where the absence of a submission can be proven. See runImageGenerationSafely. */
+const MAX_UNSUBMITTED_GENERATION_RETRIES = 2;
+const GENERATION_RETRY_DELAY_MS = 2_000;
 
 // A job can be started by POST and subsequently observed by GET. Keeping the
 // AbortController here lets cancel stop browser waits immediately; the durable
@@ -384,6 +401,26 @@ function imageInputToDataUrl(input, context) {
     extension = '';
   }
   return `data:${dataUrlMime(extension)};base64,${buffer.toString('base64')}`;
+}
+
+/**
+ * Base64 of the reference images, memoized for the lifetime of one job run.
+ *
+ * Quality control re-sends the same competitor page, product crops, logo,
+ * evidence pages and character sheets on every pass — first judgement, second
+ * opinion, and again after each repair — and encoding them is neither free nor
+ * cached anywhere else. Only string inputs are keyed, which is what keeps the
+ * candidate image itself (always passed as a Buffer) out of the cache: it is the
+ * one input that differs between passes. Never persisted: this lives beside the
+ * job, never on it, because writeJob would serialize megabytes of base64.
+ */
+const referenceDataUrlCaches = new Map();
+
+function cachedImageInputToDataUrl(job, input, context) {
+  const cache = referenceDataUrlCaches.get(job?.id);
+  if (!cache || typeof input !== 'string' || !input) return imageInputToDataUrl(input, context);
+  if (!cache.has(input)) cache.set(input, imageInputToDataUrl(input, context));
+  return cache.get(input);
 }
 
 function numericAspectRatio(value) {
@@ -1389,10 +1426,25 @@ async function waitForCodexResult(context, codexJobId, signal) {
   throw timeout;
 }
 
+/**
+ * Each structural retry gets its own pointer. Sharing one field would make
+ * runImageGeneration find the previous attempt's remembered job id and silently
+ * await the already-failed generation instead of submitting a new one.
+ */
+function structuralRegenerationJobField(attempt) {
+  return `regenerateCodexImageJobId${Math.max(1, Number(attempt) || 1)}`;
+}
+
+function structuralRegenerationPhase(attempt) {
+  return `final-regenerate-${Math.max(1, Number(attempt) || 1)}`;
+}
+
 function codexJobFieldForPhase(phase) {
   if (phase === 'blank-plate') return 'plateCodexImageJobId';
   if (phase === 'product-compose') return 'composeCodexImageJobId';
   if (phase === 'final-repair') return 'repairCodexImageJobId';
+  const structural = /^final-regenerate-(\d+)$/u.exec(String(phase || ''));
+  if (structural) return structuralRegenerationJobField(structural[1]);
   return 'codexImageJobId';
 }
 
@@ -1456,6 +1508,51 @@ async function runImageGeneration(request, job, context, meta, signal) {
     return waitForCodexResult(context, codexJob.id, signal);
   }
   throw new Error(`商品详情复刻暂不支持图片模型：${job.imageModel}`);
+}
+
+function delayBeforeRetry(milliseconds, signal) {
+  if (signal?.aborted) return Promise.reject(cancellationError());
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener?.('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    function onAbort() {
+      clearTimeout(timer);
+      reject(cancellationError());
+    }
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+  });
+}
+
+/**
+ * Retry a generation only when nothing can possibly have been charged for.
+ *
+ * Codex submission writes a child-job id onto the page the instant a job exists,
+ * so its absence is proof that no order was placed and the request may be sent
+ * again. Browser-driven providers offer no such proof — a failure there can come
+ * from before the prompt was sent or from after the image was already produced —
+ * so those errors are surfaced untouched rather than risking a double charge.
+ */
+async function runImageGenerationSafely(request, job, context, meta, signal) {
+  const page = pageForGenerationMeta(job, meta);
+  const jobField = codexJobFieldForPhase(meta?.phase);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await runImageGeneration(request, job, context, meta, signal);
+    } catch (error) {
+      if (isOperationCancelled(error) || signal?.aborted) throw error;
+      const provablyUnsubmitted = job.imageModel === 'codex-imagegen'
+        && error?.submitted !== true
+        && !page?.[jobField]
+        && !job.currentSubmission?.codexJobId;
+      if (!provablyUnsubmitted || attempt >= MAX_UNSUBMITTED_GENERATION_RETRIES) throw error;
+      const base = Number.isFinite(Number(context.generationRetryDelayMs))
+        ? Number(context.generationRetryDelayMs)
+        : GENERATION_RETRY_DELAY_MS;
+      await delayBeforeRetry(base * (attempt + 1), signal);
+    }
+  }
 }
 
 function makeGenerationRequest(job, prompt, references, nodeId, context, signal, page) {
@@ -1711,6 +1808,7 @@ async function analyzeCompetitorPage(job, page, context, signal) {
     ownVerifiedFacts: verifiedFactCatalog(job),
     ownBrandIdentity: job.brandIdentity,
     ownProductViews: productViewCatalog(job),
+    ownProductSheet: job.preferSuppliedProductReferences ? job.productSheet : null,
     pageIndex: page.index,
     pageCount: job.pages.length,
   });
@@ -1841,16 +1939,23 @@ function resolvePageProductReferences(job, page, reservedReferenceCount = 0) {
       .slice(0, MAX_AUTO_PRODUCT_VIEW_REFERENCES);
   }
 
-  const candidates = [
-    ...selectedViews,
-    ...(Array.isArray(job.productImages) ? job.productImages.map((imageUrl, index) => ({
-      id: `supplement-${index + 1}`,
-      imageUrl,
-      viewAngle: 'user-supplied',
-      description: '用户提供的产品补充参考',
-      supplemental: true,
-    })) : []),
-  ];
+  const supplied = (Array.isArray(job.productImages) ? job.productImages : []).map((imageUrl, index) => ({
+    id: `supplement-${index + 1}`,
+    imageUrl,
+    viewAngle: 'user-supplied',
+    description: job.productSheet && index === 0
+      ? '用户提供的产品角度板'
+      : '用户提供的产品补充参考',
+    supplemental: true,
+  }));
+  // With only one product slot on most providers, a hand-built reference sheet
+  // loses that slot to an auto-crop unless it is ranked first. When the user has
+  // declared their own references authoritative, auto-crops leave the generation
+  // set entirely: a labelled angle sheet describes every cell it carries, and an
+  // extra undescribed crop alongside it only invites the model to mix sources.
+  // The crops stay in the recognition catalog, which is what plans the page.
+  const preferSupplied = job.preferSuppliedProductReferences === true && supplied.length > 0;
+  const candidates = preferSupplied ? supplied : [...selectedViews, ...supplied];
   const seen = new Set();
   const selected = candidates.filter(item => {
     const key = canonicalMediaIdentity(item?.imageUrl);
@@ -1861,6 +1966,10 @@ function resolvePageProductReferences(job, page, reservedReferenceCount = 0) {
   if (!selected.length) {
     throw new Error('本页没有可用的我方产品角度；请检查“我的详情”是否包含清晰完整的产品图');
   }
+  // The declared grid only describes the first supplied image. If an auto-crop
+  // still won the leading slot, the sheet manifest must not be quoted at the
+  // model — it would be describing a different picture.
+  page.productSheetActive = Boolean(job.productSheet && selected[0]?.id === 'supplement-1');
   page.selectedProductViewIds = selected.filter(item => !item.supplemental).map(item => item.id);
   page.selectedProductViews = selected.map(item => ({
     id: item.id,
@@ -1870,6 +1979,11 @@ function resolvePageProductReferences(job, page, reservedReferenceCount = 0) {
     supplemental: item.supplemental === true,
   }));
   return selected;
+}
+
+/** The product sheet manifest, but only for pages whose leading product reference is that sheet. */
+function activeProductSheet(job, page) {
+  return page?.productSheetActive ? (job.productSheet || null) : null;
 }
 
 function resolvePageEvidenceReferences(job, page, maximum) {
@@ -2033,7 +2147,7 @@ async function validateFinalDetailPage(
   const provider = getPromptOptimizerProvider(job.recognitionProvider);
   const copyPlan = exactCopyPlan(page);
   const generatedDataUrl = imageInputToDataUrl(buffer, context);
-  const competitorLayoutDataUrl = imageInputToDataUrl(page.sourceImage, context);
+  const competitorLayoutDataUrl = cachedImageInputToDataUrl(job, page.sourceImage, context);
   const supporting = [
     competitorLayoutDataUrl,
     ...selectedProducts.map(item => item.imageUrl),
@@ -2042,7 +2156,7 @@ async function validateFinalDetailPage(
     ...characterReferences,
   ].map(value => String(value || '').startsWith('data:image/')
     ? value
-    : imageInputToDataUrl(value, context)).filter(Boolean);
+    : cachedImageInputToDataUrl(job, value, context)).filter(Boolean);
   if (!generatedDataUrl) throw new Error('无法读取待质检的最终详情图');
   if (!competitorLayoutDataUrl) throw new Error('无法读取用于版式质检的竞品原图');
   page.validationStatus = 'processing';
@@ -2058,9 +2172,10 @@ async function validateFinalDetailPage(
     hasBrandLogoReference: brandReferences.length > 0,
     evidenceReferenceCount: evidenceReferences.length,
     characterReferenceCount: characterReferences.length,
+    productSheet: activeProductSheet(job, page),
   });
   let parsed;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < MAX_VALIDATION_CALL_ATTEMPTS; attempt += 1) {
     assertActive(job, context, signal);
     const request = {
       systemInstruction: instruction,
@@ -2088,39 +2203,65 @@ async function validateFinalDetailPage(
       break;
     } catch (error) {
       if (isOperationCancelled(error)) throw error;
-      if (error?.code === 'DETAIL_REMIX_JSON_FORMAT' && attempt === 0) continue;
-      throw error;
+      if (attempt + 1 >= MAX_VALIDATION_CALL_ATTEMPTS) throw error;
+      // Judging costs nothing and submits nothing. A CLI crash, a timeout or a
+      // malformed answer must never condemn a page whose paid image is already
+      // on disk, so every failure here is simply asked again.
+      if (error?.code !== 'DETAIL_REMIX_JSON_FORMAT') {
+        const base = Number.isFinite(Number(context.validationRetryDelayMs))
+          ? Number(context.validationRetryDelayMs)
+          : VALIDATION_RETRY_DELAY_MS;
+        await delayBeforeRetry(base * (attempt + 1), signal);
+      }
     }
   }
   if (!parsed) throw new Error('最终详情质检没有返回可用结果');
-  const passed = parsed.passed === true
-    && parsed.copyExact === true
-    && parsed.brandCorrect === true
-    && parsed.productCorrect === true
-    && parsed.logoCorrect === true
-    && parsed.logoPresentationCorrect === true
-    && parsed.layoutHierarchyCorrect === true
-    && parsed.visualPolishCorrect === true
-    && parsed.productPlacementCorrect === true
-    && parsed.parameterAlignmentCorrect === true
-    && parsed.unsupportedStrictFactsAbsent === true
-    && parsed.characterIdentityCorrect === true
-    && parsed.characterHairstyleCorrect === true
-    && parsed.characterOutfitCorrect === true
-    && parsed.characterAccessoriesCorrect === true
-    && parsed.competitorRemoved === true
-    && parsed.gibberishDetected !== true
-    && parsed.missingTexts.length === 0
-    && parsed.wrongTexts.length === 0
-    && parsed.unexpectedTexts.length === 0
-    && parsed.characterIssues.length === 0
-    && parsed.layoutIssues.length === 0;
-  const validation = { ...parsed, passed };
+  const { blocking, advisory, passed, advisoryOnly } = classifyFinalDetailValidation(parsed);
+  const validation = {
+    ...parsed,
+    passed,
+    blockingFailures: blocking,
+    advisoryFailures: advisory,
+    advisoryOnly,
+  };
   page.validation = validation;
   page.validationStatus = passed ? 'passed' : 'failed';
   page.validationCompletedAt = nowIso(context);
   writeJob(job, context);
   return validation;
+}
+
+/**
+ * Second opinion on the same pixels. Only ever used when the first report named
+ * nothing but aesthetic complaints — re-judging a literal wrong-number finding
+ * would be pure waste, and waiving one would be wrong.
+ */
+async function confirmAdvisoryValidationFailure(
+  job,
+  page,
+  buffer,
+  selectedProducts,
+  brandReferences,
+  evidenceReferences,
+  characterReferences,
+  context,
+  signal,
+) {
+  page.validationRejudgeCount = Math.max(0, Number(page.validationRejudgeCount) || 0) + 1;
+  job.stage = 'revalidating_final';
+  job.stageLabel = `正在复核第 ${page.index + 1} 页的主观质检判定`;
+  writeJob(job, context);
+  return validateFinalDetailPage(
+    job,
+    page,
+    buffer,
+    selectedProducts,
+    brandReferences,
+    evidenceReferences,
+    characterReferences,
+    context,
+    signal,
+  );
 }
 
 async function repairFinalDetailPage(
@@ -2184,7 +2325,7 @@ async function repairFinalDetailPage(
     signal,
     page,
   );
-  const generated = await runImageGeneration(request, job, context, {
+  const generated = await runImageGenerationSafely(request, job, context, {
     phase: 'final-repair',
     pageIndex: page.index,
     referenceKinds: [
@@ -2214,24 +2355,106 @@ async function repairFinalDetailPage(
   return matchPageDimensions(persisted.buffer, page, context);
 }
 
-async function generateFinalPage(job, page, context, signal) {
-  if ((page.finalUrl || page.resultUrl) && page.status === 'completed') return;
-  const interruptedPhase = job.currentSubmission?.kind === 'final-repair'
-    ? 'final-repair'
-    : 'final-detail';
-  if (page.status === 'submitting'
-      && !canResumeCodexSubmission(job, page, interruptedPhase, context)) {
-    page.status = 'recovery_required';
-    page.error = '最终详情图在提交边界中断；系统不会自动重复提交';
-    writeJob(job, context);
-    return;
-  }
-  await ensurePageSourceDimensions(job, page, context);
-  page.status = 'preparing';
-  job.stage = 'generating_final';
-  job.stageLabel = `正在生成最终详情 ${page.index + 1} / ${job.pages.length}`;
-  writeJob(job, context);
+/** Returns undefined when the caller expressed no preference, so defaults stay resolvable later. */
+export function normalizeStructuralRegenerationBudget(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) return undefined;
+  return Math.min(MAX_STRUCTURAL_REGENERATIONS_LIMIT, parsed);
+}
 
+function resolveStructuralRegenerationBudget(job, context) {
+  const configured = [job?.maxStructuralRegenerations, context?.maxStructuralRegenerations]
+    .map(normalizeStructuralRegenerationBudget)
+    .find(value => value !== undefined);
+  return configured === undefined ? DEFAULT_MAX_STRUCTURAL_REGENERATIONS : configured;
+}
+
+/**
+ * Generate the page again from the original references instead of editing the
+ * rejected candidate. An edit pass can fix a wrong word; it cannot undo garbled
+ * type or a collapsed layout, because the damage is in the render itself.
+ */
+async function regenerateFinalDetailPage(job, page, basePrompt, references, validation, context, signal) {
+  const pendingAttempt = Number(page.structuralRegenerationAttempts || 0);
+  const resuming = Boolean(
+    pendingAttempt > 0
+      && page[structuralRegenerationJobField(pendingAttempt)]
+      && !page.structuralRegenerationCompletedAt,
+  );
+  const attempt = resuming ? pendingAttempt : pendingAttempt + 1;
+  const { imageTarget } = getStorage(job.workflowId, context.dirs);
+  page.structuralRegenerationAttempts = attempt;
+  page.structuralRegenerationCompletedAt = undefined;
+  page.status = 'regenerating_final';
+  job.stage = 'regenerating_final';
+  job.stageLabel = `正在重新生成第 ${page.index + 1} 页（质检结构性失败第 ${attempt} 次）`;
+  writeJob(job, context);
+  // The rejected candidate stays on disk so a later manual review can compare it
+  // against whatever this attempt produces.
+  const rejected = saveImageBuffer(
+    imageInputToBuffer(page.rawResultUrl, context),
+    imageTarget,
+    `${page.resultNodeId}-quality-failed-regen-${attempt}`,
+  );
+  page.qualityFailedCandidateUrl = rejected.resultUrl;
+  const prompt = buildFinalDetailRegenerationPrompt({ basePrompt, validation, attempt });
+  page.structuralRegenerationPrompt = prompt;
+  page.status = 'submitting';
+  page.structuralRegenerationSubmittingAt = nowIso(context);
+  const phase = structuralRegenerationPhase(attempt);
+  const assetId = `${page.resultNodeId}-regen-${attempt}-raw`;
+  markBoundary(job, context, {
+    kind: phase,
+    pageIndex: page.index,
+    submittingAt: page.structuralRegenerationSubmittingAt,
+  });
+  const request = makeGenerationRequest(job, prompt, references, assetId, context, signal, page);
+  const generated = await runImageGenerationSafely(request, job, context, {
+    phase,
+    pageIndex: page.index,
+    referenceKinds: ['structural-regeneration'],
+  }, signal);
+  assertActive(job, context, signal);
+  let persisted;
+  try {
+    persisted = await persistRawResult(generated, imageTarget, assetId, {
+      ...context,
+      workflowIdForResolution: job.workflowId,
+    });
+  } catch (error) {
+    throw submittedOperationError(error);
+  }
+  page.initialRawResultUrl ||= page.rawResultUrl;
+  page.rawResultUrl = persisted.resultUrl;
+  page.structuralRegenerationCompletedAt = nowIso(context);
+  clearBoundary(job, context);
+  return matchPageDimensions(persisted.buffer, page, context);
+}
+
+/**
+ * Which submission a page is mid-flight on, decided from that page's own state.
+ * Reading it off the job-wide `currentSubmission` misattributes the phase as soon
+ * as more than one page holds a live child job — the resumable one then looks
+ * unresumable and a paid generation is abandoned.
+ */
+function interruptedPhaseForPage(page) {
+  const structuralAttempt = Number(page?.structuralRegenerationAttempts || 0);
+  if (structuralAttempt > 0
+      && page[structuralRegenerationJobField(structuralAttempt)]
+      && !page.structuralRegenerationCompletedAt) {
+    return structuralRegenerationPhase(structuralAttempt);
+  }
+  if (page?.repairCodexImageJobId && !page.repairCompletedAt) return 'final-repair';
+  return 'final-detail';
+}
+
+/**
+ * Everything a final-detail generation needs, derived purely from job and page
+ * state. Shared by the awaited generation and by the pre-submission that queues
+ * the following page while this one is being judged.
+ */
+function prepareFinalPageGeneration(job, page) {
   const characterReferences = job.useCharacterReference && page.analysis?.hasPerson
     ? [...job.characterReferenceImages]
     : [];
@@ -2284,10 +2507,119 @@ async function generateFinalPage(job, page, context, signal) {
     hasBrandLogoReference: brandReferences.length > 0,
     ownEvidenceReferenceCount: evidenceReferences.length,
     useCharacterReference: characterReferences.length > 0,
+    productSheet: activeProductSheet(job, page),
   });
   page.finalPrompt = prompt;
   page.prompt = prompt;
   page.generationReferenceCount = references.length;
+  return {
+    prompt,
+    references,
+    selectedProducts,
+    brandReferences,
+    evidenceReferences,
+    characterReferences,
+    referenceKinds: [
+      'competitor-layout',
+      ...selectedProducts.map(item => item.supplemental ? 'own-product-supplement' : 'own-product-auto-angle'),
+      ...brandReferences.map(() => 'own-brand-logo'),
+      ...evidenceReferences.map(() => 'own-fact-evidence'),
+      ...characterReferences.map(() => 'character'),
+    ],
+  };
+}
+
+/**
+ * Queue the next page's paid generation while this page is being judged.
+ *
+ * Only for `codex-imagegen`, where submitting is just writing a job file that a
+ * single worker consumes in creation order. The worker still renders one page at
+ * a time — nothing extra runs in parallel — but it stops idling through this
+ * page's validation, repair and re-judge. Every submission is recorded on its own
+ * page, which is what makes it recoverable and cancellable.
+ */
+async function presubmitNextPageGeneration(job, page, context) {
+  if (job.imageModel !== 'codex-imagegen' || !context.codexJobsDir) return;
+  if (context.generateImage) return;
+  const next = (job.pages || []).find(candidate => (
+    Number(candidate.index) > Number(page.index)
+      // Only a current analysis may be pre-submitted. A stale one would be
+      // re-recognized when the loop arrives, producing a different prompt than
+      // the one the paid child is already carrying.
+      && candidate.recognitionStatus === 'completed'
+      && candidate.analysis
+      && Number(candidate.competitorAnalysisVersion) >= DETAIL_REMIX_COMPETITOR_ANALYSIS_VERSION
+      && !candidate.codexImageJobId
+      && !candidate.rawResultUrl
+      && !['completed', 'failed', 'failed_validation', 'recovery_required', 'cancelled'].includes(candidate.status)
+  ));
+  if (!next) return;
+  try {
+    // The per-page pixel size is part of the prompt; without it the page would be
+    // asked for at "自动" dimensions instead of following its competitor original.
+    await ensurePageSourceDimensions(job, next, context);
+    const { prompt, references } = prepareFinalPageGeneration(job, next);
+    const provider = getImageGenerationProvider(job.imageModel);
+    if (!provider || references.length > provider.maxReferenceImages) return;
+    const { imageTarget } = getStorage(job.workflowId, context.dirs);
+    const codexJob = createCodexImageJob({
+      jobsDir: context.codexJobsDir,
+      libraryDir: context.libraryDir,
+      nodeId: `${next.resultNodeId}-raw`,
+      prompt,
+      aspectRatio: next.generationAspectRatio || job.aspectRatio,
+      resolution: job.imageResolution,
+      referenceImages: references,
+      workflowId: job.workflowId,
+      projectDirName: imageTarget.projectDirName,
+    });
+    next.codexImageJobId = codexJob.id;
+    next.status = 'submitting';
+    next.submittingAt = nowIso(context);
+    next.presubmittedAt = next.submittingAt;
+    // Remembered verbatim: this is the text the paid render was made from, and
+    // it is what the page must report no matter what a later rebuild produces.
+    next.presubmittedPrompt = prompt;
+    writeJob(job, context);
+    context.codexAutomation?.notify?.();
+  } catch {
+    // Pre-submission is an optimization. If preparing or queueing fails, the
+    // page is left untouched and submitted normally when the loop reaches it.
+  }
+}
+
+async function generateFinalPage(job, page, context, signal) {
+  if ((page.finalUrl || page.resultUrl) && page.status === 'completed') return;
+  if (page.status === 'submitting'
+      && !canResumeCodexSubmission(job, page, interruptedPhaseForPage(page), context)) {
+    page.status = 'recovery_required';
+    page.error = '最终详情图在提交边界中断；系统不会自动重复提交';
+    writeJob(job, context);
+    return;
+  }
+  await ensurePageSourceDimensions(job, page, context);
+  page.status = 'preparing';
+  job.stage = 'generating_final';
+  job.stageLabel = `正在生成最终详情 ${page.index + 1} / ${job.pages.length}`;
+  writeJob(job, context);
+
+  const {
+    prompt: rebuiltPrompt,
+    references,
+    selectedProducts,
+    brandReferences,
+    evidenceReferences,
+    characterReferences,
+    referenceKinds,
+  } = prepareFinalPageGeneration(job, page);
+  // When this page was queued ahead of time, the paid child already holds its own
+  // prompt and the request below only awaits it. Report that text, so the stored
+  // metadata always describes the render that was actually produced.
+  const prompt = page.codexImageJobId && page.presubmittedPrompt
+    ? page.presubmittedPrompt
+    : rebuiltPrompt;
+  page.finalPrompt = prompt;
+  page.prompt = prompt;
   const { imageTarget } = getStorage(job.workflowId, context.dirs);
   let rawBuffer = page.rawResultUrl ? imageInputToBuffer(page.rawResultUrl, context) : null;
   if (page.rawResultUrl && !rawBuffer) {
@@ -2298,16 +2630,10 @@ async function generateFinalPage(job, page, context, signal) {
     page.submittingAt = nowIso(context);
     markBoundary(job, context, { kind: 'final-detail', pageIndex: page.index, submittingAt: page.submittingAt });
     const request = makeGenerationRequest(job, prompt, references, `${page.resultNodeId}-raw`, context, signal, page);
-    const generated = await runImageGeneration(request, job, context, {
+    const generated = await runImageGenerationSafely(request, job, context, {
       phase: 'final-detail',
       pageIndex: page.index,
-      referenceKinds: [
-        'competitor-layout',
-        ...selectedProducts.map(item => item.supplemental ? 'own-product-supplement' : 'own-product-auto-angle'),
-        ...brandReferences.map(() => 'own-brand-logo'),
-        ...evidenceReferences.map(() => 'own-fact-evidence'),
-        ...characterReferences.map(() => 'character'),
-      ],
+      referenceKinds,
     }, signal);
     assertActive(job, context, signal);
     let raw;
@@ -2327,6 +2653,10 @@ async function generateFinalPage(job, page, context, signal) {
     // No local content overlay is ever applied. A second AI edit is allowed
     // only when the independent quality gate rejects this candidate.
     clearBoundary(job, context);
+    // This page's render is safely on disk and everything that follows for it —
+    // validation, re-judge, repair — needs no image worker. Hand the worker the
+    // next page now so it is not idle for that whole stretch.
+    await presubmitNextPageGeneration(job, page, context);
   }
 
   rawBuffer = await matchPageDimensions(rawBuffer, page, context);
@@ -2369,26 +2699,82 @@ async function generateFinalPage(job, page, context, signal) {
       context,
       signal,
     );
-  const pendingRepairSubmission = Boolean(
-    page.repairCodexImageJobId
-      && !page.repairCompletedAt
-      && Number(page.repairAttempts || 0) > 0,
-  );
-  if (!validation.passed && (
-    Number(page.repairAttempts || 0) < MAX_FINAL_REPAIR_ATTEMPTS
-      || pendingRepairSubmission
-  )) {
-    rawBuffer = await repairFinalDetailPage(
+  // A first report that names nothing but aesthetic complaints gets a second look
+  // before any money is spent repairing it; judges disagree with themselves far
+  // more often about polish than about a wrong model number.
+  if (!validation.passed
+      && validation.advisoryOnly
+      && context.skipFinalValidation !== true
+      && Number(page.validationRejudgeCount || 0) < MAX_VALIDATION_REJUDGE_ATTEMPTS) {
+    validation = await confirmAdvisoryValidationFailure(
       job,
       page,
       rawBuffer,
-      validation,
+      selectedProducts,
       brandReferences,
       evidenceReferences,
       characterReferences,
       context,
       signal,
     );
+  }
+  const maxStructuralRegenerations = resolveStructuralRegenerationBudget(job, context);
+  const pendingRepairSubmission = () => Boolean(
+    page.repairCodexImageJobId
+      && !page.repairCompletedAt
+      && Number(page.repairAttempts || 0) > 0,
+  );
+  const pendingRegenerationSubmission = () => {
+    const attempt = Number(page.structuralRegenerationAttempts || 0);
+    return Boolean(
+      attempt > 0
+        && page[structuralRegenerationJobField(attempt)]
+        && !page.structuralRegenerationCompletedAt,
+    );
+  };
+  // repairFinalDetailPage returns the candidate untouched once its budget is
+  // spent, so an unexpected attempt count must not be able to spin this loop.
+  const maxRecoveryRounds = MAX_FINAL_REPAIR_ATTEMPTS + maxStructuralRegenerations + 1;
+  for (let round = 0; !validation.passed && round < maxRecoveryRounds; round += 1) {
+    assertActive(job, context, signal);
+    const canRepair = Number(page.repairAttempts || 0) < MAX_FINAL_REPAIR_ATTEMPTS
+      || pendingRepairSubmission();
+    // Only hard facts justify spending another paid image. A page whose sole
+    // remaining complaint is polish is already deliverable.
+    const canRegenerate = Boolean(validation.blockingFailures?.length)
+      && (Number(page.structuralRegenerationAttempts || 0) < maxStructuralRegenerations
+        || pendingRegenerationSubmission());
+    let nextBuffer;
+    if (canRepair) {
+      // The targeted edit stays the first response: it is what the repair prompt
+      // was written for and it preserves everything the candidate already got right.
+      nextBuffer = await repairFinalDetailPage(
+        job,
+        page,
+        rawBuffer,
+        validation,
+        brandReferences,
+        evidenceReferences,
+        characterReferences,
+        context,
+        signal,
+      );
+    } else if (canRegenerate) {
+      // The edit budget is spent and hard defects survive it. Editing the same
+      // damaged render again will not recover it; ask for the page afresh.
+      nextBuffer = await regenerateFinalDetailPage(
+        job,
+        page,
+        prompt,
+        references,
+        validation,
+        context,
+        signal,
+      );
+    } else {
+      break;
+    }
+    rawBuffer = nextBuffer;
     normalizedRaw = saveImageBuffer(rawBuffer, imageTarget, `${page.resultNodeId}-raw`);
     page.rawResultUrl = normalizedRaw.resultUrl;
     validation = await validateFinalDetailPage(
@@ -2403,7 +2789,8 @@ async function generateFinalPage(job, page, context, signal) {
       signal,
     );
   }
-  if (!validation.passed) {
+  const blockingFailures = validation.passed ? [] : (validation.blockingFailures || []);
+  if (blockingFailures.length) {
     const details = [
       ...validation.missingTexts,
       ...validation.wrongTexts,
@@ -2421,6 +2808,17 @@ async function generateFinalPage(job, page, context, signal) {
     page.failedAt = nowIso(context);
     writeJob(job, context);
     throw error;
+  }
+  // Every hard fact checked out and the repair budget is spent; the page is
+  // factually deliverable. Ship it flagged rather than discard a correct page
+  // over a polish complaint the user can judge for themselves.
+  if (!validation.passed) {
+    page.validationWarnings = describeFinalDetailValidationFailures(validation.advisoryFailures);
+    page.validationStatus = 'passed_with_warnings';
+    page.deliveredWithWarnings = true;
+  } else {
+    page.validationWarnings = undefined;
+    page.deliveredWithWarnings = undefined;
   }
   const final = saveImageBuffer(rawBuffer, imageTarget, page.resultNodeId);
   page.finalUrl = final.resultUrl;
@@ -2497,10 +2895,63 @@ function finishFinalPhase(job, context) {
   writeJob(job, context);
 }
 
+/**
+ * Recognition concurrency is bounded by what actually runs out of process.
+ * `codex-cli` spawns one child per call so a couple can overlap, but they share
+ * the same account as the image worker — a wide fan-out would rate-limit the
+ * very generations this is meant to unblock. `gemini-web` drives the shared
+ * Chrome and must never overlap with anything.
+ */
+function resolveRecognitionConcurrency(job, context) {
+  const configured = Number(context?.recognitionConcurrency);
+  if (Number.isInteger(configured) && configured > 0) {
+    return Math.min(MAX_RECOGNITION_CONCURRENCY, configured);
+  }
+  return job.recognitionProvider === 'codex-cli' ? DEFAULT_RECOGNITION_CONCURRENCY : 1;
+}
+
+/**
+ * Analyze every remaining competitor page before the generation loop starts.
+ * Recognition crosses no paid boundary, so it is safe to overlap, and getting it
+ * off the critical path means the image worker is never idle waiting on a
+ * page's analysis. Failures are left untouched for the serial pass to report.
+ */
+async function prefetchCompetitorAnalyses(job, context, signal) {
+  const pending = job.pages.filter(page => (
+    !['completed', 'failed', 'failed_validation', 'recovery_required', 'cancelled'].includes(page.status)
+    && page.recognitionStatus !== 'completed'
+  ));
+  const concurrency = Math.min(resolveRecognitionConcurrency(job, context), pending.length);
+  if (pending.length < 2 || concurrency < 2) return;
+  let cursor = 0;
+  let analyzed = 0;
+  job.stage = 'analyzing_competitor';
+  job.stageLabel = `正在并发分析竞品详情 0 / ${pending.length}`;
+  writeJob(job, context);
+  const worker = async () => {
+    for (let page = pending[cursor]; page; page = pending[cursor]) {
+      cursor += 1;
+      assertActive(job, context, signal);
+      try {
+        await analyzeCompetitorPage(job, page, context, signal);
+      } catch (error) {
+        if (isOperationCancelled(error) || signal.aborted) throw error;
+        // Leave the page exactly as it is: the serial pass re-runs analysis and
+        // records the failure through the one path that knows how to report it.
+      }
+      analyzed += 1;
+      job.stageLabel = `正在并发分析竞品详情 ${analyzed} / ${pending.length}`;
+      writeJob(job, context);
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, worker));
+}
+
 async function executeFinalPhase(job, context) {
   if (activeJobs.has(job.id)) return;
   const controller = new AbortController();
   activeJobs.set(job.id, controller);
+  referenceDataUrlCaches.set(job.id, new Map());
   const { signal } = controller;
   try {
     job.phase = 'final';
@@ -2509,6 +2960,7 @@ async function executeFinalPhase(job, context) {
     writeJob(job, context);
     await extractOwnSellingPoints(job, context, signal);
     if (job.status === 'recovery_required') return;
+    await prefetchCompetitorAnalyses(job, context, signal);
 
     for (const page of job.pages) {
       assertActive(job, context, signal);
@@ -2545,6 +2997,7 @@ async function executeFinalPhase(job, context) {
     writeJob(job, context);
   } finally {
     activeJobs.delete(job.id);
+    referenceDataUrlCaches.delete(job.id);
   }
 }
 
@@ -3046,6 +3499,11 @@ export function createDetailRemixJob(payload, context) {
     || imageProvider.supportedAspectRatios?.find(value => !['auto', '自动'].includes(String(value).toLowerCase()))
     || '3:4';
   const imageResolution = normalizeImageResolution(imageModel, payload.imageResolution ?? payload.resolution);
+  const productSheet = normalizeDetailRemixProductSheet(payload.productSheet);
+  const preferSuppliedProductReferences = payload.preferSuppliedProductReferences === true;
+  if (productSheet && !normalized.productImages.length) {
+    throw new Error('已填写产品角度板分格说明，但没有连接对应的产品参考图；请先连接那张角度板');
+  }
   const immutableFingerprint = requestFingerprint(normalized, {
     recognitionProvider,
     recognitionModel,
@@ -3053,6 +3511,10 @@ export function createDetailRemixJob(payload, context) {
     sizingMode,
     aspectRatio,
     imageResolution,
+    // The sheet layout and the priority switch both change what the model sees,
+    // so a change to either must produce a new job rather than resume the old one.
+    preferSuppliedProductReferences,
+    productSheet: productSheet ? JSON.stringify(productSheet) : '',
   });
   const requestedId = String(payload.jobId || '').trim();
   if (requestedId) {
@@ -3077,6 +3539,8 @@ export function createDetailRemixJob(payload, context) {
         sizingMode: existing.sizingMode || 'match-competitor',
         aspectRatio: existing.aspectRatio,
         imageResolution: existing.imageResolution,
+        preferSuppliedProductReferences: existing.preferSuppliedProductReferences === true,
+        productSheet: existing.productSheet ? JSON.stringify(existing.productSheet) : '',
       });
       if (existingFingerprint !== immutableFingerprint) {
         const conflict = new Error('该重试请求 ID 已绑定另一组详情输入；请重新点击执行创建新版本');
@@ -3132,6 +3596,8 @@ export function createDetailRemixJob(payload, context) {
     verifiedFacts: [],
     productImages: normalized.productImages,
     productNodeIds: normalized.productNodeIds,
+    productSheet,
+    preferSuppliedProductReferences,
     characterReferenceImages: normalized.characterReferenceImages,
     characterReferenceNodeIds: normalized.characterReferenceNodeIds,
     useCharacterReference: normalized.useCharacterReference,
@@ -3142,6 +3608,7 @@ export function createDetailRemixJob(payload, context) {
     sizingMode,
     aspectRatio,
     imageResolution,
+    maxStructuralRegenerations: normalizeStructuralRegenerationBudget(payload.maxStructuralRegenerations),
     pages,
     pageCount: pages.length,
     plannedResultNodeIds: pages.map(page => page.resultNodeId),
@@ -3247,23 +3714,36 @@ function exportSourcePath(resultUrl, imageTarget) {
 }
 
 /** Trusted desktop-only source manifest. The renderer never supplies paths. */
-export function getDetailRemixExportManifest(jobId, workflowId, context) {
+/** The best surviving image for a page that never passed the gate. */
+function fallbackCandidateUrl(page) {
+  return page?.qualityFailedCandidateUrl || page?.rawResultUrl || '';
+}
+
+export function getDetailRemixExportManifest(jobId, workflowId, context, options = {}) {
   const job = readJob(jobId, workflowId, context.dirs);
   if (!job) return null;
+  const includeCandidates = options.includeCandidates === true;
   const { imageTarget, projectRoot } = getStorage(workflowId, context.dirs);
   const dismissed = new Set(job.dismissedResultNodeIds || []);
   const pages = (job.pages || [])
-    .filter(page => (
-      page.status === 'completed'
-      && !dismissed.has(page.resultNodeId)
-      && (page.finalUrl || page.resultUrl)
-    ))
+    .filter(page => {
+      if (dismissed.has(page.resultNodeId)) return false;
+      if (page.status === 'completed' && (page.finalUrl || page.resultUrl)) return true;
+      // Quality-failed pages hold a real, paid render. Exporting it is opt-in and
+      // clearly labelled so a page the gate rejected is never mistaken for a
+      // delivered one.
+      return includeCandidates && isValidationFailedPage(page) && Boolean(fallbackCandidateUrl(page));
+    })
     .sort((left, right) => (
       Number(left.queuePosition ?? left.index) - Number(right.queuePosition ?? right.index)
       || Number(left.index) - Number(right.index)
     ));
   const files = pages.map((page, order) => {
-    const sourcePath = exportSourcePath(page.finalUrl || page.resultUrl, imageTarget);
+    const delivered = page.status === 'completed' && (page.finalUrl || page.resultUrl);
+    const sourcePath = exportSourcePath(
+      delivered ? (page.finalUrl || page.resultUrl) : fallbackCandidateUrl(page),
+      imageTarget,
+    );
     if (!sourcePath) {
       const error = new Error(`第 ${Number(page.index) + 1} 页最终图片文件不存在，无法完整导出`);
       error.status = 410;
@@ -3275,6 +3755,8 @@ export function getDetailRemixExportManifest(jobId, workflowId, context) {
       pageIndex: Number(page.index),
       resultNodeId: String(page.resultNodeId || ''),
       sourcePath,
+      ...(delivered ? {} : { candidate: true, candidateReason: String(page.error || 'AI 成图质检未通过') }),
+      ...(page.deliveredWithWarnings ? { warnings: page.validationWarnings || [] } : {}),
     };
   });
   if (!files.length) {
@@ -3288,17 +3770,47 @@ export function getDetailRemixExportManifest(jobId, workflowId, context) {
     workflowId: job.workflowId,
     projectName: path.basename(projectRoot),
     count: files.length,
+    candidateCount: files.filter(file => file.candidate).length,
     files,
   };
+}
+
+function isValidationFailedPage(page) {
+  return page?.status === 'failed_validation' || page?.terminalStatus === 'FAILED_VALIDATION';
+}
+
+/**
+ * A page may be regenerated when it already produced a paid candidate: either a
+ * delivered result, or a quality-failed candidate that the gate rejected. Both
+ * are explicit user-initiated re-spends, never automatic.
+ */
+function isRegenerableDetailRemixPage(page) {
+  if (!page) return false;
+  if (page.status === 'completed' && (page.finalUrl || page.resultUrl)) return true;
+  return isValidationFailedPage(page);
+}
+
+/** Every per-page Codex child-job pointer, including per-attempt regeneration slots. */
+function pageGenerationSubmissionFields(page) {
+  const dynamic = Object.keys(page || {})
+    .filter(key => /^regenerateCodexImageJobId\d+$/u.test(key));
+  return [
+    'codexImageJobId',
+    'repairCodexImageJobId',
+    'plateCodexImageJobId',
+    'composeCodexImageJobId',
+    ...dynamic,
+  ];
+}
+
+function clearPageGenerationSubmissions(page) {
+  for (const field of pageGenerationSubmissionFields(page)) page[field] = undefined;
 }
 
 function pageHasGenerationSubmission(job, page) {
   if (!page) return false;
   if (
-    page.codexImageJobId
-    || page.repairCodexImageJobId
-    || page.plateCodexImageJobId
-    || page.composeCodexImageJobId
+    pageGenerationSubmissionFields(page).some(field => page[field])
     || page.rawResultUrl
     || page.finalUrl
     || page.resultUrl
@@ -3398,11 +3910,14 @@ export function retryFailedDetailRemixPages(jobId, workflowId, payload, context)
 }
 
 /**
- * Explicitly regenerate one already-completed page. The old local result is
- * retained in previousResults, while a fresh result-node ID prevents file
- * overwrite and makes the new candidate independently recoverable.
+ * Explicitly regenerate pages that already produced a paid candidate — delivered
+ * results and quality-failed candidates alike. Quality-failed pages are terminal
+ * for the automatic pipeline but must stay reachable by hand, otherwise the only
+ * way to recover them is re-running the whole job. Old results are retained in
+ * previousResults, while a fresh result-node ID per page prevents file overwrite
+ * and keeps each new candidate independently recoverable.
  */
-export function regenerateCompletedDetailRemixPage(jobId, workflowId, payload, context) {
+export function regenerateDetailRemixPages(jobId, workflowId, payload, context) {
   const job = readJob(jobId, workflowId, context.dirs);
   if (!job) return null;
   if (activeJobs.has(job.id) || ['pending', 'processing'].includes(job.status)) {
@@ -3417,80 +3932,105 @@ export function regenerateCompletedDetailRemixPage(jobId, workflowId, payload, c
     incompatible.code = 'DETAIL_REMIX_REGENERATE_UNSUPPORTED';
     throw incompatible;
   }
-  const pageIndex = Number(payload?.pageIndex);
-  if (!Number.isInteger(pageIndex) || pageIndex < 0) {
+  const requestedIndexes = [
+    ...(Array.isArray(payload?.pageIndexes) ? payload.pageIndexes : []),
+    payload?.pageIndex,
+  ].map(Number).filter(value => Number.isInteger(value) && value >= 0);
+  const pageIndexes = [...new Set(requestedIndexes)].sort((left, right) => left - right);
+  if (!pageIndexes.length) {
     const invalid = new Error('缺少有效的详情页序号');
     invalid.status = 400;
     invalid.code = 'DETAIL_REMIX_PAGE_INDEX_INVALID';
     throw invalid;
   }
-  const page = (job.pages || []).find(item => Number(item.index) === pageIndex);
-  if (!page || page.status !== 'completed' || !(page.finalUrl || page.resultUrl)) {
-    const unavailable = new Error(`第 ${pageIndex + 1} 页不是可重新生成的成功结果`);
-    unavailable.status = 409;
-    unavailable.code = 'DETAIL_REMIX_COMPLETED_PAGE_REQUIRED';
-    throw unavailable;
+  const pages = [];
+  for (const pageIndex of pageIndexes) {
+    const page = (job.pages || []).find(item => Number(item.index) === pageIndex);
+    if (!page || !isRegenerableDetailRemixPage(page)) {
+      const unavailable = new Error(`第 ${pageIndex + 1} 页不是可重新生成的成功结果或质检失败结果`);
+      unavailable.status = 409;
+      unavailable.code = 'DETAIL_REMIX_COMPLETED_PAGE_REQUIRED';
+      throw unavailable;
+    }
+    pages.push(page);
   }
 
   const requestedAt = nowIso(context);
-  const previousResult = {
-    resultNodeId: page.resultNodeId,
-    rawResultUrl: page.rawResultUrl,
-    finalUrl: page.finalUrl,
-    resultUrl: page.resultUrl,
-    validation: page.validation,
-    repairAttempts: Math.max(0, Number(page.repairAttempts) || 0),
-    completedAt: page.completedAt,
-    supersededAt: requestedAt,
-  };
-  page.previousResults = [
-    ...(Array.isArray(page.previousResults) ? page.previousResults : []),
-    previousResult,
-  ].slice(-5);
-  page.resultNodeId = newId(context);
-  page.status = 'waiting';
-  page.terminalStatus = undefined;
-  page.error = undefined;
-  page.errorCode = undefined;
-  page.failedAt = undefined;
-  page.completedAt = undefined;
-  page.rawResultUrl = undefined;
-  page.initialRawResultUrl = undefined;
-  page.finalUrl = undefined;
-  page.resultUrl = undefined;
-  page.qualityFailedCandidateUrl = undefined;
-  page.finalPrompt = undefined;
-  page.prompt = undefined;
-  page.generationReferenceCount = undefined;
-  page.submittingAt = undefined;
-  page.generationCompletedAt = undefined;
-  page.codexImageJobId = undefined;
-  page.repairCodexImageJobId = undefined;
-  page.repairAttempts = 0;
-  page.repairPrompt = undefined;
-  page.repairSubmittingAt = undefined;
-  page.repairCompletedAt = undefined;
-  page.validation = undefined;
-  page.validationStatus = undefined;
-  page.validationAttempts = 0;
-  page.validationCompletedAt = undefined;
-  page.regenerationCount = Math.max(0, Number(page.regenerationCount) || 0) + 1;
-  page.regenerationRequestedAt = requestedAt;
+  const regeneratedValidationFailures = pages.filter(page => isValidationFailedPage(page)).length;
+  for (const page of pages) {
+    const previousResult = {
+      resultNodeId: page.resultNodeId,
+      rawResultUrl: page.rawResultUrl,
+      // A quality-failed page has no finalUrl; its best candidate is kept so the
+      // superseded attempt stays inspectable and exportable as a fallback.
+      finalUrl: page.finalUrl,
+      resultUrl: page.resultUrl,
+      qualityFailedCandidateUrl: page.qualityFailedCandidateUrl,
+      status: page.status,
+      terminalStatus: page.terminalStatus,
+      validation: page.validation,
+      repairAttempts: Math.max(0, Number(page.repairAttempts) || 0),
+      completedAt: page.completedAt,
+      supersededAt: requestedAt,
+    };
+    page.previousResults = [
+      ...(Array.isArray(page.previousResults) ? page.previousResults : []),
+      previousResult,
+    ].slice(-5);
+    page.resultNodeId = newId(context);
+    page.status = 'waiting';
+    page.terminalStatus = undefined;
+    page.error = undefined;
+    page.errorCode = undefined;
+    page.failedAt = undefined;
+    page.completedAt = undefined;
+    page.rawResultUrl = undefined;
+    page.initialRawResultUrl = undefined;
+    page.finalUrl = undefined;
+    page.resultUrl = undefined;
+    page.qualityFailedCandidateUrl = undefined;
+    page.finalPrompt = undefined;
+    page.prompt = undefined;
+    page.generationReferenceCount = undefined;
+    page.submittingAt = undefined;
+    page.presubmittedAt = undefined;
+    page.presubmittedPrompt = undefined;
+    page.generationCompletedAt = undefined;
+    clearPageGenerationSubmissions(page);
+    page.repairAttempts = 0;
+    page.repairPrompt = undefined;
+    page.repairSubmittingAt = undefined;
+    page.repairCompletedAt = undefined;
+    page.structuralRegenerationAttempts = 0;
+    page.structuralRegenerationPrompt = undefined;
+    page.validation = undefined;
+    page.validationStatus = undefined;
+    page.validationAttempts = 0;
+    page.validationCompletedAt = undefined;
+    page.validationWarnings = undefined;
+    page.deliveredWithWarnings = undefined;
+    page.regenerationCount = Math.max(0, Number(page.regenerationCount) || 0) + 1;
+    page.regenerationRequestedAt = requestedAt;
+  }
 
   job.status = 'pending';
   job.phase = 'final';
   job.pipelineVersion = DETAIL_REMIX_PIPELINE_VERSION;
   job.stage = 'queued';
-  job.stageLabel = `准备重新生成第 ${pageIndex + 1} 页（仅此一页）`;
+  job.stageLabel = pageIndexes.length === 1
+    ? `准备重新生成第 ${pageIndexes[0] + 1} 页（仅此一页）`
+    : `准备重新生成 ${pageIndexes.length} 页（第 ${pageIndexes.map(index => index + 1).join('、')} 页）`;
   job.error = undefined;
   job.failedAt = undefined;
   job.completedAt = undefined;
   job.cancelRequested = false;
   job.cancelSubmitted = false;
-  job.retryMode = 'completed-page-regeneration';
-  job.retryPageIndexes = [pageIndex];
+  job.retryMode = regeneratedValidationFailures === pageIndexes.length
+    ? 'validation-failed-page-regeneration'
+    : 'completed-page-regeneration';
+  job.retryPageIndexes = [...pageIndexes];
   job.retryRequestedAt = requestedAt;
-  job.currentPageIndex = pageIndex;
+  job.currentPageIndex = pageIndexes[0];
   job.currentSubmission = undefined;
   job.resultNodeIds = (job.pages || [])
     .filter(item => item.status === 'completed' && (item.finalUrl || item.resultUrl))
@@ -3510,12 +4050,11 @@ export function cancelDetailRemixJob(jobId, workflowId, context) {
   if (!['pending', 'processing'].includes(job.status)) return job;
   const codexChildIds = [...new Set([
     job.currentSubmission?.codexJobId,
-    ...(job.pages || []).flatMap(page => [
-      page.codexImageJobId,
-      page.repairCodexImageJobId,
-      page.plateCodexImageJobId,
-      page.composeCodexImageJobId,
-    ]),
+    // Every per-page pointer is reaped, not just the awaited one: pre-submitted
+    // pages hold live paid jobs the global boundary no longer points at.
+    ...(job.pages || []).flatMap(page => (
+      pageGenerationSubmissionFields(page).map(field => page[field])
+    )),
   ].map(value => String(value || '')).filter(Boolean))];
   let submittedChildMayContinue = false;
   const cancelledChildJobIds = [];
@@ -3588,4 +4127,6 @@ export const __detailRemixTest = Object.freeze({
   writeJob,
   markInterruptedSubmission,
   normalizePayload,
+  interruptedPhaseForPage,
+  presubmitNextPageGeneration,
 });

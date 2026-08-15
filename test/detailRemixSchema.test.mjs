@@ -8,6 +8,8 @@ import {
   DETAIL_REMIX_MARKETING_MODE,
   DETAIL_REMIX_STRICT_PARAMETER_MODE,
   activeDetailRemixInputRefs,
+  describeDetailRemixProductSheet,
+  normalizeDetailRemixProductSheet,
   assignDetailRemixInputPort,
   buildBlankDetailPrompt,
   buildCompetitorPageInstruction,
@@ -681,4 +683,19 @@ test('上游变化只标记详情输出 outdated，不自动启动任务；在�
   assert.equal(productStale.detailRemix.status, 'outdated');
   assert.equal(productStale.detailRemix.needsRegeneration, true);
   assert.notEqual(productStale.detailRemix.compositionNeedsRegeneration, true);
+});
+
+test('角度板未声明行列时按格数推导，不得塌成 1 行 1 列', () => {
+  const cells = Array.from({ length: 6 }, (_, index) => ({ index: index + 1, label: `角度${index + 1}` }));
+  const derived = normalizeDetailRemixProductSheet({ cells });
+  assert.equal(derived.columns, 3);
+  assert.equal(derived.rows, 2);
+  assert.match(describeDetailRemixProductSheet(derived, '参考图2'), /2 行 × 3 列/);
+
+  const declared = normalizeDetailRemixProductSheet({ rows: 3, columns: 2, cells });
+  assert.equal(declared.columns, 2);
+  assert.equal(declared.rows, 3);
+
+  assert.equal(normalizeDetailRemixProductSheet({ cells: [] }), null);
+  assert.equal(normalizeDetailRemixProductSheet(null), null);
 });

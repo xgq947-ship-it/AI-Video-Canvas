@@ -37,7 +37,7 @@ import {
 import {
   cancelDetailRemixJob,
   createDetailRemixJob,
-  regenerateCompletedDetailRemixPage,
+  regenerateDetailRemixPages,
   retryFailedDetailRemixPages,
 } from '../../services/detailRemixService';
 import { resolveImageNodeDisplayName } from '../../utils/nodeDisplayName.js';
@@ -144,6 +144,9 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
   stateRef.current = state;
   const [localError, setLocalError] = React.useState('');
   const [localNotice, setLocalNotice] = React.useState('');
+  const [sheetText, setSheetText] = React.useState(() => (
+    (data.detailRemix?.productSheet?.cells || []).map((cell: any) => cell.label).join('\n')
+  ));
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [draggingFolderRole, setDraggingFolderRole] = React.useState<'competitor' | 'own' | null>(null);
   const competitorFolderInputRef = React.useRef<HTMLInputElement>(null);
@@ -176,6 +179,11 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
   const validationFailedPages = pages.filter((page: any) => (
     page?.status === 'failed_validation' || page?.terminalStatus === 'FAILED_VALIDATION'
   ));
+  const validationFailedPageNumbers = validationFailedPages.map((page: any) => Number(page.index) + 1);
+  const warnedPages = pages.filter((page: any) => page?.deliveredWithWarnings === true);
+  const warnedPageIssues = [...new Set(
+    warnedPages.flatMap((page: any) => (page?.validationWarnings || []) as string[]),
+  )];
   const completedPages = pages.filter((page: any) => (
     page?.status === 'completed' && page?.resultReady
   ));
@@ -363,6 +371,9 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
           ...sourcePixelDimensions(node),
         })),
         resolution,
+        maxStructuralRegenerations: requestState.maxStructuralRegenerations,
+        preferSuppliedProductReferences: requestState.preferSuppliedProductReferences,
+        productSheet: requestState.preferSuppliedProductReferences ? requestState.productSheet : null,
       });
       const latest = stateRef.current;
       onUpdate(data.id, {
@@ -445,16 +456,15 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
     }
   };
 
-  const handleRegenerateFirstCompleted = async () => {
-    if (busy || !workflowId || !state.jobId || !firstCompletedPage) return;
-    const pageIndex = Number(firstCompletedPage.index);
-    if (!Number.isInteger(pageIndex)) return;
+  const handleRegeneratePages = async (pageIndexes: number[], stageLabel: string) => {
+    const indexes = pageIndexes.filter(index => Number.isInteger(index));
+    if (busy || !workflowId || !state.jobId || !indexes.length) return;
     const regenerating = createDetailRemixNodeData({
       ...stateRef.current,
       status: 'analyzing',
       jobStatus: 'pending',
       stage: 'queued',
-      stageLabel: `准备重新生成第 ${pageIndex + 1} 页（仅此一页）`,
+      stageLabel,
       errorMessage: undefined,
     });
     stateRef.current = regenerating;
@@ -467,7 +477,7 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
       detailRemix: regenerating,
     });
     try {
-      const job = await regenerateCompletedDetailRemixPage(state.jobId, workflowId, pageIndex);
+      const job = await regenerateDetailRemixPages(state.jobId, workflowId, indexes);
       const latest = stateRef.current;
       onUpdate(data.id, {
         status: NodeStatus.LOADING,
@@ -495,8 +505,9 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
     }
   };
 
-  const handleExport = async () => {
-    if (!workflowId || !state.jobId || !resultCount) return;
+  const handleExport = async (includeCandidates = false) => {
+    if (!workflowId || !state.jobId) return;
+    if (!resultCount && !(includeCandidates && validationFailedPages.length)) return;
     if (!window.evanDesktop?.exportDetailRemix) {
       setLocalError('一键导出仅在 Evan 桌面应用中可用，请完整重启桌面应用后重试');
       return;
@@ -504,9 +515,16 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
     setLocalError('');
     setLocalNotice('');
     try {
-      const result = await window.evanDesktop.exportDetailRemix({ jobId: state.jobId, workflowId });
+      const result = await window.evanDesktop.exportDetailRemix({
+        jobId: state.jobId,
+        workflowId,
+        includeCandidates,
+      });
       if (!result.canceled) {
-        setLocalNotice(`已新建文件夹并导出 ${result.count} 张：${result.destination}`);
+        const candidates = Number(result.candidateCount) || 0;
+        setLocalNotice(
+          `已新建文件夹并导出 ${result.count} 张${candidates ? `（其中 ${candidates} 张为未过检候选，文件名带「待确认」，请人工复核后再使用）` : ''}：${result.destination}`,
+        );
       }
     } catch (error) {
       setLocalError(error instanceof Error ? error.message : '详情图导出失败');
@@ -727,7 +745,12 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
             )}
             {validationFailedPages.length > 0 && !generationBusy && (
               <div className="mt-1 text-[10px] leading-4 text-red-400">
-                第 {validationFailedPages.map((page: any) => Number(page.index) + 1).join('、')} 页已标记 FAILED_VALIDATION；一次定向修复后仍未通过，不会作为成功结果，也不会自动再次付费生成。
+                第 {validationFailedPageNumbers.join('、')} 页已标记 FAILED_VALIDATION；定向修复与整页重生成都已用尽，不会自动再次付费生成。可用下方按钮单独重生成这些页，或连同候选一起导出后人工挑选。
+              </div>
+            )}
+            {warnedPages.length > 0 && !generationBusy && (
+              <div className="mt-1 text-[10px] leading-4 text-amber-400">
+                第 {warnedPages.map((page: any) => Number(page.index) + 1).join('、')} 页文案、品牌与参数均已核对通过，仅剩主观精修意见（{warnedPageIssues.join('、')}），已正常交付，建议出图前扫一眼。
               </div>
             )}
             <div className="mt-2 space-y-2 border-t border-neutral-500/20 pt-2">
@@ -806,6 +829,86 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
               >
                 {provider.resolutions.map(value => <option key={value}>{value}</option>)}
               </select>
+              <select
+                aria-label="质检失败后的整页重生成次数"
+                title="定向修复仍未通过时，允许再整页重新生成几次。每次都会额外消耗一次生图。"
+                value={String(state.maxStructuralRegenerations ?? 1)}
+                onChange={event => updatePlateSettings({}, {
+                  maxStructuralRegenerations: Number(event.target.value) as 0 | 1 | 2 | 3,
+                })}
+                className={`col-span-2 rounded-lg border px-2 py-2 text-xs ${dark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}
+              >
+                <option value="0">修复失败即停止（不额外付费重试）</option>
+                <option value="1">修复失败后再整页重生成 1 次（推荐）</option>
+                <option value="2">修复失败后再整页重生成 2 次</option>
+                <option value="3">修复失败后再整页重生成 3 次</option>
+              </select>
+              <label
+                className={`col-span-2 flex cursor-pointer items-start gap-2 rounded-lg border px-2 py-2 text-xs ${dark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}
+                title="开启后，连接到“产品参考图”的第一张就是生成时唯一的产品参考；系统不再用从“我的详情”自动裁出的角度顶掉它"
+              >
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={state.preferSuppliedProductReferences === true}
+                  onChange={event => updatePlateSettings({}, {
+                    preferSuppliedProductReferences: event.target.checked,
+                  })}
+                />
+                <span className="min-w-0">
+                  <span className="font-medium">以我提供的产品参考图为准</span>
+                  <span className="mt-0.5 block text-[9px] leading-snug text-neutral-500">
+                    自动裁图退为兜底。参考位有限（当前模型 {provider.maxReferenceImages} 张），产品通常只占 1 位。
+                  </span>
+                </span>
+              </label>
+              {state.preferSuppliedProductReferences && (
+                <div className={`col-span-2 rounded-lg border px-2 py-2 text-xs ${dark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[9px] text-neutral-500">产品角度板分格（每行一个角度，留空表示第一张不是角度板）</span>
+                    <select
+                      aria-label="角度板列数"
+                      value={String(state.productSheet?.columns || 3)}
+                      onChange={event => updatePlateSettings({}, {
+                        productSheet: state.productSheet
+                          ? { ...state.productSheet, columns: Number(event.target.value) }
+                          : null,
+                      })}
+                      className={`shrink-0 rounded border px-1 py-0.5 text-[10px] ${dark ? 'border-neutral-700 bg-[#101010]' : 'border-neutral-300 bg-white'}`}
+                    >
+                      {[2, 3, 4].map(value => <option key={value} value={value}>{value} 列</option>)}
+                    </select>
+                  </div>
+                  <textarea
+                    aria-label="产品角度板分格说明"
+                    rows={6}
+                    value={sheetText}
+                    placeholder={'正面整机\n左前 3/4\n侧面\n背面\n机芯抓捏机构\n按键卡扣材质'}
+                    onChange={event => {
+                      // The raw text is held locally so a half-typed blank line does
+                      // not get normalized away under the cursor.
+                      setSheetText(event.target.value);
+                      const labels = event.target.value.split('\n')
+                        .map(line => line.trim())
+                        .filter(Boolean);
+                      const columns = state.productSheet?.columns || 3;
+                      updatePlateSettings({}, {
+                        productSheet: labels.length
+                          ? {
+                            rows: Math.ceil(labels.length / columns),
+                            columns,
+                            cells: labels.map((label, index) => ({ index: index + 1, label })),
+                          }
+                          : null,
+                      });
+                    }}
+                    className={`mt-1 w-full resize-none rounded border px-2 py-1 text-[11px] leading-snug ${dark ? 'border-neutral-700 bg-[#101010]' : 'border-neutral-300 bg-white'}`}
+                  />
+                  <div className="mt-1 text-[9px] leading-snug text-neutral-500">
+                    编号按从左到右、从上到下。识图会为每处产品指定该用哪一格，生成时不再自选角度。
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -840,7 +943,7 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
                 <button
                   type="button"
                   disabled={folderImportBusy}
-                  onClick={() => void handleExport()}
+                  onClick={() => void handleExport(false)}
                   className={`flex shrink-0 items-center justify-center gap-1.5 rounded-xl border px-3 py-2.5 text-xs font-semibold ${dark ? 'border-cyan-700 text-cyan-300 hover:bg-cyan-500/10' : 'border-cyan-300 text-cyan-700 hover:bg-cyan-50'} disabled:opacity-45`}
                   title="选择保存位置，自动新建结果文件夹，并按页面顺序导出为 01、02……"
                 >
@@ -856,11 +959,41 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
                 />
               )}
             </div>
+            {!generationBusy && validationFailedPageNumbers.length > 0 && (
+              <button
+                type="button"
+                disabled={folderImportBusy}
+                onClick={() => void handleExport(true)}
+                className={`mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-lg border px-2 py-1.5 text-[10px] font-medium ${dark ? 'border-cyan-800 text-cyan-300 hover:bg-cyan-500/10' : 'border-cyan-300 text-cyan-700 hover:bg-cyan-50'} disabled:opacity-40`}
+                title="按页码顺序导出全部页面；质检失败页使用它最后一次生成的候选图，文件名带「待确认」"
+              >
+                <Download size={11} />
+                导出全部 {resultCount + validationFailedPageNumbers.length} 张（含 {validationFailedPageNumbers.length} 张待确认候选）
+              </button>
+            )}
+            {!generationBusy && validationFailedPageNumbers.length > 0 && (
+              <button
+                type="button"
+                disabled={folderImportBusy}
+                onClick={() => void handleRegeneratePages(
+                  validationFailedPages.map((page: any) => Number(page.index)),
+                  `准备重新生成 ${validationFailedPageNumbers.length} 页质检失败结果`,
+                )}
+                className={`mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-lg border px-2 py-1.5 text-[10px] font-semibold ${dark ? 'border-rose-700/70 text-rose-300 hover:bg-rose-500/10' : 'border-rose-300 text-rose-700 hover:bg-rose-50'} disabled:opacity-40`}
+                title="只重新生成质检未通过的页面；已通过的页面不再生图，旧候选保留在项目中"
+              >
+                <RefreshCw size={11} />
+                重新生成质检失败页（第 {validationFailedPageNumbers.join('、')} 页）
+              </button>
+            )}
             {!generationBusy && firstCompletedPage && (
               <button
                 type="button"
                 disabled={folderImportBusy}
-                onClick={() => void handleRegenerateFirstCompleted()}
+                onClick={() => void handleRegeneratePages(
+                  [Number(firstCompletedPage.index)],
+                  `准备重新生成第 ${Number(firstCompletedPage.index) + 1} 页（仅此一页）`,
+                )}
                 className={`mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-lg border px-2 py-1.5 text-[10px] font-medium ${dark ? 'border-amber-700/70 text-amber-300 hover:bg-amber-500/10' : 'border-amber-300 text-amber-700 hover:bg-amber-50'} disabled:opacity-40`}
                 title="只再次提交首张成功结果对应的页面；其他页面不生图，旧文件保留在项目中"
               >

@@ -49,7 +49,8 @@ function canvasWorkflowStatus(job: DetailRemixJob) {
   const stage = normalizedStage(job);
   if (stage === 'plates_ready' || stage === 'plates_completed') return 'plates-ready';
   if (stage === 'composing_products' || stage === 'composition_queued' || stage === 'rendering_copy') return 'composing';
-  if (stage === 'generating_final') return 'generating-final';
+  // A structural retry is a paid generation in flight, not analysis.
+  if (stage === 'generating_final' || stage === 'regenerating_final') return 'generating-final';
   if (stage === 'generating_plates') return 'generating-plates';
   if (stage === 'completed' || stage === 'composition_completed') return 'completed';
   if (stage === 'cancelled') return 'cancelled';

@@ -382,7 +382,7 @@ ipcMain.handle('project:reveal', async (_event, workflowId) => {
     }
 });
 
-ipcMain.handle('detail-remix:export', async (_event, { jobId, workflowId } = {}) => {
+ipcMain.handle('detail-remix:export', async (_event, { jobId, workflowId, includeCandidates } = {}) => {
     try {
         const safeJobId = String(jobId || '').trim();
         const safeWorkflowId = String(workflowId || '').trim();
@@ -390,14 +390,19 @@ ipcMain.handle('detail-remix:export', async (_event, { jobId, workflowId } = {})
         if (!backendOrigin) return { ok: false, error: '本地后端尚未启动，请稍后重试' };
 
         const response = await fetch(
-            `${backendOrigin}/api/detail-remix-jobs/${encodeURIComponent(safeJobId)}/export-manifest?workflowId=${encodeURIComponent(safeWorkflowId)}`,
+            `${backendOrigin}/api/detail-remix-jobs/${encodeURIComponent(safeJobId)}/export-manifest`
+                + `?workflowId=${encodeURIComponent(safeWorkflowId)}`
+                + (includeCandidates === true ? '&includeCandidates=1' : ''),
             { headers: { 'X-Evan-Desktop-Token': desktopApiToken } }
         );
         const manifest = await response.json().catch(() => ({}));
         if (!response.ok) return { ok: false, error: manifest.error || '无法准备详情图导出清单' };
 
+        const candidateCount = Number(manifest.candidateCount) || 0;
         const options = {
-            title: `导出 ${Number(manifest.count) || 0} 张最终详情图`,
+            title: candidateCount
+                ? `导出 ${Number(manifest.count) || 0} 张详情图（含 ${candidateCount} 张待确认）`
+                : `导出 ${Number(manifest.count) || 0} 张最终详情图`,
             buttonLabel: '在此位置新建结果文件夹',
             defaultPath: app.getPath('desktop'),
             properties: ['openDirectory', 'createDirectory']
@@ -414,7 +419,7 @@ ipcMain.handle('detail-remix:export', async (_event, { jobId, workflowId } = {})
             projectName: manifest.projectName,
         });
         const exported = exportDetailRemixFiles(manifest.files, destination);
-        return { ok: true, data: { canceled: false, ...exported } };
+        return { ok: true, data: { canceled: false, candidateCount, ...exported } };
     } catch (error) {
         return { ok: false, error: error.message || '详情图导出失败' };
     }

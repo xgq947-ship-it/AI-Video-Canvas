@@ -11,6 +11,17 @@ export interface DetailRemixInputRefs {
   productNodeIds: string[];
 }
 
+export interface DetailRemixProductSheetCell {
+  index: number;
+  label: string;
+}
+
+export interface DetailRemixProductSheet {
+  rows: number;
+  columns: number;
+  cells: DetailRemixProductSheetCell[];
+}
+
 export interface DetailRemixFolderImportState {
   folderName: string;
   status: 'idle' | 'uploading' | 'completed' | 'partial_failed' | 'failed';
@@ -44,6 +55,12 @@ export interface DetailRemixNodeData {
   };
   analysis: { ownSellingPoints: any[]; pages: any[]; [key: string]: any };
   recognitionProvider: 'gemini-web' | 'codex-cli';
+  /** Paid full re-generations allowed after a targeted repair still fails quality control. */
+  maxStructuralRegenerations: 0 | 1 | 2 | 3;
+  /** Rank the user's own product references ahead of auto-cropped views. */
+  preferSuppliedProductReferences: boolean;
+  /** Grid manifest for the first supplied product reference, when it is a contact sheet. */
+  productSheet: DetailRemixProductSheet | null;
   status: 'idle' | 'ready' | 'analyzing' | 'generating-final' | 'generating-plates' | 'plates-ready' | 'composing' | 'completed' | 'outdated' | 'cancelled' | 'error';
   jobId?: string;
   pendingRequestId?: string;
@@ -79,6 +96,16 @@ export const DETAIL_REMIX_STATUSES: readonly string[];
 export const DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA: Readonly<Record<string, any>>;
 export const DETAIL_REMIX_OWN_KNOWLEDGE_OUTPUT_SCHEMA: Readonly<Record<string, any>>;
 export const DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA: Readonly<Record<string, any>>;
+export const DETAIL_REMIX_ADVISORY_VALIDATION_KEYS: readonly string[];
+export const DETAIL_REMIX_VALIDATION_FAILURE_LABELS: Readonly<Record<string, string>>;
+export function classifyFinalDetailValidation(validation?: any): {
+  blocking: string[];
+  advisory: string[];
+  passed: boolean;
+  advisoryOnly: boolean;
+};
+export function describeFinalDetailValidationFailures(keys?: any): string[];
+export function buildFinalDetailRegenerationPrompt(options?: any): string;
 export function canonicalDetailRemixFactField(value: any, label?: any): string;
 export function normalizeDetailRemixFactValue(value: any): string;
 export function detailRemixAllowsStrictParameterMode(pageIndex?: number, pageCount?: number): boolean;
@@ -98,6 +125,9 @@ export function markDetailRemixDependentsStale(nodes: any[], changedNodeId: stri
 export function parseOwnSellingPointsResponse(value: any): any;
 export function parseCompetitorPageResponse(value: any): any;
 export function parseFinalDetailValidationResponse(value: any): any;
+export const MAX_DETAIL_REMIX_PRODUCT_SHEET_CELLS: number;
+export function normalizeDetailRemixProductSheet(value?: any): DetailRemixProductSheet | null;
+export function describeDetailRemixProductSheet(sheet?: any, referenceLabel?: string): string;
 export function buildOwnSellingPointsInstruction(options?: any): string;
 export function buildCompetitorPageInstruction(options?: any): string;
 export function buildDetailCopyReplacementPlan(options?: any): any[];

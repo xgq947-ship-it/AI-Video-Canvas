@@ -73,9 +73,20 @@ declare global {
         viewport: { x: number; y: number; zoom: number };
       }>;
       revealProject: (workflowId: string) => Promise<{ ok: true; path: string }>;
-      exportDetailRemix: (input: { jobId: string; workflowId: string }) => Promise<
+      exportDetailRemix: (input: {
+        jobId: string;
+        workflowId: string;
+        /** Also export quality-failed candidates, named with a 待确认 marker. */
+        includeCandidates?: boolean;
+      }) => Promise<
         | { canceled: true }
-        | { canceled: false; count: number; destination: string; filenames: string[] }
+        | {
+          canceled: false;
+          count: number;
+          candidateCount?: number;
+          destination: string;
+          filenames: string[];
+        }
       >;
       getAppInfo: () => Promise<AppInfo>;
       uninstall: {

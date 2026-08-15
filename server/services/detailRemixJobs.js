@@ -1230,37 +1230,6 @@ function validateCompetitorAnalysisContract(
   return resolution;
 }
 
-function overlayTexts(points, copySlots = [], brandIdentity = {}, brandSlots = [], hasBrandLogo = false) {
-  const expanded = points.slice(0, 3).flatMap(point => {
-    const title = String(point.title || point.text || point.headline || '').trim();
-    const description = String(point.description || point.detail || '').trim();
-    return [
-      title && { text: title, role: String(point.slotRole || 'headline') },
-      description && { text: description, role: 'support' },
-    ].filter(Boolean);
-  });
-  const slots = Array.isArray(copySlots) ? copySlots : [];
-  const used = new Set();
-  const sellingTexts = expanded.map((item, index) => {
-    let slotIndex = slots.findIndex((slot, candidateIndex) => (
-      !used.has(candidateIndex) && String(slot?.role || '') === item.role
-    ));
-    if (slotIndex < 0) slotIndex = slots.findIndex((_slot, candidateIndex) => !used.has(candidateIndex));
-    if (slotIndex >= 0) used.add(slotIndex);
-    return { ...item, slot: slotIndex >= 0 ? slots[slotIndex] : undefined };
-  });
-  const logoSlots = Array.isArray(brandSlots) ? brandSlots : [];
-  const brandTexts = [
-    !hasBrandLogo && brandIdentity?.name
-      ? { text: String(brandIdentity.name), role: 'brand', slot: logoSlots[0] }
-      : null,
-    brandIdentity?.slogan
-      ? { text: String(brandIdentity.slogan), role: 'brand-slogan', slot: logoSlots[1] }
-      : null,
-  ].filter(item => item?.text && item?.slot);
-  return [...brandTexts, ...sellingTexts];
-}
-
 function saveImageBuffer(buffer, imageTarget, assetId) {
   const filename = `${safeSegment(assetId)}.png`;
   fs.writeFileSync(path.join(imageTarget.targetDir, filename), buffer);

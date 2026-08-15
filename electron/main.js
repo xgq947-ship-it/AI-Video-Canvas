@@ -1,10 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess } from 'electron';
 import { randomUUID } from 'node:crypto';
+import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createUpdateController } from './updater.js';
 import { resolveUninstallTargets } from './uninstall.js';
-import { revealProjectById } from './projectReveal.js';
+import { resolveProjectDirectory, revealProjectById } from './projectReveal.js';
 import {
     browserHubPayloadPath,
     ensureBrowserHubRuntime,
@@ -379,6 +380,42 @@ ipcMain.handle('project:reveal', async (_event, workflowId) => {
         });
     } catch (error) {
         return { ok: false, error: error.message || '无法打开项目目录' };
+    }
+});
+
+ipcMain.handle('library:reveal', async () => {
+    try {
+        // 画布被试用到期锁死后取回成果的唯一出口，所以不能想当然地指向默认目录：
+        // 项目可以创建在库外的任意位置（workflow.projectPath），那些用户的成果
+        // 根本不在 library/projects 下。这里按 workflow 逐个解析真实目录，打开
+        // 最近更新的那个；解析不出任何项目时才回退到库根目录。
+        const dataDir = path.join(app.getPath('userData'), 'data');
+        const workflowsDir = path.join(dataDir, 'library', 'workflows');
+        let newest = null;
+        let entries = [];
+        try {
+            entries = await fsPromises.readdir(workflowsDir);
+        } catch {
+            // 还没有任何项目。
+        }
+        for (const entry of entries) {
+            if (!entry.endsWith('.json')) continue;
+            try {
+                const workflow = JSON.parse(await fsPromises.readFile(path.join(workflowsDir, entry), 'utf8'));
+                const directory = resolveProjectDirectory(workflow, dataDir);
+                const updatedAt = Date.parse(workflow?.updatedAt || '') || 0;
+                if (!newest || updatedAt > newest.updatedAt) newest = { directory, updatedAt };
+            } catch {
+                // 单个损坏或路径非法的 workflow 不能挡住其它项目。
+            }
+        }
+        const target = newest?.directory || path.join(dataDir, 'library', 'projects');
+        await fsPromises.mkdir(target, { recursive: true });
+        const error = await shell.openPath(target);
+        if (error) return { ok: false, error };
+        return { ok: true, path: target };
+    } catch (error) {
+        return { ok: false, error: error.message || '无法打开成果文件夹' };
     }
 });
 

@@ -42,6 +42,35 @@ export const UNCONFIGURED_LICENSE_STATE = Object.freeze({
  */
 
 /**
+ * 整块画布是否应当锁死。
+ *
+ * 与 canUseFeature 的默认方向相反，这里是**默认放行、只在积极证据下上锁**。
+ * 原因是失败代价不对称：漏锁一次只是少收一份钱，误锁一次却会把正在付费使用
+ * 的用户整个应用砖掉。因此 'unknown'（已登录但主进程还没拿到第一次
+ * device-status，或离线取不到）、以及任何无法识别的状态，一律不锁。
+ *
+ * 离线时主进程会保留上一次的状态并置 stale=true。此处刻意不看 stale：
+ * 一份「试用中且未到期」的旧状态在断网时应当继续可用，而一份「已过期」的
+ * 旧状态本来就该锁——两种情况按 status 判断都已经是对的。
+ *
+ * @param {LicenseState} license
+ * @param {number} now epoch 毫秒
+ * @returns {boolean}
+ */
+export function isCanvasLocked(license, now) {
+  if (!license || typeof license !== 'object') return false;
+  // 授权子系统未启用：与加这层之前的行为完全一致，永不上锁。
+  if (license.unconfigured) return false;
+  if (license.status === 'blocked') return true;
+  if (license.status === 'expired') return true;
+  if (license.status === 'trial') {
+    // 应用一直开着、试用期在使用过程中走完，也要立刻锁上。
+    return typeof license.trialExpiresAt === 'number' && now >= license.trialExpiresAt;
+  }
+  return false;
+}
+
+/**
  * 判断某功能是否可用。所有节点执行前必须再次调用（不能只靠 UI 禁用）。
  * @param {string|undefined|null} feature 节点要求的功能键；无要求（普通节点）恒为 true
  * @param {LicenseState} license

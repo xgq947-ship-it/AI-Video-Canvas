@@ -36,6 +36,12 @@ export const DEFAULT_GRANTED_FEATURES: readonly FeatureKey[];
 
 export const UNCONFIGURED_LICENSE_STATE: Readonly<LicenseState>;
 
+/**
+ * 整块画布是否应当锁死。默认放行，只在 expired / blocked / 试用已过期时上锁；
+ * 'unknown' 与任何未识别状态都不锁，避免离线或启动瞬间把应用砖掉。
+ */
+export function isCanvasLocked(license: LicenseState, now: number): boolean;
+
 export function canUseFeature(
   feature: FeatureKey | string | undefined | null,
   license: LicenseState,

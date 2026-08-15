@@ -17,7 +17,7 @@
  *   一旦收到过消息（即登录子系统已启用），后续判断严格走 canUseFeature()。
  */
 
-import { canUseFeature } from '../../shared/licenseFeatures.js';
+import { canUseFeature, isCanvasLocked } from '../../shared/licenseFeatures.js';
 
 /** @type {import('../../shared/licenseFeatures.d.ts').LicenseState | null} */
 let currentState = null;
@@ -48,6 +48,38 @@ export function isFeatureAllowed(feature) {
   if (!feature) return true;
   if (currentState === null) return true; // 登录子系统未启用/尚未收到任何消息
   return canUseFeature(feature, currentState, Date.now());
+}
+
+/**
+ * 试用到期后整块画布是否锁死。与 isFeatureAllowed 一样，在收到主进程的第一条
+ * license-state 之前恒为 false（未配置授权子系统 = 永不上锁）。
+ */
+export function isCanvasLockedNow(now = Date.now()) {
+  if (currentState === null) return false;
+  return isCanvasLocked(currentState, now);
+}
+
+/**
+ * 全局闸门：试用到期后拒绝一切会改变状态的请求。
+ *
+ * 挂在所有 /api 路由之前。渲染进程的遮罩层只是好看的提前拦截，本地 Electron
+ * 里一开 devtools 就能绕过；真正的锁在这里。
+ *
+ * 放行只读请求（GET/HEAD/OPTIONS）是刻意的：用户已经生成的成果不能被扣作
+ * 人质。画布要能打开、项目要能读、导出清单要能取——桌面端的一键导出正是先
+ * GET 清单再由主进程复制文件，所以这条放行同时也保住了导出。
+ */
+export function blockWhenCanvasLocked(req, res, next) {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  // 保存画布不是付费价值所在——生成才是。挡住保存只会让到期瞬间尚未落盘的
+  // 布局永远丢失，并让自动保存每隔几秒撞一次 403 空转；重命名、封面、
+  // 打开素材目录同理，都属于用户处置自己既有成果。
+  if (/^\/workflows(\/|$)/u.test(req.path || '')) return next();
+  if (!isCanvasLockedNow()) return next();
+  return res.status(403).json({
+    error: 'CANVAS_LOCKED',
+    message: '试用已结束。已生成的成果仍可查看和导出；请激活授权码后继续创作。',
+  });
 }
 
 /**

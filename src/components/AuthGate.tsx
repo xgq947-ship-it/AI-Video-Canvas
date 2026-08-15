@@ -4,6 +4,8 @@ import { useLicense } from '../hooks/useLicense';
 import { LoginPage } from './LoginPage';
 import { TrialBanner } from './TrialBanner';
 import { LicenseDialog } from './LicenseDialog';
+import { CanvasLockOverlay } from './CanvasLockOverlay';
+import { useCanvasLocked } from '../hooks/useCanvasLocked';
 
 /**
  * 登录门。仅当主进程的 GOOGLE_LOGIN_ENABLED 为开时生效（经 useLoginEnabled 问主进程，
@@ -21,6 +23,7 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
   const { state: license, activate } = useLicense();
   const [keepSignedIn, setKeepSignedIn] = useState(true);
   const [showLicenseDialog, setShowLicenseDialog] = useState(false);
+  const locked = useCanvasLocked(license);
 
   // 尚未问到主进程开关状态：不假设任何一边，先不渲染，避免任何一个方向的闪烁。
   // 这是主进程已经启动、preload 桥已就绪之后的一次本地 IPC 往返，通常几毫秒内完成。
@@ -34,6 +37,10 @@ export const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) 
       <>
         {children}
         <TrialBanner state={license} onActivate={() => setShowLicenseDialog(true)} />
+        {/* 到期硬锁盖在画布之上、激活弹窗之下——锁上之后唯一能做的就是激活或取走成果。 */}
+        {locked ? (
+          <CanvasLockOverlay state={license} onActivate={() => setShowLicenseDialog(true)} />
+        ) : null}
         {showLicenseDialog ? (
           <LicenseDialog onActivate={activate} onClose={() => setShowLicenseDialog(false)} />
         ) : null}

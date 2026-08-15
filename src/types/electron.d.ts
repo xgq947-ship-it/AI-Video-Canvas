@@ -73,6 +73,8 @@ declare global {
         viewport: { x: number; y: number; zoom: number };
       }>;
       revealProject: (workflowId: string) => Promise<{ ok: true; path: string }>;
+      /** 打开本机成果文件夹。试用锁死后取回已生成结果的出口，失败不抛异常。 */
+      revealLibrary: () => Promise<{ ok: boolean; path?: string; error?: string }>;
       exportDetailRemix: (input: {
         jobId: string;
         workflowId: string;

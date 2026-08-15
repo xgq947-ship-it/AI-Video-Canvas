@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('evanDesktop', {
         if (!result?.ok) throw new Error(result?.error || '无法打开项目目录');
         return result;
     },
+    // 试用锁死后取回成果的出口：不抛异常，遮罩层自己把失败原因显示出来。
+    revealLibrary: () => ipcRenderer.invoke('library:reveal'),
     exportDetailRemix: async (input) => {
         const result = await ipcRenderer.invoke('detail-remix:export', input);
         if (!result?.ok) throw new Error(result?.error || '详情图导出失败');

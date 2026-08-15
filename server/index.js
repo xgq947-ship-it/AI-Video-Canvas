@@ -38,6 +38,7 @@ import {
     loadWebExecutionPreference
 } from './services/webhttp/index.js';
 import { closeBrowserForShutdown } from './services/opsCliRunner.js';
+import { blockWhenCanvasLocked } from './services/licenseGuard.js';
 import { RUNTIME_PATHS } from './runtime/paths.js';
 import {
     AUDIO_DIR,
@@ -150,6 +151,10 @@ applyWebExecutionPreferenceToApp(app, process.env, loadWebExecutionPreference(LI
  * @param {string} dataUrl - Base64 data URL (e.g., data:image/png;base64,...)
  * @returns {{ url: string } | null} - File URL path or null if not base64
  */
+
+// 试用到期后的全局闸门。必须排在所有 /api 路由之前，否则任何一条漏挂的路由
+// 都是绕过口。只读请求一律放行，用户已生成的成果不被扣作人质。
+app.use('/api', blockWhenCanvasLocked);
 
 // Mount generation routes (image and video generation)
 app.use('/api', generationRoutes);

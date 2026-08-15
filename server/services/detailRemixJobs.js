@@ -23,6 +23,7 @@ import {
   DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA,
   DETAIL_REMIX_OWN_KNOWLEDGE_OUTPUT_SCHEMA,
   DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA,
+  DETAIL_REMIX_PRODUCT_SHEET_OUTPUT_SCHEMA,
   DETAIL_REMIX_MARKETING_MODE,
   DETAIL_REMIX_STRICT_FACT_MIN_CONFIDENCE,
   DETAIL_REMIX_STRICT_PARAMETER_MODE,
@@ -36,6 +37,8 @@ import {
   parseOwnSellingPointsResponse,
   parseCompetitorPageResponse,
   parseFinalDetailValidationResponse,
+  parseProductSheetResponse,
+  productSheetFromDetection,
   normalizeDetailRemixProductSheet,
   classifyFinalDetailValidation,
   describeFinalDetailValidationFailures,
@@ -44,6 +47,7 @@ import {
   buildFinalDetailPrompt,
   buildDetailCopyReplacementPlan,
   buildFinalDetailValidationInstruction,
+  buildProductSheetInstruction,
   buildFinalDetailRepairPrompt,
   buildFinalDetailRegenerationPrompt,
   buildBlankDetailPrompt,
@@ -1768,6 +1772,78 @@ async function extractOwnSellingPoints(job, context, signal) {
   writeJob(job, context);
 }
 
+/**
+ * Derive the angle-grid manifest from the supplied product reference itself.
+ *
+ * Hand-typed cell labels are a standing hazard: swap the product and forget the
+ * labels, and the render prompt starts naming cells that no longer exist — a
+ * confident lie is worse than no description at all. Reading the picture keeps
+ * the manifest true by construction, and lets a plain product photo fall back to
+ * ordinary reference handling instead of being announced as a grid.
+ */
+async function detectProductSheet(job, context, signal) {
+  if (job.preferSuppliedProductReferences !== true) return;
+  // An explicitly supplied manifest is the user overriding detection on purpose.
+  if (job.productSheetManual === true) return;
+  const source = (Array.isArray(job.productImages) ? job.productImages : [])[0];
+  if (!source) return;
+  const identity = canonicalMediaIdentity(source);
+  if (job.productSheetDetectedAt && job.productSheetSourceIdentity === identity) return;
+
+  const imageDataUrl = imageInputToDataUrl(source, context);
+  if (!imageDataUrl) return;
+  const provider = getPromptOptimizerProvider(job.recognitionProvider);
+  job.stage = 'detecting_product_sheet';
+  job.stageLabel = '正在识别产品角度板';
+  writeJob(job, context);
+  let detection;
+  try {
+    const raw = await runRecognition({
+      systemInstruction: buildProductSheetInstruction(),
+      userPrompt: '判断这张我方产品参考图是不是角度板，并逐格说明。严格返回指定 JSON。',
+      imageDataUrls: [imageDataUrl],
+      outputSchema: DETAIL_REMIX_PRODUCT_SHEET_OUTPUT_SCHEMA,
+      model: job.recognitionModel,
+      effort: job.recognitionProvider === 'codex-cli' ? 'high' : (provider?.defaultEffort || ''),
+      temperature: 0,
+      maxTokens: 1200,
+      timeoutMs: Number(context.recognitionTimeoutMs) || DETAIL_REMIX_RECOGNITION_TIMEOUT_MS,
+      libraryDir: context.libraryDir,
+      signal,
+    }, context, { providerId: job.recognitionProvider, kind: 'product-sheet' });
+    detection = parseProductSheetResponse(raw);
+  } catch (error) {
+    if (isOperationCancelled(error)) throw error;
+    // Detection is an optimisation, never a gate. Falling back to plain product
+    // reference handling still generates; failing the job here would not.
+    job.productSheet = null;
+    job.productSheetDetection = undefined;
+    job.productSheetWarnings = [`产品角度板识别失败，已按普通产品参考图处理：${error instanceof Error ? error.message : String(error)}`];
+    job.productSheetSourceIdentity = identity;
+    job.productSheetDetectedAt = nowIso(context);
+    writeJob(job, context);
+    return;
+  }
+  const sheet = productSheetFromDetection(detection);
+  const unusable = (detection.cells || []).filter(cell => cell.usable === false);
+  job.productSheet = sheet;
+  job.productSheetDetection = detection;
+  job.productSheetSourceIdentity = identity;
+  job.productSheetDetectedAt = nowIso(context);
+  const warnings = [
+    ...(detection.isSheet ? [] : ['所连产品参考图不是角度板，已按普通产品参考图处理']),
+    ...unusable.map(cell => `第 ${cell.index} 格不可用${cell.issue ? `：${cell.issue}` : ''}，本次不会引用该格`),
+  ];
+  // Any route to "no manifest" must say so. A sheet that reported itself as a
+  // grid but yielded no usable labelled cell would otherwise leave the user with
+  // the toggle on, a board connected, and nothing explaining why it did nothing.
+  if (!sheet && !warnings.length) {
+    warnings.push('未能从所连产品参考图读出可用的分格角度，已按普通产品参考图处理');
+  }
+  job.productSheetWarnings = warnings;
+  writeJob(job, context);
+}
+
 async function analyzeCompetitorPage(job, page, context, signal) {
   if (page.analysis
       && page.recognitionStatus === 'completed'
@@ -2960,6 +3036,9 @@ async function executeFinalPhase(job, context) {
     writeJob(job, context);
     await extractOwnSellingPoints(job, context, signal);
     if (job.status === 'recovery_required') return;
+    // The grid manifest must exist before page planning: the planner is what
+    // assigns a cell to each product instance.
+    await detectProductSheet(job, context, signal);
     await prefetchCompetitorAnalyses(job, context, signal);
 
     for (const page of job.pages) {
@@ -3501,8 +3580,8 @@ export function createDetailRemixJob(payload, context) {
   const imageResolution = normalizeImageResolution(imageModel, payload.imageResolution ?? payload.resolution);
   const productSheet = normalizeDetailRemixProductSheet(payload.productSheet);
   const preferSuppliedProductReferences = payload.preferSuppliedProductReferences === true;
-  if (productSheet && !normalized.productImages.length) {
-    throw new Error('已填写产品角度板分格说明，但没有连接对应的产品参考图；请先连接那张角度板');
+  if (preferSuppliedProductReferences && !normalized.productImages.length) {
+    throw new Error('已选择“以我提供的产品参考图为准”，但没有连接任何产品参考图；请先连接产品参考图，或关闭该选项改用自动裁图');
   }
   const immutableFingerprint = requestFingerprint(normalized, {
     recognitionProvider,
@@ -3597,6 +3676,9 @@ export function createDetailRemixJob(payload, context) {
     productImages: normalized.productImages,
     productNodeIds: normalized.productNodeIds,
     productSheet,
+    // A manifest that arrived with the request is a deliberate override; without
+    // one, the sheet is read off the picture at run time.
+    productSheetManual: Boolean(productSheet),
     preferSuppliedProductReferences,
     characterReferenceImages: normalized.characterReferenceImages,
     characterReferenceNodeIds: normalized.characterReferenceNodeIds,

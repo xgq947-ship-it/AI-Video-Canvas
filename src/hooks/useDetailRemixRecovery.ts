@@ -145,6 +145,8 @@ function detailStateFromJob(node: NodeData, job: DetailRemixJob) {
     pageCount: job.pageCount || job.pages?.length || 0,
     version: job.version,
     queueProgress: queueProgressFromJob(job),
+    detectedProductSheet: job.productSheet || null,
+    productSheetWarnings: job.productSheetWarnings || [],
     analysis: {
       ...currentAnalysis,
       ...(Array.isArray(job.ownSellingPoints) ? { ownSellingPoints: job.ownSellingPoints } : {}),

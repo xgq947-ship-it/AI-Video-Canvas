@@ -865,7 +865,9 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
               {state.preferSuppliedProductReferences && (
                 <div className={`col-span-2 rounded-lg border px-2 py-2 text-xs ${dark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-[9px] text-neutral-500">产品角度板分格（每行一个角度，留空表示第一张不是角度板）</span>
+                    <span className="text-[9px] text-neutral-500">
+                      产品角度板分格 · <span className="text-emerald-500">留空＝执行时自动识别</span>（换产品无需改动）
+                    </span>
                     <select
                       aria-label="角度板列数"
                       value={String(state.productSheet?.columns || 3)}
@@ -883,7 +885,7 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
                     aria-label="产品角度板分格说明"
                     rows={6}
                     value={sheetText}
-                    placeholder={'正面整机\n左前 3/4\n侧面\n背面\n机芯抓捏机构\n按键卡扣材质'}
+                    placeholder={'留空即可：执行时会自动读取这张板子，逐格识别角度。\n只有在自动识别结果不对时，才手动逐行覆盖，例如：\n正面整机\n左前 3/4\n背面'}
                     onChange={event => {
                       // The raw text is held locally so a half-typed blank line does
                       // not get normalized away under the cursor.
@@ -907,6 +909,20 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
                   <div className="mt-1 text-[9px] leading-snug text-neutral-500">
                     编号按从左到右、从上到下。识图会为每处产品指定该用哪一格，生成时不再自选角度。
                   </div>
+                  {state.detectedProductSheet && !state.productSheet && (
+                    <div className={`mt-1.5 rounded border px-2 py-1 text-[9px] leading-snug ${dark ? 'border-emerald-800/70 bg-emerald-500/5 text-emerald-300' : 'border-emerald-300 bg-emerald-50 text-emerald-700'}`}>
+                      上次已自动识别为 {state.detectedProductSheet.rows} 行 × {state.detectedProductSheet.columns} 列：
+                      {state.detectedProductSheet.cells.map(cell => `${cell.index}=${cell.label}`).join('、')}
+                    </div>
+                  )}
+                  {(state.productSheetWarnings || []).map((warning, index) => (
+                    <div
+                      key={index}
+                      className={`mt-1.5 rounded border px-2 py-1 text-[9px] leading-snug ${dark ? 'border-amber-800/70 bg-amber-500/5 text-amber-300' : 'border-amber-300 bg-amber-50 text-amber-700'}`}
+                    >
+                      {warning}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

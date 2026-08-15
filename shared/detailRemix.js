@@ -324,6 +324,38 @@ export const DETAIL_REMIX_OWN_KNOWLEDGE_OUTPUT_SCHEMA = Object.freeze({
   },
 });
 
+/**
+ * Reads a supplied product reference and reports whether it is a labelled angle
+ * grid, and what each cell shows. Hand-typed cell labels go stale the moment the
+ * product changes, and a stale label makes the render prompt confidently wrong;
+ * deriving them from the picture keeps the two in sync by construction.
+ */
+export const DETAIL_REMIX_PRODUCT_SHEET_OUTPUT_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: ['isSheet', 'rows', 'columns', 'cells', 'summary'],
+  properties: {
+    isSheet: { type: 'boolean' },
+    rows: { type: 'integer', minimum: 0 },
+    columns: { type: 'integer', minimum: 0 },
+    cells: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['index', 'label', 'usable', 'issue'],
+        properties: {
+          index: { type: 'integer', minimum: 1 },
+          label: { type: 'string' },
+          usable: { type: 'boolean' },
+          issue: { type: 'string' },
+        },
+      },
+    },
+    summary: { type: 'string' },
+  },
+});
+
 /** AI-only delivery gate. It never draws pixels; it decides whether the page is deliverable. */
 export const DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA = Object.freeze({
   type: 'object',
@@ -591,7 +623,11 @@ export function createDetailRemixNodeData(overrides = {}) {
       ? Number(source.maxStructuralRegenerations)
       : 1,
     preferSuppliedProductReferences: source.preferSuppliedProductReferences === true,
+    // `productSheet` is the user's optional override; `detectedProductSheet` is
+    // what the last run actually read off the picture and is display-only.
     productSheet: normalizeDetailRemixProductSheet(source.productSheet),
+    detectedProductSheet: normalizeDetailRemixProductSheet(source.detectedProductSheet),
+    productSheetWarnings: array(source.productSheetWarnings).map(text).filter(Boolean),
     status,
     ...(text(source.errorMessage) ? { errorMessage: text(source.errorMessage) } : {}),
   };
@@ -974,6 +1010,56 @@ export function normalizeDetailRemixProductSheet(value) {
   return { rows, columns, cells: unique };
 }
 
+export function buildProductSheetInstruction() {
+  return [
+    '你是电商产品参考图审阅员。所附只有一张图，它是我方自己的产品参考，不是竞品，也不是详情页版式。',
+    '判断这张图是不是「产品角度板」：把同一台产品的多个角度按规则网格拼在一起、每格一个角度的索引图。',
+    '只有确实呈现规则网格且每格是同一台产品的不同角度时，isSheet 才为 true。单张产品照、场景图、多个不同产品的合集、详情页截图一律 isSheet=false，此时 rows、columns 填 0，cells 留空。',
+    'isSheet=true 时给出 rows 与 columns，并按从左到右、从上到下从 1 开始为每格编号。编号必须连续覆盖所有格子。',
+    'label 写这一格拍的是什么，用简短中文名词短语，例如「正面整机」「左前 3/4」「背面」「内部机芯结构」「按键面板特写」「卡扣与材质特写」。只描述看得见的内容，不要编造用途、功效或参数。',
+    '若某格模糊、过暗、被裁切、被遮挡或看不出角度，usable 填 false 并在 issue 里写明原因；其余情况 usable=true、issue 留空。',
+    '不要输出图上的任何文字内容，也不要把格子里的编号数字当成产品标识。',
+    '只输出符合 Schema 的 JSON，不要 Markdown。',
+  ].join('\n');
+}
+
+export function parseProductSheetResponse(value) {
+  const parsed = object(parseJsonPayload(value, '产品角度板识别结果'));
+  const cells = array(parsed.cells).map((entry, index) => {
+    const cell = object(entry);
+    const cellIndex = Number(cell.index);
+    return {
+      index: Number.isInteger(cellIndex) && cellIndex > 0 ? cellIndex : index + 1,
+      label: text(cell.label),
+      usable: cell.usable !== false,
+      issue: text(cell.issue),
+    };
+  });
+  return {
+    isSheet: parsed.isSheet === true,
+    rows: Math.max(0, Number(parsed.rows) || 0),
+    columns: Math.max(0, Number(parsed.columns) || 0),
+    cells,
+    summary: text(parsed.summary),
+  };
+}
+
+/**
+ * Turns a raw detection into a usable manifest, or null when the picture is not
+ * actually a grid. Returning null is the point: the render prompt must never
+ * announce cells that a plain product photo does not have.
+ */
+export function productSheetFromDetection(detection) {
+  const report = object(detection);
+  if (report.isSheet !== true) return null;
+  const usable = array(report.cells).filter(cell => object(cell).usable !== false);
+  return normalizeDetailRemixProductSheet({
+    rows: report.rows,
+    columns: report.columns,
+    cells: usable,
+  });
+}
+
 /** Human-readable grid description handed to both the planner and the renderer. */
 export function describeDetailRemixProductSheet(sheet, referenceLabel = '该产品参考板') {
   const normalized = normalizeDetailRemixProductSheet(sheet);
@@ -1042,7 +1128,10 @@ export function buildCompetitorPageInstruction({
     'mappedSellingPoints 中同一 slotId 恰好一项，每项都必须填写 replacementText。replacementText 必须是所选我方卖点 title/description 的忠实短写，适配该槽 maxChars，不得添加证据外功效；相邻的拆分标题允许选择同一卖点但要写成不同且连贯的片段。不同槽禁止机械重复同一句话。最终要保持原页“眉题/胶囊标签—大标题—副标题/说明”的数量、字号层级和留白节奏。',
     '判断所有竞品产品实例的观察角度、朝向、可见面和透视要求，再从我方产品视角库中选择最匹配的 1~3 个 ID 写入 selectedProductViewIds。必须只选给定 ID；优先覆盖本页出现的不同角度和产品完整度。',
     productSheet
-      ? `${describeDetailRemixProductSheet(productSheet, '我方已提供一张产品角度板，生成时它就是产品参考图')}为每个 productInstance 判断它最该照抄哪一格，把该格编号写入 productSheetCell。必须落在 1~${productSheet.cells[productSheet.cells.length - 1].index} 之间；同一格可以被多个实例引用；实在无法判断时填最接近整机角度的那一格，不要填 0。`
+      // Enumerate the legal cells instead of giving a range: unusable cells are
+      // already dropped from the manifest, and a range would invite the planner
+      // to assign one of them, leaving that instance with no binding at all.
+      ? `${describeDetailRemixProductSheet(productSheet, '我方已提供一张产品角度板，生成时它就是产品参考图')}为每个 productInstance 判断它最该照抄哪一格，把该格编号写入 productSheetCell。只能使用这些编号：${productSheet.cells.map(cell => cell.index).join('、')}；其它编号一律无效。同一格可以被多个实例引用；实在无法判断时填最接近整机角度的那一格，不要填 0。`
       : '本次没有产品角度板，所有 productInstance 的 productSheetCell 一律填 0。',
     `页面序号：${pageIndex + 1}/${totalPages}。我方品牌：${JSON.stringify(brand)}。我方卖点库：${JSON.stringify(sellingPoints)}。我方精确事实库：${JSON.stringify(verifiedFacts)}。我方产品视角库：${JSON.stringify(productViews)}`,
     '只输出合法 JSON，不要 Markdown。格式：',

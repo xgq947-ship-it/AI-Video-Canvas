@@ -16,6 +16,7 @@ export type DetailRemixJobStatus =
 export type DetailRemixJobStage =
   | 'queued'
   | 'extracting_selling_points'
+  | 'detecting_product_sheet'
   | 'analyzing_competitor'
   | 'generating_final'
   | 'validating_final'
@@ -136,6 +137,9 @@ export interface DetailRemixJob {
   sizingMode?: 'match-competitor' | string;
   brandIdentity?: Record<string, unknown>;
   brandLogoUrl?: string;
+  /** Grid manifest the run resolved for the supplied product reference, if any. */
+  productSheet?: DetailRemixProductSheet | null;
+  productSheetWarnings?: string[];
   productViews?: Array<{
     id?: string;
     sourceImageIndex?: number;

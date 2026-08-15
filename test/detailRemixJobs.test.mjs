@@ -2295,14 +2295,312 @@ test('角度板会写进识图与生成提示词，并按实例绑定具体格�
   assert.equal(completed.pages[0].analysis.productInstances[0].productSheetCell, 5);
 });
 
-test('没有连接产品参考图时填写角度板会被明确拒绝', t => {
+test('未手填分格时自动读取角度板，逐格标签来自图片而不是人工输入', async t => {
   const env = setup();
   t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
-  assert.throws(() => createDetailRemixJob(basePayload({
-    jobId: 'product-sheet-missing-image-job',
-    productImages: [], productNodeIds: [],
+  const sheetRequests = [];
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      if (meta.kind === 'product-sheet') {
+        sheetRequests.push(request);
+        return JSON.stringify({
+          isSheet: true, rows: 2, columns: 3,
+          cells: [
+            { index: 1, label: '正面整机', usable: true, issue: '' },
+            { index: 2, label: '左前 3/4', usable: true, issue: '' },
+            { index: 3, label: '侧面', usable: true, issue: '' },
+            { index: 4, label: '背面', usable: true, issue: '' },
+            { index: 5, label: '滚轮气囊结构', usable: true, issue: '' },
+            { index: 6, label: '按键面板特写', usable: true, issue: '' },
+          ],
+          summary: '2x3 角度板',
+        });
+      }
+      return completeRecognition({ hasPerson: false })(request, meta);
+    },
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('auto-sheet'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'product-sheet-auto-detect-job',
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+    preferSuppliedProductReferences: true,
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(sheetRequests.length, 1);
+  assert.equal(sheetRequests[0].imageDataUrls.length, 1);
+  assert.equal(completed.productSheetManual, false);
+  assert.equal(completed.productSheet.rows, 2);
+  assert.equal(completed.productSheet.columns, 3);
+  assert.equal(completed.productSheet.cells[4].label, '滚轮气囊结构');
+  assert.deepEqual(completed.productSheetWarnings, []);
+  assert.match(generationCalls[0].request.prompt, /5=滚轮气囊结构/);
+});
+
+test('所连产品图不是角度板时回落为普通参考图，提示词不得声称存在分格', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      if (meta.kind === 'product-sheet') {
+        return JSON.stringify({
+          isSheet: false, rows: 0, columns: 0, cells: [], summary: '单张产品实拍',
+        });
+      }
+      return completeRecognition({ hasPerson: false })(request, meta);
+    },
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('not-a-sheet'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'product-sheet-not-a-sheet-job',
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+    preferSuppliedProductReferences: true,
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(completed.productSheet, null);
+  assert.match(completed.productSheetWarnings[0], /不是角度板/);
+  assert.doesNotMatch(generationCalls[0].request.prompt, /角度板/);
+  // The supplied image still wins the product slot; only the grid claim is dropped.
+  assert.equal(generationCalls[0].request.referenceImageInputs[1], PRODUCT);
+});
+
+test('角度板某格不可用时排除该格并留下提示，其余格位照常绑定', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      if (meta.kind === 'product-sheet') {
+        return JSON.stringify({
+          isSheet: true, rows: 2, columns: 2,
+          cells: [
+            { index: 1, label: '正面整机', usable: true, issue: '' },
+            { index: 2, label: '', usable: false, issue: '过暗看不出角度' },
+            { index: 3, label: '背面', usable: true, issue: '' },
+            { index: 4, label: '按键特写', usable: true, issue: '' },
+          ],
+          summary: '2x2 角度板，第 2 格过暗',
+        });
+      }
+      return completeRecognition({ hasPerson: false })(request, meta);
+    },
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('partial-sheet'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'product-sheet-unusable-cell-job',
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+    preferSuppliedProductReferences: true,
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.deepEqual(completed.productSheet.cells.map(cell => cell.index), [1, 3, 4]);
+  assert.match(completed.productSheetWarnings[0], /第 2 格不可用：过暗看不出角度/);
+  const prompt = generationCalls[0].request.prompt;
+  assert.match(prompt, /1=正面整机、3=背面、4=按键特写/);
+});
+
+test('识别调用失败不拖垮任务，按普通产品参考图继续生成', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      if (meta.kind === 'product-sheet') throw new Error('识图服务暂时不可用');
+      return completeRecognition({ hasPerson: false })(request, meta);
+    },
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('detect-failed'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'product-sheet-detect-failed-job',
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+    preferSuppliedProductReferences: true,
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(completed.productSheet, null);
+  assert.match(completed.productSheetWarnings[0], /识别失败/);
+  assert.ok(completed.pages[0].finalUrl);
+});
+
+test('手填分格视为人工覆盖，不再触发自动识别', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let sheetDetectCalls = 0;
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      if (meta.kind === 'product-sheet') {
+        sheetDetectCalls += 1;
+        return JSON.stringify({ isSheet: false, rows: 0, columns: 0, cells: [], summary: '' });
+      }
+      return completeRecognition({ hasPerson: false })(request, meta);
+    },
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('manual-sheet'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'product-sheet-manual-override-job',
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
     useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
     preferSuppliedProductReferences: true,
     productSheet: PRODUCT_SHEET,
-  }), { ...env.context, autoStart: false }), /没有连接对应的产品参考图/);
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(sheetDetectCalls, 0);
+  assert.equal(completed.productSheetManual, true);
+  assert.equal(completed.productSheet.cells[4].label, '机芯抓捏机构');
+});
+
+test('开启了以我提供的产品图为准却没连产品图会被明确拒绝', t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  assert.throws(() => createDetailRemixJob(basePayload({
+    jobId: 'product-sheet-no-image-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+    preferSuppliedProductReferences: true,
+  }), { ...env.context, autoStart: false }), /没有连接任何产品参考图/);
+});
+
+test('自称角度板却读不出可用分格时，也必须给出回落说明而不是静默', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      if (meta.kind === 'product-sheet') {
+        return JSON.stringify({
+          isSheet: true, rows: 2, columns: 3,
+          cells: [{ index: 1, label: '', usable: true, issue: '' }],
+          summary: '看起来是板子但读不出角度',
+        });
+      }
+      return completeRecognition({ hasPerson: false })(request, meta);
+    },
+    generateImage: async () => ({ buffer: Buffer.from('empty-sheet'), extension: 'png' }),
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'product-sheet-empty-cells-job',
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+    preferSuppliedProductReferences: true,
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(completed.productSheet, null);
+  assert.equal(completed.productSheetWarnings.length, 1);
+  assert.match(completed.productSheetWarnings[0], /读出可用的分格角度/);
+});
+
+test('识别结果按图片缓存，重新生成同一页不会再次调用角度板识别', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let sheetDetectCalls = 0;
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      if (meta.kind === 'product-sheet') {
+        sheetDetectCalls += 1;
+        return JSON.stringify({
+          isSheet: true, rows: 1, columns: 2,
+          cells: [
+            { index: 1, label: '正面整机', usable: true, issue: '' },
+            { index: 2, label: '背面', usable: true, issue: '' },
+          ],
+          summary: '1x2 角度板',
+        });
+      }
+      return completeRecognition({ hasPerson: false })(request, meta);
+    },
+    generateImage: async () => ({ buffer: Buffer.from('cached-sheet'), extension: 'png' }),
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'product-sheet-cache-job',
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+    preferSuppliedProductReferences: true,
+  }), context);
+  await waitFor(created.id, context, job => job?.status === 'completed');
+  assert.equal(sheetDetectCalls, 1);
+
+  regenerateDetailRemixPages(created.id, 'workflow-1', { pageIndexes: [0] }, context);
+  const regenerated = await waitFor(
+    created.id,
+    context,
+    job => job?.status === 'completed' && job.pages[0].regenerationCount === 1,
+  );
+  // The board did not change, so re-detecting it would be a wasted call per retry.
+  assert.equal(sheetDetectCalls, 1);
+  assert.equal(regenerated.productSheet.cells.length, 2);
+});
+
+test('规划识图只被允许使用真实存在的格号，不得给出包含被排除格的区间', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const competitorInstructions = [];
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      if (meta.kind === 'product-sheet') {
+        return JSON.stringify({
+          isSheet: true, rows: 2, columns: 2,
+          cells: [
+            { index: 1, label: '正面整机', usable: true, issue: '' },
+            { index: 2, label: '', usable: false, issue: '过暗' },
+            { index: 3, label: '背面', usable: true, issue: '' },
+            { index: 4, label: '按键特写', usable: true, issue: '' },
+          ],
+          summary: '2x2，第 2 格过暗',
+        });
+      }
+      if (meta.kind === 'competitor-page') competitorInstructions.push(request.systemInstruction);
+      return completeRecognition({ hasPerson: false })(request, meta);
+    },
+    generateImage: async () => ({ buffer: Buffer.from('enumerated'), extension: 'png' }),
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'product-sheet-enumerated-cells-job',
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+    preferSuppliedProductReferences: true,
+  }), context);
+  await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.match(competitorInstructions[0], /只能使用这些编号：1、3、4/);
+  assert.doesNotMatch(competitorInstructions[0], /1~4/);
 });

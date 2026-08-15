@@ -2654,3 +2654,82 @@ test('取消发生在预提交途中时不得再排入付费子任务', async t 
   assert.equal(listCodexImageJobs(context.codexJobsDir).length, 0);
   assert.equal(inMemory.pages[1].codexImageJobId, undefined);
 });
+
+test('我方详情识图返回坏 JSON 时会重试，不再一次失败就打挂整个任务', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let ownCalls = 0;
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      if (meta.kind === 'own-selling-points') {
+        ownCalls += 1;
+        if (ownCalls === 1) return '这不是 JSON，只是模型的一段废话';
+      }
+      return completeRecognition({ hasPerson: false })(request, meta);
+    },
+    generateImage: async () => ({ buffer: Buffer.from('own-retry'), extension: 'png' }),
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'own-knowledge-retry-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(ownCalls, 2);
+  assert.equal(completed.ownRecognition.status, 'completed');
+  assert.equal(completed.ownRecognition.chunks[0].lastError, undefined);
+  assert.ok(completed.pages[0].finalUrl);
+});
+
+test('我方详情识图重试用尽后仍然失败，并保留最后一次错误', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  let ownCalls = 0;
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      if (meta.kind === 'own-selling-points') {
+        ownCalls += 1;
+        return '始终不是 JSON';
+      }
+      return completeRecognition({ hasPerson: false })(request, meta);
+    },
+    generateImage: async () => ({ buffer: Buffer.from('never'), extension: 'png' }),
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'own-knowledge-exhausted-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const failed = await waitFor(created.id, context, job => job?.status === 'failed');
+
+  assert.equal(ownCalls, 3);
+  assert.ok(failed.ownRecognition.chunks[0].lastError);
+});
+
+test('竞品原图比例远离模型可用比例时记录裁剪损失并在收尾时点名该页', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const context = {
+    ...env.context,
+    runRecognition: completeRecognition({ hasPerson: false }),
+    generateImage: async () => ({ buffer: Buffer.from('tall-page'), extension: 'png' }),
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'dimension-crop-loss-job',
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+    competitorDetails: [
+      // 750x1000 lands exactly on 3:4; 750x2000 has no close provider ratio.
+      { nodeId: 'c-square', imageUrl: COMPETITOR, order: 0, sourceWidth: 750, sourceHeight: 1000 },
+      { nodeId: 'c-tall', imageUrl: COMPETITOR, order: 1, sourceWidth: 750, sourceHeight: 2000 },
+    ],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(completed.pages[0].dimensionCropLoss, 0);
+  assert.ok(completed.pages[1].dimensionCropLoss > 0.3);
+  assert.deepEqual(completed.croppedPageIndexes, [1]);
+});

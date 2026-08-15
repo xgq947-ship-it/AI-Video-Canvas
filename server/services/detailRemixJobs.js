@@ -62,6 +62,8 @@ const DETAIL_REMIX_COMPETITOR_ANALYSIS_VERSION = 3;
 const DETAIL_REMIX_PIPELINE_VERSION = 'tail-strict-auto-copy-qa-v4';
 const MAX_AUTO_PRODUCT_VIEW_REFERENCES = 3;
 const MAX_FINAL_REPAIR_ATTEMPTS = 1;
+/** Cover-crop loss above this is visible content removal, not rounding. */
+const SIGNIFICANT_CROP_LOSS = 0.02;
 /** Second opinions are recognition calls, not paid generations, so one is enough and cheap. */
 const MAX_VALIDATION_REJUDGE_ATTEMPTS = 1;
 /** Fresh re-generations after a structural failure. Each one costs a paid image. */
@@ -69,6 +71,8 @@ const DEFAULT_MAX_STRUCTURAL_REGENERATIONS = 1;
 const MAX_STRUCTURAL_REGENERATIONS_LIMIT = 3;
 const DETAIL_REMIX_RECOGNITION_TIMEOUT_MS = 10 * 60_000;
 const MAX_DETAIL_REMIX_RECOGNITION_ATTEMPTS = 2;
+/** In-run attempts for the own-knowledge pass; recognition never crosses a paid boundary. */
+const MAX_OWN_KNOWLEDGE_ATTEMPTS = 3;
 const DEFAULT_RECOGNITION_CONCURRENCY = 2;
 const MAX_RECOGNITION_CONCURRENCY = 3;
 /** The quality gate submits nothing, so a failed call is always safe to repeat. */
@@ -448,6 +452,23 @@ function closestProviderAspectRatio(modelId, width, height, fallback = '3:4') {
   )).value;
 }
 
+/**
+ * Fraction of the generated image that `fit: 'cover'` will crop away.
+ *
+ * The output must land on the competitor page's exact pixel size, but providers
+ * only render a fixed set of aspect ratios. When the two are far apart, covering
+ * the target box throws away real pixels — copy and product included — and it
+ * happens before the quality gate ever sees the page, so the judge then reports
+ * missing text the model actually drew. Knowing the number up front is what lets
+ * the user re-slice the input instead of paying for a page that cannot survive.
+ */
+function expectedCoverCropLoss(width, height, generationAspectRatio) {
+  const target = Number(width) > 0 && Number(height) > 0 ? Number(width) / Number(height) : null;
+  const generated = numericAspectRatio(generationAspectRatio);
+  if (!target || !generated) return 0;
+  return 1 - (Math.min(target, generated) / Math.max(target, generated));
+}
+
 async function ensurePageSourceDimensions(job, page, context) {
   let width = Math.round(Number(page.sourceWidth) || 0);
   let height = Math.round(Number(page.sourceHeight) || 0);
@@ -478,6 +499,7 @@ async function ensurePageSourceDimensions(job, page, context) {
     height,
     job.aspectRatio || '3:4',
   );
+  page.dimensionCropLoss = expectedCoverCropLoss(width, height, page.generationAspectRatio);
   return page;
 }
 
@@ -488,6 +510,20 @@ async function matchPageDimensions(sourceBuffer, page, context) {
   if (context.matchDetailRemixDimensions) {
     const output = await context.matchDetailRemixDimensions({ sourceBuffer, width, height, page });
     return Buffer.isBuffer(output) ? output : output?.buffer;
+  }
+  // Replace the pre-generation estimate with what this render actually costs:
+  // the model does not always return the ratio it was asked for.
+  try {
+    const metadata = await sharp(sourceBuffer, { failOn: 'none' }).metadata();
+    if (Number(metadata.width) > 0 && Number(metadata.height) > 0) {
+      page.dimensionCropLoss = expectedCoverCropLoss(
+        width,
+        height,
+        `${metadata.width}:${metadata.height}`,
+      );
+    }
+  } catch {
+    // Keep the estimate from ensurePageSourceDimensions.
   }
   return sharp(sourceBuffer, { failOn: 'none' })
     .resize(width, height, {
@@ -1633,14 +1669,23 @@ async function extractOwnSellingPoints(job, context, signal) {
       ? Number(previousRecognition.knowledgeSchemaVersion) || 1
       : previousRecognition.knowledgeSchemaVersion,
     totalImages: job.ownDetails.length,
-    chunks: chunks.map((chunk, index) => ({
-      ...(previousRecognition.chunks?.[index] || {}),
-      index,
-      startIndex: index * chunkSize,
-      imageCount: chunk.length,
-      sourceNodeIds: chunk.map(item => item.sourceNodeId).filter(Boolean),
-      status: mustUpgradeKnowledge ? 'waiting' : (previousRecognition.chunks?.[index]?.status || 'waiting'),
-    })),
+    chunks: chunks.map((chunk, index) => {
+      const previous = previousRecognition.chunks?.[index] || {};
+      const startIndex = index * chunkSize;
+      // A completed marker only carries over when it describes the same slice.
+      // If the batch size changed between runs, slot N now covers different
+      // images, and honouring the old status would silently skip them.
+      const sameSlice = Number(previous.startIndex) === startIndex
+        && Number(previous.imageCount) === chunk.length;
+      return {
+        ...previous,
+        index,
+        startIndex,
+        imageCount: chunk.length,
+        sourceNodeIds: chunk.map(item => item.sourceNodeId).filter(Boolean),
+        status: mustUpgradeKnowledge || !sameSlice ? 'waiting' : (previous.status || 'waiting'),
+      };
+    }),
   };
   job.ownRecognition.processedImages = job.ownRecognition.chunks
     .filter(task => task.status === 'completed')
@@ -1692,24 +1737,37 @@ async function extractOwnSellingPoints(job, context, signal) {
       libraryDir: context.libraryDir,
       signal,
     };
-    let raw;
+    // This call crosses no paid boundary, so repeating it is always safe — and
+    // without a retry a single malformed JSON reply kills the whole job before
+    // a single page has been generated. The competitor-page reader already
+    // retries for exactly this reason; this one was the odd path out.
     let parsed;
-    try {
-      raw = await runRecognition(request, context, {
-        providerId: job.recognitionProvider,
-        kind: 'own-selling-points',
-        chunkIndex: index,
-      });
-      assertActive(job, context, signal);
-      parsed = parseOwnSellingPointsResponse(raw);
-    } catch (error) {
-      if (!isOperationCancelled(error)) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const raw = await runRecognition({
+          ...request,
+          userPrompt: attempt === 0
+            ? request.userPrompt
+            : '上一次返回的内容不符合 JSON Schema。请重新分析同一批图片，只返回符合 Schema 的 JSON。',
+        }, context, {
+          providerId: job.recognitionProvider,
+          kind: 'own-selling-points',
+          chunkIndex: index,
+          attempt: attempt + 1,
+        });
+        assertActive(job, context, signal);
+        parsed = parseOwnSellingPointsResponse(raw);
+        break;
+      } catch (error) {
+        if (isOperationCancelled(error)) throw error;
         task.lastError = error instanceof Error ? error.message : String(error);
         task.lastFailedAt = nowIso(context);
         writeJob(job, context);
+        if (attempt + 1 >= MAX_OWN_KNOWLEDGE_ATTEMPTS) throw error;
+        task.attempts = Math.max(0, Number(task.attempts) || 0) + 1;
       }
-      throw error;
     }
+    task.lastError = undefined;
     const chunkStart = index * chunkSize;
     const chunkBrand = normalizeBrandIdentity(parsed);
     if (Number.isInteger(chunkBrand.logoSourceImageIndex)
@@ -2969,6 +3027,12 @@ function finishFinalPhase(job, context) {
   // straight from `pages`, and a second copy would be state nobody reads.
   const warned = job.pages.filter(page => page.status === 'completed' && page.deliveredWithWarnings).length;
   const warnedSuffix = warned ? `（其中 ${warned} 页带质检提示）` : '';
+  // A page whose competitor original sits far from every ratio the model can
+  // render loses real pixels to the cover crop. Reporting it turns a baffling
+  // "文案缺失" verdict into an input problem the user can actually fix.
+  job.croppedPageIndexes = job.pages
+    .filter(page => Number(page.dimensionCropLoss || 0) >= SIGNIFICANT_CROP_LOSS)
+    .map(page => Number(page.index));
   job.resultNodeIds = job.pages
     .filter(page => page.status === 'completed' && (page.finalUrl || page.resultUrl))
     .map(page => page.resultNodeId);

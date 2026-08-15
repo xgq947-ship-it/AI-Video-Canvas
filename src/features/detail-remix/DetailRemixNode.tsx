@@ -180,6 +180,8 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
     page?.status === 'failed_validation' || page?.terminalStatus === 'FAILED_VALIDATION'
   ));
   const validationFailedPageNumbers = validationFailedPages.map((page: any) => Number(page.index) + 1);
+  // 2% is the line between rounding and the cover crop actually removing content.
+  const croppedPages = pages.filter((page: any) => Number(page?.dimensionCropLoss || 0) >= 0.02);
   const warnedPages = pages.filter((page: any) => page?.deliveredWithWarnings === true);
   const warnedPageIssues = [...new Set(
     warnedPages.flatMap((page: any) => (page?.validationWarnings || []) as string[]),
@@ -746,6 +748,13 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
             {validationFailedPages.length > 0 && !generationBusy && (
               <div className="mt-1 text-[10px] leading-4 text-red-400">
                 第 {validationFailedPageNumbers.join('、')} 页已标记 FAILED_VALIDATION；定向修复与整页重生成都已用尽，不会自动再次付费生成。可用下方按钮单独重生成这些页，或连同候选一起导出后人工挑选。
+              </div>
+            )}
+            {croppedPages.length > 0 && !generationBusy && (
+              <div className="mt-1 text-[10px] leading-4 text-amber-400">
+                第 {croppedPages.map((page: any) => Number(page.index) + 1).join('、')} 页的竞品原图比例与模型能出的比例相差较大，
+                成图为对齐原始尺寸最多被裁掉约 {Math.round(Math.max(...croppedPages.map((page: any) => Number(page.dimensionCropLoss) || 0)) * 100)}%
+                的画面。若这几页质检报告文案缺失或产品不完整，多半是被裁掉了——把这几张竞品图按更接近的比例重新切分后再导入会更稳。
               </div>
             )}
             {warnedPages.length > 0 && !generationBusy && (

@@ -395,6 +395,7 @@ export const useConnectionDragging = () => {
         updateConnectionDrag,
         completeConnectionDrag,
         handleEdgeClick,
-        deleteSelectedConnection
+        deleteSelectedConnection,
+        resetConnectionDrag
     };
 };

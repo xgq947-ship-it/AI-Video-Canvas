@@ -37,6 +37,7 @@ export const useNodeDragging = () => {
      * 对它为假，从图标上起手时根本没有捕获。
      */
     const capturedElementRef = useRef<Element | null>(null);
+    const capturedPointerIdRef = useRef<number>(-1);
     const [isDragging, setIsDragging] = useState<boolean>(false);
 
     // 指针事件的触发频率可以远高于屏幕刷新率（高刷鼠标能到 1000Hz）。
@@ -50,12 +51,28 @@ export const useNodeDragging = () => {
     const pendingNodeFlushRef = useRef<(() => void) | null>(null);
     const pendingPanFlushRef = useRef<(() => void) | null>(null);
 
+    /** 丢弃任何残留的捕获。任何一次新的按下都从干净状态开始。 */
+    const forceReleaseCapture = () => {
+        const captured = capturedElementRef.current;
+        capturedElementRef.current = null;
+        if (!captured) return;
+        try {
+            // 不知道当时的 pointerId，逐个尝试代价太大；浏览器在元素上最多
+            // 持有少量捕获，releasePointerCapture 对未捕获的 id 会抛错，忽略即可。
+            (captured as any).releasePointerCapture?.(capturedPointerIdRef.current);
+        } catch {
+            // 元素可能已卸载，捕获随之释放。
+        }
+    };
+
     const capturePointer = (e: React.PointerEvent) => {
         const element = e.currentTarget;
         if (!(element instanceof Element)) return;
+        forceReleaseCapture();
         try {
             element.setPointerCapture(e.pointerId);
             capturedElementRef.current = element;
+            capturedPointerIdRef.current = e.pointerId;
         } catch {
             // 指针已经抬起或被系统接管时会抛错；没有捕获也能靠冒泡继续拖，
             // 不值得因此中断这次拖拽。
@@ -229,17 +246,36 @@ export const useNodeDragging = () => {
     /**
      * Releases pointer capture
      */
-    const releasePointerCapture = (e: React.PointerEvent) => {
+    const releasePointerCapture = (_e?: React.PointerEvent) => {
         const captured = capturedElementRef.current;
+        const pointerId = capturedPointerIdRef.current;
         capturedElementRef.current = null;
-        if (!captured) return;
+        capturedPointerIdRef.current = -1;
+        if (!captured || pointerId < 0) return;
         try {
-            if (captured.hasPointerCapture(e.pointerId)) {
-                captured.releasePointerCapture(e.pointerId);
+            if (captured.hasPointerCapture(pointerId)) {
+                captured.releasePointerCapture(pointerId);
             }
         } catch {
             // 元素可能已经卸载；捕获随之自动释放，这里不需要再做什么。
         }
+    };
+
+    /**
+     * pointercancel / 窗口失焦时的兜底。
+     *
+     * 捕获现在挂在稳定的容器上，不会像以前挂在子元素时那样因为 React 卸载而
+     * 被浏览器顺手释放。少了这条路径，一次被系统打断的触控板手势就会让某个
+     * 节点永久持有指针捕获——之后窗口里所有指针事件都被转发给它，整块画布
+     * 看起来就彻底失灵了。
+     */
+    const abortPointerInteractions = () => {
+        flushPendingNodeDrag();
+        flushPendingPan();
+        dragNodeRef.current = null;
+        isPanning.current = false;
+        setIsDragging(false);
+        releasePointerCapture();
     };
 
     // ============================================================================
@@ -255,6 +291,7 @@ export const useNodeDragging = () => {
         endPanning,
         isDragging,
         isPanning: isPanning.current,
-        releasePointerCapture
+        releasePointerCapture,
+        abortPointerInteractions
     };
 };

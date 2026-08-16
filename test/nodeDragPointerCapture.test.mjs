@@ -37,3 +37,18 @@ test('落在表单控件上的按下不启动节点拖拽', () => {
 test('画布平移与节点拖拽共用同一套捕获逻辑', () => {
   assert.match(source, /const startPanning = \(e: React\.PointerEvent\) => \{\s*isPanning\.current = true;\s*capturePointer\(e\);/);
 });
+
+test('指针被系统收走时必须有兜底，否则捕获会永久残留把画布卡死', () => {
+  const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  // 捕获挂在稳定容器上之后不会再因为子元素卸载被浏览器顺手释放；
+  // 少了这条路径，一次被打断的触控板手势就让某个节点永久持有捕获，
+  // 之后所有指针事件都转发给它，整块画布看起来彻底失灵。
+  assert.match(app, /onPointerCancel=\{handleGlobalPointerCancel\}/);
+  assert.match(source, /abortPointerInteractions/);
+  // lostpointercapture 在正常松手时也会冒泡，绑上去会误杀已完成的连线拖拽。
+  assert.doesNotMatch(app, /onLostPointerCapture/);
+});
+
+test('每次新的按下都先清掉可能残留的旧捕获', () => {
+  assert.match(source, /forceReleaseCapture\(\);\s*try \{\s*element\.setPointerCapture/);
+});

@@ -326,6 +326,7 @@ export default function App() {
     handleConnectorPointerDown,
     updateConnectionDrag,
     completeConnectionDrag,
+    resetConnectionDrag,
     handleEdgeClick,
     deleteSelectedConnection
   } = useConnectionDragging();
@@ -338,7 +339,8 @@ export default function App() {
     updatePanning,
     endPanning,
     isDragging,
-    releasePointerCapture
+    releasePointerCapture,
+    abortPointerInteractions
   } = useNodeDragging();
 
   const {
@@ -3298,6 +3300,17 @@ export default function App() {
     releasePointerCapture(e);
   };
 
+  /**
+   * 指针被系统收走时的兜底（触控板手势、掌托误触、窗口失焦都会触发）。
+   *
+   * 没有这条路径的话，被打断的那一次拖拽会让节点一直持有指针捕获，之后所有
+   * 指针事件都被转发给它，整块画布看起来就完全没反应了。
+   */
+  const handleGlobalPointerCancel = () => {
+    abortPointerInteractions();
+    resetConnectionDrag();
+  };
+
   // Context menu handlers provided by useContextMenuHandlers hook
   // handleDoubleClick, handleGlobalContextMenu, handleAddNext, handleNodeContextMenu,
   // handleContextMenuCreateAsset and handleContextMenuSelect are used below.
@@ -3675,6 +3688,7 @@ export default function App() {
         onPointerDown={handlePointerDown}
         onPointerMove={handleGlobalPointerMove}
         onPointerUp={handleGlobalPointerUp}
+        onPointerCancel={handleGlobalPointerCancel}
         onWheel={handleWheel}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleGlobalContextMenu}

@@ -10,22 +10,74 @@ import {
     resolveVideoRemixPromptProfileForModel
 } from '../shared/promptOptimizationProfiles.js';
 
-test('图片提示词优化配置包含人物、场景、道具各三种一致性设定图', () => {
+test('图片手动菜单只保留人物三件套、电商两块板与手术式编辑', () => {
   assert.deepEqual(
     IMAGE_PROMPT_OPTIMIZATION_PROFILES.map(profile => profile.id),
     [
       'image-identity-front',
       'image-identity-angles',
       'image-identity-board',
-      'image-scene-establishing',
-      'image-scene-layout',
-      'image-scene-material-lighting',
-      'image-prop-front',
-      'image-prop-angles',
-      'image-prop-details',
+      'image-model-reference',
+      'image-product-reference',
       'image-edit-surgical',
     ],
   );
+});
+
+test('场景与道具 profile 退出菜单但定义必须还在——视频混剪资产管线按 id 直接取用', () => {
+  const hidden = [
+    'image-scene-establishing',
+    'image-scene-layout',
+    'image-scene-material-lighting',
+    'image-prop-front',
+    'image-prop-angles',
+    'image-prop-details',
+  ];
+  for (const id of hidden) {
+    const profile = getPromptOptimizationProfile(id);
+    assert.ok(profile, `${id} 定义不得删除`);
+    assert.equal(profile.hiddenInMenu, true, `${id} 应标记为不进菜单`);
+    assert.equal(
+      IMAGE_PROMPT_OPTIMIZATION_PROFILES.some(item => item.id === id),
+      false,
+      `${id} 不应出现在手动菜单`,
+    );
+  }
+});
+
+test('模特参考图锁身份与造型，明确不带商品，且补上详情页最常用的 45° 角', () => {
+  const profile = getPromptOptimizationProfile('image-model-reference');
+  assert.equal(profile.nodeType, 'image');
+  assert.equal(profile.aspectRatio, '16:9');
+  assert.match(profile.systemInstruction, /左前三分之二胸像/);
+  assert.match(profile.systemInstruction, /背面半身/);
+  // 详情页大量是背影佩戴，缺了背面这格等于让模型编后脑和肩背。
+  assert.match(profile.systemInstruction, /后脑发型结构/);
+  // 姿态由详情页版式决定，人物板只提供身份。
+  assert.match(profile.systemInstruction, /不要让模特佩戴、手持或接触任何商品/);
+});
+
+test('产品参考图固定四个必需角度，另两格交给优化器按品类判断', () => {
+  const profile = getPromptOptimizationProfile('image-product-reference');
+  assert.equal(profile.aspectRatio, '16:9');
+  assert.match(profile.systemInstruction, /2 行 × 3 列/);
+  assert.match(profile.systemInstruction, /第 1 至 4 格是所有品类都必须具备的固定角度/);
+  assert.match(profile.systemInstruction, /左前 45°/);
+  assert.match(profile.systemInstruction, /正侧面 90°/);
+  assert.match(profile.systemInstruction, /完整背面/);
+  assert.match(profile.systemInstruction, /第 5 与第 6 格由你根据参考图判断/);
+  assert.match(profile.systemInstruction, /折叠、开合、伸缩等第二形态/);
+});
+
+test('产品参考图把「宁可留空也不编造」写成高于填满格子的硬约束', () => {
+  const profile = getPromptOptimizationProfile('image-product-reference');
+  // 详情页会忠实复刻这块板；编造出来的背面会被原样放大到成品里，
+  // 那正好与「产品一致性拉满」的目的相反。
+  assert.match(profile.systemInstruction, /优先级高于填满格子/);
+  assert.match(profile.systemInstruction, /绝不允许凭空编造结构、接口、纹理或组件/);
+  assert.match(profile.systemInstruction, /编号不得压在产品上/);
+  // 板上出现文字会被详情页质检判成多余文案，整页失败。
+  assert.match(profile.systemInstruction, /不要在板上写任何文字说明/);
 });
 
 test('手术式编辑 profile 输出 CHANGE / PRESERVE EXACTLY 三段式，且不强制改画幅', () => {

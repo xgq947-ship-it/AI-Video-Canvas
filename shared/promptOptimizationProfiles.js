@@ -83,9 +83,59 @@ export const PROMPT_OPTIMIZATION_PROFILES = {
     aspectRatio: '16:9',
       systemInstruction: `严格基于已经确认的同一角色正面身份照和面部多角度图，生成一张全身综合设定板。画面分为三个竖向区域：左侧仅展示完整服装正面，使用隐形模特/幽灵模特效果，服装从上装到裤装或裙装、鞋和固定配饰按照真实穿着结构自然悬浮排列，但绝对不能出现人物、头部、脸、皮肤、手臂、手、腿、脚、实体模特、人体轮廓或假人支架；中间展示同一角色完整全身背面，人物为中性标准站姿，双臂自然下垂，头顶到鞋底完整入画；右侧展示同一角色正面头肩特写。左侧服装必须与中间人物穿着的服装完全一致，包括款式、颜色、材质、层次、裤长或裙长、鞋和固定配件。中间人物的身高、头身比、肩宽、腰臀比例、四肢长度和发型必须符合已经确认的角色设定。右侧头肩特写必须与正面身份照是同一张脸，并清楚展示五官、皮肤纹理、发际线、服装领口和固定配件。穿着【完整基础服装款式、颜色、材质与鞋】，佩戴【固定配件】。纯白或浅灰摄影棚背景，均匀柔光，真人电影角色设定板，准确人体结构，真实皮肤、头发和服装材质，高细节。不要在左侧生成任何人体或假人；不要改变身体比例；不要出现不同服装；不要新增配件；不要文字、标签、边框和水印。`,
   },
+  'image-model-reference': {
+    id: 'image-model-reference',
+    nodeType: 'image',
+    label: '模特参考图',
+    description: '16:9 · 正面、左前 45°、背面（电商详情专用）',
+    aspectRatio: '16:9',
+    systemInstruction: `生成电商详情页专用的模特身份三联参考板。这块板只负责锁定「这个人长什么样、穿什么」，姿态与动作一律由后续详情页的版式决定，不在这里定义。
+
+画面严格分成左、中、右三个等宽区域，每格都必须出现同一个真人模特，三格是完全相同的一个人、同一套服装、同一个发型与妆容：
+
+左侧区域：正面胸像。身体与脸部正对镜头，双眼平视，从头顶取景至胸口下方，清楚展示脸型五官、发际线、发色、肤色、服装领口与可见配饰。
+
+中间区域：左前三分之二胸像。身体与脸部向画布左侧偏转约 45°，鼻尖明确朝向画布左边缘，画面右侧的耳朵清楚可见。这一格是详情页最常用的观看角度，肩线与颈部转折必须交代清楚。
+
+右侧区域：背面半身。模特背对镜头，从头顶取景至腰部上方，清楚展示后脑发型结构、颈后、肩背轮廓和服装背面的款式、颜色与材质。
+
+三格使用完全相同的模特大小、镜头高度、85mm 焦段、纯白或浅灰摄影棚背景与均匀柔光。保持完全一致的脸型、骨骼、年龄、五官比例、肤色、发型、发色、服装款式与颜色、可见配饰，只改变身体朝向。
+
+关键约束：不要让模特佩戴、手持或接触任何商品——商品会在后续详情页里单独合成，这里出现商品会与详情页的版式打架。不要摆出夸张姿势、不要伸展手臂遮挡躯干、不要改变服装、不要出现第二个人。真人电商模特摄影棚照片，真实皮肤与织物质感，高细节。不要文字、标签、尺码表、边框和水印。`,
+  },
+  'image-product-reference': {
+    id: 'image-product-reference',
+    nodeType: 'image',
+    label: '产品参考图',
+    description: '16:9 · 2×3 六格角度板（电商详情专用）',
+    aspectRatio: '16:9',
+    systemInstruction: `生成电商详情页专用的产品六格角度板。这块板的唯一目的是让后续详情页在任何一处呈现该产品时都能照抄到正确结构，因此**结构真实性绝对优先于美观**。
+
+画面严格分成 2 行 × 3 列共六个等大格子，按从左到右、从上到下编号 1 至 6。每格只出现同一台产品本身，六格必须是同一台实体，颜色、配色分区、材质、组件数量、按钮与接口位置、拼缝、logo 位置完全一致。
+
+第 1 至 4 格是所有品类都必须具备的固定角度，不得替换：
+1. 正面直视整机。锁定外轮廓、长宽比、组件数量。
+2. 左前 45° 三分之二视图。这是详情页最常用的观看角度，也是正面与侧面之间最容易画塌的过渡角，弧面与转折必须交代清楚。
+3. 正侧面 90° 视图。锁定厚度、侧面曲率与真实体积感。
+4. 完整背面。锁定背部结构、后部接口与背面的材质分区。
+
+第 5 与第 6 格由你根据参考图判断本产品最需要单独锁定的两个部位，按下列优先级挑选，只选两个，并在这两格里各拍一处：
+- 详情页会展示内部机构或工作原理的产品（按摩仪机芯、电器风道、锅具内胆等）→ 内部结构或机构特写；
+- 有可操作界面的产品 → 按键、旋钮或屏幕面板特写；
+- 有折叠、开合、伸缩等第二形态的产品 → 该产品在另一形态下的完整视图（漏掉这一格，后续详情页在另一形态下必然编造结构）；
+- 有明确材质卖点的产品 → 表面材质与工艺特写；
+- 需要佩戴或握持使用的产品 → 中性无身份的佩戴或握持姿态，展示真实尺度关系。
+
+诚实约束（最重要，优先级高于填满格子）：只允许依据参考图中真实可见的证据来推导各个角度。参考图没有拍到、无法可靠推断的部位——尤其是背面、内部机构和第二形态——宁可让该格保持简洁的整机视图，也绝不允许凭空编造结构、接口、纹理或组件。后续详情页会忠实复刻这块板，编造出来的结构会被原样放大到成品里。
+
+六格使用完全相同的产品大小、镜头高度、中长焦产品摄影透视、纯白或浅灰无缝背景与均匀柔光，每格产品居中并占该格约八成面积，四周留白。格与格之间留细缝但不要画分隔线，每格左上角标注小号高对比的阿拉伯数字编号，编号不得压在产品上。
+
+不要在板上写任何文字说明、参数、型号、箭头、标注引线、尺寸数字、水印或品牌角标；不要出现竞品或第二件产品；不要透视夸张；不要裁切主体；不要增减组件；不要生成爆炸图或拆散零件。`,
+  },
   'image-scene-establishing': {
     id: 'image-scene-establishing',
     nodeType: 'image',
+    hiddenInMenu: true,
     label: '场景主视角定妆图',
     description: '16:9 · 锁定空间结构与主光方向',
     aspectRatio: '16:9',
@@ -94,6 +144,7 @@ export const PROMPT_OPTIMIZATION_PROFILES = {
   'image-scene-layout': {
     id: 'image-scene-layout',
     nodeType: 'image',
+    hiddenInMenu: true,
     label: '场景多机位布局板',
     description: '16:9 · 正向、反向与侧向机位保持同一空间',
     aspectRatio: '16:9',
@@ -102,6 +153,7 @@ export const PROMPT_OPTIMIZATION_PROFILES = {
   'image-scene-material-lighting': {
     id: 'image-scene-material-lighting',
     nodeType: 'image',
+    hiddenInMenu: true,
     label: '场景材质与光线板',
     description: '16:9 · 锁定材质、色彩与昼夜光线',
     aspectRatio: '16:9',
@@ -110,6 +162,7 @@ export const PROMPT_OPTIMIZATION_PROFILES = {
   'image-prop-front': {
     id: 'image-prop-front',
     nodeType: 'image',
+    hiddenInMenu: true,
     label: '道具正面结构照',
     description: '1:1 · 锁定轮廓、比例与组件数量',
     aspectRatio: '1:1',
@@ -118,6 +171,7 @@ export const PROMPT_OPTIMIZATION_PROFILES = {
   'image-prop-angles': {
     id: 'image-prop-angles',
     nodeType: 'image',
+    hiddenInMenu: true,
     label: '道具多角度结构板',
     description: '16:9 · 正面、左右 45° 与背面结构一致',
     aspectRatio: '16:9',
@@ -126,6 +180,7 @@ export const PROMPT_OPTIMIZATION_PROFILES = {
   'image-prop-details': {
     id: 'image-prop-details',
     nodeType: 'image',
+    hiddenInMenu: true,
     label: '道具细节与比例板',
     description: '16:9 · 关键细节、材质和真实尺度参照',
     aspectRatio: '16:9',
@@ -291,8 +346,16 @@ PRESERVE EXACTLY（逐项锁定）：列出所有必须保持原样的元素—�
   },
 };
 
+/**
+ * 图片节点「提示词优化」下拉里可手动选择的 profile。
+ *
+ * 场景与道具那六套仍然保留在 PROMPT_OPTIMIZATION_PROFILES 里，只是不进菜单：
+ * 视频混剪的资产管线按 id 直接取用它们（见 shared/videoRemix.js 与
+ * shared/videoAnalysis.js），删掉会让场景/道具资产图生成整条断掉。手动菜单
+ * 只保留电商详情这条线真正会用到的几项。
+ */
 export const IMAGE_PROMPT_OPTIMIZATION_PROFILES = Object.values(PROMPT_OPTIMIZATION_PROFILES)
-  .filter(profile => profile.nodeType === 'image');
+  .filter(profile => profile.nodeType === 'image' && !profile.hiddenInMenu);
 
 export const VIDEO_PROMPT_OPTIMIZATION_PROFILES = Object.values(PROMPT_OPTIMIZATION_PROFILES)
   .filter(profile => profile.nodeType === 'video');

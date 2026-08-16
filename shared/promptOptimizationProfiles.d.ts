@@ -10,6 +10,11 @@ export interface PromptOptimizationProfile {
   label: string;
   description: string;
   aspectRatio?: string;
+  /**
+   * 不出现在图片节点的手动下拉里，但仍可按 id 取用。
+   * 场景与道具那六套就是这样：视频混剪的资产管线依赖它们，只是不需要手选。
+   */
+  hiddenInMenu?: boolean;
   /** 视频 profile 专用：这套提示词是给哪个供应商写的（两者的参考图约定不通用）。 */
   videoProvider?: 'jimeng' | 'google-flow' | 'generic';
   preserveReferenceTags?: boolean;

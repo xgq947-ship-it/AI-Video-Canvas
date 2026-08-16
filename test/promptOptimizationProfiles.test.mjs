@@ -231,3 +231,12 @@ test('品牌 Logo 图明令禁止底板与材质——那正是 Logo 被画成�
   assert.match(profile.systemInstruction, /不要给标识加任何底板、色块、圆角矩形、边框、投影/);
   assert.match(profile.systemInstruction, /不要把标识放在产品表面、包装、招牌或任何材质上/);
 });
+
+test('产品板禁止出现人脸——板上的脸会和模特参考图争夺身份权威', () => {
+  const profile = getPromptOptimizationProfile('image-product-reference');
+  assert.match(profile.systemInstruction, /无身份铁律/);
+  assert.match(profile.systemInstruction, /画面上边缘要切在下巴以下，让头部完全出画/);
+  // 说明「为什么」而不只是「不许」，模型照做的概率明显更高。
+  assert.match(profile.systemInstruction, /两张参考图就会互相争夺身份权威/);
+  assert.match(profile.systemInstruction, /不要出现任何人脸或可识别的人物/);
+});

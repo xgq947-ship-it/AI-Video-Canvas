@@ -8,6 +8,7 @@ import {
   DETAIL_REMIX_MARKETING_MODE,
   DETAIL_REMIX_STRICT_PARAMETER_MODE,
   activeDetailRemixInputRefs,
+  buildProductSheetInstruction,
   describeDetailRemixProductSheet,
   normalizeDetailRemixProductSheet,
   assignDetailRemixInputPort,
@@ -738,4 +739,12 @@ test('没有我方详情时提示词不得声称角度来自「我的详情」',
   const instruction = buildCompetitorPageInstruction({ ownProductViews: [], pageIndex: 0, pageCount: 3 });
   assert.match(instruction, /本次没有我方产品视角库/);
   assert.doesNotMatch(instruction, /必须只选给定 ID/);
+});
+
+test('自动识板把含人脸的格子判为不可用，避免污染人物身份', () => {
+  const instruction = buildProductSheetInstruction();
+  assert.match(instruction, /出现了可识别的人脸或人物身份/);
+  assert.match(instruction, /含可识别人物，会与模特参考冲突/);
+  // 只露颈肩、手部的中性佩戴格仍然可用，否则会误杀真正有价值的尺度参照。
+  assert.match(instruction, /只露出颈肩、手部等中性躯体而看不到脸的佩戴格不受此限/);
 });

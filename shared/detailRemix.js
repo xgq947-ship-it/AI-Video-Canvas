@@ -903,11 +903,11 @@ export function validateDetailRemixPreflight(value, nodes, options = {}) {
   // 「我的详情」识别。两者至少要有一条，不再强制必须导入我方详情图。
   const brief = text(state.productBrief);
   if (!brief && !own.length) {
-    return { ok: false, error: '请填写产品说明（卖点与参数），或连接至少一张我的详情图' };
+    return { ok: false, error: '请填写产品说明（卖点与参数）' };
   }
-  // 产品长什么样只能靠图。没有产品参考图时才回退到从我方详情自动裁角度。
+  // 产品长什么样只能靠图。旧画布若还连着我的详情，仍允许从中自动裁角度兜底。
   if (!product.length && !own.length) {
-    return { ok: false, error: '请至少提供一张产品参考图' };
+    return { ok: false, error: '请选择一张产品参考图' };
   }
   if (state.inputRefs.characterReference.enabled && !character.length) {
     return { ok: false, error: '已开启人物参考，请选择一张有效人物参考图' };

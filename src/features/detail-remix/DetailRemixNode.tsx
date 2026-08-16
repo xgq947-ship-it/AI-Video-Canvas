@@ -64,10 +64,14 @@ interface DetailRemixNodeProps {
   ) => Promise<unknown>;
 }
 
-const inputPorts: Array<{ id: DetailRemixInputPort; label: string }> = DETAIL_REMIX_INPUT_PORTS.map(id => ({
-  id,
-  label: DETAIL_REMIX_PORT_LABELS[id],
-}));
+// 「我的详情」端口仍留在 DETAIL_REMIX_INPUT_PORTS 里——旧画布上已有的连线要能
+// 继续读回，删掉常量会让它们在保存时被静默丢弃。但新流程不再需要它，所以不再
+// 出现在节点的可连接端口上。
+const HIDDEN_INPUT_PORTS: readonly DetailRemixInputPort[] = ['own-detail'];
+
+const inputPorts: Array<{ id: DetailRemixInputPort; label: string }> = DETAIL_REMIX_INPUT_PORTS
+  .filter(id => !HIDDEN_INPUT_PORTS.includes(id))
+  .map(id => ({ id, label: DETAIL_REMIX_PORT_LABELS[id] }));
 
 const previewUrl = (node?: NodeData) => node?.resultUrl || node?.editorBackgroundUrl;
 
@@ -150,7 +154,6 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [draggingFolderRole, setDraggingFolderRole] = React.useState<'competitor' | 'own' | null>(null);
   const competitorFolderInputRef = React.useRef<HTMLInputElement>(null);
-  const ownFolderInputRef = React.useRef<HTMLInputElement>(null);
   const folderImportBusy = state.folderImports.competitor.status === 'uploading'
     || state.folderImports.own.status === 'uploading';
   const generationBusy = isBusyState(state, data);
@@ -158,10 +161,25 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
   const imageNodes = allNodes.filter(isUsableImage);
   const byId = new Map(allNodes.map(node => [node.id, node]));
   const selectedCharacterId = state.inputRefs.characterReference.nodeIds[0] || '';
+  // 旧画布上可能还连着「我的详情」。端口保留是为了不静默丢掉已有连线，
+  // 但新流程不再使用它们，所以只在存在时提示一句，不再给导入入口。
+  const legacyOwnDetailCount = state.inputRefs.ownDetailNodeIds.length;
   const selectableReferenceNodes = imageNodes.filter(node => (
     !state.inputRefs.competitorDetailNodeIds.includes(node.id)
     && !state.inputRefs.ownDetailNodeIds.includes(node.id)
   ));
+  /**
+   * 已选中的那张必须始终在选项里。用户直接在画布上连线到产品/Logo 端口时，
+   * 这个 id 可能不在可选清单中（例如它同时也连着别的端口），此时 select 的
+   * value 找不到对应 option，会渲染成一片空白，看起来像什么都没选。
+   */
+  const optionNodesFor = (selectedId: string) => {
+    if (!selectedId || selectableReferenceNodes.some(node => node.id === selectedId)) {
+      return selectableReferenceNodes;
+    }
+    const selected = byId.get(selectedId);
+    return selected ? [selected, ...selectableReferenceNodes] : selectableReferenceNodes;
+  };
   const ownPoints = state.analysis?.ownSellingPoints || [];
   const pages = state.analysis?.pages || [];
   const ownKnowledgeQueue = {
@@ -273,6 +291,14 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
       ...state.inputRefs,
       characterReference: { ...state.inputRefs.characterReference, nodeIds: nodeId ? [nodeId] : [] },
     });
+  };
+
+  const updateSingleReference = (
+    key: 'productNodeIds' | 'brandLogoNodeIds',
+    nodeId: string,
+  ) => {
+    setLocalError('');
+    withInputRefs({ ...state.inputRefs, [key]: nodeId ? [nodeId] : [] });
   };
 
   const updatePlateSettings = (nodeUpdates: Partial<NodeData>, stateUpdates: Partial<DetailRemixNodeData> = {}) => {
@@ -562,6 +588,48 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
     }
   };
 
+  /** 单张素材选择器。产品参考图、品牌 Logo 共用同一套外观，只是必填性与文案不同。 */
+  const referenceSelectCard = ({
+    icon,
+    title,
+    required,
+    selectedId,
+    onChange,
+    placeholder,
+    hint,
+  }: {
+    icon: React.ReactNode;
+    title: string;
+    required: boolean;
+    selectedId: string;
+    onChange: (nodeId: string) => void;
+    placeholder: string;
+    hint: string;
+  }) => (
+    <div className={`rounded-xl border p-3 ${dark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-200 bg-neutral-50'}`}>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="flex items-center gap-1.5 text-xs font-semibold">
+          {icon}{title}
+          <span className={`font-normal ${required ? 'text-rose-400' : 'text-neutral-500'}`}>
+            {required ? '（必需）' : '（可选）'}
+          </span>
+        </span>
+        {selectedId ? <span className="text-[10px] text-emerald-400">已选择</span> : null}
+      </div>
+      <select
+        value={selectedId}
+        onChange={event => onChange(event.target.value)}
+        className={`w-full rounded-lg border px-2.5 py-2 text-xs outline-none ${dark ? 'border-neutral-700 bg-[#242424]' : 'border-neutral-300 bg-white'}`}
+      >
+        <option value="">{placeholder}</option>
+        {optionNodesFor(selectedId).map((node, index) => (
+          <option key={node.id} value={node.id}>{resolveImageNodeDisplayName(node, index + 1)}</option>
+        ))}
+      </select>
+      <p className="mt-1.5 text-[10px] leading-4 text-neutral-500">{hint}</p>
+    </div>
+  );
+
   const folderImportCard = (
     role: 'competitor' | 'own',
     label: string,
@@ -622,11 +690,14 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
   const queuePercent = (queue: { total: number; completed: number; failed: number }) => (
     queue.total > 0 ? Math.min(100, Math.round(((queue.completed + queue.failed) / queue.total) * 100)) : 0
   );
+  // 产品说明这条路不按「张」计数：没有图片要读，chunks 恒为空。沿用旧的
+  // 张数进度会让这一行永远停在 0/N，看起来像卡住了。
+  const briefMode = Boolean(state.productBrief);
   const ownQueueLabel = ownKnowledgeQueue.status === 'completed'
     ? '卖点、参数与产品角度库已就绪'
     : ownKnowledgeQueue.status === 'processing'
-      ? '正在识别卖点、参数与产品角度'
-      : '等待读取我的详情';
+      ? (briefMode ? '正在结构化产品说明' : '正在识别卖点、参数与产品角度')
+      : (briefMode ? '等待结构化产品说明' : '等待读取我的详情');
   const competitorQueueLabel = competitorQueue.status === 'completed'
     ? '竞品队列已完成'
     : competitorQueue.status === 'processing'
@@ -677,32 +748,45 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
               void handleFolderFiles('competitor', files);
             }}
           />
-          <input
-            ref={ownFolderInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif,image/avif"
-            multiple
-            hidden
-            {...({ webkitdirectory: '', directory: '' } as any)}
-            onChange={event => {
-              const files = Array.from(event.currentTarget.files || []);
-              event.currentTarget.value = '';
-              void handleFolderFiles('own', files);
-            }}
-          />
           <div className={`rounded-xl border px-3 py-2 text-[11px] leading-5 ${dark ? 'border-violet-500/20 bg-violet-500/5 text-neutral-400' : 'border-violet-200 bg-violet-50 text-neutral-600'}`}>
-            导入后，“我的详情”在最上方、“竞品详情”在下方。系统会从我的详情中识别卖点、Logo、产品角度与可追溯参数证据，无需单独上传产品图；参数页自动进入严格模式，参数名和值分栏映射，无证据字段直接删除。正式生成时把竞品原图、匹配产品、证据页、可选人物及逐位置替换清单一次性交给 AI，不做本地叠字或多轮拼图。
+            竞品详情只提供版式骨架。产品长什么样、人是谁、品牌标识、以及每一句文案与每一个参数，全部来自你在下面直接提供的素材——不再需要导入自己的旧详情去反推。参数页自动进入严格模式，只逐字使用你写的值，清单之外的数字与型号一律删除。正式生成时把竞品原图、产品参考、可选人物与 Logo、以及逐位置替换清单一次性交给 AI，不做本地叠字或多轮拼图。
           </div>
 
           <div className="flex gap-2">
-            {folderImportCard('own', '我的详情文件夹', 'text-cyan-400', ownFolderInputRef)}
             {folderImportCard('competitor', '竞品详情文件夹', 'text-rose-400', competitorFolderInputRef)}
           </div>
-          <p className="px-1 text-[10px] text-neutral-500">也可以把散图连接到左侧对应端口；只有自动识别不到清晰产品角度时，才需要使用“产品补充图（可选）”。</p>
+          <p className="px-1 text-[10px] text-neutral-500">也可以把散图连接到左侧「竞品详情」端口。</p>
+
+          {legacyOwnDetailCount > 0 && (
+            <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-[10px] leading-4 text-amber-400">
+              这个节点上还连着 {legacyOwnDetailCount} 张「我的详情」。新流程不再使用它们，也不会因此扣费；
+              只有在你把下方产品说明留空时，系统才会回退到从它们识别卖点与参数。
+            </p>
+          )}
+
+          {referenceSelectCard({
+            icon: <Images size={14} className="text-cyan-400" />,
+            title: '产品参考图',
+            required: true,
+            selectedId: state.inputRefs.productNodeIds[0] || '',
+            onChange: nodeId => updateSingleReference('productNodeIds', nodeId),
+            placeholder: selectableReferenceNodes.length ? '请选择产品参考图（执行前必选）' : '请先在画布导入产品参考图',
+            hint: '推荐用「产品参考图」提示词优化生成的六格角度板：正面、左前 45°、侧面、背面，以及两格按品类挑选的细节。产品外观完全以这张图为准。',
+          })}
+
+          {referenceSelectCard({
+            icon: <WandSparkles size={14} className="text-sky-400" />,
+            title: '品牌 Logo',
+            required: false,
+            selectedId: state.inputRefs.brandLogoNodeIds[0] || '',
+            onChange: nodeId => updateSingleReference('brandLogoNodeIds', nodeId),
+            placeholder: '不使用 Logo 图（只按品牌名生成文字）',
+            hint: '一张纯白底、四周留白的干净标识。留空时只能按品牌名生成文字，无法还原图形标识。',
+          })}
 
           <div className={`rounded-xl border p-3 ${dark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-200 bg-neutral-50'}`}>
             <div className="mb-2 flex items-center justify-between gap-3">
-              <span className="flex items-center gap-1.5 text-xs font-semibold"><UserRound size={14} className="text-amber-400" />人物参考图 <span className="font-normal text-neutral-500">（可选）</span></span>
+              <span className="flex items-center gap-1.5 text-xs font-semibold"><UserRound size={14} className="text-amber-400" />模特参考图 <span className="font-normal text-neutral-500">（可选）</span></span>
               <div className="flex items-center gap-2">
                 <span className="text-[10px] text-neutral-500">{state.inputRefs.characterReference.enabled ? '已开启' : '已关闭'}</span>
                 <button
@@ -726,7 +810,7 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
               <option value="">{state.inputRefs.characterReference.enabled
                 ? selectableReferenceNodes.length ? '请选择人物参考图（执行前必选）' : '请先在画布导入一张人物参考图'
                 : '人物参考已关闭'}</option>
-              {selectableReferenceNodes.map((node, index) => (
+              {optionNodesFor(selectedCharacterId).map((node, index) => (
                 <option key={node.id} value={node.id}>{resolveImageNodeDisplayName(node, index + 1)}</option>
               ))}
             </select>
@@ -793,9 +877,9 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
               <div>
                 <div className="flex items-center justify-between gap-2 text-[10px]">
                   <span className="flex items-center gap-1 text-neutral-400"><Database size={11} />{ownQueueLabel}</span>
-                  <span className="text-neutral-500">{ownKnowledgeQueue.completed}/{ownKnowledgeQueue.total} 张 · {ownKnowledgeQueue.sellingPointCount || ownPoints.length} 卖点 · {Number(state.verifiedFactCount) || 0} 参数 · {Number(state.productViewCount) || 0} 角度</span>
+                  <span className="text-neutral-500">{briefMode ? '' : `${ownKnowledgeQueue.completed}/${ownKnowledgeQueue.total} 张 · `}{ownKnowledgeQueue.sellingPointCount || ownPoints.length} 卖点 · {Number(state.verifiedFactCount) || 0} 参数 · {Number(state.productViewCount) || 0} 角度</span>
                 </div>
-                <div className="mt-1 h-1 overflow-hidden rounded-full bg-neutral-500/20"><div className="h-full rounded-full bg-cyan-500 transition-[width]" style={{ width: `${queuePercent(ownKnowledgeQueue)}%` }} /></div>
+                <div className="mt-1 h-1 overflow-hidden rounded-full bg-neutral-500/20"><div className="h-full rounded-full bg-cyan-500 transition-[width]" style={{ width: `${briefMode ? (ownKnowledgeQueue.status === 'completed' ? 100 : 0) : queuePercent(ownKnowledgeQueue)}%` }} /></div>
               </div>
               <div>
                 <div className="flex items-center justify-between gap-2 text-[10px]">

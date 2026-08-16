@@ -133,17 +133,33 @@ test('打开旧项目时只迁移旧版文件夹布局，已经整理过的用�
   );
 });
 
-test('控制节点提供两个文件夹入口，无必填产品选择器且执行链路不包含坐标角色推断', () => {
+test('控制节点只保留竞品文件夹入口，素材改为直接选择', () => {
   const detailNode = fs.readFileSync(new URL('../src/features/detail-remix/DetailRemixNode.tsx', import.meta.url), 'utf8');
   const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
-  assert.equal((detailNode.match(/webkitdirectory/g) || []).length, 2);
+  // 只剩竞品一个文件夹入口：产品、模特、Logo 与文案都由用户直接提供，
+  // 不再从「我的详情」反推。
+  assert.equal((detailNode.match(/webkitdirectory/g) || []).length, 1);
   assert.match(detailNode, /handleFolderFiles\('competitor'/);
-  assert.match(detailNode, /handleFolderFiles\('own'/);
-  assert.match(detailNode, /无需单独上传产品图/);
-  assert.doesNotMatch(detailNode, /生成时必选/);
+  assert.doesNotMatch(detailNode, /handleFolderFiles\('own'/);
+  assert.doesNotMatch(detailNode, /我的详情文件夹/);
+  // 三块素材选择器与产品说明输入齐备。
+  assert.match(detailNode, /产品参考图/);
+  assert.match(detailNode, /品牌 Logo/);
+  assert.match(detailNode, /模特参考图/);
+  assert.match(detailNode, /产品说明（卖点与参数）/);
   assert.match(detailNode, /GenerationCancelButton/);
   assert.match(detailNode, /label="取消生成"/);
   assert.match(app, /onImportDetailRemixFolder/);
+});
+
+test('「我的详情」端口只是隐藏而没有删除，旧画布的连线不能被静默丢弃', () => {
+  const detailNode = fs.readFileSync(new URL('../src/features/detail-remix/DetailRemixNode.tsx', import.meta.url), 'utf8');
+  const shared = fs.readFileSync(new URL('../shared/detailRemix.js', import.meta.url), 'utf8');
+  // 常量里必须还在——syncDetailRemixInputRefs 会丢弃不在清单里的端口。
+  assert.match(shared, /'own-detail',/);
+  assert.match(detailNode, /HIDDEN_INPUT_PORTS/);
+  // 但已连的旧图要有提示，否则用户不知道它们为何不再参与生成。
+  assert.match(detailNode, /legacyOwnDetailCount/);
 });
 
 test('整批导入由单个历史事务提交，导入中撤销会中止上传并回到导入前', () => {

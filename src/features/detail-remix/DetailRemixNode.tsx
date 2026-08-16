@@ -303,12 +303,15 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
     const ownNodes = referenceNodes(preflight.refs.ownDetailNodeIds);
     const characterNodes = referenceNodes(preflight.refs.characterNodeIds);
     const productNodes = referenceNodes(preflight.refs.productNodeIds);
+    const brandLogoNodes = referenceNodes((preflight.refs as any).brandLogoNodeIds || []);
     const requestFingerprint = JSON.stringify({
       competitor: competitorNodes.map(node => [node.id, previewUrl(node)]),
       own: ownNodes.map(node => [node.id, previewUrl(node)]),
       characterReferenceEnabled: requestState.inputRefs.characterReference.enabled,
       characters: characterNodes.map(node => [node.id, previewUrl(node)]),
       products: productNodes.map(node => [node.id, previewUrl(node)]),
+      brandLogos: brandLogoNodes.map(node => [node.id, previewUrl(node)]),
+      productBrief: requestState.productBrief,
       recognitionProvider: requestState.recognitionProvider,
       imageModel: provider.id,
       sizingMode: 'match-competitor',
@@ -363,6 +366,9 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
         characterNodeIds: characterNodes.map(node => node.id),
         productImages: productNodes.map(node => previewUrl(node)!),
         productNodeIds: productNodes.map(node => node.id),
+        brandLogoImages: brandLogoNodes.map(node => previewUrl(node)!),
+        brandLogoNodeIds: brandLogoNodes.map(node => node.id),
+        productBrief: requestState.productBrief,
         recognitionProvider: requestState.recognitionProvider,
         imageModel: provider.id,
         sizingMode: 'match-competitor',
@@ -726,6 +732,27 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
             </select>
             <p className="mt-1.5 text-[10px] text-neutral-500">
               开启后，仅在竞品详情原本有人物时，让人物的脸、发型、服装和可见配饰完整遵循所选参考图；保留竞品人物的姿势与产品交互。关闭时不会发送人物图。
+            </p>
+          </div>
+
+          <div className={`rounded-xl border px-3 py-2.5 ${dark ? 'border-neutral-700 bg-neutral-900/70' : 'border-neutral-200 bg-neutral-50'}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold">产品说明（卖点与参数）</span>
+              <span className="text-[9px] text-neutral-500">
+                {state.productBrief ? `${state.productBrief.length} 字` : '填了就不必再导入我的详情'}
+              </span>
+            </div>
+            <textarea
+              aria-label="产品说明"
+              rows={5}
+              value={state.productBrief || ''}
+              onChange={event => updatePlateSettings({}, { productBrief: event.target.value })}
+              placeholder={'把卖点和参数一起写在这里，随便分行，例如：\n仿人手深层揉捏，覆盖肩颈斜方肌\n按摩热敷双效同步\n额定功率 16W\n电池容量 2500mAh'}
+              className={`mt-1.5 w-full resize-none rounded-lg border px-2 py-1.5 text-[11px] leading-snug ${dark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}
+            />
+            <p className="mt-1 text-[10px] leading-4 text-neutral-500">
+              执行时会自动拆成卖点与精确参数。参数只会逐字使用你写的值，
+              清单之外的数字、型号一律从成图中删除，不会臆造。
             </p>
           </div>
 

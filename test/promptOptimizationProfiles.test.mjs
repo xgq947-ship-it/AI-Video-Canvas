@@ -19,6 +19,7 @@ test('图片手动菜单只保留人物三件套、电商两块板与手术式�
       'image-identity-board',
       'image-model-reference',
       'image-product-reference',
+      'image-brand-logo',
       'image-edit-surgical',
     ],
   );
@@ -218,4 +219,15 @@ test('关键帧优化器只描述静态画面，不复用完整视频动作路�
     assert.equal(profile.nodeType, 'image-remix');
     assert.match(profile.systemInstruction, /单一静态画面/);
     assert.match(profile.systemInstruction, /不得加入完整动作路径/);
+});
+
+test('品牌 Logo 图明令禁止底板与材质——那正是 Logo 被画成深色贴片的根源', () => {
+  const profile = getPromptOptimizationProfile('image-brand-logo');
+  assert.equal(profile.nodeType, 'image');
+  assert.equal(profile.aspectRatio, '1:1');
+  assert.match(profile.systemInstruction, /纯白背景/);
+  assert.match(profile.systemInstruction, /四周留出至少百分之十五的空白边距/);
+  // 详情图链路的质检有专门的 logoPresentationCorrect 字段盯这一类失败。
+  assert.match(profile.systemInstruction, /不要给标识加任何底板、色块、圆角矩形、边框、投影/);
+  assert.match(profile.systemInstruction, /不要把标识放在产品表面、包装、招牌或任何材质上/);
 });

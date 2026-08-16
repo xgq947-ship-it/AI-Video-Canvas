@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { AuthStatus } from '../hooks/useAuth';
+import { TRIAL_DAYS } from '../../shared/licenseFeatures.js';
 
 export interface LoginPageProps {
   status: AuthStatus;
@@ -92,7 +93,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
         <ul className="lp-reassure">
           <li>
-            <Dot /> 首次使用免费试用 7 天
+            <Dot /> 首次使用免费试用 {TRIAL_DAYS} 天
           </li>
           <li>
             <Dot /> 画布、素材与生成结果仅保存在本地

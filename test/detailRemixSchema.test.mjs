@@ -693,3 +693,49 @@ test('角度板未声明行列时按格数推导，不得塌成 1 行 1 列', ()
   assert.equal(normalizeDetailRemixProductSheet({ cells: [] }), null);
   assert.equal(normalizeDetailRemixProductSheet(null), null);
 });
+
+test('品牌 Logo 端口的连线必须在映射与回写中存活，否则保存一次就丢了', () => {
+  const node = {
+    id: 'remix-1',
+    type: 'Detail Page Remix',
+    parentIds: [],
+    detailRemix: createDetailRemixNodeData({}),
+  };
+  const withLogo = assignDetailRemixInputPort(node, { id: 'logo-node' }, 'brand-logo');
+  assert.deepEqual(withLogo.detailRemix.inputRefs.brandLogoNodeIds, ['logo-node']);
+  assert.equal(withLogo.inputPortByParentId['logo-node'], 'brand-logo');
+
+  // 存盘再读回：映射与 inputRefs 必须能互相推导。
+  const mapping = buildDetailRemixInputMapping(withLogo.detailRemix.inputRefs);
+  assert.equal(mapping['logo-node'], 'brand-logo');
+  const restored = syncDetailRemixInputRefs(
+    { ...withLogo, detailRemix: createDetailRemixNodeData({}) },
+    mapping,
+  );
+  assert.deepEqual(restored.detailRemix.inputRefs.brandLogoNodeIds, ['logo-node']);
+
+  // 换一张 Logo 必须让已有结果作废，否则会拿旧 Logo 的成图冒充新的。
+  const before = detailRemixInputFingerprint(withLogo.detailRemix);
+  const swapped = assignDetailRemixInputPort(
+    { ...withLogo, detailRemix: createDetailRemixNodeData({}) },
+    { id: 'logo-node-2' },
+    'brand-logo',
+  );
+  assert.notEqual(detailRemixInputFingerprint(swapped.detailRemix), before);
+});
+
+test('没有我方详情时提示词不得声称角度来自「我的详情」', () => {
+  const suppliedOnly = [{ id: 'supplement-1', viewAngle: 'user-supplied', supplemental: true }];
+  const prompt = buildFinalDetailPrompt({
+    pageAnalysis: { pageType: 'marketing', hasPerson: false, copySlots: [], productInstances: [] },
+    selectedProductViews: suppliedOnly,
+    productImageCount: 1,
+  });
+  assert.doesNotMatch(prompt, /系统已从“我的详情”自动挑选/);
+  assert.match(prompt, /商家直接提供的我方产品实拍参考/);
+
+  // 规划识图同理：视角库为空时不能再要求「必须只选给定 ID」。
+  const instruction = buildCompetitorPageInstruction({ ownProductViews: [], pageIndex: 0, pageCount: 3 });
+  assert.match(instruction, /本次没有我方产品视角库/);
+  assert.doesNotMatch(instruction, /必须只选给定 ID/);
+});

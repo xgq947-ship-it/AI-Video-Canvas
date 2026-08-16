@@ -38,6 +38,9 @@ import {
   parseCompetitorPageResponse,
   parseFinalDetailValidationResponse,
   parseProductSheetResponse,
+  parseProductBriefResponse,
+  buildProductBriefInstruction,
+  DETAIL_REMIX_PRODUCT_BRIEF_OUTPUT_SCHEMA,
   productSheetFromDetection,
   normalizeDetailRemixProductSheet,
   classifyFinalDetailValidation,
@@ -285,6 +288,8 @@ function normalizePayload(payload) {
     competitorDetails,
     productImages,
     productNodeIds: normalizeNodeIds(payload.productNodeIds),
+    brandLogoImages: normalizeImageList(payload.brandLogoImages, payload.brandLogoImage),
+    brandLogoNodeIds: normalizeNodeIds(payload.brandLogoNodeIds),
     characterReferenceImages,
     characterReferenceNodeIds: useCharacterReference
       ? normalizeNodeIds(payload.characterNodeIds || payload.characterReferenceNodeIds)
@@ -934,7 +939,12 @@ function resolveMappedFacts(analysis, verifiedFacts) {
       return [];
     }
     const known = byId.get(String(entry.factId || entry.id || ''));
-    if (!known || !Array.isArray(known.evidence) || !known.evidence.length) {
+    // 声明式事实的来源是商家手写的产品说明，本来就没有图片证据区域。其余
+    // 校验（字段对齐、标签值不错栏、槽位存在）一条都不放松。
+    const grounded = known
+      && (known.declared === true
+        || (Array.isArray(known.evidence) && known.evidence.length > 0));
+    if (!grounded) {
       rejected.push({ reason: 'own_evidence_missing', entry });
       return [];
     }
@@ -1237,6 +1247,13 @@ function saveImageBuffer(buffer, imageTarget, assetId) {
 }
 
 async function materializeBrandLogo(job, context) {
+  // 商家直接给的干净 Logo 图永远优先。从详情图里抠出来的那张必然带着周围
+  // 像素，正是「Logo 被生成为深色纹理方块」的根源，只在没有专用图时才用。
+  if (!job.brandLogoUrl && job.brandLogoImages?.length) {
+    job.brandLogoUrl = job.brandLogoImages[0];
+    job.brandLogoSource = 'supplied';
+    return;
+  }
   if (job.brandLogoUrl || !job.brandIdentity?.logoRegion) return;
   const sourceIndex = Number(job.brandIdentity.logoSourceImageIndex);
   if (!Number.isInteger(sourceIndex) || sourceIndex < 0) return;
@@ -1506,7 +1523,73 @@ function clearBoundary(job, context) {
   writeJob(job, context);
 }
 
+/**
+ * 从商家手写的产品说明里结构化出卖点与精确参数。
+ *
+ * 这条路取代了「导入我方详情图再 OCR」：商家自己写的值不经过识图，没有读错
+ * 的可能，也不需要把那些详情图一路带到生成阶段当证据。参数因此标记为
+ * declared，evidence 为空，由 factsSupportedByEvidenceReferences 放行。
+ */
+async function extractProductBrief(job, context, signal) {
+  const brief = String(job.productBrief || '').trim();
+  if (!brief) return false;
+  if (job.ownRecognition?.status === 'completed'
+      && job.ownRecognition?.briefFingerprint === brief) return true;
+
+  const provider = getPromptOptimizerProvider(job.recognitionProvider);
+  job.stage = 'extracting_selling_points';
+  job.stageLabel = '正在结构化产品说明';
+  writeJob(job, context);
+  const raw = await runRecognition({
+    systemInstruction: buildProductBriefInstruction(),
+    userPrompt: brief,
+    outputSchema: DETAIL_REMIX_PRODUCT_BRIEF_OUTPUT_SCHEMA,
+    model: job.recognitionModel,
+    effort: job.recognitionProvider === 'codex-cli' ? 'high' : (provider?.defaultEffort || ''),
+    temperature: 0,
+    maxTokens: 4000,
+    timeoutMs: Number(context.recognitionTimeoutMs) || DETAIL_REMIX_RECOGNITION_TIMEOUT_MS,
+    libraryDir: context.libraryDir,
+    signal,
+  }, context, { providerId: job.recognitionProvider, kind: 'product-brief' });
+  assertActive(job, context, signal);
+  const parsed = parseProductBriefResponse(raw);
+  if (!parsed.sellingPoints.length && !parsed.verifiedFacts.length) {
+    throw new Error('产品说明里没有解析出任何卖点或参数；请写清楚卖点主张与参数名值');
+  }
+  job.ownSellingPoints = parsed.sellingPoints;
+  job.verifiedFacts = parsed.verifiedFacts;
+  job.brandIdentity = mergeBrandIdentity(job.brandIdentity, parsed.brandIdentity);
+  job.ownRecognition = {
+    ...(job.ownRecognition || {}),
+    status: 'completed',
+    source: 'product-brief',
+    briefFingerprint: brief,
+    knowledgeSchemaVersion: DETAIL_REMIX_KNOWLEDGE_SCHEMA_VERSION,
+    chunks: [],
+    totalImages: 0,
+    processedImages: 0,
+    sellingPointCount: parsed.sellingPoints.length,
+    verifiedFactCount: parsed.verifiedFacts.length,
+    completedAt: nowIso(context),
+  };
+  writeJob(job, context);
+  return true;
+}
+
 async function extractOwnSellingPoints(job, context, signal) {
+  // 产品说明是卖点与参数的首选来源；只有没填说明时才回退到识别我方详情图。
+  if (await extractProductBrief(job, context, signal)) {
+    await materializeBrandLogo(job, context);
+    await materializeProductViews(job, context);
+    const usableProductViews = productViewCatalog(job);
+    job.ownRecognition.productViewCount = usableProductViews.length;
+    if (!usableProductViews.length && !job.productImages?.length) {
+      throw new Error('没有可用的产品外观参考；请连接产品参考图');
+    }
+    writeJob(job, context);
+    return;
+  }
   const knowledgeCurrent = Number(job.ownRecognition?.knowledgeSchemaVersion) >= DETAIL_REMIX_KNOWLEDGE_SCHEMA_VERSION;
   if ((job.ownSellingPoints?.length || job.verifiedFacts?.length)
       && job.ownRecognition?.status === 'completed'
@@ -2011,13 +2094,19 @@ function resolvePageEvidenceReferences(job, page, maximum) {
 
 function factsSupportedByEvidenceReferences(mappedFacts, evidenceReferences) {
   const included = new Set(evidenceReferences.map(item => Number(item.sourceImageIndex)));
-  return (mappedFacts || []).filter(fact => (fact.evidence || []).some(item => (
-    included.has(Number(item.evidenceImageIndex))
-    && String(item.evidenceImageId || '') === String(
-      evidenceReferences.find(reference => Number(reference.sourceImageIndex) === Number(item.evidenceImageIndex))
-        ?.sourceNodeId || '',
-    )
-  )));
+  return (mappedFacts || []).filter(fact => (
+    // 用户在产品说明里手写的参数没有、也不需要图片证据区域：值本来就来自
+    // 商家而不是从图上读出来的。要求它出示证据图只会把整页参数删空。
+    fact.declared === true
+    || (fact.evidence || []).some(item => (
+      included.has(Number(item.evidenceImageIndex))
+      && String(item.evidenceImageId || '') === String(
+        evidenceReferences.find(
+          reference => Number(reference.sourceImageIndex) === Number(item.evidenceImageIndex),
+        )?.sourceNodeId || '',
+      )
+    ))
+  ));
 }
 
 function exactCopyPlan(page) {
@@ -3137,7 +3226,13 @@ function maybeResume(job, context) {
 export function createDetailRemixJob(payload, context) {
   if (!payload?.workflowId || !payload?.nodeId) throw new Error('缺少项目或商品详情复刻节点');
   const normalized = normalizePayload(payload);
-  if (!normalized.ownDetails.length) throw new Error('请至少连接一张我方详情图');
+  const productBrief = String(payload.productBrief || '').trim();
+  if (!productBrief && !normalized.ownDetails.length) {
+    throw new Error('请填写产品说明（卖点与参数），或连接至少一张我方详情图');
+  }
+  if (!normalized.productImages.length && !normalized.ownDetails.length) {
+    throw new Error('请至少连接一张产品参考图');
+  }
   if (!normalized.competitorDetails.length) throw new Error('请至少连接一张竞品详情图');
   if (normalized.useCharacterReference && !normalized.characterReferenceImages.length) {
     throw new Error('已开启人物参考，但没有连接人物参考图');
@@ -3174,7 +3269,10 @@ export function createDetailRemixJob(payload, context) {
     || '3:4';
   const imageResolution = normalizeImageResolution(imageModel, payload.imageResolution ?? payload.resolution);
   const productSheet = normalizeDetailRemixProductSheet(payload.productSheet);
-  const preferSuppliedProductReferences = payload.preferSuppliedProductReferences === true;
+  // 没有我方详情就根本无法自动裁角度，供图是唯一来源。此时强制开启，
+  // 否则 productViews 为空而提示词仍在说「已从我的详情自动挑选」。
+  const preferSuppliedProductReferences = payload.preferSuppliedProductReferences === true
+    || !normalized.ownDetails.length;
   if (preferSuppliedProductReferences && !normalized.productImages.length) {
     throw new Error('已选择“以我提供的产品参考图为准”，但没有连接任何产品参考图；请先连接产品参考图，或关闭该选项改用自动裁图');
   }
@@ -3189,6 +3287,8 @@ export function createDetailRemixJob(payload, context) {
     // so a change to either must produce a new job rather than resume the old one.
     preferSuppliedProductReferences,
     productSheet: productSheet ? JSON.stringify(productSheet) : '',
+    // 改了卖点或参数就是另一份内容，必须产生新任务而不是续跑旧的。
+    productBrief,
   });
   const requestedId = String(payload.jobId || '').trim();
   if (requestedId) {
@@ -3215,6 +3315,7 @@ export function createDetailRemixJob(payload, context) {
         imageResolution: existing.imageResolution,
         preferSuppliedProductReferences: existing.preferSuppliedProductReferences === true,
         productSheet: existing.productSheet ? JSON.stringify(existing.productSheet) : '',
+        productBrief: String(existing.productBrief || '').trim(),
       });
       if (existingFingerprint !== immutableFingerprint) {
         const conflict = new Error('该重试请求 ID 已绑定另一组详情输入；请重新点击执行创建新版本');
@@ -3270,6 +3371,9 @@ export function createDetailRemixJob(payload, context) {
     verifiedFacts: [],
     productImages: normalized.productImages,
     productNodeIds: normalized.productNodeIds,
+    brandLogoImages: normalized.brandLogoImages,
+    brandLogoNodeIds: normalized.brandLogoNodeIds,
+    productBrief,
     productSheet,
     // A manifest that arrived with the request is a deliberate override; without
     // one, the sheet is read off the picture at run time.

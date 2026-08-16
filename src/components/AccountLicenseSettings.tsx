@@ -3,6 +3,7 @@ import { useAuth } from '../hooks/useAuth';
 import { useLicense } from '../hooks/useLicense';
 import { useDeviceInfo } from '../hooks/useDeviceInfo';
 import { LicenseDialog } from './LicenseDialog';
+import { TRIAL_DAYS } from '../../shared/licenseFeatures.js';
 
 export interface AccountLicenseSettingsProps {
   onClose: () => void;
@@ -126,7 +127,7 @@ export const AccountLicenseSettings: React.FC<AccountLicenseSettingsProps> = ({ 
             <>
               <div className="als-row">
                 <span className="als-label">当前设备</span>
-                <span className="als-value">7 天试用</span>
+                <span className="als-value">{TRIAL_DAYS} 天试用</span>
               </div>
               <div className="als-row">
                 <span className="als-label">剩余时间</span>

@@ -208,7 +208,7 @@ export interface DeviceRow {
 
 /**
  * 幂等 upsert 设备状态：
- *   - 首次插入 → 建 7 天试用，起止时间由服务端生成。
+ *   - 首次插入 → 按 TRIAL_DAYS 建试用，起止时间由服务端生成。
  *   - 已存在 → 只更新 last_seen/app_version/platform，绝不重置试用、不改 user_id
  *     （文档 §6.3：同一设备切换账号不能重开试用）。device_hash 唯一，天然防并发重复建。
  * 返回落库后的设备行。

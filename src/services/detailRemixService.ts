@@ -244,6 +244,11 @@ export interface CreateDetailRemixJobParams {
   preferSuppliedProductReferences?: boolean;
   /** Grid manifest describing the first supplied product reference. */
   productSheet?: DetailRemixProductSheet | null;
+  /** 商家自己写的干净 Logo 图，优先于从详情图里抠出来的那张。 */
+  brandLogoImages?: string[];
+  brandLogoNodeIds?: string[];
+  /** 卖点与精确参数的自由文本；填了就不再需要导入我方详情图。 */
+  productBrief?: string;
 }
 
 async function readJson<T>(response: Response, fallback: string): Promise<T> {

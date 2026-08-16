@@ -34,6 +34,8 @@ export const FEATURE_KEYS: {
 
 export const DEFAULT_GRANTED_FEATURES: readonly FeatureKey[];
 
+/** 界面文案用的试用天数副本；真正的期限由 Worker 侧 TRIAL_DAYS 决定。 */
+export const TRIAL_DAYS: number;
 export const UNCONFIGURED_LICENSE_STATE: Readonly<LicenseState>;
 
 /**

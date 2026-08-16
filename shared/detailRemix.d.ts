@@ -2,13 +2,15 @@ export type DetailRemixInputPort =
   | 'competitor-detail'
   | 'own-detail'
   | 'character-reference'
-  | 'product-reference';
+  | 'product-reference'
+  | 'brand-logo';
 
 export interface DetailRemixInputRefs {
   competitorDetailNodeIds: string[];
   ownDetailNodeIds: string[];
   characterReference: { enabled: boolean; nodeIds: string[] };
   productNodeIds: string[];
+  brandLogoNodeIds: string[];
 }
 
 export interface DetailRemixProductSheetCell {
@@ -59,6 +61,8 @@ export interface DetailRemixNodeData {
   maxStructuralRegenerations: 0 | 1 | 2 | 3;
   /** Rank the user's own product references ahead of auto-cropped views. */
   preferSuppliedProductReferences: boolean;
+  /** 卖点与精确参数的自由文本；填了就不再必须导入我方详情图。 */
+  productBrief: string;
   /** Optional manual override of the grid manifest; empty means detect it from the picture. */
   productSheet: DetailRemixProductSheet | null;
   /** What the last run actually read off the supplied reference. Display only. */
@@ -131,6 +135,14 @@ export function parseFinalDetailValidationResponse(value: any): any;
 export const MAX_DETAIL_REMIX_PRODUCT_SHEET_CELLS: number;
 export function normalizeDetailRemixProductSheet(value?: any): DetailRemixProductSheet | null;
 export function parseProductSheetResponse(value: any): any;
+export const DETAIL_REMIX_PRODUCT_BRIEF_OUTPUT_SCHEMA: any;
+export const DETAIL_REMIX_STRICT_FIELD_KEYS: readonly string[];
+export function buildProductBriefInstruction(): string;
+export function parseProductBriefResponse(value: any): {
+  brandIdentity: { name: string; slogan: string };
+  sellingPoints: Array<{ id: string; title: string; description: string }>;
+  verifiedFacts: Array<Record<string, any>>;
+};
 export function productSheetFromDetection(detection?: any): DetailRemixProductSheet | null;
 export function buildProductSheetInstruction(): string;
 export const DETAIL_REMIX_PRODUCT_SHEET_OUTPUT_SCHEMA: any;

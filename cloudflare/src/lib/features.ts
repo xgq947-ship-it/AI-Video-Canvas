@@ -9,4 +9,9 @@ export const FEATURE_DIRECTOR_WORKFLOW = 'director_workflow';
 /** 试用与永久授权默认授予的功能集合。 */
 export const DEFAULT_GRANTED_FEATURES: string[] = [FEATURE_DIRECTOR_WORKFLOW];
 
-export const TRIAL_DAYS = 7;
+/**
+ * 试用天数。改动只影响**新注册设备**——试用起止时间在设备首次注册时写进 D1，
+ * 已注册设备手里的旧期限不会因为这里改动而变化。
+ * 前端展示用的副本在 shared/licenseFeatures.js，两处必须同步。
+ */
+export const TRIAL_DAYS = 3;

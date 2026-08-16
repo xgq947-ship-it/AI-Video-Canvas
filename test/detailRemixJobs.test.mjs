@@ -2724,3 +2724,160 @@ test('竞品原图比例远离模型可用比例时记录裁剪损失并在收�
   assert.ok(completed.pages[1].dimensionCropLoss > 0.3);
   assert.deepEqual(completed.croppedPageIndexes, [1]);
 });
+
+const BRIEF = [
+  '肩颈按摩器，品牌 SUPOR，主打仿人手深层揉捏。',
+  '覆盖肩颈斜方肌，按摩热敷双效同步。',
+  '额定功率 16W；电池容量 2500mAh；单次工作时间 15 分钟。',
+].join('\n');
+
+const briefRecognition = async (request, meta) => {
+  if (meta.kind === 'product-brief') {
+    return JSON.stringify({
+      brandIdentity: { name: 'SUPOR', slogan: '抓揉肩颈斜方肌' },
+      sellingPoints: [
+        { id: 'sp-1', title: '仿人手深层揉捏', description: '覆盖肩颈斜方肌' },
+        { id: 'sp-2', title: '按摩热敷双效', description: '同步进行' },
+      ],
+      verifiedFacts: [
+        { id: 'fact-1', field: 'power', label: '额定功率', value: '16W' },
+        { id: 'fact-2', field: 'battery_capacity', label: '电池容量', value: '2500mAh' },
+      ],
+    });
+  }
+  return JSON.stringify({ page: {
+    pageType: 'specification', hasPerson: false,
+    selectedProductViewIds: [], productInstances: [],
+    copySlots: [
+      { slotId: 'power-label', role: 'parameterLabel', field: 'power', parameterPart: 'label', sourceText: '功率', x: 0.1, y: 0.1, width: 0.3, height: 0.05 },
+      { slotId: 'power-value', role: 'parameterValue', field: 'power', parameterPart: 'value', sourceText: '20W', x: 0.5, y: 0.1, width: 0.2, height: 0.05 },
+    ],
+    mappedSellingPoints: [],
+    mappedFacts: [
+      { factId: 'fact-1', slotId: 'power-label', slotRole: 'parameterLabel', displayPart: 'label' },
+      { factId: 'fact-1', slotId: 'power-value', slotRole: 'parameterValue', displayPart: 'value' },
+    ],
+  } });
+};
+
+test('只给产品说明与产品参考图即可生成，不再需要导入我方详情', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const recognitionKinds = [];
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      recognitionKinds.push(meta.kind);
+      return briefRecognition(request, meta);
+    },
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('brief-final'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'product-brief-job',
+    ownDetails: [],
+    productBrief: BRIEF,
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+    preferSuppliedProductReferences: true,
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  // 说明文本直接结构化，完全不走我方详情识图。
+  assert.ok(recognitionKinds.includes('product-brief'));
+  assert.equal(recognitionKinds.includes('own-selling-points'), false);
+  assert.equal(completed.ownRecognition.source, 'product-brief');
+  assert.equal(completed.ownSellingPoints.length, 2);
+  assert.equal(completed.verifiedFacts.length, 2);
+  assert.equal(completed.brandIdentity.name, 'SUPOR');
+  assert.ok(completed.pages[0].finalUrl);
+});
+
+test('声明式参数没有图片证据也必须写进成图，不能被证据链判为无来源而删空', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    runRecognition: briefRecognition,
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('declared-facts'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'declared-facts-job',
+    ownDetails: [],
+    productBrief: BRIEF,
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+    preferSuppliedProductReferences: true,
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  // 没有我方详情就没有证据图；旧的证据链会把所有参数丢弃，参数页整片留白。
+  assert.deepEqual(completed.pages[0].omittedMappedFacts, []);
+  assert.ok(completed.pages[0].effectiveMappedFacts.length > 0);
+  assert.match(generationCalls[0].request.prompt, /16W/);
+  // 证据图占位被腾空，参考图里只剩版式图与产品板。
+  assert.equal(generationCalls[0].meta.referenceKinds.includes('own-fact-evidence'), false);
+});
+
+test('商家直接提供的干净 Logo 优先于从详情图抠出来的那张', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    runRecognition: briefRecognition,
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('logo-input'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'brand-logo-input-job',
+    ownDetails: [],
+    productBrief: BRIEF,
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+    brandLogoImages: [PRODUCT_2],
+    brandLogoNodeIds: ['logo-node'],
+    preferSuppliedProductReferences: true,
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.equal(completed.brandLogoUrl, PRODUCT_2);
+  assert.equal(completed.brandLogoSource, 'supplied');
+  assert.ok(generationCalls[0].meta.referenceKinds.includes('own-brand-logo'));
+});
+
+test('既没有产品说明也没有我方详情时明确拒绝', t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  assert.throws(() => createDetailRemixJob(basePayload({
+    jobId: 'no-brief-no-own-job',
+    ownDetails: [],
+    productImages: [PRODUCT],
+    productNodeIds: ['product-node'],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), { ...env.context, autoStart: false }), /请填写产品说明/);
+});
+
+test('有说明但没有任何产品外观参考时明确拒绝', t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  assert.throws(() => createDetailRemixJob(basePayload({
+    jobId: 'no-product-image-job',
+    ownDetails: [],
+    productBrief: BRIEF,
+    productImages: [], productNodeIds: [],
+    useCharacterReference: false, characterReferenceImages: [], characterReferenceNodeIds: [],
+  }), { ...env.context, autoStart: false }), /请至少连接一张产品参考图/);
+});

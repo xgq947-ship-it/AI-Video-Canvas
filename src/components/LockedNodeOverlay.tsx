@@ -1,5 +1,6 @@
 import React from 'react';
 import { Lock } from 'lucide-react';
+import { TRIAL_DAYS } from '../../shared/licenseFeatures.js';
 
 export interface LockedNodeOverlayProps {
   dark?: boolean;
@@ -15,7 +16,7 @@ export interface LockedNodeOverlayProps {
  * 目前没有接"输入授权码"按钮：授权码激活弹窗（P4）还没做，这里放一个会话式
  * 死按钮不如不放。顶部 TrialBanner 是激活入口就位后统一挂载 CTA 的地方。
  */
-export const LockedNodeOverlay: React.FC<LockedNodeOverlayProps> = ({ dark = true, title = '7 天试用已结束' }) => (
+export const LockedNodeOverlay: React.FC<LockedNodeOverlayProps> = ({ dark = true, title = `${TRIAL_DAYS} 天试用已结束` }) => (
   <div
     className={`flex w-full flex-col items-center gap-1 rounded-xl border px-3 py-3 text-center text-[10px] ${
       dark ? 'border-amber-400/25 bg-amber-400/[0.06] text-amber-200' : 'border-amber-300 bg-amber-50 text-amber-700'

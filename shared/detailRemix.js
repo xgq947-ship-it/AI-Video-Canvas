@@ -45,13 +45,15 @@ export const DETAIL_REMIX_INPUT_PORTS = Object.freeze([
   'own-detail',
   'character-reference',
   'product-reference',
+  'brand-logo',
 ]);
 
 export const DETAIL_REMIX_PORT_LABELS = Object.freeze({
   'competitor-detail': '竞品详情（可多张）',
   'own-detail': '我的详情（可多张）',
   'character-reference': '人物参考（可选）',
-  'product-reference': '产品补充图（可选）',
+  'product-reference': '产品参考图（可多张）',
+  'brand-logo': '品牌 Logo（可选）',
 });
 
 export const DETAIL_REMIX_STATUSES = Object.freeze([
@@ -325,6 +327,115 @@ export const DETAIL_REMIX_OWN_KNOWLEDGE_OUTPUT_SCHEMA = Object.freeze({
 });
 
 /**
+ * 把用户手写的产品说明拆成卖点与精确参数。
+ *
+ * 这条路取代了「从我方详情图 OCR 出参数」：用户自己写的值不经过识图，没有
+ * 读错的可能，因此这些事实标记为 declared——它们不需要、也不可能有图片证据
+ * 区域。反幻觉的强度并未下降：白名单从「证据图里出现过的值」换成「说明里
+ * 写过的值」，同样是逐字白名单。
+ */
+export const DETAIL_REMIX_PRODUCT_BRIEF_OUTPUT_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  required: ['brandIdentity', 'sellingPoints', 'verifiedFacts'],
+  properties: {
+    brandIdentity: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name', 'slogan'],
+      properties: {
+        name: { type: 'string' },
+        slogan: { type: 'string' },
+      },
+    },
+    sellingPoints: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'title', 'description'],
+        properties: {
+          id: { type: 'string' },
+          title: { type: 'string' },
+          description: { type: 'string' },
+        },
+      },
+    },
+    verifiedFacts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'field', 'label', 'value'],
+        properties: {
+          id: { type: 'string' },
+          field: { type: 'string' },
+          label: { type: 'string' },
+          value: { type: 'string' },
+        },
+      },
+    },
+  },
+});
+
+export function buildProductBriefInstruction() {
+  return [
+    '你是电商详情页的产品资料结构化助手。所给内容是商家自己写的产品说明，里面混杂着卖点和精确参数，你的任务是把它拆成两类结构化数据。',
+    '严格只使用说明里已经写明的内容。禁止补充、润色、推断或发明任何说明中没有出现的功效、参数、认证、材质或比较结论——漏掉一条远好过编造一条。',
+    'sellingPoints 是可以直接印在详情图上的营销文案：title 是短句主张，description 是一句补充说明。两者都必须是成品文案口吻，不要写「说明中提到」「资料显示」这类分析用语。同一个意思不要拆成多条。',
+    'verifiedFacts 是精确参数：label 是参数名（如「额定功率」「电池容量」），value 是参数值连同单位（如「16W」「2500mAh」）。数字、单位、型号、正负号与大小写必须与原文逐字一致，一个字符都不能改。',
+    `field 必须从这份规范字段表中选取：${DETAIL_REMIX_STRICT_FIELD_KEYS.join('、')}。都对不上时可自定义一个简短英文小写下划线命名，但不要把营销卖点塞进 verifiedFacts。`,
+    '判断归属的标准：能被第三方核验的客观规格进 verifiedFacts，主观主张与使用体验进 sellingPoints。「续航 8 小时」是参数，「持久续航一整天」是卖点。',
+    'brandIdentity 只填说明里明确写出的品牌名与品牌标语；没写就留空字符串，绝不猜测。',
+    'id 用 sp-1、sp-2 与 fact-1、fact-2 这样的顺序编号。只输出符合 Schema 的 JSON，不要 Markdown。',
+  ].join('\n');
+}
+
+export function parseProductBriefResponse(value) {
+  const parsed = object(parseJsonPayload(value, '产品说明解析结果'));
+  const brand = object(parsed.brandIdentity);
+  const sellingPoints = array(parsed.sellingPoints).flatMap((entry, index) => {
+    const item = object(entry);
+    const title = text(item.title);
+    const description = text(item.description);
+    if (!title && !description) return [];
+    return [{
+      id: text(item.id) || `sp-${index + 1}`,
+      title: title || description,
+      description: title ? description : '',
+    }];
+  });
+  const verifiedFacts = array(parsed.verifiedFacts).flatMap((entry, index) => {
+    const item = object(entry);
+    const label = text(item.label);
+    const value = text(item.value);
+    if (!label || !value) return [];
+    const field = canonicalDetailRemixFactField(item.field, label)
+      || text(item.field)
+      || normalizedToken(label);
+    if (!field) return [];
+    return [{
+      id: text(item.id) || `fact-${index + 1}`,
+      field,
+      factType: field,
+      label,
+      value,
+      normalizedValue: normalizeDetailRemixFactValue(value),
+      displayText: `${label}\n${value}`,
+      // 声明式事实：值来自用户手写，不存在也不需要图片证据区域。
+      declared: true,
+      evidence: [],
+      confidence: 1,
+    }];
+  });
+  return {
+    brandIdentity: { name: text(brand.name), slogan: text(brand.slogan) },
+    sellingPoints,
+    verifiedFacts,
+  };
+}
+
+/**
  * Reads a supplied product reference and reports whether it is a labelled angle
  * grid, and what each cell shows. Hand-typed cell labels go stale the moment the
  * product changes, and a stale label makes the render prompt confidently wrong;
@@ -426,6 +537,11 @@ const STRICT_FIELD_ALIASES = Object.freeze([
   ['certification', /(?:执行标准|认证|证书|certification|certificate)/iu],
   ['material', /(?:主要材质|材质|面料|material)/iu],
 ]);
+
+/** 规范参数字段键，供产品说明解析时约束 field 取值。 */
+export const DETAIL_REMIX_STRICT_FIELD_KEYS = Object.freeze(
+  STRICT_FIELD_ALIASES.map(([key]) => key),
+);
 
 /** Canonical key used to prove that a competitor slot and an own fact describe the same field. */
 export function canonicalDetailRemixFactField(value, label = '') {
@@ -595,6 +711,7 @@ export function normalizeDetailRemixInputRefs(value = {}) {
     ownDetailNodeIds: unique(input.ownDetailNodeIds ?? input.ownNodeIds),
     characterReference: normalizedCharacter(input),
     productNodeIds: unique(input.productNodeIds ?? input.productReferenceNodeIds),
+    brandLogoNodeIds: unique(input.brandLogoNodeIds),
   };
 }
 
@@ -622,6 +739,9 @@ export function createDetailRemixNodeData(overrides = {}) {
     maxStructuralRegenerations: [0, 1, 2, 3].includes(Number(source.maxStructuralRegenerations))
       ? Number(source.maxStructuralRegenerations)
       : 1,
+    // 卖点与精确参数的唯一权威来源。用户直接写清楚，比从旧详情图 OCR 出来更准，
+    // 也让整条链路不再必须依赖「我的详情」这组输入。
+    productBrief: text(source.productBrief),
     preferSuppliedProductReferences: source.preferSuppliedProductReferences === true,
     // `productSheet` is the user's optional override; `detectedProductSheet` is
     // what the last run actually read off the picture and is display-only.
@@ -660,6 +780,7 @@ export function syncDetailRemixInputRefs(node, inputPortByParentId = node?.input
       nodeIds: idsFor('character-reference'),
     },
     productNodeIds: idsFor('product-reference'),
+    brandLogoNodeIds: idsFor('brand-logo'),
   };
   const previousRefs = current.inputRefs;
   const activeCharacter = reference => ({
@@ -674,11 +795,13 @@ export function syncDetailRemixInputRefs(node, inputPortByParentId = node?.input
     own: nextRefs.ownDetailNodeIds,
     character: activeCharacter(nextRefs.characterReference),
     product: nextRefs.productNodeIds,
+    brandLogo: nextRefs.brandLogoNodeIds,
   }) !== JSON.stringify({
     competitor: previousRefs.competitorDetailNodeIds,
     own: previousRefs.ownDetailNodeIds,
     character: activeCharacter(previousRefs.characterReference),
     product: previousRefs.productNodeIds,
+    brandLogo: previousRefs.brandLogoNodeIds,
   });
   const hasRun = Boolean(current.jobId);
   const nextStatus = generationInputsChanged
@@ -719,6 +842,7 @@ export function buildDetailRemixInputMapping(inputRefs = {}) {
     ...refs.ownDetailNodeIds.map(id => [id, 'own-detail']),
     ...refs.characterReference.nodeIds.map(id => [id, 'character-reference']),
     ...refs.productNodeIds.map(id => [id, 'product-reference']),
+    ...refs.brandLogoNodeIds.map(id => [id, 'brand-logo']),
   ]);
 }
 
@@ -741,6 +865,7 @@ export function detailRemixInputFingerprint(value = {}) {
     characterReferenceEnabled: refs.characterReference.enabled,
     characterReferenceNodeIds: refs.characterReference.activeNodeIds,
     productNodeIds: refs.productNodeIds,
+    brandLogoNodeIds: refs.brandLogoNodeIds,
   });
 }
 
@@ -774,7 +899,16 @@ export function validateDetailRemixPreflight(value, nodes, options = {}) {
     };
   }
   if (!competitor.length) return { ok: false, error: '请至少提供一张竞品详情图' };
-  if (!own.length) return { ok: false, error: '请至少提供一张我的详情图' };
+  // 卖点与参数现在有两条来源：产品说明文本（更准，用户直接写），或从旧的
+  // 「我的详情」识别。两者至少要有一条，不再强制必须导入我方详情图。
+  const brief = text(state.productBrief);
+  if (!brief && !own.length) {
+    return { ok: false, error: '请填写产品说明（卖点与参数），或连接至少一张我的详情图' };
+  }
+  // 产品长什么样只能靠图。没有产品参考图时才回退到从我方详情自动裁角度。
+  if (!product.length && !own.length) {
+    return { ok: false, error: '请至少提供一张产品参考图' };
+  }
   if (state.inputRefs.characterReference.enabled && !character.length) {
     return { ok: false, error: '已开启人物参考，请选择一张有效人物参考图' };
   }
@@ -785,6 +919,7 @@ export function validateDetailRemixPreflight(value, nodes, options = {}) {
       ownDetailNodeIds: own,
       characterNodeIds: state.inputRefs.characterReference.enabled ? character : [],
       productNodeIds: product,
+      brandLogoNodeIds: valid(state.inputRefs.brandLogoNodeIds || []),
     },
   };
 }
@@ -802,6 +937,7 @@ export function markDetailRemixDependentsStale(nodes, changedNodeId) {
       ...refs.ownDetailNodeIds,
       ...(refs.characterReference.enabled ? refs.characterReference.nodeIds : []),
       ...refs.productNodeIds,
+      ...refs.brandLogoNodeIds,
     ].includes(changedNodeId);
     if (!generationDependsOnChanged) return node;
     changed = true;
@@ -1126,7 +1262,9 @@ export function buildCompetitorPageInstruction({
     `当 pageMode=${DETAIL_REMIX_MARKETING_MODE} 时，把营销文案槽映射到 mappedSellingPoints；只能选择已给卖点，不得新造参数或功效，也不得新造比较结论。页面中若混有精确数字/型号，只能通过 mappedFacts 使用我方证据，绝不能用营销卖点覆盖。`,
     '营销页中承担版式层级的所有可读槽都必须逐槽映射：包括胶囊标签/眉题、主标题及其拆分片段、副标题、功能标题、说明正文。若 competitorTrademark 实际占据主标题的一部分，也按主标题槽替换，不能删掉后破坏标题层级。只有水印、页码、法务脚注、免责声明、纯表头/对照栏目名，以及已由 brandSlots 单独承接的孤立品牌字样可以不映射并删除。',
     'mappedSellingPoints 中同一 slotId 恰好一项，每项都必须填写 replacementText。replacementText 必须是所选我方卖点 title/description 的忠实短写，适配该槽 maxChars，不得添加证据外功效；相邻的拆分标题允许选择同一卖点但要写成不同且连贯的片段。不同槽禁止机械重复同一句话。最终要保持原页“眉题/胶囊标签—大标题—副标题/说明”的数量、字号层级和留白节奏。',
-    '判断所有竞品产品实例的观察角度、朝向、可见面和透视要求，再从我方产品视角库中选择最匹配的 1~3 个 ID 写入 selectedProductViewIds。必须只选给定 ID；优先覆盖本页出现的不同角度和产品完整度。',
+    productViews.length
+      ? '判断所有竞品产品实例的观察角度、朝向、可见面和透视要求，再从我方产品视角库中选择最匹配的 1~3 个 ID 写入 selectedProductViewIds。必须只选给定 ID；优先覆盖本页出现的不同角度和产品完整度。'
+      : '本次没有我方产品视角库：产品外观全部来自商家直接提供的参考图。selectedProductViewIds 留空数组，不要编造任何 ID。仍然要照常判断并输出每个竞品产品实例的位置、观察角度、接触面与遮挡关系。',
     productSheet
       // Enumerate the legal cells instead of giving a range: unusable cells are
       // already dropped from the manifest, and a range would invite the planner
@@ -1173,6 +1311,16 @@ const safeNormalizedRegion = value => {
 
 const strictFactEvidence = value => {
   const fact = object(value);
+  // 商家在产品说明里手写的参数，来源就是那份说明本身，没有任何图片区域可指。
+  // 在这里给它一条声明式证据，下游按证据长度过滤的地方就不必各自开特例；
+  // 逐字白名单的约束一点没松——能写进图的仍然只有清单里出现过的值。
+  if (fact.declared === true) {
+    return [{
+      declared: true,
+      confidence: 1,
+      sourceText: text(fact.displayText) || `${text(fact.label)}\n${text(fact.value)}`,
+    }];
+  }
   const explicit = array(fact.evidence);
   const legacy = explicit.length ? [] : [{
     evidenceImageIndex: fact.evidenceImageIndex ?? fact.sourceImageIndexes?.[0],
@@ -1568,7 +1716,12 @@ export function buildFinalDetailPrompt({
     `必须完成的品牌与 Logo 替换清单：${JSON.stringify(brandPlan)}`,
     sheet
       ? describeDetailRemixProductSheet(sheet, '参考图2')
-      : `系统已从“我的详情”自动挑选与本页角度最匹配的产品参考：${JSON.stringify(selectedProductViews)}`,
+      // 全部参考都由商家直接提供时，说成「从我的详情自动挑选」是假话——
+      // 这时根本没有我的详情。一句自信的错误说明比不说明更有害。
+      : array(selectedProductViews).length
+        && array(selectedProductViews).every(view => object(view).supplemental === true)
+        ? `${productRange}是商家直接提供的我方产品实拍参考，没有其它角度库可选；产品外观完全以这些图为准。`
+        : `系统已从“我的详情”自动挑选与本页角度最匹配的产品参考：${JSON.stringify(selectedProductViews)}`,
     // Only the first supplied image carries a declared grid. Any further product
     // references must still be named, or they arrive as undescribed pixels.
     sheet && productCount > 1

@@ -20,6 +20,15 @@ export const FEATURE_KEYS = Object.freeze({
   ADVANCED_EXPORT: 'advanced_export',
 });
 
+/**
+ * 试用天数，仅供界面文案使用。
+ *
+ * 真正决定期限的是 Worker 侧的 cloudflare/src/lib/features.ts —— 试用起止
+ * 时间由服务端在设备首次注册时写进 D1，客户端算不了也不该算。这里只是让
+ * 三处文案不用各写各的数字，改动时两边必须一起改。
+ */
+export const TRIAL_DAYS = 3;
+
 /** 试用与永久授权默认授予的功能集合（本期只有导演工作流是高级）。 */
 export const DEFAULT_GRANTED_FEATURES = Object.freeze([FEATURE_KEYS.DIRECTOR_WORKFLOW]);
 

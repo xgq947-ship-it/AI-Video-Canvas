@@ -18,6 +18,12 @@
       "runtimeExecutable": "sh",
       "runtimeArgs": ["-c", "cd cloudflare && npx wrangler dev --port 8788"],
       "port": 8788
+    },
+    {
+      "name": "repro-desktop-data",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "EVAN_DATA_DIR=\"$HOME/Library/Application Support/Evan AI Video Canvas/data\" PORT=3001 npm run dev"],
+      "port": 5173
     }
   ]
 }

@@ -52,3 +52,15 @@ test('指针被系统收走时必须有兜底，否则捕获会永久残留把�
 test('每次新的按下都先清掉可能残留的旧捕获', () => {
   assert.match(source, /forceReleaseCapture\(\);\s*try \{\s*element\.setPointerCapture/);
 });
+
+test('详情节点的重状态归一化必须缓存，否则拖拽时每帧重算 1.6MB', () => {
+  const node = fs.readFileSync(
+    new URL('../src/features/detail-remix/DetailRemixNode.tsx', import.meta.url), 'utf8');
+  // 拖动画布上任意节点都会让 setNodes 产生新数组，allNodes 引用随之改变，
+  // CanvasNode 的 React.memo 失效。真实项目里这个节点状态有 22 页分析数据，
+  // 不缓存就是每秒六十次深拷贝。
+  assert.match(node, /const state = React\.useMemo\(\s*\(\) => createDetailRemixNodeData/);
+  assert.match(node, /\[data\.detailRemix\],/);
+  assert.match(node, /const imageNodes = React\.useMemo/);
+  assert.match(node, /const byId = React\.useMemo/);
+});

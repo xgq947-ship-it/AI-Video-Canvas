@@ -143,7 +143,18 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
   onImportFolder,
 }) => {
   const dark = canvasTheme === 'dark';
-  const state = createDetailRemixNodeData(data.detailRemix || {});
+  /**
+   * 这一步会把 analysis.pages 里的每一页全量深度归一化。真实项目里这个节点的
+   * 状态能到 1.6MB（22 页的分析、提示词与质检结果），而拖动画布上任意一个节点
+   * 都会让 setNodes 生成新数组、allNodes 引用改变、CanvasNode 的 React.memo
+   * 失效，于是它每帧都要重算一次——每秒六十次深拷贝 1.6MB，GC 很快就跟不上，
+   * 表现就是「拖几下画布整个卡死」。按 detailRemix 自身的引用缓存，拖拽时它
+   * 不变，这一步就不再重复。
+   */
+  const state = React.useMemo(
+    () => createDetailRemixNodeData(data.detailRemix || {}),
+    [data.detailRemix],
+  );
   const stateRef = React.useRef(state);
   stateRef.current = state;
   const [localError, setLocalError] = React.useState('');
@@ -158,8 +169,12 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
     || state.folderImports.own.status === 'uploading';
   const generationBusy = isBusyState(state, data);
   const busy = generationBusy || folderImportBusy;
-  const imageNodes = allNodes.filter(isUsableImage);
-  const byId = new Map(allNodes.map(node => [node.id, node]));
+  // 同理：这两个都是 O(节点数) 的重建，拖拽期间没必要每帧做。
+  const imageNodes = React.useMemo(() => allNodes.filter(isUsableImage), [allNodes]);
+  const byId = React.useMemo(
+    () => new Map(allNodes.map(node => [node.id, node])),
+    [allNodes],
+  );
   const selectedCharacterId = state.inputRefs.characterReference.nodeIds[0] || '';
   // 旧画布上可能还连着「我的详情」。端口保留是为了不静默丢掉已有连线，
   // 但新流程不再使用它们，所以只在存在时提示一句，不再给导入入口。

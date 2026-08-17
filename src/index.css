@@ -1,0 +1,5 @@
+/* Play CDN 在浏览器里注入的就是这三层，顺序不能变：base 是 preflight
+   重置，去掉会让所有原生控件的默认样式回来。 */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

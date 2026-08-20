@@ -7,6 +7,7 @@
 
 export const DETAIL_STITCH_SCHEMA_VERSION = 1;
 export const DETAIL_STITCH_MIN_SLICE_HEIGHT = 96;
+export const DETAIL_STITCH_MAX_SLICE_HEIGHT = 1500;
 
 const text = value => String(value ?? '').trim();
 
@@ -82,9 +83,11 @@ export function normalizeDetailStitchCuts(
   cuts,
   canvasHeight,
   minSliceHeight = DETAIL_STITCH_MIN_SLICE_HEIGHT,
+  maxSliceHeight = DETAIL_STITCH_MAX_SLICE_HEIGHT,
 ) {
   const height = Math.round(Number(canvasHeight) || 0);
   const minimum = Math.max(1, Math.round(Number(minSliceHeight) || 1));
+  const maximum = Math.max(minimum, Math.round(Number(maxSliceHeight) || minimum));
   if (height <= 0) throw new Error('拼接长图高度无效');
   const unique = new Map();
   for (const input of Array.isArray(cuts) ? cuts : []) {
@@ -99,6 +102,9 @@ export function normalizeDetailStitchCuts(
     if (boundaries[index] - boundaries[index - 1] < minimum) {
       throw new Error(`切片高度不能小于 ${minimum}px`);
     }
+    if (boundaries[index] - boundaries[index - 1] > maximum) {
+      throw new Error(`切片高度不能大于 ${maximum}px`);
+    }
   }
   return result;
 }
@@ -110,13 +116,19 @@ export function buildDetailStitchSlices({
   canvasHeight,
   supportedAspectRatios,
   minSliceHeight = DETAIL_STITCH_MIN_SLICE_HEIGHT,
+  maxSliceHeight = DETAIL_STITCH_MAX_SLICE_HEIGHT,
   nodeIds = [],
   urls = [],
 } = {}) {
   const width = Math.round(Number(canvasWidth) || 0);
   const height = Math.round(Number(canvasHeight) || 0);
   if (width <= 0) throw new Error('拼接长图宽度无效');
-  const normalizedCuts = normalizeDetailStitchCuts(cuts, height, minSliceHeight);
+  const normalizedCuts = normalizeDetailStitchCuts(
+    cuts,
+    height,
+    minSliceHeight,
+    maxSliceHeight,
+  );
   const boundaries = [0, ...normalizedCuts.map(cut => cut.y), height];
   return boundaries.slice(0, -1).map((startY, index) => {
     const endY = boundaries[index + 1];

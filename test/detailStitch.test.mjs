@@ -8,6 +8,7 @@ import express from 'express';
 import sharp from 'sharp';
 
 import {
+  DETAIL_STITCH_MAX_SLICE_HEIGHT,
   buildDetailStitchSlices,
   detailStitchTargetHeights,
   expectedDetailStitchCropLoss,
@@ -16,6 +17,7 @@ import {
 import { getImageGenerationProvider } from '../shared/generationProviders.js';
 import detailStitchRoutes from '../server/routes/detail-stitch.js';
 import { detectAdjacentDuplicateRows } from '../server/services/detailStitch/stitcher.js';
+import { planDetailSlices } from '../server/services/detailStitch/slicePlanner.js';
 import {
   applyDetailStitchSlices,
   canRestoreDetailStitchOriginals,
@@ -115,6 +117,7 @@ test('目标高度表来自当前 provider，预期 cover-crop 损失与切片�
   assert.ok(expectedDetailStitchCropLoss(750, 1000, '1:1') > 0.24);
 
   assert.throws(() => normalizeDetailStitchCuts([{ y: 50 }], 1000), /不能小于/);
+  assert.throws(() => normalizeDetailStitchCuts([{ y: 1501 }], 3000), /不能大于 1500px/);
   const slices = buildDetailStitchSlices({
     cuts: [{ y: 1000, source: 'manual' }],
     canvasWidth: 750,
@@ -125,6 +128,18 @@ test('目标高度表来自当前 provider，预期 cover-crop 损失与切片�
     [0, 1000, '3:4'], [1000, 2000, '3:4'],
   ]);
   assert.equal(slices[0].source, 'manual');
+
+  const capped = planDetailSlices({
+    canvasWidth: 1200,
+    canvasHeight: 4700,
+    candidates: [
+      { y: 1800, score: 1 },
+      { y: 3290, score: 0.95 },
+    ],
+    supportedAspectRatios: flow.supportedAspectRatios,
+  });
+  assert.equal(capped.slices.at(-1).endY, 4700);
+  assert.ok(capped.slices.every(slice => slice.height <= DETAIL_STITCH_MAX_SLICE_HEIGHT));
 });
 
 test('空白平坦带不会被误判为抓取重复区', async t => {

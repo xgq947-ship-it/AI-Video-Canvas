@@ -62,17 +62,24 @@ export interface DetailStitchRecord {
 
 export const DETAIL_STITCH_SCHEMA_VERSION: 1;
 export const DETAIL_STITCH_MIN_SLICE_HEIGHT: 96;
+export const DETAIL_STITCH_MAX_SLICE_HEIGHT: 1500;
 export function parseDetailStitchAspectRatio(value: unknown): number | null;
 export function detailStitchTargetHeights(width: number, ratios?: string[]): DetailStitchTargetHeight[];
 export function closestDetailStitchAspectRatio(width: number, height: number, ratios?: string[]): DetailStitchTargetHeight | null;
 export function expectedDetailStitchCropLoss(width: number, height: number, ratio: string): number;
-export function normalizeDetailStitchCuts(cuts: Array<number | Partial<DetailStitchCut>>, height: number, minHeight?: number): DetailStitchCut[];
+export function normalizeDetailStitchCuts(
+  cuts: Array<number | Partial<DetailStitchCut>>,
+  height: number,
+  minHeight?: number,
+  maxHeight?: number,
+): DetailStitchCut[];
 export function buildDetailStitchSlices(options?: {
   cuts?: Array<number | Partial<DetailStitchCut>>;
   canvasWidth?: number;
   canvasHeight?: number;
   supportedAspectRatios?: string[];
   minSliceHeight?: number;
+  maxSliceHeight?: number;
   nodeIds?: string[];
   urls?: string[];
 }): DetailStitchSlice[];

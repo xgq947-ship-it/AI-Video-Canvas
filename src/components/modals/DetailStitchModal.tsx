@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 
 import {
+  DETAIL_STITCH_MAX_SLICE_HEIGHT,
   DETAIL_STITCH_MIN_SLICE_HEIGHT,
   buildDetailStitchSlices,
   type DetailStitchCut,
@@ -176,7 +177,15 @@ export const DetailStitchModal: React.FC<DetailStitchModalProps> = ({
   };
 
   const deleteSelectedCut = () => {
-    if (selectedCut === null) return;
+    if (selectedCut === null || !record) return;
+    const previousY = selectedCut === 0 ? 0 : cuts[selectedCut - 1].y;
+    const nextY = selectedCut === cuts.length - 1
+      ? record.canvasHeight
+      : cuts[selectedCut + 1].y;
+    if (nextY - previousY > DETAIL_STITCH_MAX_SLICE_HEIGHT) {
+      setError(`删除后该切片会超过 ${DETAIL_STITCH_MAX_SLICE_HEIGHT}px，已保留这条切割线`);
+      return;
+    }
     setCuts(current => current.filter((_, index) => index !== selectedCut));
     setSelectedCut(null);
     setError('');
@@ -187,9 +196,17 @@ export const DetailStitchModal: React.FC<DetailStitchModalProps> = ({
     setCuts(current => {
       const previousY = index === 0 ? 0 : current[index - 1].y;
       const nextY = index === current.length - 1 ? record.canvasHeight : current[index + 1].y;
-      const y = Math.max(
+      const lowerBound = Math.max(
         previousY + DETAIL_STITCH_MIN_SLICE_HEIGHT,
-        Math.min(nextY - DETAIL_STITCH_MIN_SLICE_HEIGHT, Math.round(proposed)),
+        nextY - DETAIL_STITCH_MAX_SLICE_HEIGHT,
+      );
+      const upperBound = Math.min(
+        nextY - DETAIL_STITCH_MIN_SLICE_HEIGHT,
+        previousY + DETAIL_STITCH_MAX_SLICE_HEIGHT,
+      );
+      const y = Math.max(
+        lowerBound,
+        Math.min(upperBound, Math.round(proposed)),
       );
       return current.map((cut, cutIndex) => (
         cutIndex === index ? { y, source: 'manual' as const } : cut
@@ -365,7 +382,7 @@ export const DetailStitchModal: React.FC<DetailStitchModalProps> = ({
             </div>
 
             <footer className={`flex h-16 shrink-0 items-center justify-between border-t px-5 ${dark ? 'border-neutral-800' : 'border-neutral-200'}`}>
-              <div className="text-[11px] text-neutral-500">拖动虚线微调；确认前不会改动画布节点。原始切片会归档保留，可随时恢复。</div>
+              <div className="text-[11px] text-neutral-500">拖动虚线微调；单张最高 {DETAIL_STITCH_MAX_SLICE_HEIGHT}px。确认前不会改动画布节点，原始切片可随时恢复。</div>
               <div className="flex gap-2">
                 <button type="button" onClick={onClose} disabled={phase === 'exporting'} className="rounded-lg border border-neutral-600 px-4 py-2 text-sm disabled:opacity-40">取消</button>
                 <button type="button" onClick={() => void confirm()} disabled={phase !== 'ready' || !slices.length} className="flex items-center gap-2 rounded-lg bg-violet-600 px-5 py-2 text-sm font-semibold text-white hover:bg-violet-500 disabled:opacity-40">

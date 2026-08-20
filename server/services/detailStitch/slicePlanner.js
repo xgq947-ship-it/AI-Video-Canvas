@@ -1,4 +1,5 @@
 import {
+  DETAIL_STITCH_MAX_SLICE_HEIGHT,
   DETAIL_STITCH_MIN_SLICE_HEIGHT,
   buildDetailStitchSlices,
   detailStitchTargetHeights,
@@ -11,6 +12,7 @@ export function planDetailSlices({
   candidates,
   supportedAspectRatios,
   minSliceHeight = DETAIL_STITCH_MIN_SLICE_HEIGHT,
+  maxSliceHeight = DETAIL_STITCH_MAX_SLICE_HEIGHT,
 } = {}) {
   const width = Math.round(Number(canvasWidth) || 0);
   const height = Math.round(Number(canvasHeight) || 0);
@@ -21,18 +23,20 @@ export function planDetailSlices({
       ? current
       : best
   ));
-  const targetHeight = Math.max(minSliceHeight, preferred.height);
+  const maximum = Math.max(minSliceHeight, Number(maxSliceHeight) || DETAIL_STITCH_MAX_SLICE_HEIGHT);
+  const targetHeight = Math.min(maximum, Math.max(minSliceHeight, preferred.height));
   const orderedCandidates = [...(Array.isArray(candidates) ? candidates : [])]
     .filter(candidate => Number(candidate?.y) > 0 && Number(candidate?.y) < height)
     .sort((left, right) => left.y - right.y);
   const cuts = [];
   let startY = 0;
-  while (height - startY > targetHeight * 1.35) {
+  while (height - startY > Math.min(maximum, targetHeight * 1.35)) {
     const idealY = startY + targetHeight;
     const lower = startY + Math.max(minSliceHeight, Math.round(targetHeight * 0.65));
     const upper = Math.min(
       height - minSliceHeight,
       startY + Math.round(targetHeight * 1.35),
+      startY + maximum,
     );
     const nearby = orderedCandidates.filter(candidate => candidate.y >= lower && candidate.y <= upper);
     const chosen = nearby.reduce((best, candidate) => {
@@ -56,6 +60,7 @@ export function planDetailSlices({
       canvasHeight: height,
       supportedAspectRatios,
       minSliceHeight,
+      maxSliceHeight: maximum,
     }),
     targetHeights: targets,
     preferredTargetHeight: targetHeight,

@@ -232,6 +232,7 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
     !page?.codexImageJobId
     && !page?.plateCodexImageJobId
     && !page?.composeCodexImageJobId
+    && page?.scenePlateStatus !== 'completed'
     && !page?.resultReady
     && page?.recognitionStatus !== 'completed'
   ));
@@ -363,6 +364,10 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
       sizingMode: 'match-competitor',
       competitorDimensions: competitorNodes.map(node => [node.id, node.resultAspectRatio || '']),
       resolution,
+      lockProductIdentity: requestState.lockProductIdentity,
+      preferSuppliedProductReferences: requestState.preferSuppliedProductReferences,
+      productSheet: requestState.productSheet,
+      maxStructuralRegenerations: requestState.maxStructuralRegenerations,
     });
     const requestId = requestState.pendingRequestId
       && requestState.pendingRequestFingerprint === requestFingerprint
@@ -426,6 +431,7 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
         })),
         resolution,
         maxStructuralRegenerations: requestState.maxStructuralRegenerations,
+        lockProductIdentity: requestState.lockProductIdentity,
         preferSuppliedProductReferences: requestState.preferSuppliedProductReferences,
         productSheet: requestState.preferSuppliedProductReferences ? requestState.productSheet : null,
       });
@@ -1010,6 +1016,25 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
                 <option value="2">修复失败后再整页重生成 2 次</option>
                 <option value="3">修复失败后再整页重生成 3 次</option>
               </select>
+              <label
+                className={`col-span-2 flex cursor-pointer items-start gap-2 rounded-lg border px-2 py-2 text-xs ${dark ? 'border-emerald-900/70 bg-emerald-950/20' : 'border-emerald-200 bg-emerald-50/60'}`}
+                title="先把竞品产品彻底移出场景，再只用我方产品参考完成最终合成；每页会多消耗一次生图"
+              >
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={state.lockProductIdentity !== false}
+                  onChange={event => updatePlateSettings({}, {
+                    lockProductIdentity: event.target.checked,
+                  })}
+                />
+                <span className="min-w-0">
+                  <span className="font-medium">产品身份锁定（推荐）</span>
+                  <span className="mt-0.5 block text-[9px] leading-snug text-neutral-500">
+                    竞品只提供版式、场景、人物姿势和文案槽位；最终合成不接触竞品产品纹理、皮革或 Logo。每页增加一次场景隔离生图。
+                  </span>
+                </span>
+              </label>
               <label
                 className={`col-span-2 flex cursor-pointer items-start gap-2 rounded-lg border px-2 py-2 text-xs ${dark ? 'border-neutral-700 bg-[#181818]' : 'border-neutral-300 bg-white'}`}
                 title="开启后，连接到“产品参考图”的第一张就是生成时唯一的产品参考；系统不再用从“我的详情”自动裁出的角度顶掉它"

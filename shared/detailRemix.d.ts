@@ -71,6 +71,8 @@ export interface DetailRemixNodeData {
   recognitionProvider: 'gemini-web' | 'codex-cli';
   /** Paid full re-generations allowed after a targeted repair still fails quality control. */
   maxStructuralRegenerations: 0 | 1 | 2 | 3;
+  /** Two-pass mode that prevents competitor product pixels from entering the own-product render. */
+  lockProductIdentity: boolean;
   /** Rank the user's own product references ahead of auto-cropped views. */
   preferSuppliedProductReferences: boolean;
   /** 卖点与精确参数的自由文本；填了就不再必须导入我方详情图。 */
@@ -163,6 +165,7 @@ export function describeDetailRemixProductSheet(sheet?: any, referenceLabel?: st
 export function buildOwnSellingPointsInstruction(options?: any): string;
 export function buildCompetitorPageInstruction(options?: any): string;
 export function buildDetailCopyReplacementPlan(options?: any): any[];
+export function buildDetailScenePlatePrompt(options?: any): string;
 export function buildFinalDetailPrompt(options?: any): string;
 export function buildFinalDetailValidationInstruction(options?: any): string;
 export function buildFinalDetailRepairPrompt(options?: any): string;

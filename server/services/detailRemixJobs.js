@@ -47,6 +47,7 @@ import {
   describeFinalDetailValidationFailures,
   buildOwnSellingPointsInstruction,
   buildCompetitorPageInstruction,
+  buildDetailScenePlatePrompt,
   buildFinalDetailPrompt,
   buildDetailCopyReplacementPlan,
   buildFinalDetailValidationInstruction,
@@ -57,10 +58,10 @@ import {
 
 export const DEFAULT_DETAIL_REMIX_RECOGNITION_PROVIDER = 'gemini-web';
 export const DEFAULT_DETAIL_REMIX_IMAGE_MODEL = 'google-flow-nano-banana-pro';
-export const DETAIL_REMIX_JOB_SCHEMA_VERSION = 7;
+export const DETAIL_REMIX_JOB_SCHEMA_VERSION = 8;
 const DETAIL_REMIX_KNOWLEDGE_SCHEMA_VERSION = 3;
-const DETAIL_REMIX_COMPETITOR_ANALYSIS_VERSION = 3;
-const DETAIL_REMIX_PIPELINE_VERSION = 'tail-strict-auto-copy-qa-v4';
+const DETAIL_REMIX_COMPETITOR_ANALYSIS_VERSION = 4;
+const DETAIL_REMIX_PIPELINE_VERSION = 'product-identity-lock-v1';
 const MAX_AUTO_PRODUCT_VIEW_REFERENCES = 3;
 const MAX_FINAL_REPAIR_ATTEMPTS = 1;
 /** Cover-crop loss above this is visible content removal, not rounding. */
@@ -327,6 +328,8 @@ function requestFingerprint(normalized, config) {
     competitorDetails: details(normalized.competitorDetails),
     productImages: normalized.productImages.map(canonicalMediaIdentity),
     productNodeIds: normalized.productNodeIds,
+    brandLogoImages: (normalized.brandLogoImages || []).map(canonicalMediaIdentity),
+    brandLogoNodeIds: normalized.brandLogoNodeIds || [],
     useCharacterReference: normalized.useCharacterReference,
     characterReferenceImages: normalized.characterReferenceImages.map(canonicalMediaIdentity),
     characterReferenceNodeIds: normalized.characterReferenceNodeIds,
@@ -336,6 +339,10 @@ function requestFingerprint(normalized, config) {
     sizingMode: config.sizingMode,
     aspectRatio: config.aspectRatio,
     imageResolution: config.imageResolution,
+    lockProductIdentity: config.lockProductIdentity !== false,
+    preferSuppliedProductReferences: config.preferSuppliedProductReferences === true,
+    productSheet: config.productSheet || '',
+    productBrief: config.productBrief || '',
   })).digest('hex');
 }
 
@@ -834,6 +841,24 @@ function productViewCatalog(job) {
     }));
 }
 
+function normalizeBrandSlotPlacement(slot, index) {
+  const source = slot && typeof slot === 'object' ? slot : {};
+  const explicit = String(source.placement || source.placementKind || '').trim().toLowerCase();
+  const descriptor = `${source.visualDescription || ''} ${source.role || ''} ${source.containerType || ''}`;
+  const placement = ['page_graphic', 'product_surface', 'packaging'].includes(explicit)
+    ? explicit
+    : /(?:产品|商品|机身|表面|皮革|布料|织物|铭牌|压印|刺绣|烫印|product|device|surface|emboss)/iu.test(descriptor)
+      ? 'product_surface'
+      : /(?:包装|包装盒|外箱|瓶身标签|packag|box|carton)/iu.test(descriptor)
+        ? 'packaging'
+        : 'page_graphic';
+  return {
+    ...source,
+    slotId: String(source.slotId || source.id || `brand-${index + 1}`),
+    placement,
+  };
+}
+
 function normalizePageAnalysis(parsed, { pageIndex = 0, pageCount = 1 } = {}) {
   const value = parsed?.page || parsed?.pages?.[0] || parsed?.analysis || parsed || {};
   const hasPersonValue = value.hasPerson ?? value.containsPerson ?? value.personPresent
@@ -894,7 +919,7 @@ function normalizePageAnalysis(parsed, { pageIndex = 0, pageCount = 1 } = {}) {
     productRegion: value.productRegion || productInstances[0] || {},
     copySlots,
     brandSlots: Array.isArray(value.brandSlots || value.logoSlots)
-      ? (value.brandSlots || value.logoSlots)
+      ? (value.brandSlots || value.logoSlots).map(normalizeBrandSlotPlacement)
       : [],
   };
 }
@@ -2253,6 +2278,7 @@ async function repairFinalDetailPage(
   page,
   rawBuffer,
   validation,
+  selectedProducts,
   brandReferences,
   evidenceReferences,
   characterReferences,
@@ -2276,21 +2302,85 @@ async function repairFinalDetailPage(
   writeJob(job, context);
   const current = saveImageBuffer(rawBuffer, imageTarget, `${page.resultNodeId}-quality-failed-${repairAttempt}`);
   page.qualityFailedCandidateUrl = current.resultUrl;
-  const repairReferences = [
-    current.resultUrl,
-    page.sourceImage,
-    ...evidenceReferences.map(item => item.imageUrl),
-    ...brandReferences,
-    ...characterReferences,
+  const identityLocked = job.lockProductIdentity !== false;
+  const baseReferences = identityLocked
+    ? [current.resultUrl]
+    : [current.resultUrl, page.sourceImage];
+  const provider = getImageGenerationProvider(job.imageModel);
+  const supportCapacity = Math.max(0, Number(provider?.maxReferenceImages || 0) - baseReferences.length);
+  const productCandidates = (selectedProducts || []).map(item => ({
+    key: `product:${item.imageUrl}`,
+    kind: item.supplemental ? 'own-product-supplement' : 'own-product-auto-angle',
+    imageUrl: item.imageUrl,
+    item,
+  }));
+  const evidenceCandidates = evidenceReferences.map(item => ({
+    key: `evidence:${item.imageUrl}`,
+    kind: 'own-fact-evidence',
+    imageUrl: item.imageUrl,
+    item,
+  }));
+  const brandCandidates = brandReferences.map(imageUrl => ({
+    key: `brand:${imageUrl}`,
+    kind: 'own-brand-logo',
+    imageUrl,
+    item: imageUrl,
+  }));
+  const characterCandidates = characterReferences.map(imageUrl => ({
+    key: `character:${imageUrl}`,
+    kind: 'character',
+    imageUrl,
+    item: imageUrl,
+  }));
+  const productFailed = validation.productCorrect !== true
+    || validation.productPlacementCorrect !== true
+    || validation.logoPresentationCorrect !== true;
+  const copyFailed = validation.copyExact !== true
+    || validation.parameterAlignmentCorrect !== true
+    || validation.unsupportedStrictFactsAbsent !== true;
+  const brandFailed = validation.brandCorrect !== true || validation.logoCorrect !== true;
+  const characterFailed = [
+    validation.characterIdentityCorrect,
+    validation.characterHairstyleCorrect,
+    validation.characterOutfitCorrect,
+    validation.characterAccessoriesCorrect,
+  ].some(value => value !== true);
+  const priority = [
+    ...(productFailed ? productCandidates : []),
+    ...(characterFailed ? characterCandidates : []),
+    ...(copyFailed ? evidenceCandidates : []),
+    ...(brandFailed ? brandCandidates : []),
+    ...productCandidates,
+    ...evidenceCandidates,
+    ...brandCandidates,
+    ...characterCandidates,
   ];
+  const selectedKeys = new Set();
+  for (const candidate of priority) {
+    if (selectedKeys.size >= supportCapacity) break;
+    selectedKeys.add(candidate.key);
+  }
+  const includedProducts = productCandidates.filter(item => selectedKeys.has(item.key));
+  const includedEvidence = evidenceCandidates.filter(item => selectedKeys.has(item.key));
+  const includedBrand = brandCandidates.filter(item => selectedKeys.has(item.key));
+  const includedCharacters = characterCandidates.filter(item => selectedKeys.has(item.key));
+  const orderedSupport = [
+    ...includedProducts,
+    ...includedEvidence,
+    ...includedBrand,
+    ...includedCharacters,
+  ];
+  const repairReferences = [...baseReferences, ...orderedSupport.map(item => item.imageUrl)];
   const prompt = buildFinalDetailRepairPrompt({
     pageAnalysis: page.analysis,
     copyPlan: exactCopyPlan(page),
     ownBrandIdentity: job.brandIdentity,
     validation,
-    evidenceReferenceCount: evidenceReferences.length,
-    hasBrandLogoReference: brandReferences.length > 0,
-    characterReferenceCount: characterReferences.length,
+    productReferenceCount: includedProducts.length,
+    evidenceReferenceCount: includedEvidence.length,
+    hasBrandLogoReference: includedBrand.length > 0,
+    characterReferenceCount: includedCharacters.length,
+    identityLocked,
   });
   page.repairPrompt = prompt;
   page.status = 'submitting';
@@ -2314,10 +2404,8 @@ async function repairFinalDetailPage(
     pageIndex: page.index,
     referenceKinds: [
       'quality-failed-final',
-      'competitor-layout-original',
-      ...evidenceReferences.map(() => 'own-fact-evidence'),
-      ...brandReferences.map(() => 'own-brand-logo'),
-      ...characterReferences.map(() => 'character'),
+      ...(identityLocked ? [] : ['competitor-layout-original']),
+      ...orderedSupport.map(item => item.kind),
     ],
   }, signal);
   assertActive(job, context, signal);
@@ -2420,6 +2508,96 @@ async function regenerateFinalDetailPage(job, page, basePrompt, references, vali
 }
 
 /**
+ * Product identity lock pass 1. The competitor is consumed here and never
+ * forwarded to the product-rendering request. Persisting the clean plate before
+ * pass 2 also makes each paid boundary independently resumable.
+ */
+async function ensureIdentityLockedScenePlate(job, page, context, signal) {
+  if (job.lockProductIdentity === false) return;
+  if (page.scenePlateStatus === 'completed' && page.rawPlateUrl) return;
+  if (page.status === 'submitting'
+      && !canResumeCodexSubmission(job, page, 'blank-plate', context)) {
+    page.status = 'recovery_required';
+    page.scenePlateStatus = 'recovery_required';
+    page.error = '产品身份锁定底图在提交边界中断；系统不会自动重复提交';
+    writeJob(job, context);
+    return;
+  }
+  await ensurePageSourceDimensions(job, page, context);
+  page.plateNodeId ||= newId(context);
+  page.status = 'preparing_scene_plate';
+  page.scenePlateStatus = 'preparing';
+  job.stage = 'isolating_competitor_product';
+  job.stageLabel = `正在隔离竞品产品 ${page.index + 1} / ${job.pages.length}`;
+  writeJob(job, context);
+
+  const characterReferences = job.useCharacterReference && page.analysis?.hasPerson
+    ? [...job.characterReferenceImages]
+    : [];
+  const references = [page.sourceImage, ...characterReferences];
+  const prompt = buildDetailScenePlatePrompt({
+    pageAnalysis: page.analysis,
+    pageIndex: page.index,
+    useCharacterReference: characterReferences.length > 0,
+  });
+  page.blankPrompt = prompt;
+  page.scenePlateReferenceCount = references.length;
+  const { imageTarget } = getStorage(job.workflowId, context.dirs);
+  let rawBuffer = page.rawPlateUrl ? imageInputToBuffer(page.rawPlateUrl, context) : null;
+  if (page.rawPlateUrl && !rawBuffer) {
+    throw new Error('已生成的产品隔离底图无法读取；为避免重复扣费，系统不会自动重新提交');
+  }
+  if (!rawBuffer) {
+    page.status = 'submitting';
+    page.scenePlateStatus = 'submitting';
+    page.scenePlateSubmittingAt = nowIso(context);
+    markBoundary(job, context, {
+      kind: 'blank-plate',
+      pageIndex: page.index,
+      submittingAt: page.scenePlateSubmittingAt,
+    });
+    const request = makeGenerationRequest(
+      job,
+      prompt,
+      references,
+      `${page.plateNodeId}-raw`,
+      context,
+      signal,
+      page,
+    );
+    const generated = await runImageGenerationSafely(request, job, context, {
+      phase: 'blank-plate',
+      pageIndex: page.index,
+      referenceKinds: ['competitor-structure-only', ...characterReferences.map(() => 'character')],
+    }, signal);
+    assertActive(job, context, signal);
+    let raw;
+    try {
+      raw = await persistRawResult(generated, imageTarget, `${page.plateNodeId}-raw`, {
+        ...context,
+        workflowIdForResolution: job.workflowId,
+      });
+    } catch (error) {
+      throw submittedOperationError(error);
+    }
+    rawBuffer = raw.buffer;
+    page.rawPlateUrl = raw.resultUrl;
+    page.status = 'normalizing_scene_plate';
+    page.scenePlateStatus = 'normalizing';
+    page.scenePlateGenerationCompletedAt = nowIso(context);
+    clearBoundary(job, context);
+  }
+  rawBuffer = await matchPageDimensions(rawBuffer, page, context);
+  const normalized = saveImageBuffer(rawBuffer, imageTarget, `${page.plateNodeId}-raw`);
+  page.rawPlateUrl = normalized.resultUrl;
+  page.scenePlateStatus = 'completed';
+  page.scenePlateCompletedAt = nowIso(context);
+  page.status = 'preparing';
+  page.error = undefined;
+  writeJob(job, context);
+}
+
+/**
  * Which submission a page is mid-flight on, decided from that page's own state.
  * Reading it off the job-wide `currentSubmission` misattributes the phase as soon
  * as more than one page holds a live child job — the resumable one then looks
@@ -2433,6 +2611,7 @@ function interruptedPhaseForPage(page) {
     return structuralRegenerationPhase(structuralAttempt);
   }
   if (page?.repairCodexImageJobId && !page.repairCompletedAt) return 'final-repair';
+  if (page?.plateCodexImageJobId && !page.scenePlateCompletedAt) return 'blank-plate';
   return 'final-detail';
 }
 
@@ -2442,16 +2621,21 @@ function interruptedPhaseForPage(page) {
  * the following page while this one is being judged.
  */
 function prepareFinalPageGeneration(job, page) {
+  const identityLocked = job.lockProductIdentity !== false;
+  if (identityLocked && !page.rawPlateUrl) {
+    throw new Error('产品身份锁定底图尚未完成，不能进入产品合成阶段');
+  }
   const characterReferences = job.useCharacterReference && page.analysis?.hasPerson
     ? [...job.characterReferenceImages]
     : [];
+  const generationCharacterReferences = identityLocked ? [] : characterReferences;
   const brandReferences = job.brandLogoUrl ? [job.brandLogoUrl] : [];
   const imageProvider = getImageGenerationProvider(job.imageModel);
   const evidenceCapacity = Math.max(
     0,
     Number(imageProvider?.maxReferenceImages || 0)
       - 1
-      - characterReferences.length
+      - generationCharacterReferences.length
       - brandReferences.length
       - 1,
   );
@@ -2470,18 +2654,18 @@ function prepareFinalPageGeneration(job, page) {
   const selectedProducts = resolvePageProductReferences(
     job,
     page,
-    characterReferences.length + brandReferences.length + evidenceReferences.length,
+    generationCharacterReferences.length + brandReferences.length + evidenceReferences.length,
   );
-  // One generation request receives every visual input it needs. Only the
+  // Locked mode receives the clean scene instead of competitor pixels. Only the
   // exact own-detail pages that prove mapped facts are included; unrelated
   // pages remain excluded to avoid confusing the image model.
   const productReferences = selectedProducts.map(item => item.imageUrl);
   const references = [
-    page.sourceImage,
+    identityLocked ? page.rawPlateUrl : page.sourceImage,
     ...productReferences,
     ...brandReferences,
     ...evidenceReferences.map(item => item.imageUrl),
-    ...characterReferences,
+    ...generationCharacterReferences,
   ];
   const prompt = buildFinalDetailPrompt({
     pageAnalysis: page.analysis,
@@ -2493,8 +2677,9 @@ function prepareFinalPageGeneration(job, page) {
     ownBrandIdentity: job.brandIdentity,
     hasBrandLogoReference: brandReferences.length > 0,
     ownEvidenceReferenceCount: evidenceReferences.length,
-    useCharacterReference: characterReferences.length > 0,
+    useCharacterReference: generationCharacterReferences.length > 0,
     productSheet: activeProductSheet(job, page),
+    identityLocked,
   });
   page.finalPrompt = prompt;
   page.prompt = prompt;
@@ -2507,11 +2692,11 @@ function prepareFinalPageGeneration(job, page) {
     evidenceReferences,
     characterReferences,
     referenceKinds: [
-      'competitor-layout',
+      identityLocked ? 'identity-locked-scene' : 'competitor-layout',
       ...selectedProducts.map(item => item.supplemental ? 'own-product-supplement' : 'own-product-auto-angle'),
       ...brandReferences.map(() => 'own-brand-logo'),
       ...evidenceReferences.map(() => 'own-fact-evidence'),
-      ...characterReferences.map(() => 'character'),
+      ...generationCharacterReferences.map(() => 'character'),
     ],
   };
 }
@@ -2526,6 +2711,10 @@ function prepareFinalPageGeneration(job, page) {
  * page, which is what makes it recoverable and cancellable.
  */
 async function presubmitNextPageGeneration(job, page, context, signal) {
+  // Locked pages need their own persisted clean scene before the final request
+  // can be constructed. Queueing the legacy one-pass request here would put the
+  // competitor back into the product-rendering boundary.
+  if (job.lockProductIdentity !== false) return;
   if (job.imageModel !== 'codex-imagegen' || !context.codexJobsDir) return;
   if (context.generateImage) return;
   if (signal?.aborted) return;
@@ -2596,6 +2785,8 @@ async function presubmitNextPageGeneration(job, page, context, signal) {
 
 async function generateFinalPage(job, page, context, signal) {
   if ((page.finalUrl || page.resultUrl) && page.status === 'completed') return;
+  await ensureIdentityLockedScenePlate(job, page, context, signal);
+  if (page.status === 'recovery_required') return;
   if (page.status === 'submitting'
       && !canResumeCodexSubmission(job, page, interruptedPhaseForPage(page), context)) {
     page.status = 'recovery_required';
@@ -2759,6 +2950,7 @@ async function generateFinalPage(job, page, context, signal) {
         page,
         rawBuffer,
         validation,
+        selectedProducts,
         brandReferences,
         evidenceReferences,
         characterReferences,
@@ -2847,6 +3039,8 @@ async function generateFinalPage(job, page, context, signal) {
     sourceNodeId: page.sourceNodeId,
     sourcePageIndex: page.index,
     detailRemixPhase: 'final',
+    productIdentityLocked: job.lockProductIdentity !== false,
+    scenePlateUrl: job.lockProductIdentity !== false ? page.rawPlateUrl : undefined,
     rawResultUrl: page.rawResultUrl,
     mappedSellingPoints: page.mappedSellingPoints,
     mappedFacts: page.effectiveMappedFacts,
@@ -3103,20 +3297,22 @@ function markInterruptedSubmission(job, context) {
       const phase = Number(job.currentSubmission?.pageIndex) === Number(page.index)
         && job.currentSubmission?.kind
         ? String(job.currentSubmission.kind)
-        : (Number(job.schemaVersion) >= 3 || job.phase === 'final'
-            ? 'final-detail'
-            : 'blank-plate');
+        : interruptedPhaseForPage(page);
       const codex = codexSubmissionFor(job, page, phase, context);
       if (codex && ['pending', 'processing', 'completed'].includes(codex.child.status)) {
         changed = true;
       } else if (codex && ['failed', 'cancelled'].includes(codex.child.status)) {
         page.status = 'failed';
+        if (phase === 'blank-plate') page.scenePlateStatus = 'failed';
         page.error = codex.child.error || 'Codex 生图任务未完成';
         changed = true;
       } else {
         page.status = 'recovery_required';
+        if (phase === 'blank-plate') page.scenePlateStatus = 'recovery_required';
         page.error = phase === 'final-repair'
           ? '最终详情 AI 修复提交状态待核对'
+          : phase === 'blank-plate'
+            ? '产品身份锁定底图提交状态待核对'
           : Number(job.schemaVersion) >= 3
             ? '最终详情图提交状态待核对'
             : '空白详情底图提交状态待核对';
@@ -3210,15 +3406,15 @@ function maybeResume(job, context) {
     job.stageLabel = '旧版生成方式已停用，请重新生成最终详情';
     job.error = predatesSinglePassPipeline
       ? '该任务创建于本地叠字/二次合成版本。为避免恢复出无字图或重复扣费，系统不会继续旧任务；请点击“重新生成最终详情”创建一次生成的新版本。'
-      : '该任务创建于旧版参数证据契约。为避免恢复时混入无证据参数、发生参数错栏或重复扣费，系统不会继续旧任务；请点击“重新生成最终详情”创建严格证据链的新版本。';
+      : '该任务创建于旧版生成契约。为避免恢复时重新提交、混入竞品产品细节或发生参数错栏，系统不会继续旧任务；请点击“重新生成最终详情”创建产品身份锁定版本。';
     writeJob(job, context);
     return job;
   }
   if (markInterruptedSubmission(job, context)) return job;
   if (!['pending', 'processing'].includes(job.status)) return job;
   if (context.autoStart === false) return job;
-  // Anything that reaches here is at the current schema version — the guard
-  // above stops every older job — so the single-pass phase is the only one left.
+  // Anything that reaches here is at the current schema version. The final
+  // phase now owns both resumable identity-lock passes.
   void executeFinalPhase(job, context);
   return job;
 }
@@ -3240,18 +3436,25 @@ export function createDetailRemixJob(payload, context) {
   const imageModel = String(payload.imageModel || DEFAULT_DETAIL_REMIX_IMAGE_MODEL);
   const imageProvider = getImageGenerationProvider(imageModel);
   if (!imageProvider?.supportsImageToImage) throw new Error('请选择支持参考图的图片模型');
+  const lockProductIdentity = payload.lockProductIdentity !== false;
   // Even without a standalone product upload, reserve one provider slot for
   // the angle-matched crop extracted automatically from the user's details.
-  // Reserve one competitor base, at least one product angle, and one possible
-  // brand-logo reference. The logo is detected later from the user's details.
+  // Reserve one base (competitor in fast mode, clean scene in locked mode), at
+  // least one product angle, and one possible brand-logo reference. The logo is
+  // detected later from the user's details.
   const reservedReferences = 2 + Math.max(1, normalized.productImages.length);
   if (reservedReferences > imageProvider.maxReferenceImages) {
-    throw new Error(`${imageProvider.name} 每页保留竞品版式图后，最多支持 ${imageProvider.maxReferenceImages - 1} 张产品补充图`);
+    throw new Error(`${imageProvider.name} 每页保留${lockProductIdentity ? '场景底图' : '竞品版式图'}后，最多支持 ${imageProvider.maxReferenceImages - 1} 张产品补充图`);
   }
-  const maximumCharacterReferences = Math.max(0, imageProvider.maxReferenceImages - reservedReferences);
+  const maximumCharacterReferences = Math.max(
+    0,
+    imageProvider.maxReferenceImages - (lockProductIdentity ? 1 : reservedReferences),
+  );
   if (normalized.useCharacterReference
       && normalized.characterReferenceImages.length > maximumCharacterReferences) {
-    throw new Error(`${imageProvider.name} 每页需同时发送竞品版式图和自动产品角度，人物参考图最多支持 ${maximumCharacterReferences} 张`);
+    throw new Error(lockProductIdentity
+      ? `${imageProvider.name} 的场景隔离阶段除竞品图外，人物参考图最多支持 ${maximumCharacterReferences} 张`
+      : `${imageProvider.name} 每页需同时发送竞品版式图和自动产品角度，人物参考图最多支持 ${maximumCharacterReferences} 张`);
   }
   const recognitionProvider = ['gemini-web', 'codex-cli'].includes(payload.recognitionProvider)
     ? payload.recognitionProvider
@@ -3283,6 +3486,7 @@ export function createDetailRemixJob(payload, context) {
     sizingMode,
     aspectRatio,
     imageResolution,
+    lockProductIdentity,
     // The sheet layout and the priority switch both change what the model sees,
     // so a change to either must produce a new job rather than resume the old one.
     preferSuppliedProductReferences,
@@ -3303,6 +3507,8 @@ export function createDetailRemixJob(payload, context) {
         competitorDetails: existing.competitorDetails || [],
         productImages: existing.productImages || [],
         productNodeIds: existing.productNodeIds || [],
+        brandLogoImages: existing.brandLogoImages || [],
+        brandLogoNodeIds: existing.brandLogoNodeIds || [],
         characterReferenceImages: existing.useCharacterReference ? (existing.characterReferenceImages || []) : [],
         characterReferenceNodeIds: existing.useCharacterReference ? (existing.characterReferenceNodeIds || []) : [],
         useCharacterReference: existing.useCharacterReference === true,
@@ -3313,6 +3519,7 @@ export function createDetailRemixJob(payload, context) {
         sizingMode: existing.sizingMode || 'match-competitor',
         aspectRatio: existing.aspectRatio,
         imageResolution: existing.imageResolution,
+        lockProductIdentity: existing.lockProductIdentity !== false,
         preferSuppliedProductReferences: existing.preferSuppliedProductReferences === true,
         productSheet: existing.productSheet ? JSON.stringify(existing.productSheet) : '',
         productBrief: String(existing.productBrief || '').trim(),
@@ -3351,6 +3558,7 @@ export function createDetailRemixJob(payload, context) {
       ),
     } : {}),
     resultNodeId: newId(context),
+    ...(lockProductIdentity ? { plateNodeId: newId(context), scenePlateStatus: 'waiting' } : {}),
     status: 'waiting',
     recognitionStatus: 'waiting',
   }));
@@ -3379,6 +3587,7 @@ export function createDetailRemixJob(payload, context) {
     // one, the sheet is read off the picture at run time.
     productSheetManual: Boolean(productSheet),
     preferSuppliedProductReferences,
+    lockProductIdentity,
     characterReferenceImages: normalized.characterReferenceImages,
     characterReferenceNodeIds: normalized.characterReferenceNodeIds,
     useCharacterReference: normalized.useCharacterReference,
@@ -3533,6 +3742,7 @@ function pageHasGenerationSubmission(job, page) {
   if (!page) return false;
   if (
     pageGenerationSubmissionFields(page).some(field => page[field])
+    || page.rawPlateUrl
     || page.rawResultUrl
     || page.finalUrl
     || page.resultUrl

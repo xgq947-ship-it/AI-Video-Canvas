@@ -1,4 +1,4 @@
-/** Frontend contract for the single-generation e-commerce detail remix job. */
+/** Frontend contract for the e-commerce detail remix job. */
 
 import type { DetailRemixProductSheet } from '../../shared/detailRemix';
 
@@ -18,6 +18,7 @@ export type DetailRemixJobStage =
   | 'extracting_selling_points'
   | 'detecting_product_sheet'
   | 'analyzing_competitor'
+  | 'isolating_competitor_product'
   | 'generating_final'
   | 'validating_final'
   | 'revalidating_final'
@@ -86,6 +87,8 @@ export interface DetailRemixPageResult {
   recognitionLastError?: string;
   recognitionAttempts?: number;
   recognitionFormatRetries?: number;
+  scenePlateStatus?: string;
+  scenePlateCompletedAt?: string;
   composeStatus?: string;
   codexImageJobId?: string;
   repairCodexImageJobId?: string;
@@ -133,6 +136,7 @@ export interface DetailRemixJob {
   imageModel?: string;
   imageResolution?: string;
   resolution?: string;
+  lockProductIdentity?: boolean;
   aspectRatio?: string;
   sizingMode?: 'match-competitor' | string;
   brandIdentity?: Record<string, unknown>;
@@ -240,6 +244,8 @@ export interface CreateDetailRemixJobParams {
   resolution?: string;
   /** Paid full re-generations allowed after a targeted repair still fails quality control. */
   maxStructuralRegenerations?: number;
+  /** Isolate the competitor before rendering the user's product. */
+  lockProductIdentity?: boolean;
   /** Rank supplied product references ahead of auto-cropped views from the own detail pages. */
   preferSuppliedProductReferences?: boolean;
   /** Grid manifest describing the first supplied product reference. */

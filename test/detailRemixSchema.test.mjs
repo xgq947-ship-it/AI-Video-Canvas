@@ -15,6 +15,7 @@ import {
   buildCompetitorPageInstruction,
   buildDetailCopyReplacementPlan,
   buildDetailRemixInputMapping,
+  buildDetailScenePlatePrompt,
   buildFinalDetailPrompt,
   buildFinalDetailRepairPrompt,
   buildFinalDetailValidationInstruction,
@@ -38,7 +39,9 @@ const image = (id, x, y, url = `/${id}.png`) => ({ id, type: 'Image', x, y, resu
 test('新节点人物参考默认关闭；关闭仍保留选择，active refs 与 fingerprint 排除人物图', () => {
   const empty = createDetailRemixNodeData();
   assert.equal(empty.schemaVersion, 1);
+  assert.equal(empty.lockProductIdentity, true);
   assert.deepEqual(empty.inputRefs.characterReference, { enabled: false, nodeIds: [] });
+  assert.equal(createDetailRemixNodeData({ lockProductIdentity: false }).lockProductIdentity, false);
 
   const off = createDetailRemixNodeData({
     inputRefs: { characterReference: { enabled: false, nodeIds: ['person-1'] } },
@@ -218,6 +221,10 @@ test('结构化识图解析产品角度与竞品选角，同时禁止编造竞�
   }));
   assert.equal(page.page.hasPerson, true);
   assert.equal(page.page.productRegion.x, 0.5);
+  const productSurfaceBrand = parseCompetitorPageResponse(JSON.stringify({
+    page: { brandSlots: [{ visualDescription: '产品皮革表面白色压印 Logo' }] },
+  }));
+  assert.equal(productSurfaceBrand.page.brandSlots[0].placement, 'product_surface');
   assert.throws(() => parseCompetitorPageResponse('not json'), /不是有效 JSON/);
   assert.equal(parseCompetitorPageResponse('{"page":{"hasPerson":false,},}').page.hasPerson, false);
   assert.throws(
@@ -234,9 +241,15 @@ test('结构化识图解析产品角度与竞品选角，同时禁止编造竞�
   });
   assert.match(competitorInstruction, /不得新造参数或功效/);
   assert.match(competitorInstruction, /selectedProductViewIds/);
+  assert.match(competitorInstruction, /product_surface.*只用于清除竞品/);
+  assert.match(competitorInstruction, /竞品产品.*材质、纹理、缝线/);
   assert.doesNotMatch(competitorInstruction, /evidenceSummary|sourceNodeIds/);
   assert.equal(DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.additionalProperties, false);
   assert.ok(DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.properties.page.required.includes('copySlots'));
+  assert.ok(
+    DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.properties.page.properties.brandSlots.items.required
+      .includes('placement'),
+  );
   assert.equal(DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.properties.page.properties.copySlots.items.additionalProperties, false);
   assert.ok(DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA.properties.page.required.includes('mappedFacts'));
   assert.ok(
@@ -507,32 +520,47 @@ test('成图质检与 AI 定向修复保持全 AI 路径，不产生本地叠字
     pageAnalysis: { pageType: 'specification' },
     copyPlan: [{ replacementText: '额定功率\n16W' }],
     validation,
+    productReferenceCount: 1,
     evidenceReferenceCount: 1,
     hasBrandLogoReference: true,
     characterReferenceCount: 1,
   });
   assert.match(repair, /参考图2是原始竞品页/);
-  assert.match(repair, /参考图3.*事实证据/);
-  assert.match(repair, /参考图4只提供我方 Logo/);
-  assert.match(repair, /参考图5是人物完整造型参考/);
+  assert.match(repair, /参考图3是我方产品身份的最高权威/);
+  assert.match(repair, /参考图4.*事实证据/);
+  assert.match(repair, /参考图5只提供页面图形槽所需的我方 Logo/);
+  assert.match(repair, /参考图6是人物完整造型参考/);
   assert.match(repair, /恢复胶囊标签、主标题、副标题/);
   assert.match(repair, /禁止只换脸/);
   assert.doesNotMatch(repair, /本地|程序叠加/);
+  const lockedRepair = buildFinalDetailRepairPrompt({
+    pageAnalysis: { pageType: 'marketing' },
+    validation: { productCorrect: false, logoPresentationCorrect: false },
+    productReferenceCount: 1,
+    identityLocked: true,
+  });
+  assert.match(lockedRepair, /本次修复不提供竞品原图/);
+  assert.match(lockedRepair, /参考图2是我方产品身份的最高权威/);
+  assert.match(lockedRepair, /参考中没有的标识必须删除/);
+  assert.doesNotMatch(lockedRepair, /参考图2是原始竞品页/);
 });
 
-test('单阶段提示词一次传入版式、产品和可选人物，并直接要求最终图', () => {
+test('快速模式仍可单阶段生成，锁定模式先隔离竞品再只吃我方产品', () => {
   const analysis = {
     hasPerson: true,
     reversePrompt: '柔和家居光线，人物在左，商品区在右',
     productInstances: [
-      { instanceId: 'product-1', x: 0.6, y: 0.4, width: 0.3, height: 0.4 },
+      { instanceId: 'product-1', x: 0.6, y: 0.4, width: 0.3, height: 0.4, material: '竞品鳄鱼皮纹理' },
       { instanceId: 'product-2', x: 0.1, y: 0.65, width: 0.2, height: 0.2 },
     ],
     copySlots: [
       { slotId: 'headline-1', role: 'headline', sourceText: '竞品原标题', x: 0.1, y: 0.08, width: 0.8, height: 0.1 },
       { slotId: 'support-1', role: 'support', sourceText: '竞品说明', x: 0.1, y: 0.2, width: 0.8, height: 0.12 },
     ],
-    brandSlots: [{ slotId: 'brand-1', sourceText: '竞品牌', x: 0.05, y: 0.03, width: 0.2, height: 0.08 }],
+    brandSlots: [
+      { slotId: 'brand-1', sourceText: '竞品牌', placement: 'page_graphic', x: 0.05, y: 0.03, width: 0.2, height: 0.08 },
+      { slotId: 'brand-on-product', sourceText: '竞品白色标', placement: 'product_surface', x: 0.62, y: 0.42, width: 0.08, height: 0.03 },
+    ],
   };
   const mappedSellingPoints = [{
     id: 'sp-1',
@@ -557,7 +585,7 @@ test('单阶段提示词一次传入版式、产品和可选人物，并直接�
   assert.match(off, /直接编辑参考图1/);
   assert.match(off, /目标尺寸继承竞品原图/);
   assert.match(off, /参考图2是同一款我方真实产品/);
-  assert.match(off, /参考图3只提供我方 Logo 的身份/);
+  assert.match(off, /参考图3只允许用于 page_graphic 页面品牌槽/);
   assert.match(off, /front-left/);
   assert.match(off, /生成第.*最终图/);
   assert.match(off, /"originalText":"竞品原标题"/);
@@ -566,7 +594,10 @@ test('单阶段提示词一次传入版式、产品和可选人物，并直接�
   assert.match(off, /深层舒缓/);
   assert.doesNotMatch(off, /"replacementText":"双档热敷"/);
   assert.match(off, /PHILIPS/);
-  assert.match(off, /全部竞品产品实例/);
+  assert.match(off, /productInstances 指定的空位/);
+  assert.match(off, /"sourceSlots":\[\{"slotId":"brand-1","placement":"page_graphic"/);
+  assert.match(off, /"removalOnlySlots":\[\{"slotId":"brand-on-product","placement":"product_surface"/);
+  assert.match(off, /参考图相应位置没有就必须保持无标识/);
   assert.doesNotMatch(off, /稍后由程序/);
   assert.match(off, /不要输出中间底图/);
   const on = buildFinalDetailPrompt({
@@ -576,9 +607,37 @@ test('单阶段提示词一次传入版式、产品和可选人物，并直接�
     useCharacterReference: true,
   });
   assert.match(on, /参考图2至参考图3/);
-  assert.match(on, /参考图4只提供我方 Logo 的身份/);
+  assert.match(on, /参考图4只允许用于 page_graphic 页面品牌槽/);
   assert.match(on, /参考图5及之后是人物完整外观的最高权威/);
   assert.match(on, /绝不允许只换脸后保留竞品人物的发型、衣服或配饰/);
+
+  const scene = buildDetailScenePlatePrompt({
+    pageAnalysis: analysis,
+    pageIndex: 0,
+    useCharacterReference: true,
+  });
+  assert.match(scene, /无产品场景底图/);
+  assert.match(scene, /竞品产品本身不是参考素材/);
+  assert.match(scene, /皮革颗粒、缝线、按钮细节/);
+  assert.match(scene, /参考图2及之后是人物完整身份与造型的唯一依据/);
+  assert.doesNotMatch(scene, /竞品鳄鱼皮纹理/);
+  assert.doesNotMatch(scene, /竞品原标题|竞品说明/);
+
+  const locked = buildFinalDetailPrompt({
+    pageAnalysis: analysis,
+    mappedSellingPoints,
+    productImageCount: 1,
+    ownBrandIdentity: { name: 'SUPOR' },
+    hasBrandLogoReference: true,
+    identityLocked: true,
+  });
+  assert.match(locked, /参考图1是已经隔离竞品产品后生成的无产品场景底图/);
+  assert.match(locked, /不包含任何可供借鉴的竞品产品/);
+  assert.match(locked, /本次修复不提供竞品原图|产品表面的 Logo/);
+  assert.match(locked, /没有完全相同的实拍角度.*轻微调整场景适配/);
+  assert.doesNotMatch(locked, /参考图1是需要直接修改的竞品原图/);
+  assert.doesNotMatch(locked, /竞品鳄鱼皮纹理/);
+  assert.doesNotMatch(locked, /竞品原标题|竞品说明/);
 });
 
 test('真实多卖点映射严格收敛为一个槽位一条文案，不产生无位置重复文字', () => {

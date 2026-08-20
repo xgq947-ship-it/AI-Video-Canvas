@@ -1,10 +1,10 @@
 /**
  * Shared contract for the canvas-native e-commerce detail remix workflow.
  *
- * The controller performs recognition first, then makes exactly one paid image
- * generation request per competitor page. That request receives the competitor
- * layout, the user's product, and (when enabled and needed) character references
- * and directly produces the final detail image.
+ * The controller performs recognition first. Product identity lock (the default)
+ * isolates the competitor in a scene-cleaning pass, then renders the final page
+ * from that clean scene plus own-side references only. The optional fast mode
+ * keeps the legacy one-pass edit for users who explicitly prefer lower cost.
  * Input roles are explicit ports. `parentIds` is only the graph edge list and
  * must never be used to guess whether an image is a competitor, own detail,
  * character, or product reference.
@@ -159,13 +159,17 @@ export const DETAIL_REMIX_COMPETITOR_OUTPUT_SCHEMA = Object.freeze({
             type: 'object',
             additionalProperties: false,
             required: [
-              'slotId', 'sourceText', 'visualDescription', 'x', 'y', 'width',
+              'slotId', 'sourceText', 'visualDescription', 'placement', 'x', 'y', 'width',
               'height', 'align', 'color',
             ],
             properties: {
               slotId: { type: 'string' },
               sourceText: { type: 'string' },
               visualDescription: { type: 'string' },
+              placement: {
+                type: 'string',
+                enum: ['page_graphic', 'product_surface', 'packaging'],
+              },
               ...normalizedRegionSchema.properties,
               align: { type: 'string' },
               color: { type: 'string' },
@@ -512,6 +516,26 @@ const text = value => String(value ?? '').trim();
 const unique = values => [...new Set(array(values).map(text).filter(Boolean))];
 const object = value => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
 
+const DETAIL_REMIX_BRAND_PLACEMENTS = new Set(['page_graphic', 'product_surface', 'packaging']);
+
+function normalizeDetailRemixBrandSlot(value, index = 0) {
+  const slot = object(value);
+  const explicit = text(slot.placement || slot.placementKind).toLowerCase();
+  const description = `${text(slot.visualDescription)} ${text(slot.role)} ${text(slot.containerType)}`;
+  const placement = DETAIL_REMIX_BRAND_PLACEMENTS.has(explicit)
+    ? explicit
+    : /(?:产品|商品|机身|表面|皮革|布料|织物|铭牌|压印|刺绣|烫印|product|device|surface|emboss)/iu.test(description)
+      ? 'product_surface'
+      : /(?:包装|包装盒|外箱|瓶身标签|packag|box|carton)/iu.test(description)
+        ? 'packaging'
+        : 'page_graphic';
+  return {
+    ...slot,
+    slotId: text(slot.slotId || slot.id) || `brand-${index + 1}`,
+    placement,
+  };
+}
+
 const normalizedToken = value => text(value)
   .normalize('NFKC')
   .toLowerCase()
@@ -742,6 +766,10 @@ export function createDetailRemixNodeData(overrides = {}) {
     // 卖点与精确参数的唯一权威来源。用户直接写清楚，比从旧详情图 OCR 出来更准，
     // 也让整条链路不再必须依赖「我的详情」这组输入。
     productBrief: text(source.productBrief),
+    // Default on: the competitor image is removed from the product-rendering
+    // request, which prevents its leather grain, seams and marks from leaking
+    // into the user's product. `false` is the explicit one-pass fast mode.
+    lockProductIdentity: source.lockProductIdentity !== false,
     preferSuppliedProductReferences: source.preferSuppliedProductReferences === true,
     // `productSheet` is the user's optional override; `detectedProductSheet` is
     // what the last run actually read off the picture and is display-only.
@@ -1076,7 +1104,8 @@ export function parseCompetitorPageResponse(value) {
       mappedSellingPoints: array(page.mappedSellingPoints || page.sellingPointMapping),
       mappedFacts: array(page.mappedFacts || page.factMapping),
       copySlots,
-      brandSlots: array(page.brandSlots || page.logoSlots),
+      brandSlots: array(page.brandSlots || page.logoSlots)
+        .map((slot, index) => normalizeDetailRemixBrandSlot(slot, index)),
       productRegion,
       productInstances: productInstances.length ? productInstances : (Object.keys(productRegion).length ? [productRegion] : []),
       selectedProductViewIds: array(page.selectedProductViewIds || page.productViewIds).map(text).filter(Boolean),
@@ -1245,13 +1274,13 @@ export function buildCompetitorPageInstruction({
   const strictParameterModeEligible = detailRemixAllowsStrictParameterMode(pageIndex, totalPages);
   const firstTailPage = Math.max(1, totalPages - DETAIL_REMIX_STRICT_PARAMETER_TAIL_PAGE_COUNT + 1);
   const responseExample = strictParameterModeEligible
-    ? `{"page":{"pageType":"specification","pageMode":"${DETAIL_REMIX_STRICT_PARAMETER_MODE}","strictPageCategory":"electrical","purpose":"","reversePrompt":"","layoutSpec":"","palette":"","lighting":"","hasPerson":false,"personaSpec":"","targetProductView":{"viewAngle":"front-left","visibleSides":["front","left"],"orientation":"upright","perspective":"three-quarter"},"selectedProductViewIds":["pv-1"],"productInstances":[{"instanceId":"product-1","x":0.5,"y":0.5,"width":0.3,"height":0.3,"viewAngle":"front-left","contactSurface":"","foregroundOcclusion":"","productSheetCell":0}],"brandSlots":[{"slotId":"brand-1","sourceText":"竞品品牌","visualDescription":"左上角白色品牌标识","x":0.05,"y":0.03,"width":0.2,"height":0.08,"align":"left","color":"#ffffff"}],"copySlots":[{"slotId":"power-label","role":"parameterLabel","field":"power","parameterPart":"label","sourceText":"额定功率","x":0.1,"y":0.08,"width":0.35,"height":0.06,"align":"left","color":"#ffffff","fontWeight":500,"maxChars":8},{"slotId":"power-value","role":"parameterValue","field":"power","parameterPart":"value","sourceText":"20W","x":0.5,"y":0.08,"width":0.2,"height":0.06,"align":"right","color":"#ffffff","fontWeight":500,"maxChars":8}],"mappedSellingPoints":[],"mappedFacts":[{"factId":"fact-1","slotId":"power-label","slotRole":"parameterLabel","displayPart":"label"},{"factId":"fact-1","slotId":"power-value","slotRole":"parameterValue","displayPart":"value"}],"forbiddenCompetitorElements":[]}}`
+    ? `{"page":{"pageType":"specification","pageMode":"${DETAIL_REMIX_STRICT_PARAMETER_MODE}","strictPageCategory":"electrical","purpose":"","reversePrompt":"","layoutSpec":"","palette":"","lighting":"","hasPerson":false,"personaSpec":"","targetProductView":{"viewAngle":"front-left","visibleSides":["front","left"],"orientation":"upright","perspective":"three-quarter"},"selectedProductViewIds":["pv-1"],"productInstances":[{"instanceId":"product-1","x":0.5,"y":0.5,"width":0.3,"height":0.3,"viewAngle":"front-left","contactSurface":"","foregroundOcclusion":"","productSheetCell":0}],"brandSlots":[{"slotId":"brand-1","sourceText":"竞品品牌","visualDescription":"左上角白色品牌标识","placement":"page_graphic","x":0.05,"y":0.03,"width":0.2,"height":0.08,"align":"left","color":"#ffffff"}],"copySlots":[{"slotId":"power-label","role":"parameterLabel","field":"power","parameterPart":"label","sourceText":"额定功率","x":0.1,"y":0.08,"width":0.35,"height":0.06,"align":"left","color":"#ffffff","fontWeight":500,"maxChars":8},{"slotId":"power-value","role":"parameterValue","field":"power","parameterPart":"value","sourceText":"20W","x":0.5,"y":0.08,"width":0.2,"height":0.06,"align":"right","color":"#ffffff","fontWeight":500,"maxChars":8}],"mappedSellingPoints":[],"mappedFacts":[{"factId":"fact-1","slotId":"power-label","slotRole":"parameterLabel","displayPart":"label"},{"factId":"fact-1","slotId":"power-value","slotRole":"parameterValue","displayPart":"value"}],"forbiddenCompetitorElements":[]}}`
     : `{"page":{"pageType":"marketing","pageMode":"${DETAIL_REMIX_MARKETING_MODE}","strictPageCategory":"none","purpose":"","reversePrompt":"","layoutSpec":"","palette":"","lighting":"","hasPerson":false,"personaSpec":"","targetProductView":{"viewAngle":"front-left","visibleSides":["front","left"],"orientation":"upright","perspective":"three-quarter"},"selectedProductViewIds":["pv-1"],"productInstances":[{"instanceId":"product-1","x":0.5,"y":0.5,"width":0.3,"height":0.3,"viewAngle":"front-left","contactSurface":"","foregroundOcclusion":"","productSheetCell":0}],"brandSlots":[],"copySlots":[{"slotId":"headline-1","role":"headline","field":"","parameterPart":"none","sourceText":"竞品主标题","x":0.1,"y":0.08,"width":0.8,"height":0.08,"align":"center","color":"#ffffff","fontWeight":700,"maxChars":10}],"mappedSellingPoints":[{"sellingPointId":"sp-1","slotId":"headline-1","slotRole":"headline","replacementText":"我方真实卖点"}],"mappedFacts":[],"forbiddenCompetitorElements":[]}}`;
   return [
     '你是电商详情页视觉反推与语义槽位规划专家。所附仅一张“竞品详情图”。',
-    '反推画面结构、镜头、背景、光线、色彩、人物需求、文字层级、商品区域及前后遮挡关系；完整保留版式位置关系，但不要保留竞品品牌、Logo、商品外观或竞品独有主张。',
+    '反推画面结构、镜头、背景、光线、色彩、人物需求、文字层级、商品区域及前后遮挡关系；完整保留版式位置关系。竞品产品的轮廓、结构、材质、纹理、缝线、皮革细节、按钮、标识、包装与品牌都属于禁止迁移的视觉证据，只允许识别它占据的区域、朝向、接触面和遮挡关系。',
     '逐个识别画面里所有竞品产品实例并输出 productInstances；每个实例使用 0~1 归一化 x/y/width/height，并说明观察角度、接触面与需要保留在商品前方的遮挡层。只有单个实例时仍必须输出一项。',
-    '识别竞品品牌/Logo 原本占据的位置并输出 brandSlots，记录 sourceText 或 visualDescription，尤其写清原槽位的底色、容器形状、留白、对齐和呈现方式（独立标牌、角标、产品压印等）；后续只替换品牌身份，必须保留该槽位原有的视觉容器。',
+    '识别竞品品牌/Logo 原本占据的位置并输出 brandSlots，记录 sourceText 或 visualDescription，并强制标注 placement：页面独立标牌/角标填 page_graphic，竞品产品本体上的印字、压印、刺绣或铭牌填 product_surface，包装上的标识填 packaging。只有 page_graphic 是可替换品牌槽；product_surface 与 packaging 只用于清除竞品，绝不能把我方页面 Logo 补到产品或包装上。',
     `当前文件夹共 ${totalPages} 张竞品详情，本页是第 ${pageIndex + 1} 张。业务硬规则：只有最后两张（第 ${firstTailPage} 至 ${totalPages} 张）有资格判断参数模式；此前页面一律填 ${DETAIL_REMIX_MARKETING_MODE} 且 strictPageCategory=none，即使出现型号、功率、温度、数字或对比表也不能把整页判成参数页。`,
     strictParameterModeEligible
       ? `本页位于最后两张候选范围内。只有画面主体确实是参数表、规格表、型号表、配件/装箱清单或电气参数表时才填 ${DETAIL_REMIX_STRICT_PARAMETER_MODE}；孤立型号或少量数字仍按 ${DETAIL_REMIX_MARKETING_MODE}。`
@@ -1264,7 +1293,7 @@ export function buildCompetitorPageInstruction({
     '营销页中承担版式层级的所有可读槽都必须逐槽映射：包括胶囊标签/眉题、主标题及其拆分片段、副标题、功能标题、说明正文。若 competitorTrademark 实际占据主标题的一部分，也按主标题槽替换，不能删掉后破坏标题层级。只有水印、页码、法务脚注、免责声明、纯表头/对照栏目名，以及已由 brandSlots 单独承接的孤立品牌字样可以不映射并删除。',
     'mappedSellingPoints 中同一 slotId 恰好一项，每项都必须填写 replacementText。replacementText 必须是所选我方卖点 title/description 的忠实短写，适配该槽 maxChars，不得添加证据外功效；相邻的拆分标题允许选择同一卖点但要写成不同且连贯的片段。不同槽禁止机械重复同一句话。最终要保持原页“眉题/胶囊标签—大标题—副标题/说明”的数量、字号层级和留白节奏。',
     productViews.length
-      ? '判断所有竞品产品实例的观察角度、朝向、可见面和透视要求，再从我方产品视角库中选择最匹配的 1~3 个 ID 写入 selectedProductViewIds。必须只选给定 ID；优先覆盖本页出现的不同角度和产品完整度。'
+      ? '判断所有竞品产品实例的大致观察角度、朝向、可见面和透视需求，再从我方产品视角库中选择最接近的 1~3 个 ID 写入 selectedProductViewIds。必须只选给定 ID；若没有完全相同角度，宁可选择最近实拍角度并允许后续轻微调整商品朝向、人物接触点或局部构图，也不得要求模型凭竞品产品补造我方未拍到的结构。'
       : '本次没有我方产品视角库：产品外观全部来自商家直接提供的参考图。selectedProductViewIds 留空数组，不要编造任何 ID。仍然要照常判断并输出每个竞品产品实例的位置、观察角度、接触面与遮挡关系。',
     productSheet
       // Enumerate the legal cells instead of giving a range: unusable cells are
@@ -1554,7 +1583,8 @@ const safePageAnalysis = value => {
     productInstances: productInstances.length ? productInstances : (Object.keys(productRegion).length ? [productRegion] : []),
     targetProductView: object(page.targetProductView),
     selectedProductViewIds: array(page.selectedProductViewIds).map(text).filter(Boolean),
-    brandSlots: array(page.brandSlots || page.logoSlots),
+    brandSlots: array(page.brandSlots || page.logoSlots)
+      .map((slot, index) => normalizeDetailRemixBrandSlot(slot, index)),
     copySlots: array(page.copySlots),
     mappedFacts: array(page.mappedFacts),
     forbiddenCompetitorElements: array(page.forbiddenCompetitorElements),
@@ -1566,11 +1596,16 @@ const safePageAnalysis = value => {
 
 const safePromptSlot = (slot, fallbackId) => {
   const source = object(slot);
+  const sourceField = text(source.field);
   return {
     slotId: text(source.slotId || source.id) || fallbackId,
     role: text(source.role) || undefined,
-    field: text(source.field) || undefined,
+    // Generic marketing fields were historically derived as
+    // `custom:<competitor copy>`. They are not semantic identifiers and would
+    // smuggle rejected competitor text back into otherwise clean prompts.
+    field: sourceField && !sourceField.startsWith('custom:') ? sourceField : undefined,
     parameterPart: text(source.parameterPart) || undefined,
+    placement: text(source.placement) || undefined,
     x: Number.isFinite(Number(source.x)) ? Number(source.x) : undefined,
     y: Number.isFinite(Number(source.y)) ? Number(source.y) : undefined,
     width: Number.isFinite(Number(source.width)) ? Number(source.width) : undefined,
@@ -1583,12 +1618,14 @@ const safePromptSlot = (slot, fallbackId) => {
 };
 
 /**
- * Reference image 1 still carries the competitor's pixels, but rejected OCR
- * text must never be repeated in the generation prompt. Only visual geometry
- * and own-side identifiers cross this boundary.
+ * Analysis can feed either the competitor-isolation pass or the clean-scene
+ * render. In both cases rejected copy and appearance-bearing product details
+ * must not cross the prompt boundary; only geometry and own-side identifiers do.
  */
 const promptSafePageAnalysis = value => {
   const page = safePageAnalysis(value);
+  const productRegionSource = object(page.productRegion);
+  const targetProductViewSource = object(page.targetProductView);
   const productInstances = array(page.productInstances).map((instance, index) => {
     const source = object(instance);
     return {
@@ -1610,9 +1647,20 @@ const promptSafePageAnalysis = value => {
     palette: page.palette,
     lighting: page.lighting,
     hasPerson: page.hasPerson,
-    productRegion: object(page.productRegion),
+    productRegion: {
+      ...(safeNormalizedRegion(productRegionSource) || {}),
+      viewAngle: text(productRegionSource.viewAngle) || undefined,
+      contactSurface: text(productRegionSource.contactSurface) || undefined,
+      foregroundOcclusion: text(productRegionSource.foregroundOcclusion) || undefined,
+      productSheetCell: Math.max(0, Number(productRegionSource.productSheetCell) || 0),
+    },
     productInstances,
-    targetProductView: object(page.targetProductView),
+    targetProductView: {
+      viewAngle: text(targetProductViewSource.viewAngle) || undefined,
+      visibleSides: array(targetProductViewSource.visibleSides).map(text).filter(Boolean),
+      orientation: text(targetProductViewSource.orientation) || undefined,
+      perspective: text(targetProductViewSource.perspective) || undefined,
+    },
     selectedProductViewIds: page.selectedProductViewIds,
     brandSlots: array(page.brandSlots).map((slot, index) => safePromptSlot(slot, `brand-${index + 1}`)),
     copySlots: array(page.copySlots).map((slot, index) => safePromptSlot(slot, `copy-${index + 1}`)),
@@ -1659,6 +1707,33 @@ const promptSafeCopyPlan = value => array(value).map(item => {
   };
 });
 
+/**
+ * First pass of product identity lock. The competitor is allowed into this
+ * request only to reconstruct scene geometry; every appearance-bearing product
+ * pixel, mark and readable string must be removed before the own product is seen.
+ */
+export function buildDetailScenePlatePrompt({
+  pageAnalysis,
+  pageIndex = 0,
+  useCharacterReference = false,
+} = {}) {
+  const page = safePageAnalysis(pageAnalysis);
+  const promptPage = promptSafePageAnalysis(page);
+  return [
+    `以参考图1为几何母版，生成第 ${pageIndex + 1} 张“无产品场景底图”。这不是最终详情图。`,
+    `目标尺寸继承参考图1：${page.sourceWidth || '自动'} × ${page.sourceHeight || '自动'} 像素；不得改成统一画幅。`,
+    `只可使用的结构信息（不含竞品原文）：${JSON.stringify(promptPage)}`,
+    '参考图1只提供画布比例、版式区域、背景、光线、色彩、人物位置与姿势、产品占位坐标、接触面和前后遮挡关系。竞品产品本身不是参考素材。',
+    '彻底删除所有竞品产品、产品轮廓、包装、品牌、Logo、产品表面标记、材质纹理、皮革颗粒、缝线、按钮细节、文案、数字、字母和水印；不得临摹、保留、弱化或变形重画。',
+    '按 productInstances 留出干净、自然、可再次编辑的商品空间。保留桌面、衣物、手臂、肩部等真实接触环境和合理遮挡边界，但空位内不得出现占位模型、幽灵轮廓、残影、产品阴影或任何暗示竞品外形的纹理。',
+    '保留原页的视觉层级骨架和文字容器几何，但所有文字槽与页面品牌槽都必须清空为自然背景；整张底图不得出现任何可读文字、Logo、商标、乱码、字母或数字。',
+    useCharacterReference
+      ? '参考图2及之后是人物完整身份与造型的唯一依据。只继承参考图1的人物位置、动作、视线、构图尺度及与未来商品的交互关系；脸、发型、服装、颜色、材质和配饰全部服从人物参考。'
+      : '不使用人物身份参考；若 hasPerson=false，禁止增加人物。若原图有人物，只保留匿名化的姿势与场景功能，不得保留可识别的竞品人物身份。',
+    '输出单张完整的无产品、无包装、无品牌、无文字场景底图，不要解释，不要输出蒙版。',
+  ].join('\n');
+}
+
 export function buildFinalDetailPrompt({
   pageAnalysis,
   mappedSellingPoints = [],
@@ -1671,6 +1746,7 @@ export function buildFinalDetailPrompt({
   ownEvidenceReferenceCount = 0,
   useCharacterReference = false,
   productSheet = null,
+  identityLocked = false,
 } = {}) {
   const page = safePageAnalysis(pageAnalysis);
   const promptPage = promptSafePageAnalysis(page);
@@ -1698,22 +1774,33 @@ export function buildFinalDetailPrompt({
     mappedFacts,
   });
   const strictMode = isDetailRemixStrictParameterPage(page);
-  const safeCopyPlan = promptSafeCopyPlan(copyPlan);
+  const safeCopyPlan = promptSafeCopyPlan(copyPlan).map(item => {
+    if (!identityLocked) return item;
+    const { originalText: _competitorText, ...clean } = item;
+    return clean;
+  });
   const marketingLayoutSlots = strictMode
     ? []
     : array(page.copySlots)
       .filter(isDetailRemixMarketingLayoutSlot)
       .map((slot, index) => safePromptSlot(slot, `marketing-layout-${index + 1}`));
+  const pageBrandSlots = promptPage.brandSlots.filter(slot => slot.placement === 'page_graphic');
+  const removalOnlyBrandSlots = promptPage.brandSlots.filter(slot => slot.placement !== 'page_graphic');
   const brandPlan = {
     brandIdentity: object(ownBrandIdentity),
-    sourceSlots: promptPage.brandSlots,
+    sourceSlots: pageBrandSlots,
+    removalOnlySlots: removalOnlyBrandSlots,
     logoReference: hasBrandLogoReference ? `参考图${brandReferenceIndex}` : '',
   };
   return [
-    `直接编辑参考图1，生成第 ${pageIndex + 1} 张可立即交付的电商详情页最终图。这次模型输出就是最终成品，后续不会再叠加产品、文字或 Logo。`,
+    identityLocked
+      ? `参考图1是已经隔离竞品产品后生成的无产品场景底图。以它为基础生成第 ${pageIndex + 1} 张可立即交付的电商详情页最终图。`
+      : `直接编辑参考图1，生成第 ${pageIndex + 1} 张可立即交付的电商详情页最终图。这次模型输出就是最终成品，后续不会再叠加产品、文字或 Logo。`,
     `目标尺寸继承竞品原图：${page.sourceWidth || '自动'} × ${page.sourceHeight || '自动'} 像素；不得改成统一画幅。`,
     `视觉反推规格（仅含版式坐标，不含任何竞品原文）：${JSON.stringify(promptPage)}`,
-    `精确逐位置替换清单（originalText 只用于定位并擦除，replacementText 才是唯一允许写入的文字）：${JSON.stringify(safeCopyPlan)}`,
+    identityLocked
+      ? `精确逐位置生成清单（场景底图已经清空竞品文字，replacementText 是唯一允许写入的文字）：${JSON.stringify(safeCopyPlan)}`
+      : `精确逐位置替换清单（originalText 只用于定位并擦除，replacementText 才是唯一允许写入的文字）：${JSON.stringify(safeCopyPlan)}`,
     `必须完成的品牌与 Logo 替换清单：${JSON.stringify(brandPlan)}`,
     sheet
       ? describeDetailRemixProductSheet(sheet, '参考图2')
@@ -1731,26 +1818,33 @@ export function buildFinalDetailPrompt({
     sheetBindings.length
       ? `本页每个产品实例必须使用的板格已经指定，不得自行改用其它格：${JSON.stringify(sheetBindings)}。指定格里没有拍到的结构，从相邻格补全，禁止凭空发明。`
       : '',
-    '参考图1是需要直接修改的竞品原图，不是只供自由发挥的风格参考。锁定它的画布、构图、背景、区域边界、人物姿势、商品位置、文字位置与视觉层级；除明确要求替换的区域外，不得重新设计页面。',
-    `${sheet ? '参考图2 的各个分格' : productRange}是同一款我方真实产品的角度参考。逐个用我方产品替换参考图1中 productInstances 列出的全部竞品产品实例；${sheet ? '每个实例使用上面指定的板格' : '为每个实例选择最接近的我方角度'}，保持我方产品真实结构、材质、颜色、比例和产品自身标识，并匹配原位置的透视、接触面、阴影、反射、肢体交互与前景遮挡。不得遗漏重复出现的小产品或混入竞品外形。`,
+    identityLocked
+      ? '参考图1只包含场景、人物、版式骨架和清空后的商品空间，不包含任何可供借鉴的竞品产品。锁定它的画布、背景、人物姿势、区域边界、文字位置与视觉层级；仅允许为适配我方最近实拍角度，对商品朝向、接触阴影、邻近肢体接触点和局部留白做最小幅度调整。'
+      : '参考图1是需要直接修改的竞品原图，不是只供自由发挥的风格参考。锁定它的画布、构图、背景、区域边界、人物姿势、商品位置、文字位置与视觉层级；除明确要求替换的区域外，不得重新设计页面。',
+    `${sheet ? '参考图2 的各个分格' : productRange}是同一款我方真实产品的唯一外观依据。逐个在 productInstances 指定的空位生成我方产品；${sheet ? '每个实例使用上面指定的板格' : '每个实例优先采用最接近的我方实拍角度'}。结构、轮廓、比例、材质、颜色、纹理、缝线、按钮、开孔和产品自身标识必须逐项服从我方产品参考。若没有完全相同的实拍角度，使用最近角度并轻微调整场景适配，禁止借用${identityLocked ? '任何未提供素材' : '竞品产品'}补造不可见结构。`,
     sheet
       ? '参考图2 是角度索引板，不是版式参考：禁止把它的网格、分格线、编号数字、背景底色或多格并排的布局搬进详情页，每个产品实例只呈现单一产品本身。'
       : '',
     hasBrandLogoReference
-      ? `参考图${brandReferenceIndex}只提供我方 Logo 的身份、拼写和图形结构，不提供 Logo 容器样式。严禁把该裁剪图周围的产品材质、压印底纹、深色背景、光影或矩形裁剪边界复制到页面。删除参考图1全部竞品 Logo 和品牌字样，再在 brandSlots 原位置生成我方 Logo；每个槽位的底色、容器形状、尺寸、留白、对齐与呈现方式严格继承参考图1，例如独立白色标牌仍是干净白色标牌，产品表面压印仍是自然压印，不能把一种呈现方式套到所有位置。`
-      : `删除参考图1全部竞品 Logo 和品牌字样，并根据 brandIdentity 在 brandSlots 指定的原位置生成我方品牌；品牌名必须逐字正确。若 brandIdentity 为空，则该位置保持干净，不得保留或猜测竞品品牌。`,
+      ? `参考图${brandReferenceIndex}只允许用于 page_graphic 页面品牌槽的 Logo 身份、拼写和图形结构，不得用于产品表面或包装。严禁复制 Logo 裁剪图周围的产品材质、压印底纹、深色背景、光影或矩形边界。只在 brandPlan.sourceSlots 指定的页面图形槽生成我方 Logo；brandPlan.removalOnlySlots 必须保持清空。`
+      : '只在 brandPlan.sourceSlots 指定的页面图形槽按 brandIdentity 生成准确品牌名；brandIdentity 为空时保持清空。brandPlan.removalOnlySlots 属于竞品产品表面或包装标识，绝不替换成我方 Logo。',
+    '产品表面的 Logo、字样、图标、圆点、铭牌和压印完全由产品参考图决定：参考图相应位置没有就必须保持无标识，禁止因为页面品牌、独立 Logo 参考或常识而新增、补点、改字或复制到产品上。',
     ownEvidenceReferenceCount > 0
       ? `参考图${evidenceStart}${evidenceEnd > evidenceStart ? `至参考图${evidenceEnd}` : ''}是“我的详情”中与本页文案直接对应的事实证据页。参数、型号、数字、单位、正负号和大小写必须同时服从这些证据图与文案替换清单；不得从竞品原图抄回任何参数。`
       : '本页没有额外事实证据图；只能生成文案替换清单中已经核验的文字，其它竞品文字必须删除，禁止猜测补全。',
     strictMode
       ? `本页已由程序锁定为 ${DETAIL_REMIX_STRICT_PARAMETER_MODE}：每个 replacementText 都是不可改写的事实，sourceField、targetPart、targetRegion、evidenceImageId、evidenceRegion 与 confidence 构成证据链。参数名只能写入 label 位置，参数值只能写入 value 位置。禁止把营销卖点填入参数栏；没有证据映射的竞品参数栏必须连标签和值一起删除并自然修复背景。`
       : `本页是营销/场景详情页：只能使用已经映射的我方卖点，不得擅自添加型号、功率、电压、认证或效果数据。以下槽位共同承担原页的核心文案层级，必须与替换清单逐槽对应、全部保留，任何一个都不得消失或合并：${JSON.stringify(marketingLayoutSlots)}。`,
-    '先彻底擦除参考图1的全部竞品文案，再依据“文案替换清单”在对应 slot 原位置直接生成 replacementText。中文必须逐字一致，不得改写、缩写、增字、漏字、重复、错别字或乱码；保持原槽位的字号层级、对齐、颜色和留白，不得让新旧文字重叠。没有分配替换文案的竞品文字槽必须删除并自然修复背景。',
+    identityLocked
+      ? '参考图1的文字槽已经清空；仅依据“文案替换清单”在对应 slot 原位置生成 replacementText。中文必须逐字一致，不得改写、缩写、增字、漏字、重复、错别字或乱码；保持槽位的字号层级、对齐、颜色和留白。没有分配文案的槽保持干净。'
+      : '先彻底擦除参考图1的全部竞品文案，再依据“文案替换清单”在对应 slot 原位置直接生成 replacementText。中文必须逐字一致，不得改写、缩写、增字、漏字、重复、错别字或乱码；保持原槽位的字号层级、对齐、颜色和留白，不得让新旧文字重叠。没有分配替换文案的竞品文字槽必须删除并自然修复背景。',
     '保留参考图1原有的“眉题/胶囊标签—主标题—副标题/说明”视觉层级：主标题仍然是视觉中心，副标题不得抢级，胶囊标签不得变成散落小字；禁止把多级文案压成同字号的两行文字，也禁止随意改变字体区域宽度、基线、行距和组间距。',
     '在不改变原版式骨架的前提下完成高级感精修：Logo 边缘清晰、文字字形干净、字距行距稳定、光学对齐准确、留白克制、色彩和圆角一致；不得出现贴图感、脏底色、廉价描边、发光滥用、粗糙阴影或突兀矩形补丁。高级感只用于提高完成度，不允许自由改版。',
     '展示文案中禁止出现“图片显示”“图片明确标注”“文案提到”“证据表明”等分析过程用语。不得把 sellingPointId、坐标、JSON、提示词或任何内部说明画进图片。',
     '必须彻底移除竞品产品、包装、品牌、Logo、文案、水印与竞品独有主张；不得残留、变形、混合或臆造竞品元素，也不得生成额外产品。',
-    useCharacterReference
+    identityLocked
+      ? '人物身份与造型已经在场景底图阶段确定。保持参考图1里人物的脸、发型、服装、配饰、姿势和遮挡关系，不得在产品合成阶段重新设计或换人。'
+      : useCharacterReference
       ? `参考图${characterStart}及之后是人物完整外观的最高权威。必须把参考图1中的竞品人物完整替换成参考人物：脸型五官、肤色、发际线、发色、发型结构、服装款式、领口袖型、服装颜色材质、可见配饰和身体比例都以人物参考图为准。绝不允许只换脸后保留竞品人物的发型、衣服或配饰。只保留参考图1的人物位置、动作、姿势、视线、构图尺度、与产品的交互及前后遮挡；被产品遮住的衣物区域无需臆造，但所有可见衣物必须属于参考造型。若人物参考是多视图造型板，所有分栏代表同一个人物与同一套造型，应选取和本页角度最接近的分栏。`
       : '不使用人物身份参考；若规格 hasPerson=false，禁止凭空增加人物；若原图有人物，也不得保留可识别的竞品人物身份。',
     '只允许出现替换清单中的我方文案、我方品牌/Logo，以及我方产品自身不可分离的真实标识；不得出现其它文字、乱码、商标或水印。',
@@ -1910,6 +2004,10 @@ export function buildFinalDetailValidationInstruction({
     : array(page.copySlots)
       .filter(isDetailRemixMarketingLayoutSlot)
       .map((slot, index) => safePromptSlot(slot, `marketing-layout-${index + 1}`));
+  const brandSlots = array(page.brandSlots)
+    .map((slot, index) => safePromptSlot(slot, `brand-${index + 1}`));
+  const pageBrandSlots = brandSlots.filter(slot => slot.placement === 'page_graphic');
+  const removalOnlyBrandSlots = brandSlots.filter(slot => slot.placement !== 'page_graphic');
   return [
     '你是电商详情最终交付质检员。参考图1是待验收成图；参考图2是原始竞品页，只能用于比对画布、构图、品牌容器和文案版式，绝不能把其中的竞品品牌、产品或文案判为应保留内容。参考图3及之后才是我方产品、Logo、事实证据或人物完整造型。',
     characterCount > 0
@@ -1918,9 +2016,9 @@ export function buildFinalDetailValidationInstruction({
     sheet
       ? `${describeDetailRemixProductSheet(sheet, `参考图${productStart}`)}它只是角度索引，成图里本来就不该出现网格、分格线或编号；只有当成图真的把网格或编号画了进去，才判 productCorrect=false。核对产品时用各分格逐一比对成图中每一处产品的结构、比例与材质。`
       : '',
-    `页面类型：${page.pageType}；运行模式：${page.pageMode}。必须逐字、逐位置出现的文案清单：${JSON.stringify(safeCopyPlan)}。营销页必须保留的核心文案层级槽：${JSON.stringify(marketingLayoutSlots)}。我方品牌：${JSON.stringify(object(ownBrandIdentity))}。`,
+    `页面类型：${page.pageType}；运行模式：${page.pageMode}。必须逐字、逐位置出现的文案清单：${JSON.stringify(safeCopyPlan)}。营销页必须保留的核心文案层级槽：${JSON.stringify(marketingLayoutSlots)}。我方品牌：${JSON.stringify(object(ownBrandIdentity))}。页面品牌槽：${JSON.stringify(pageBrandSlots)}。竞品产品/包装清除槽：${JSON.stringify(removalOnlyBrandSlots)}。`,
     '所有不在上述我方文案与品牌白名单中的可读内容，都必须按竞品残留或模型臆造内容报告。',
-    '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 参数名是否仍在 label 区、参数值是否仍在 value 区，不能错栏、合并或串行；3) 是否出现乱码、伪字、重复卖点、提示词或 JSON；4) 品牌与 Logo 身份是否正确且无竞品残留；5) 对照参考图2，Logo 是否只替换标识身份而保留原槽位容器，不能把 Logo 参考图的深色产品材质、压印纹理或矩形裁剪底复制成贴片；6) 对照参考图2，营销页的胶囊标签、主标题、副标题/说明是否逐层保留，不能缺层、合并、缩成同字号小字或大幅漂移；7) 产品是否仍是我方产品、位置透视是否正确；8) 有人物参考时，成图人物的脸型五官、发际线与发型结构、服装款式领口袖型与颜色材质、可见配饰是否都来自人物参考。只换脸、仍保留竞品发型或竞品衣服必须判失败，并在 characterIssues 写明。',
+    '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 参数名是否仍在 label 区、参数值是否仍在 value 区，不能错栏、合并或串行；3) 是否出现乱码、伪字、重复卖点、提示词或 JSON；4) 页面品牌与 Logo 身份是否正确且无竞品残留；5) 对照参考图2，页面 Logo 是否只出现在 page_graphic 槽并保留原槽位容器，product_surface 与 packaging 槽必须清除而不是替换；6) 对照参考图2，营销页的胶囊标签、主标题、副标题/说明是否逐层保留，不能缺层、合并、缩成同字号小字或大幅漂移；7) 对照参考图3开始的我方产品参考，产品结构、轮廓、材质、纹理、缝线、按钮和所有产品表面标识是否一致；参考图没有的白色 Logo、圆点、铭牌或压印一律属于错误，productCorrect 与 logoPresentationCorrect 必须为 false；8) 有人物参考时，成图人物的脸型五官、发际线与发型结构、服装款式领口袖型与颜色材质、可见配饰是否都来自人物参考。只换脸、仍保留竞品发型或竞品衣服必须判失败，并在 characterIssues 写明。',
     '视觉完成度检查：只有 Logo 清晰、字体层级明确、字距行距稳定、对齐与留白统一，并且没有贴图方块、脏底、廉价描边、滥用发光、粗糙阴影或明显 AI 排版破损时，visualPolishCorrect 才能为 true。不要因正常风格差异苛刻判错，但任何肉眼明显不专业的排版都必须判失败并写入 layoutIssues。',
     strictMode
       ? `这是 ${DETAIL_REMIX_STRICT_PARAMETER_MODE}。没有列入替换清单的型号、数字、单位、材质、认证、配件或清单内容必须完全不存在；发现一个即 unsupportedStrictFactsAbsent=false，并写入 unexpectedTexts。`
@@ -1935,32 +2033,44 @@ export function buildFinalDetailRepairPrompt({
   copyPlan = [],
   ownBrandIdentity = {},
   validation = {},
+  productReferenceCount = 0,
   evidenceReferenceCount = 0,
   hasBrandLogoReference = false,
   characterReferenceCount = 0,
+  identityLocked = false,
 } = {}) {
   const page = safePageAnalysis(pageAnalysis);
   const safeCopyPlan = promptSafeCopyPlan(copyPlan);
-  const evidenceStart = 3;
+  const productCount = Math.max(0, Number(productReferenceCount) || 0);
+  const productStart = identityLocked ? 2 : 3;
+  const productEnd = productStart + productCount - 1;
+  const evidenceStart = productEnd + 1;
   const evidenceEnd = evidenceStart + Math.max(0, Number(evidenceReferenceCount) || 0) - 1;
   const characterCount = Math.max(0, Number(characterReferenceCount) || 0);
   const brandReferenceIndex = evidenceEnd + 1;
   const characterStart = brandReferenceIndex + (hasBrandLogoReference ? 1 : 0);
   return [
-    '直接编辑参考图1，输出修复后的完整最终详情图。参考图2是原始竞品页，只用于恢复画布、构图、品牌容器和文案层级，严禁恢复其中的竞品品牌、产品或文案。只修复质检报告中失败的区域；产品、正确文字和其它已通过区域保持不变。',
+    identityLocked
+      ? '直接编辑参考图1，输出修复后的完整最终详情图。本次修复不提供竞品原图，任何产品细节都只能来自我方产品参考。只修复质检报告中失败的区域；正确文字、人物、背景和其它已通过区域保持不变。'
+      : '直接编辑参考图1，输出修复后的完整最终详情图。参考图2是原始竞品页，只用于恢复画布、构图、品牌容器和文案层级，严禁恢复其中的竞品品牌、产品或文案。只修复质检报告中失败的区域；正确文字和其它已通过区域保持不变。',
     `页面类型：${page.pageType}；运行模式：${page.pageMode}。质检发现：${JSON.stringify(object(validation))}。`,
     `必须逐字生成的最终文案：${JSON.stringify(safeCopyPlan)}。我方品牌：${JSON.stringify(object(ownBrandIdentity))}。`,
+    productCount > 0
+      ? `参考图${productStart}${productEnd > productStart ? `至参考图${productEnd}` : ''}是我方产品身份的最高权威。修复 productCorrect、productPlacementCorrect 或任何产品表面 Logo/圆点/纹理问题时，结构、材质、颜色、缝线、按钮和标识必须逐项服从这些参考；参考中没有的标识必须删除。`
+      : '没有额外产品参考；不得在产品表面新增、猜测或修改任何 Logo、圆点、铭牌、纹理和结构。',
     evidenceReferenceCount > 0
       ? `参考图${evidenceStart}${evidenceEnd > evidenceStart ? `至参考图${evidenceEnd}` : ''}是我方事实证据，必须据此核对型号、数字、单位、符号和品牌。`
       : '没有额外事实证据图，严禁在清单之外猜测或新增文字。',
     hasBrandLogoReference
-      ? `参考图${brandReferenceIndex}只提供我方 Logo 的身份、拼写和图形结构；不得复制其产品材质、压印底纹、深色背景或矩形裁剪边界。修复品牌时必须恢复参考图2原品牌槽的底色、容器形状、尺寸、留白和对齐，只替换 Logo 身份。`
+      ? `参考图${brandReferenceIndex}只提供页面图形槽所需的我方 Logo 身份、拼写和图形结构；不得复制其产品材质、压印底纹、深色背景或矩形裁剪边界，也不得把它加到产品或包装上。`
       : '没有独立 Logo 参考时只允许使用品牌清单中的准确名称，不得臆造 Logo 图形。',
     characterCount > 0
       ? `参考图${characterStart}${characterCount > 1 ? `至参考图${characterStart + characterCount - 1}` : ''}是人物完整造型参考。若 characterIdentityCorrect、characterHairstyleCorrect、characterOutfitCorrect 或 characterAccessoriesCorrect 任一为 false，必须换掉参考图1中对应的脸、发型、服装或配饰，完整服从人物参考；只保留原人物的位置、动作、视线、与产品交互和遮挡关系，禁止只换脸。`
       : '本次没有人物造型参考，不要凭空改动人物。',
     '先擦除所有错误文字、乱码、重复文案、竞品参数和竞品品牌，再严格按 targetRegion/targetPart 在原槽位写入清单中的 replacementText。参数名不得进入 value 区，参数值不得进入 label 区；没有替换项的竞品文字区域保持干净。',
-    '若 layoutHierarchyCorrect=false，按参考图2逐层恢复胶囊标签、主标题、副标题/说明的原位置、字号比例、对齐和留白，禁止把多级文案压成同字号小字。若 logoPresentationCorrect=false，去掉贴图方块和脏底，只保留干净、清晰且适配原容器的我方 Logo。若 visualPolishCorrect=false，修正字距、行距、光学对齐、边缘、底色与阴影，使页面精致高级，但不得自由改版。',
+    identityLocked
+      ? '若 layoutHierarchyCorrect=false，以参考图1仍然正确的版式骨架逐层恢复胶囊标签、主标题、副标题/说明的字号比例、对齐和留白，禁止自由改版。若 logoPresentationCorrect=false，只在 page_graphic 页面槽保留干净 Logo；产品表面或包装上多出的 Logo、白字、圆点、铭牌与压印必须删除。'
+      : '若 layoutHierarchyCorrect=false，按参考图2逐层恢复胶囊标签、主标题、副标题/说明的原位置、字号比例、对齐和留白，禁止把多级文案压成同字号小字。若 logoPresentationCorrect=false，去掉贴图方块和脏底，只在 page_graphic 页面槽保留干净、清晰且适配原容器的我方 Logo；产品表面或包装上的竞品槽只清除、不替换。若 visualPolishCorrect=false，修正字距、行距、光学对齐、边缘、底色与阴影，使页面精致高级，但不得自由改版。',
     '中文、数字、型号、单位、正负号、斜杠和大小写必须逐字一致；不得解释，不得输出蒙版或中间稿，只输出单张完整图片。',
   ].join('\n');
 }

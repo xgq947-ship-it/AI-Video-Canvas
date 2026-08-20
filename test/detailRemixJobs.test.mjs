@@ -73,6 +73,9 @@ function basePayload(overrides = {}) {
     recognitionProvider: 'gemini-web',
     imageModel: 'google-flow-nano-banana-pro',
     aspectRatio: '3:4',
+    // Existing tests exercise the explicitly retained one-pass fast mode.
+    // Product identity lock has dedicated two-pass coverage below.
+    lockProductIdentity: false,
     ...overrides,
   };
 }
@@ -134,7 +137,7 @@ test('无需单独产品图：自动裁出我方详情产品角度并与竞品�
   const resultNodeId = created.pages[0].resultNodeId;
   const completed = await waitFor(created.id, context, job => job?.stage === 'completed');
 
-  assert.equal(completed.schemaVersion, 7);
+  assert.equal(completed.schemaVersion, 8);
   assert.equal(completed.phase, 'final');
   assert.equal(completed.pages[0].sourceNodeId, 'competitor-node');
   assert.equal(completed.pages[0].resultNodeId, resultNodeId);
@@ -163,6 +166,111 @@ test('无需单独产品图：自动裁出我方详情产品角度并与竞品�
   assert.doesNotMatch(call.request.prompt, /稍后由程序/);
   assert.match(call.request.prompt, /不要输出中间底图/);
   assert.ok(fs.existsSync(path.join(env.jobsDir, `${created.id}.json`)));
+});
+
+test('产品身份锁定默认两阶段：竞品只进入场景隔离，最终产品请求只含底图与我方产品', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const generationCalls = [];
+  let dimensionCalls = 0;
+  const context = {
+    ...env.context,
+    runRecognition: completeRecognition({ hasPerson: true }),
+    matchDetailRemixDimensions: async ({ sourceBuffer }) => {
+      dimensionCalls += 1;
+      if (dimensionCalls === 1) {
+        const persisted = __detailRemixTest.readJob(
+          'identity-lock-two-pass-job',
+          'workflow-1',
+          env.context.dirs,
+        );
+        assert.equal(persisted.pages[0].status, 'normalizing_scene_plate');
+        assert.equal(persisted.pages[0].scenePlateStatus, 'normalizing');
+        assert.equal(persisted.currentSubmission, undefined);
+      }
+      return sourceBuffer;
+    },
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return {
+        buffer: Buffer.from(meta.phase === 'blank-plate' ? 'identity-clean-scene' : 'identity-final'),
+        extension: 'png',
+      };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'identity-lock-two-pass-job',
+    lockProductIdentity: undefined,
+    preferSuppliedProductReferences: true,
+    productSheet: { rows: 1, columns: 1, cells: [{ index: 1, label: '我方产品实拍' }] },
+  }), context);
+  assert.equal(created.lockProductIdentity, true);
+  const completed = await waitFor(created.id, context, job => job?.stage === 'completed');
+
+  assert.equal(generationCalls.length, 2);
+  assert.equal(generationCalls[0].meta.phase, 'blank-plate');
+  assert.deepEqual(generationCalls[0].request.referenceImageInputs, [COMPETITOR, CHARACTER]);
+  assert.deepEqual(generationCalls[0].meta.referenceKinds, ['competitor-structure-only', 'character']);
+  assert.match(generationCalls[0].request.prompt, /无产品场景底图/);
+  assert.match(generationCalls[0].request.prompt, /皮革颗粒、缝线、按钮细节/);
+  assert.ok(!generationCalls[0].request.referenceImageInputs.includes(PRODUCT));
+
+  assert.equal(generationCalls[1].meta.phase, 'final-detail');
+  assert.equal(generationCalls[1].request.referenceImageInputs[0], completed.pages[0].rawPlateUrl);
+  assert.deepEqual(generationCalls[1].request.referenceImageInputs.slice(1), [PRODUCT]);
+  assert.deepEqual(generationCalls[1].meta.referenceKinds, ['identity-locked-scene', 'own-product-supplement']);
+  assert.ok(!generationCalls[1].request.referenceImageInputs.includes(COMPETITOR));
+  assert.ok(!generationCalls[1].request.referenceImageInputs.includes(CHARACTER));
+  assert.match(generationCalls[1].request.prompt, /不包含任何可供借鉴的竞品产品/);
+  assert.match(generationCalls[1].request.prompt, /参考图相应位置没有就必须保持无标识/);
+  assert.equal(completed.pages[0].scenePlateStatus, 'completed');
+});
+
+test('锁定模式产品质检失败时，修复继续携带我方产品且绝不重新引入竞品原图', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const generationCalls = [];
+  let validationCalls = 0;
+  const context = {
+    ...env.context,
+    skipFinalValidation: false,
+    runRecognition: async (request, meta) => {
+      if (meta.kind !== 'final-detail-validation') {
+        return completeRecognition({ hasPerson: true })(request, meta);
+      }
+      validationCalls += 1;
+      return JSON.stringify(cleanValidation(validationCalls === 1 ? {
+        passed: false,
+        productCorrect: false,
+        logoPresentationCorrect: false,
+        summary: '产品上多出白色 Logo 与圆点',
+      } : {}));
+    },
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from(`locked-${meta.phase}`), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'identity-lock-repair-job',
+    lockProductIdentity: true,
+    preferSuppliedProductReferences: true,
+    productSheet: { rows: 1, columns: 1, cells: [{ index: 1, label: '我方产品实拍' }] },
+  }), context);
+  const completed = await waitFor(created.id, context, job => job?.status === 'completed');
+
+  assert.deepEqual(generationCalls.map(call => call.meta.phase), [
+    'blank-plate', 'final-detail', 'final-repair',
+  ]);
+  const repair = generationCalls[2];
+  assert.deepEqual(repair.meta.referenceKinds, [
+    'quality-failed-final', 'own-product-supplement', 'character',
+  ]);
+  assert.ok(repair.request.referenceImageInputs.includes(PRODUCT));
+  assert.ok(!repair.request.referenceImageInputs.includes(COMPETITOR));
+  assert.match(repair.request.prompt, /本次修复不提供竞品原图/);
+  assert.match(repair.request.prompt, /参考中没有的标识必须删除/);
+  assert.equal(completed.pages[0].repairAttempts, 1);
 });
 
 test('竞品识图 JSON 格式失败会在生图前用同一严格 Schema 安全重试一次', async t => {
@@ -256,7 +364,7 @@ test('营销页核心文案槽缺失会在付费生图前重试，完整保留�
 
   assert.equal(competitorCalls.length, 2);
   assert.equal(completed.pages[0].recognitionContractRetries, 1);
-  assert.equal(completed.pages[0].competitorAnalysisVersion, 3);
+  assert.equal(completed.pages[0].competitorAnalysisVersion, 4);
   assert.equal(generationCalls.length, 1);
   assert.match(generationCalls[0].request.prompt, /肩颈按摩器/);
   assert.match(generationCalls[0].request.prompt, /仿人手深层揉捏/);
@@ -659,6 +767,13 @@ test('创建请求幂等；提交边界中断不会自动重复付费提交', as
   assert.equal(recognitionCalls, 2);
   assert.equal(generationCalls, 1);
   assert.equal(repeated.pages[0].resultNodeId, completed.pages[0].resultNodeId);
+  assert.throws(
+    () => createDetailRemixJob(basePayload({
+      jobId: 'idempotent-detail-job',
+      lockProductIdentity: true,
+    }), context),
+    error => error?.code === 'IDEMPOTENCY_CONFLICT',
+  );
 
   const interrupted = { ...completed, status: 'processing', stage: 'generating_final', phase: 'final' };
   interrupted.pages = completed.pages.map(page => ({
@@ -957,8 +1072,8 @@ test('从我方详情提取品牌 Logo，作为参考交给 AI 直接替换且�
     'own-product-auto-angle',
     'own-brand-logo',
   ]);
-  assert.match(generationCalls[0].request.prompt, /参考图3只提供我方 Logo 的身份/);
-  assert.match(generationCalls[0].request.prompt, /严禁把.*深色背景.*矩形裁剪边界复制/);
+  assert.match(generationCalls[0].request.prompt, /参考图3只允许用于 page_graphic 页面品牌槽/);
+  assert.match(generationCalls[0].request.prompt, /严禁复制.*深色背景.*矩形边界/);
   assert.match(generationCalls[0].request.prompt, /我方品牌/);
   assert.match(generationCalls[0].request.prompt, /真实卖点/);
   const finalPath = path.join(env.root, 'library', 'projects', '详情复刻测试', 'images', `${completed.pages[0].resultNodeId}.png`);
@@ -1295,7 +1410,7 @@ test('文案层级或 Logo 容器破坏时不得误判通过，定向修复携�
   assert.equal(validationCalls, 2);
   assert.deepEqual(generationCalls.map(call => call.meta.phase), ['final-detail', 'final-repair']);
   assert.deepEqual(generationCalls[1].meta.referenceKinds, [
-    'quality-failed-final', 'competitor-layout-original',
+    'quality-failed-final', 'competitor-layout-original', 'own-product-auto-angle',
   ]);
   assert.equal(generationCalls[1].request.referenceImageInputs[1], COMPETITOR);
   assert.equal(validationRequests[0].imageDataUrls[1], COMPETITOR);
@@ -1378,7 +1493,7 @@ test('人物只换脸但发型服装不符时质检失败，定向修复继续�
     'competitor-layout', 'own-product-auto-angle', 'character',
   ]);
   assert.deepEqual(generationCalls[1].meta.referenceKinds, [
-    'quality-failed-final', 'competitor-layout-original', 'character',
+    'quality-failed-final', 'competitor-layout-original', 'own-product-auto-angle', 'character',
   ]);
   assert.equal(generationCalls[1].request.referenceImageInputs.at(-1), CHARACTER);
   assert.match(generationCalls[0].request.prompt, /绝不允许只换脸/);
@@ -1977,9 +2092,15 @@ test('提交阶段按页判定：预提交的下一页不会被别页的修复�
     structuralRegenerationAttempts: 2,
     regenerateCodexImageJobId2: 'child-regen-2',
   };
+  const isolating = {
+    index: 3,
+    status: 'submitting',
+    plateCodexImageJobId: 'child-scene-plate',
+  };
   assert.equal(__detailRemixTest.interruptedPhaseForPage(presubmitted), 'final-detail');
   assert.equal(__detailRemixTest.interruptedPhaseForPage(repairing), 'final-repair');
   assert.equal(__detailRemixTest.interruptedPhaseForPage(regenerating), 'final-regenerate-2');
+  assert.equal(__detailRemixTest.interruptedPhaseForPage(isolating), 'blank-plate');
   // A finished repair falls back to the plain generation phase.
   assert.equal(
     __detailRemixTest.interruptedPhaseForPage({ ...repairing, repairCompletedAt: '2026-08-14T00:00:00.000Z' }),
@@ -2002,7 +2123,7 @@ test('Codex 生图时在质检期间预提交下一页，且每页各自记录�
   // Both analyses are already done; page 1 is mid-validation with its raw image saved.
   for (const page of job.pages) {
     page.recognitionStatus = 'completed';
-    page.competitorAnalysisVersion = 3;
+    page.competitorAnalysisVersion = 4;
     page.analysis = {
       pageType: 'marketing', hasPerson: false, copySlots: [], productInstances: [],
       // analyzeCompetitorPage stamps the source size onto the analysis; the
@@ -2106,7 +2227,7 @@ test('预提交的下一页会被直接等待并采用，绝不重复提交第�
   const job = __detailRemixTest.readJob(created.id, 'workflow-1', context.dirs);
   for (const page of job.pages) {
     page.recognitionStatus = 'completed';
-    page.competitorAnalysisVersion = 3;
+    page.competitorAnalysisVersion = 4;
     page.analysis = {
       pageType: 'marketing', hasPerson: false, copySlots: [], productInstances: [],
       // analyzeCompetitorPage stamps the source size onto the analysis; the

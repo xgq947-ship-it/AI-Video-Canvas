@@ -14,19 +14,26 @@ import {
   expectedDetailStitchCropLoss,
   normalizeDetailStitchCuts,
 } from '../shared/detailStitch.js';
+import {
+  DETAIL_REMIX_NODE_HEIGHT,
+  buildDetailRemixInputMapping,
+  createDetailRemixNodeData,
+} from '../shared/detailRemix.js';
 import { getImageGenerationProvider } from '../shared/generationProviders.js';
 import detailStitchRoutes from '../server/routes/detail-stitch.js';
 import { detectAdjacentDuplicateRows } from '../server/services/detailStitch/stitcher.js';
 import { planDetailSlices } from '../server/services/detailStitch/slicePlanner.js';
 import {
+  DETAIL_REMIX_IMPORT_COLUMN_GAP,
+  DETAIL_REMIX_IMPORT_LAYOUT_VERSION,
+  DETAIL_REMIX_IMPORT_NODE_WIDTH,
+  DETAIL_REMIX_IMPORT_ROW_GAP,
+} from '../src/utils/detailRemixFolderImport.js';
+import {
   applyDetailStitchSlices,
   canRestoreDetailStitchOriginals,
   restoreDetailStitchOriginals,
 } from '../src/utils/detailStitchNodes.js';
-import {
-  buildDetailRemixInputMapping,
-  createDetailRemixNodeData,
-} from '../shared/detailRemix.js';
 
 const PROJECT_NAME = '详情拼接测试';
 
@@ -296,11 +303,24 @@ test('竞品节点替换一次同步 refs、端口、parentIds 和导入元数�
   assert.deepEqual(controller.detailRemix.detailStitch.originalCompetitorNodeIds, ['source-1', 'source-2']);
   assert.equal(byId.get('source-1').detailStitchArchive.stitchId, 'stitch-1');
   assert.equal(byId.get('source-2').detailStitchArchive.stitchId, 'stitch-1');
+  const placedSlices = expectedSliceIds.map(id => byId.get(id));
+  assert.equal(new Set(placedSlices.map(node => node.y)).size, 1);
+  assert.equal(
+    placedSlices[0].y,
+    original[0].y + DETAIL_REMIX_NODE_HEIGHT + DETAIL_REMIX_IMPORT_ROW_GAP,
+  );
+  for (let index = 1; index < placedSlices.length; index += 1) {
+    assert.equal(
+      placedSlices[index].x - placedSlices[index - 1].x,
+      DETAIL_REMIX_IMPORT_NODE_WIDTH + DETAIL_REMIX_IMPORT_COLUMN_GAP,
+    );
+  }
   for (const [index, id] of expectedSliceIds.entries()) {
     const node = byId.get(id);
     assert.equal(node.detailRemixImport.controllerNodeId, 'controller');
     assert.equal(node.detailRemixImport.role, 'competitor');
     assert.equal(node.detailRemixImport.order, index);
+    assert.equal(node.detailRemixImport.layoutVersion, DETAIL_REMIX_IMPORT_LAYOUT_VERSION);
     assert.equal(node.detailStitchSource.sliceId, `slice_${String(index + 1).padStart(3, '0')}`);
   }
   assert.equal(canRestoreDetailStitchOriginals(controller), true);

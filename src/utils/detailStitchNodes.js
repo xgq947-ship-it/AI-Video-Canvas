@@ -1,13 +1,77 @@
 import {
+  DETAIL_REMIX_NODE_HEIGHT,
+  DETAIL_REMIX_NODE_WIDTH,
   buildDetailRemixInputMapping,
   createDetailRemixNodeData,
   syncDetailRemixInputRefs,
 } from '../../shared/detailRemix.js';
-import { reflowDetailRemixFolderNodes } from './detailRemixFolderImport.js';
+import {
+  DETAIL_REMIX_IMPORT_COLUMN_GAP,
+  DETAIL_REMIX_IMPORT_LAYOUT_VERSION,
+  DETAIL_REMIX_IMPORT_NODE_WIDTH,
+  DETAIL_REMIX_IMPORT_ROW_GAP,
+  reflowDetailRemixFolderNodes,
+} from './detailRemixFolderImport.js';
 
 const IMAGE_NODE_TYPE = 'Image';
 const DETAIL_REMIX_NODE_TYPE = 'Detail Page Remix';
 const SUCCESS_STATUS = 'success';
+
+const parseAspectRatio = value => {
+  const text = String(value || '3:4');
+  const separator = text.includes('/') ? '/' : ':';
+  const [width, height] = text.split(separator).map(Number);
+  return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
+    ? width / height
+    : 3 / 4;
+};
+
+const imageNodeHeight = node => (
+  DETAIL_REMIX_IMPORT_NODE_WIDTH / parseAspectRatio(
+    node?.resultAspectRatio || node?.aspectRatio,
+  )
+);
+
+const nodeBottom = node => {
+  const y = Number(node?.y || 0);
+  if (node?.type === DETAIL_REMIX_NODE_TYPE) return y + DETAIL_REMIX_NODE_HEIGHT;
+  if (node?.type === IMAGE_NODE_TYPE) return y + imageNodeHeight(node);
+  return y;
+};
+
+/** Place generated slices in one dedicated row below the source details. */
+function layoutSliceNodesBelowSources(nodes, sliceNodes, controller, sourceNodeIds) {
+  const sourceIds = new Set(sourceNodeIds);
+  const sourceNodes = nodes.filter(node => sourceIds.has(node.id));
+  const sourceLeft = sourceNodes.length
+    ? Math.min(...sourceNodes.map(node => Number(node.x || 0)))
+    : Number(controller.x || 0);
+  const sourceRight = sourceNodes.length
+    ? Math.max(...sourceNodes.map(node => Number(node.x || 0) + DETAIL_REMIX_IMPORT_NODE_WIDTH))
+    : Number(controller.x || 0) + DETAIL_REMIX_NODE_WIDTH;
+  const centerX = (sourceLeft + sourceRight) / 2;
+  const horizontalStep = DETAIL_REMIX_IMPORT_NODE_WIDTH + DETAIL_REMIX_IMPORT_COLUMN_GAP;
+  const rowWidth = sliceNodes.length * DETAIL_REMIX_IMPORT_NODE_WIDTH
+    + Math.max(0, sliceNodes.length - 1) * DETAIL_REMIX_IMPORT_COLUMN_GAP;
+  const startX = centerX - rowWidth / 2;
+
+  // Keep the new row clear of the controller, original imports, earlier stitch
+  // versions and generated detail results that belong to this workflow.
+  const relatedNodes = nodes.filter(node => (
+    node.id === controller.id
+    || sourceIds.has(node.id)
+    || node?.detailRemixImport?.controllerNodeId === controller.id
+    || node?.detailStitchArchive?.controllerNodeId === controller.id
+    || node?.detailRemixSourceNodeId === controller.id
+  ));
+  const rowY = Math.max(...relatedNodes.map(nodeBottom)) + DETAIL_REMIX_IMPORT_ROW_GAP;
+
+  return sliceNodes.map((node, index) => ({
+    ...node,
+    x: startX + index * horizontalStep,
+    y: rowY,
+  }));
+}
 
 const orderedSlices = record => {
   const slices = [...(record.slices || [])].sort((left, right) => left.startY - right.startY);
@@ -71,6 +135,7 @@ function sliceNode(
       folderName,
       relativePath: `${record.stitchId}_${slice.id}.png`,
       order: slice.index,
+      layoutVersion: DETAIL_REMIX_IMPORT_LAYOUT_VERSION,
     },
     detailStitchSource: {
       stitchId: record.stitchId,
@@ -84,8 +149,8 @@ function sliceNode(
 
 /**
  * One immutable canvas transaction: archive originals, insert slices, replace
- * ordered refs + semantic ports, then reflow. Validation finishes before any
- * new array is returned.
+ * ordered refs + semantic ports, then place the slices below the source row.
+ * Validation finishes before any new array is returned.
  */
 export function applyDetailStitchSlices(
   nodes,
@@ -168,7 +233,12 @@ export function applyDetailStitchSlices(
     inputPortByParentId: mapping,
     detailRemix: nextState,
   }, mapping);
-  const newNodes = slices.map(slice => sliceNode(slice, record, controller, folderName));
+  const newNodes = layoutSliceNodesBelowSources(
+    nodes,
+    slices.map(slice => sliceNode(slice, record, controller, folderName)),
+    controller,
+    currentCompetitorIds,
+  );
   const newIdSet = new Set(newIds);
   const withoutPreviousVersionOfSameIds = nodes.filter(node => !newIdSet.has(node.id));
   const archived = withoutPreviousVersionOfSameIds.map(node => {
@@ -176,7 +246,7 @@ export function applyDetailStitchSlices(
     if (order >= 0) return archivePatch(node, controllerNodeId, record.stitchId, now, order);
     return node.id === controllerNodeId ? nextController : node;
   });
-  return reflowDetailRemixFolderNodes([...archived, ...newNodes], controllerNodeId);
+  return [...archived, ...newNodes];
 }
 
 export function canRestoreDetailStitchOriginals(controller) {

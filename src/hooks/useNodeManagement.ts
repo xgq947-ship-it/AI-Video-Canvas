@@ -21,6 +21,7 @@ import {
     CINEMATIC_DEFAULT_VIDEO_MODEL,
     normalizeCinematicSettings,
 } from '../../shared/cinematicDirector.js';
+import { removeCanvasNodes } from '../utils/canvasEdges.js';
 
 const applyStickmanNodeDefaults = (node: NodeData): NodeData => {
     if (node.type === NodeType.SCRIPT_INPUT) {
@@ -407,7 +408,7 @@ export const useNodeManagement = () => {
      * @param id - Node ID to delete
      */
     const deleteNode = (id: string) => {
-        setNodes(prev => prev.filter(n => n.id !== id));
+        setNodes(prev => removeCanvasNodes(prev, [id]));
         setSelectedNodeIds(prev => prev.filter(nodeId => nodeId !== id));
     };
 
@@ -416,7 +417,7 @@ export const useNodeManagement = () => {
      * @param ids - Array of node IDs to delete
      */
     const deleteNodes = (ids: string[]) => {
-        setNodes(prev => prev.filter(n => !ids.includes(n.id)));
+        setNodes(prev => removeCanvasNodes(prev, ids));
         setSelectedNodeIds([]);
     };
 

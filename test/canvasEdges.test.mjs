@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { removeCanvasConnection, removeCanvasConnections, wouldCreateCycle } from '../src/utils/canvasEdges.js';
+import {
+  removeCanvasConnection,
+  removeCanvasConnections,
+  removeCanvasNodes,
+  wouldCreateCycle,
+} from '../src/utils/canvasEdges.js';
 
 test('删除 Edge 只改 child.parentIds，不删除节点、生成资源或其它连接', () => {
   const nodes = [
@@ -103,6 +108,74 @@ test('删除商品详情复刻 Edge 会同步移除对应语义角色并保留�
   assert.deepEqual(next[0].parentIds, ['competitor']);
   assert.deepEqual(next[0].detailRemix.inputRefs.characterReference, { enabled: false, nodeIds: [] });
   assert.deepEqual(next[0].detailRemix.inputRefs.competitorDetailNodeIds, ['competitor']);
+});
+
+test('删除已导入的竞品图会同步页序引用，详情重切片不再读取已不存在节点', () => {
+  const nodes = [
+    { id: 'competitor-1', type: 'Image', resultUrl: '/1.png' },
+    { id: 'competitor-2', type: 'Image', resultUrl: '/2.png' },
+    { id: 'competitor-3', type: 'Image', resultUrl: '/3.png' },
+    { id: 'product', type: 'Image', resultUrl: '/product.png' },
+    {
+      id: 'detail',
+      type: 'Detail Page Remix',
+      parentIds: ['competitor-1', 'competitor-2', 'competitor-3', 'product'],
+      inputPortByParentId: {
+        'competitor-1': 'competitor-detail',
+        'competitor-2': 'competitor-detail',
+        'competitor-3': 'competitor-detail',
+        product: 'product-reference',
+      },
+      detailRemix: {
+        schemaVersion: 1,
+        status: 'ready',
+        inputRefs: {
+          competitorDetailNodeIds: ['competitor-1', 'competitor-2', 'competitor-3'],
+          ownDetailNodeIds: [],
+          characterReference: { enabled: false, nodeIds: [] },
+          productNodeIds: ['product'],
+        },
+      },
+    },
+  ];
+  const next = removeCanvasNodes(nodes, ['competitor-2']);
+  assert.equal(next.some(node => node.id === 'competitor-2'), false);
+  const detail = next.find(node => node.id === 'detail');
+  assert.deepEqual(detail.parentIds, ['competitor-1', 'competitor-3', 'product']);
+  assert.deepEqual(detail.detailRemix.inputRefs.competitorDetailNodeIds, [
+    'competitor-1',
+    'competitor-3',
+  ]);
+  assert.deepEqual(detail.detailRemix.inputRefs.productNodeIds, ['product']);
+  assert.equal(detail.inputPortByParentId['competitor-2'], undefined);
+});
+
+test('打开旧项目时可清理已经缺失但仍残留在详情输入中的竞品图引用', () => {
+  const staleNodes = [{
+    id: 'detail',
+    type: 'Detail Page Remix',
+    parentIds: ['competitor-1', 'deleted-competitor'],
+    inputPortByParentId: {
+      'competitor-1': 'competitor-detail',
+      'deleted-competitor': 'competitor-detail',
+    },
+    detailRemix: {
+      schemaVersion: 1,
+      status: 'ready',
+      inputRefs: {
+        competitorDetailNodeIds: ['competitor-1', 'deleted-competitor'],
+        ownDetailNodeIds: [],
+        characterReference: { enabled: false, nodeIds: [] },
+        productNodeIds: [],
+      },
+    },
+  }, {
+    id: 'competitor-1', type: 'Image', resultUrl: '/1.png',
+  }];
+  const repaired = removeCanvasNodes(staleNodes, ['deleted-competitor']);
+  const detail = repaired.find(node => node.id === 'detail');
+  assert.deepEqual(detail.parentIds, ['competitor-1']);
+  assert.deepEqual(detail.detailRemix.inputRefs.competitorDetailNodeIds, ['competitor-1']);
 });
 
 test('wouldCreateCycle：直接回连 A→B→A 会成环', () => {

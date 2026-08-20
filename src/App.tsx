@@ -72,6 +72,7 @@ import { CanvasZoomControl } from './components/canvas/CanvasZoomControl';
 import { collectNodeReferences, type NodeReference } from './utils/nodeReferences.js';
 import { upsertProductSceneResultNode } from './utils/productSceneResult.js';
 import { upsertDetailRemixResultNodes } from './utils/detailRemixResult.js';
+import { removeCanvasNodes } from './utils/canvasEdges.js';
 import {
   applyDetailStitchSlices,
   restoreDetailStitchOriginals,
@@ -1170,12 +1171,27 @@ export default function App() {
       showToast('请先新建或打开项目', { tone: 'error' });
       return;
     }
-    const current = nodesRef.current;
-    const controller = current.find(node => (
+    let current = nodesRef.current;
+    let controller = current.find(node => (
       node.id === controllerNodeId && node.type === NodeType.DETAIL_PAGE_REMIX
     ));
-    const sourceIds = controller?.detailRemix?.inputRefs?.competitorDetailNodeIds || [];
-    const byId = new Map(current.map(node => [node.id, node]));
+    let sourceIds = controller?.detailRemix?.inputRefs?.competitorDetailNodeIds || [];
+    let byId = new Map(current.map(node => [node.id, node]));
+    const missingSourceIds = sourceIds.filter(nodeId => !byId.has(nodeId));
+    if (missingSourceIds.length) {
+      // Projects saved before node deletion synchronized semantic inputs can
+      // still contain dangling competitor IDs. Repair them at the entry point
+      // so users do not need to re-import the whole folder.
+      current = removeCanvasNodes(current, missingSourceIds);
+      controller = current.find(node => (
+        node.id === controllerNodeId && node.type === NodeType.DETAIL_PAGE_REMIX
+      ));
+      sourceIds = controller?.detailRemix?.inputRefs?.competitorDetailNodeIds || [];
+      byId = new Map(current.map(node => [node.id, node]));
+      nodesRef.current = current;
+      setNodes(current);
+      showToast(`已自动移除 ${missingSourceIds.length} 个已删除的竞品图引用`);
+    }
     const sources = sourceIds.flatMap(nodeId => {
       const source = byId.get(nodeId);
       const url = source?.resultUrl || source?.editorBackgroundUrl;

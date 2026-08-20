@@ -90,3 +90,28 @@ export function removeCanvasConnections(nodes, connections) {
     nodes
   );
 }
+
+/**
+ * Delete canvas nodes and disconnect every outgoing edge in one immutable
+ * transaction. Semantic controllers must be disconnected through the same
+ * helpers as an explicit Edge deletion, otherwise their denormalized inputRefs
+ * keep IDs for images that no longer exist on the canvas.
+ *
+ * nodeIds may include an ID that is already absent. This intentionally repairs
+ * older projects that persisted a dangling parent/reference before this guard
+ * existed.
+ */
+export function removeCanvasNodes(nodes, nodeIds) {
+  const deletedIds = new Set(
+    (Array.isArray(nodeIds) ? nodeIds : []).map(value => String(value || '')).filter(Boolean)
+  );
+  if (!deletedIds.size) return nodes;
+  const connections = [];
+  for (const child of nodes || []) {
+    for (const parentId of child?.parentIds || []) {
+      if (deletedIds.has(parentId)) connections.push({ parentId, childId: child.id });
+    }
+  }
+  return removeCanvasConnections(nodes, connections)
+    .filter(node => !deletedIds.has(node.id));
+}

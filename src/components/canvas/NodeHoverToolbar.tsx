@@ -11,6 +11,7 @@ export type NodeHoverToolbarAction =
 
 interface NodeHoverToolbarProps {
   data: NodeData;
+  visible: boolean;
   localScale: number;
   topClassName: string;
   mediaType: 'image' | 'video';
@@ -61,6 +62,7 @@ const downloadMedia = (resultUrl: string, nodeId: string, mediaType: 'image' | '
 
 export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
   data,
+  visible,
   localScale,
   topClassName,
   mediaType,
@@ -73,9 +75,13 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const resultUrl = data.resultUrl!;
 
+  // The toolbar is click-driven through the canvas selection state. Keeping it
+  // out of the DOM while hidden also prevents invisible actions receiving focus.
+  if (!visible) return null;
+
   return (
     <div
-      className={`absolute ${topClassName} left-0 right-0 flex justify-center opacity-0 group-hover/nodecard:opacity-100 transition-opacity z-20`}
+      className={`absolute ${topClassName} left-0 right-0 z-20 flex justify-center`}
       style={{
         transform: `scale(${localScale})`,
         transformOrigin: 'bottom center',

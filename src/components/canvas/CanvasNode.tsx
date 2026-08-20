@@ -510,6 +510,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
           {data.resultUrl && (
             <NodeHoverToolbar
               data={data}
+              visible={selected && showControls}
               localScale={localScale}
               topClassName="-top-20"
               mediaType="image"
@@ -620,6 +621,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
         {data.type === NodeType.IMAGE && isSuccess && data.resultUrl && (
           <NodeHoverToolbar
             data={data}
+            visible={selected && showControls}
             localScale={localScale}
             topClassName="-top-12"
             mediaType="image"
@@ -654,6 +656,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
         {data.type === NodeType.VIDEO && isSuccess && data.resultUrl && (
           <NodeHoverToolbar
             data={data}
+            visible={selected && showControls}
             localScale={localScale}
             topClassName="-top-11"
             mediaType="video"

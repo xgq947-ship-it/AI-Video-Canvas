@@ -10,6 +10,7 @@ import {
   ListOrdered,
   Loader2,
   RefreshCw,
+  Scissors,
   Sparkles,
   UserRound,
   WandSparkles,
@@ -62,6 +63,8 @@ interface DetailRemixNodeProps {
     role: 'competitor' | 'own',
     files: File[],
   ) => Promise<unknown>;
+  onOpenDetailStitch?: (nodeId: string) => void;
+  onRestoreDetailStitch?: (nodeId: string) => void;
 }
 
 // 「我的详情」端口仍留在 DETAIL_REMIX_INPUT_PORTS 里——旧画布上已有的连线要能
@@ -141,6 +144,8 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
   onContextMenu,
   onConnectorDown,
   onImportFolder,
+  onOpenDetailStitch,
+  onRestoreDetailStitch,
 }) => {
   const dark = canvasTheme === 'dark';
   /**
@@ -769,6 +774,33 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
 
           <div className="flex gap-2">
             {folderImportCard('competitor', '竞品详情文件夹', 'text-rose-400', competitorFolderInputRef)}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              disabled={busy || state.inputRefs.competitorDetailNodeIds.length === 0}
+              onClick={() => {
+                if (!onOpenDetailStitch) {
+                  setLocalError('当前版本尚未连接详情重切片能力，请完整重启应用');
+                  return;
+                }
+                setLocalError('');
+                onOpenDetailStitch(data.id);
+              }}
+              className={`flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[11px] font-medium ${dark ? 'border-violet-600 text-violet-300 hover:bg-violet-500/10' : 'border-violet-300 text-violet-700 hover:bg-violet-50'} disabled:opacity-40`}
+              title="把零散竞品图拼成长图，按视觉模块和当前模型宽高比重新切片"
+            >
+              <Scissors size={13} />详情拼接重新切片
+            </button>
+            <button
+              type="button"
+              disabled={busy || state.detailStitch?.status !== 'active'}
+              onClick={() => onRestoreDetailStitch?.(data.id)}
+              className={`flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-[11px] ${dark ? 'border-neutral-700 text-neutral-300 hover:bg-neutral-800' : 'border-neutral-300 hover:bg-neutral-100'} disabled:opacity-35`}
+              title="恢复替换前的原始竞品切片，不删除已生成的新切片"
+            >
+              <RefreshCw size={13} />恢复原始切片
+            </button>
           </div>
           <p className="px-1 text-[10px] text-neutral-500">也可以把散图连接到左侧「竞品详情」端口。</p>
 

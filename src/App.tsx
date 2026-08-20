@@ -58,6 +58,7 @@ import { ExpandedMediaModal } from './components/modals/ExpandedMediaModal';
 import { CreateAssetModal } from './components/modals/CreateAssetModal';
 import { CreateProjectModal } from './components/modals/CreateProjectModal';
 import { TikTokImportModal } from './components/modals/TikTokImportModal';
+import { DetailStitchModal } from './components/modals/DetailStitchModal';
 import { AssetLibraryPanel, type LibraryAsset } from './components/AssetLibraryPanel';
 import { useTikTokImport } from './hooks/useTikTokImport';
 import { isValidNodeConnection } from '@/shared/connectionRules.js';
@@ -71,6 +72,11 @@ import { CanvasZoomControl } from './components/canvas/CanvasZoomControl';
 import { collectNodeReferences, type NodeReference } from './utils/nodeReferences.js';
 import { upsertProductSceneResultNode } from './utils/productSceneResult.js';
 import { upsertDetailRemixResultNodes } from './utils/detailRemixResult.js';
+import {
+  applyDetailStitchSlices,
+  restoreDetailStitchOriginals,
+} from './utils/detailStitchNodes';
+import type { DetailStitchRecord } from '../shared/detailStitch';
 import { getImageGenerationProvider } from '@/shared/generationProviders.js';
 import { listVideoGenerationProviders } from '@/shared/generationProviders.js';
 import { assignProductSceneInputOnConnect } from './utils/productSceneInputMapping.js';
@@ -238,6 +244,11 @@ export default function App() {
   const [isImportingLocalProject, setIsImportingLocalProject] = useState(false);
   const [isMinimapOpen, setIsMinimapOpen] = useState(false);
   const [videoRemixes, setVideoRemixes] = useState<VideoRemixProject[]>([]);
+  const [detailStitchModal, setDetailStitchModal] = useState<{
+    controllerNodeId: string;
+    imageModel: string;
+    sources: Array<{ nodeId: string; url: string }>;
+  } | null>(null);
 
   // Panel state management (history, asset library, expand)
   const {
@@ -1152,6 +1163,57 @@ export default function App() {
     rollbackHistoryTransaction: rollbackCanvasHistoryTransaction,
   });
   cancelActiveImportRef.current = cancelActiveImport;
+
+  const handleOpenDetailStitch = React.useCallback((controllerNodeId: string) => {
+    if (!canvasEditLock.guard()) return;
+    if (!workflowId) {
+      showToast('请先新建或打开项目', { tone: 'error' });
+      return;
+    }
+    const current = nodesRef.current;
+    const controller = current.find(node => (
+      node.id === controllerNodeId && node.type === NodeType.DETAIL_PAGE_REMIX
+    ));
+    const sourceIds = controller?.detailRemix?.inputRefs?.competitorDetailNodeIds || [];
+    const byId = new Map(current.map(node => [node.id, node]));
+    const sources = sourceIds.flatMap(nodeId => {
+      const source = byId.get(nodeId);
+      const url = source?.resultUrl || source?.editorBackgroundUrl;
+      return url ? [{ nodeId, url }] : [];
+    });
+    if (!controller || sourceIds.length === 0 || sources.length !== sourceIds.length) {
+      showToast('请先导入并等待所有竞品详情图加载完成', { tone: 'error' });
+      return;
+    }
+    setDetailStitchModal({
+      controllerNodeId,
+      imageModel: controller.imageModel || 'google-flow-nano-banana-pro',
+      sources,
+    });
+  }, [canvasEditLock, showToast, workflowId]);
+
+  const handleRestoreDetailStitch = React.useCallback((controllerNodeId: string) => {
+    if (!canvasEditLock.guard()) return;
+    try {
+      const next = restoreDetailStitchOriginals(nodesRef.current, controllerNodeId);
+      nodesRef.current = next;
+      setNodes(next);
+      setSelectedNodeIds([controllerNodeId]);
+      showToast('已恢复原始竞品切片，重切片结果仍保留在画布中');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '恢复原始切片失败', { tone: 'error' });
+    }
+  }, [canvasEditLock, setNodes, setSelectedNodeIds, showToast]);
+
+  const handleConfirmDetailStitch = React.useCallback(async (record: DetailStitchRecord) => {
+    const controllerNodeId = detailStitchModal?.controllerNodeId;
+    if (!controllerNodeId) throw new Error('详情重切片会话已失效');
+    const next = applyDetailStitchSlices(nodesRef.current, controllerNodeId, record);
+    nodesRef.current = next;
+    setNodes(next);
+    setSelectedNodeIds([controllerNodeId]);
+    showToast(`已生成并替换 ${record.slices.length} 张新竞品切片，原图已归档保留`);
+  }, [detailStitchModal?.controllerNodeId, setNodes, setSelectedNodeIds, showToast]);
 
   /**
    * 侧边栏点击「画布元素」→ 跳转到该节点：居中并缩放到刚好铺满画布可视区。
@@ -3435,6 +3497,8 @@ export default function App() {
     resumeCinematicBatch,
     handleMergeCinematicVideos,
     importDetailRemixFolder,
+    handleOpenDetailStitch,
+    handleRestoreDetailStitch,
     handleDuplicate,
     handleNodePointerDown,
     setSelectedNodeIds,
@@ -3498,6 +3562,8 @@ export default function App() {
       role: 'competitor' | 'own',
       files: File[],
     ) => nodeCallbacksRef.current.importDetailRemixFolder(controller, role, files),
+    onOpenDetailStitch: (id: string) => nodeCallbacksRef.current.handleOpenDetailStitch(id),
+    onRestoreDetailStitch: (id: string) => nodeCallbacksRef.current.handleRestoreDetailStitch(id),
     onNodePointerDown: (e: React.PointerEvent, id: string) => {
       setSelectedConnection(null);
       const current = nodeCallbacksRef.current;
@@ -3621,6 +3687,19 @@ export default function App() {
         onCreate={handleCreateProject}
         canvasTheme={canvasTheme}
       />
+
+      {detailStitchModal && workflowId && (
+        <DetailStitchModal
+          isOpen
+          workflowId={workflowId}
+          controllerNodeId={detailStitchModal.controllerNodeId}
+          imageModel={detailStitchModal.imageModel}
+          sources={detailStitchModal.sources}
+          canvasTheme={canvasTheme}
+          onClose={() => setDetailStitchModal(null)}
+          onConfirm={handleConfirmDetailStitch}
+        />
+      )}
 
       {/* TikTok Import Modal */}
       <TikTokImportModal
@@ -3783,6 +3862,8 @@ export default function App() {
                 onResumeCinematicBatch={stableNodeHandlers.onResumeCinematicBatch}
                 onMergeCinematicVideos={stableNodeHandlers.onMergeCinematicVideos}
                 onImportDetailRemixFolder={stableNodeHandlers.onImportDetailRemixFolder}
+                onOpenDetailStitch={stableNodeHandlers.onOpenDetailStitch}
+                onRestoreDetailStitch={stableNodeHandlers.onRestoreDetailStitch}
                 zoom={viewport.zoom}
                 onMouseEnter={handleNodeMouseEnter}
                 onMouseLeave={handleNodeMouseLeave}

@@ -88,6 +88,8 @@ interface CanvasNodeProps {
     role: 'competitor' | 'own',
     files: File[],
   ) => Promise<unknown>;
+  onOpenDetailStitch?: (nodeId: string) => void;
+  onRestoreDetailStitch?: (nodeId: string) => void;
   zoom: number;
   // 悬停回调带上 nodeId，调用方才能传稳定的引用（否则每次 render 都是新箭头函数，
   // React.memo 会全部失效）。
@@ -171,6 +173,8 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   onResumeCinematicBatch,
   onMergeCinematicVideos,
   onImportDetailRemixFolder,
+  onOpenDetailStitch,
+  onRestoreDetailStitch,
   zoom,
   onMouseEnter,
   onMouseLeave,
@@ -418,6 +422,8 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
         onContextMenu={onContextMenu}
         onConnectorDown={onConnectorDown}
         onImportFolder={onImportDetailRemixFolder}
+        onOpenDetailStitch={onOpenDetailStitch}
+        onRestoreDetailStitch={onRestoreDetailStitch}
       />
     );
   }

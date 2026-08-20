@@ -17,6 +17,7 @@ import settingsRoutes from './routes/settings.js';
 import videoRemixRoutes from './routes/video-remix.js';
 import videoAnalysisRoutes from './routes/video-analysis.js';
 import detailRemixRoutes from './routes/detail-remix.js';
+import detailStitchRoutes from './routes/detail-stitch.js';
 import stickmanDirectorRoutes from './routes/stickman-director.js';
 import cinematicDirectorRoutes from './routes/cinematic-director.js';
 import trashRoutes from './routes/trash.js';
@@ -180,6 +181,8 @@ app.use('/api/video-remix', videoRemixRoutes);
 app.use('/api/video-analysis', videoAnalysisRoutes);
 // 商品详情复刻先从我方详情识别卖点和产品角度，再按竞品页自动选角、一次生成最终图。
 app.use('/api', detailRemixRoutes);
+// 竞品详情图在进入复刻作业前的无损拼接与智能重切片。
+app.use('/api', detailStitchRoutes);
 // Internal Stickman Video Director skill, Flow batch orchestration and merge jobs.
 app.use('/api', stickmanDirectorRoutes);
 app.use('/api', cinematicDirectorRoutes);

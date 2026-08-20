@@ -368,6 +368,21 @@ export interface NodeData {
     order: number;
     layoutVersion?: number;
   };
+  /** Generated competitor re-slice provenance. */
+  detailStitchSource?: {
+    stitchId: string;
+    sliceId: string;
+    startY: number;
+    endY: number;
+    source: 'auto' | 'manual';
+  };
+  /** Originals and superseded re-slices stay on canvas but leave active refs. */
+  detailStitchArchive?: {
+    controllerNodeId: string;
+    stitchId: string;
+    archivedAt: string;
+    order: number;
+  };
 
   // 仅兼容旧项目与项目级工作台适配器；新状态持久化在 workflow.videoRemixes[]。
   videoRemix?: VideoRemixState;

@@ -43,6 +43,18 @@ export interface DetailRemixQueueSection {
   currentIndex?: number;
 }
 
+export interface DetailRemixStitchState {
+  status: 'active' | 'restored';
+  stitchId: string;
+  fullImageUrl: string;
+  originalCompetitorNodeIds: string[];
+  originalFolderImport: DetailRemixFolderImportState;
+  sourceNodeIds: string[];
+  activeSliceNodeIds: string[];
+  appliedAt: string;
+  restoredAt?: string;
+}
+
 export interface DetailRemixNodeData {
   schemaVersion: 1;
   inputRefs: DetailRemixInputRefs;
@@ -68,6 +80,7 @@ export interface DetailRemixNodeData {
   /** What the last run actually read off the supplied reference. Display only. */
   detectedProductSheet: DetailRemixProductSheet | null;
   productSheetWarnings: string[];
+  detailStitch?: DetailRemixStitchState;
   status: 'idle' | 'ready' | 'analyzing' | 'generating-final' | 'generating-plates' | 'plates-ready' | 'composing' | 'completed' | 'outdated' | 'cancelled' | 'error';
   jobId?: string;
   pendingRequestId?: string;

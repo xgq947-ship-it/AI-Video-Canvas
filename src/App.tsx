@@ -31,6 +31,7 @@ import { useHistory } from './hooks/useHistory';
 import { useCanvasTitle } from './hooks/useCanvasTitle';
 import { useWorkflow } from './hooks/useWorkflow';
 import { useImageEditor } from './hooks/useImageEditor';
+import { useImageCrop } from './hooks/useImageCrop';
 import { usePanelState } from './hooks/usePanelState';
 import { useAssetHandlers } from './hooks/useAssetHandlers';
 import { useTextNodeHandlers } from './hooks/useTextNodeHandlers';
@@ -54,6 +55,7 @@ import { SelectionBoundingBox } from './components/canvas/SelectionBoundingBox';
 import { WorkflowPanel } from './components/WorkflowPanel';
 import { HistoryPanel } from './components/HistoryPanel';
 import { ImageEditorModal } from './components/modals/ImageEditorModal';
+import { ImageCropModal } from './components/modals/ImageCropModal';
 import { ExpandedMediaModal } from './components/modals/ExpandedMediaModal';
 import { CreateAssetModal } from './components/modals/CreateAssetModal';
 import { CreateProjectModal } from './components/modals/CreateProjectModal';
@@ -1021,6 +1023,20 @@ export default function App() {
     handleCloseImageEditor,
     handleUpload
   } = useImageEditor({ nodes, updateNode });
+
+  // Image crop modal（图片节点就地裁剪）
+  const {
+    cropModal,
+    isSavingCrop,
+    handleOpenImageCrop,
+    handleCloseImageCrop,
+    handleApplyImageCrop
+  } = useImageCrop({
+    nodes,
+    updateNode,
+    workflowId,
+    notify: (message, options) => showToast(message, options)
+  });
 
   /**
    * Opens the image editor for image editor nodes.
@@ -3525,6 +3541,7 @@ export default function App() {
     handleConnectorPointerDown,
     handleOpenEditor,
     handleUpload,
+    handleOpenImageCrop,
     handleExpandImage,
     handleWriteContent,
     handleTextToVideo,
@@ -3589,6 +3606,7 @@ export default function App() {
     onUpload: (id: string, imageDataUrl: string) =>
       nodeCallbacksRef.current.handleUpload(id, imageDataUrl),
     onExpand: (imageUrl: string) => nodeCallbacksRef.current.handleExpandImage(imageUrl),
+    onCrop: (id: string) => nodeCallbacksRef.current.handleOpenImageCrop(id),
     onWriteContent: (id: string) => nodeCallbacksRef.current.handleWriteContent(id),
     onTextToVideo: (id: string) => nodeCallbacksRef.current.handleTextToVideo(id),
     onTextToImage: (id: string) => nodeCallbacksRef.current.handleTextToImage(id),
@@ -3901,6 +3919,7 @@ export default function App() {
                 onOpenEditor={stableNodeHandlers.onOpenEditor}
                 onUpload={stableNodeHandlers.onUpload}
                 onExpand={stableNodeHandlers.onExpand}
+                onCrop={stableNodeHandlers.onCrop}
                 onWriteContent={stableNodeHandlers.onWriteContent}
                 onTextToVideo={stableNodeHandlers.onTextToVideo}
                 onTextToImage={stableNodeHandlers.onTextToImage}
@@ -4088,6 +4107,14 @@ export default function App() {
           </div>
         </div>
       )}
+
+      <ImageCropModal
+        isOpen={cropModal.isOpen}
+        imageUrl={cropModal.imageUrl}
+        busy={isSavingCrop}
+        onCancel={handleCloseImageCrop}
+        onApply={handleApplyImageCrop}
+      />
 
       <ImageEditorModal
         isOpen={editorModal.isOpen}

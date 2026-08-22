@@ -6,6 +6,7 @@ import {
     createDetailRemixNodeData,
     syncDetailRemixInputRefs,
 } from '../../shared/detailRemix.js';
+import { uploadProjectImage } from '../services/assetService';
 import {
     buildDetailRemixFolderPlacements,
     detailRemixFolderFilePath,
@@ -47,28 +48,6 @@ const SUPPORTED_IMAGE_MIMES = new Set([
 export const isSupportedImageFile = (file: Pick<File, 'name' | 'type'>) =>
     SUPPORTED_IMAGE_MIMES.has(file.type.toLowerCase()) || IMAGE_FILE_RE.test(file.name || '');
 
-/**
- * 量图片尺寸。
- *
- * 刻意走 object URL 而不是 readAsDataURL：后者会把整张图变成 base64 字符串
- * （体积 ×1.33），一张 100MB 的图光这一步就是 133MB 常驻内存，
- * 而这里只是想知道宽高。
- */
-const loadImageSize = (file: File) => new Promise<{ width: number; height: number }>((resolve, reject) => {
-    const objectUrl = URL.createObjectURL(file);
-    const image = new Image();
-    image.onload = () => {
-        const size = { width: image.naturalWidth, height: image.naturalHeight };
-        URL.revokeObjectURL(objectUrl);
-        resolve(size);
-    };
-    image.onerror = () => {
-        URL.revokeObjectURL(objectUrl);
-        reject(new Error('无法识别图片尺寸'));
-    };
-    image.src = objectUrl;
-});
-
 /** 以 limit 为上限并发跑任务，保持 tasks 的原始顺序无关性。 */
 const runWithConcurrency = async (count: number, limit: number, run: (index: number) => Promise<void>) => {
     let next = 0;
@@ -82,47 +61,12 @@ const runWithConcurrency = async (count: number, limit: number, run: (index: num
     await Promise.all(workers);
 };
 
-const closestAspectRatio = (width: number, height: number) => {
-    const ratios = [
-        ['1:1', 1], ['16:9', 16 / 9], ['9:16', 9 / 16], ['4:3', 4 / 3],
-        ['3:4', 3 / 4], ['3:2', 3 / 2], ['2:3', 2 / 3], ['5:4', 5 / 4],
-        ['4:5', 4 / 5], ['21:9', 21 / 9]
-    ] as const;
-    const ratio = width / height;
-    return ratios.reduce((best, current) =>
-        Math.abs(current[1] - ratio) < Math.abs(best[1] - ratio) ? current : best
-    )[0];
-};
-
-const uploadProjectImageFile = async (
+const uploadProjectImageFile = (
     workflowId: string,
     file: File,
     displayName: string,
     signal?: AbortSignal,
-) => {
-    const size = await loadImageSize(file);
-    const response = await fetch(
-        `/api/projects/${encodeURIComponent(workflowId)}/assets/upload-image-binary`,
-        {
-            method: 'POST',
-            headers: {
-                'Content-Type': file.type || 'application/octet-stream',
-                'X-Evan-Mime': file.type || '',
-                'X-Evan-Filename': encodeURIComponent(displayName),
-                'X-Evan-Prompt': encodeURIComponent(displayName)
-            },
-            body: file,
-            signal,
-        }
-    );
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || !result.url) throw new Error(result.error || '图片上传失败');
-    return {
-        url: String(result.url),
-        resultAspectRatio: `${size.width}/${size.height}`,
-        aspectRatio: closestAspectRatio(size.width, size.height),
-    };
-};
+) => uploadProjectImage(workflowId, file, displayName, signal);
 
 const roleKey = (role: DetailRemixFolderRole): 'competitorDetailNodeIds' | 'ownDetailNodeIds' => (
     role === 'competitor' ? 'competitorDetailNodeIds' : 'ownDetailNodeIds'

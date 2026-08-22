@@ -166,12 +166,14 @@ test('整批导入由单个历史事务提交，导入中撤销会中止上传�
   const hook = fs.readFileSync(new URL('../src/hooks/useCanvasImageImport.ts', import.meta.url), 'utf8');
   const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   const topBar = fs.readFileSync(new URL('../src/components/TopBar.tsx', import.meta.url), 'utf8');
+  const assets = fs.readFileSync(new URL('../src/services/assetService.ts', import.meta.url), 'utf8');
 
   assert.match(hook, /beginHistoryTransaction/);
   assert.match(hook, /commitHistoryTransaction/);
   assert.match(hook, /rollbackHistoryTransaction/);
   assert.match(hook, /session\.controller\.abort\(\)/);
-  assert.match(hook, /body:\s*file,\s*signal,/);
+  assert.match(hook, /uploadProjectImage\(workflowId, file, displayName, signal\)/);
+  assert.match(assets, /body:\s*blob,\s*signal,/);
   assert.match(hook, /replaceableFolderNodeIds/);
   assert.match(hook, /finishImport\(session, committedNodes, \[controller\.id\]\)/);
   assert.match(app, /activeCanvasHistoryTransactionRef/);

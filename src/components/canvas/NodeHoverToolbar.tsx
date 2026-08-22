@@ -5,6 +5,7 @@ export type NodeHoverToolbarAction =
   | 'changeAngle'
   | 'lastFrame'
   | 'upload'
+  | 'crop'
   | 'separator'
   | 'expand'
   | 'download';
@@ -19,6 +20,8 @@ interface NodeHoverToolbarProps {
   onUpdate: (id: string, updates: Partial<NodeData>) => void;
   onUpload?: (nodeId: string, imageDataUrl: string) => void;
   onExpand?: (imageUrl: string) => void;
+  /** 打开裁剪弹窗，裁完就地替换本节点的图片 */
+  onCrop?: (nodeId: string) => void;
   /** 用视频最后一帧生成一个图片节点 */
   onExtractLastFrame?: (nodeId: string) => void;
 }
@@ -70,6 +73,7 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
   onUpdate,
   onUpload,
   onExpand,
+  onCrop,
   onExtractLastFrame,
 }) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -146,6 +150,22 @@ export const NodeHoverToolbar: React.FC<NodeHoverToolbarProps> = ({
                     }}
                   />
                 </React.Fragment>
+              );
+            case 'crop':
+              return (
+                <button
+                  key={`${action}-${index}`}
+                  onClick={(event) => { event.stopPropagation(); onCrop?.(data.id); }}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium text-neutral-200 transition-colors hover:bg-neutral-700 hover:text-white"
+                  title="裁剪图片（就地替换，可撤销）"
+                >
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M6 2v14a2 2 0 0 0 2 2h14" />
+                    <path d="M18 22V8a2 2 0 0 0-2-2H2" />
+                  </svg>
+                  裁剪
+                </button>
               );
             case 'separator':
               return <div key={`${action}-${index}`} className="mx-0.5 h-4 w-px shrink-0 bg-neutral-600" />;

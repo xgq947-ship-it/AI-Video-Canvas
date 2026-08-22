@@ -53,6 +53,7 @@ interface CanvasNodeProps {
   onOpenEditor?: (nodeId: string) => void;
   onUpload?: (nodeId: string, imageDataUrl: string) => void;
   onExpand?: (imageUrl: string) => void;
+  onCrop?: (nodeId: string) => void;
   // Text node callbacks
   onWriteContent?: (nodeId: string) => void;
   onTextToVideo?: (nodeId: string) => void;
@@ -144,6 +145,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   onOpenEditor,
   onUpload,
   onExpand,
+  onCrop,
   onWriteContent,
   onTextToVideo,
   onTextToImage,
@@ -206,6 +208,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
   ];
   const imageToolbarActions: NodeHoverToolbarAction[] = [
     'changeAngle',
+    'crop',
     'separator',
     'upload',
     'expand',
@@ -629,6 +632,7 @@ const CanvasNodeComponent: React.FC<CanvasNodeProps> = ({
             onUpdate={onUpdate}
             onUpload={onUpload}
             onExpand={onExpand}
+            onCrop={onCrop}
           />
         )}
 

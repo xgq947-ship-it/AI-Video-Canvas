@@ -8,6 +8,7 @@
 import React from 'react';
 import { NodeData, NodeType, NodeStatus } from '../types';
 import { generateCameraAngle } from '../services/cameraAngleService';
+import { uploadProjectImage } from '../services/assetService';
 
 // ============================================================================
 // TYPES
@@ -38,21 +39,7 @@ const persistDataUrlToProject = async (
 ): Promise<string | null> => {
     try {
         const blob = await (await fetch(dataUrl)).blob();
-        const response = await fetch(
-            `/api/projects/${encodeURIComponent(workflowId)}/assets/upload-image-binary`,
-            {
-                method: 'POST',
-                headers: {
-                    'Content-Type': blob.type || 'image/png',
-                    'X-Evan-Mime': blob.type || 'image/png',
-                    'X-Evan-Filename': encodeURIComponent(displayName),
-                    'X-Evan-Prompt': encodeURIComponent(displayName)
-                },
-                body: blob
-            }
-        );
-        const result = await response.json().catch(() => ({}));
-        return response.ok && result.url ? String(result.url) : null;
+        return (await uploadProjectImage(workflowId, blob, displayName)).url;
     } catch (error) {
         console.warn('[ChangeAngle] 结果落盘失败，暂时使用内存中的 data URL:', error);
         return null;

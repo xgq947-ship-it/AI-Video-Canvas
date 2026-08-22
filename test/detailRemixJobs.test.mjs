@@ -505,7 +505,7 @@ test('营销页核心文案槽缺失会在付费生图前重试，完整保留�
 
   assert.equal(competitorCalls.length, 2);
   assert.equal(completed.pages[0].recognitionContractRetries, 1);
-  assert.equal(completed.pages[0].competitorAnalysisVersion, 4);
+  assert.equal(completed.pages[0].competitorAnalysisVersion, 5);
   assert.equal(generationCalls.length, 1);
   assert.match(generationCalls[0].request.prompt, /肩颈按摩器/);
   assert.match(generationCalls[0].request.prompt, /仿人手深层揉捏/);
@@ -2279,7 +2279,7 @@ test('Codex 生图时在质检期间预提交下一页，且每页各自记录�
   // Both analyses are already done; page 1 is mid-validation with its raw image saved.
   for (const page of job.pages) {
     page.recognitionStatus = 'completed';
-    page.competitorAnalysisVersion = 4;
+    page.competitorAnalysisVersion = 5;
     page.analysis = {
       pageType: 'marketing', hasPerson: false, copySlots: [], productInstances: [],
       // analyzeCompetitorPage stamps the source size onto the analysis; the
@@ -2383,7 +2383,7 @@ test('预提交的下一页会被直接等待并采用，绝不重复提交第�
   const job = __detailRemixTest.readJob(created.id, 'workflow-1', context.dirs);
   for (const page of job.pages) {
     page.recognitionStatus = 'completed';
-    page.competitorAnalysisVersion = 4;
+    page.competitorAnalysisVersion = 5;
     page.analysis = {
       pageType: 'marketing', hasPerson: false, copySlots: [], productInstances: [],
       // analyzeCompetitorPage stamps the source size onto the analysis; the
@@ -2553,6 +2553,9 @@ test('角度板会写进识图与生成提示词，并按实例绑定具体格�
     .find(entry => entry.meta.kind === 'competitor-page').request.systemInstruction;
   assert.match(competitorInstruction, /5=机芯抓捏机构/);
   assert.match(competitorInstruction, /productSheetCell/);
+  // 角度板拍不到的剖视图必须能填 0；硬绑一个整机格会让成图和质检对同一块画面各执一词。
+  assert.match(competitorInstruction, /才填 0/);
+  assert.doesNotMatch(competitorInstruction, /实在无法判断时填最接近整机角度的那一格/);
 
   // The renderer gets the same grid plus the resolved per-instance binding.
   const prompt = generationCalls[0].request.prompt;

@@ -61,8 +61,8 @@ export const DEFAULT_DETAIL_REMIX_RECOGNITION_PROVIDER = 'gemini-web';
 export const DEFAULT_DETAIL_REMIX_IMAGE_MODEL = 'google-flow-nano-banana-pro';
 export const DETAIL_REMIX_JOB_SCHEMA_VERSION = 9;
 const DETAIL_REMIX_KNOWLEDGE_SCHEMA_VERSION = 3;
-const DETAIL_REMIX_COMPETITOR_ANALYSIS_VERSION = 4;
-const DETAIL_REMIX_PIPELINE_VERSION = 'explicit-generation-modes-v2';
+const DETAIL_REMIX_COMPETITOR_ANALYSIS_VERSION = 5;
+const DETAIL_REMIX_PIPELINE_VERSION = 'same-mold-character-swap-v3';
 const MAX_AUTO_PRODUCT_VIEW_REFERENCES = 3;
 const MAX_FINAL_REPAIR_ATTEMPTS = 1;
 /** Cover-crop loss above this is visible content removal, not rounding. */

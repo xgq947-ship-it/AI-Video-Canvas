@@ -551,6 +551,8 @@ test('成图质检与 AI 定向修复保持全 AI 路径，不产生本地叠字
   assert.match(repair, /参考图3是我方产品身份的最高权威/);
   assert.match(repair, /参考图4.*事实证据/);
   assert.match(repair, /参考图5只提供页面图形槽所需的我方 Logo/);
+  // 定向修复会重画品牌槽，字形约束必须跟着走，否则修一次多一个圆点。
+  assert.match(repair, /重画品牌槽时必须逐字形复刻该参考图/);
   assert.match(repair, /参考图6是人物完整造型参考/);
   assert.match(repair, /恢复胶囊标签、主标题、副标题/);
   assert.match(repair, /禁止只换脸/);
@@ -691,6 +693,58 @@ test('快速模式仍可单阶段生成，锁定模式先隔离竞品再只吃�
   assert.match(sameMoldValidationInstruction, /productGeometryPreserved=false/);
   assert.match(sameMoldValidationInstruction, /保留相同模具几何本身不算竞品残留/);
 
+  // 几何冻结只锁产品。换人必然重画头发和衣物，遮挡面积随之改变；
+  // 若生成端冻结遮挡、质检端又要求换发型，页面永远不可能同时满足两条。
+  assert.doesNotMatch(sameMold, /手指\/衣物前后遮挡和阴影脚印必须逐像素级保持/);
+  assert.match(sameMold, /几何冻结只约束产品本身/);
+  assert.match(sameMold, /发长、束发\/披发状态、发缝与发型轮廓一律按人物参考重做/);
+  assert.doesNotMatch(sameMold, /人物替换不得移动手指、手掌、衣物与产品的接触边界/);
+  // 「前后遮挡」指层次关系，不是遮挡面积；同一段里两句话不能各说各的。
+  assert.doesNotMatch(sameMold, /与产品的交互及前后遮挡/);
+  assert.match(sameMold, /谁在前、谁在后不变/);
+  assert.doesNotMatch(sameMoldValidationInstruction, /手部\/衣物遮挡和阴影脚印/);
+  assert.match(sameMoldValidationInstruction, /这不算几何改变/);
+  assert.match(sameMoldValidationInstruction, /头发与衣物的遮挡范围随参考造型变化属于正常/);
+  // 换发型仍然是硬性要求，放宽的只是遮挡面积。
+  assert.match(sameMoldValidationInstruction, /必须判 characterHairstyleCorrect=false/);
+
+  // 角度板拍不到的机芯剖视图无从换色；生成端要求保留，质检端就不能按外观不符判失败。
+  assert.match(sameMold, /产品内部结构剖视、透视爆炸或机芯特写/);
+  assert.match(sameMold, /清除竞品品牌字样、竞品独有配色与表面标识/);
+  assert.match(sameMoldValidationInstruction, /不参与外观比对/);
+
+  // Logo 参考图此前从未被质检指令点名，多出来的圆点因此一路判成 logoCorrect=true。
+  assert.match(sameMoldValidationInstruction, /参考图4是页面品牌槽 Logo 的唯一字形权威/);
+  assert.match(sameMoldValidationInstruction, /必须判 logoCorrect=false/);
+  assert.match(sameMold, /页面 Logo 必须逐字形复刻该参考图/);
+  assert.match(sameMold, /参考图里没有的点、环、图形或装饰一律不得添加/);
+
+  const directValidationInstruction = buildFinalDetailValidationInstruction({
+    pageAnalysis: analysis,
+    productReferenceCount: 1,
+    hasBrandLogoReference: true,
+  });
+  assert.match(directValidationInstruction, /参考图4是页面品牌槽 Logo 的唯一字形权威/);
+  assert.doesNotMatch(directValidationInstruction, /4\) 页面品牌与 Logo 身份是否正确且无竞品残留；/);
+
+  // 没有 Logo 参考图时不能要求质检员去比对一张不存在的图。
+  const noLogoValidationInstruction = buildFinalDetailValidationInstruction({
+    pageAnalysis: analysis,
+    productReferenceCount: 1,
+    hasBrandLogoReference: false,
+  });
+  assert.match(noLogoValidationInstruction, /本页没有 Logo 参考图/);
+  assert.doesNotMatch(noLogoValidationInstruction, /唯一字形权威/);
+
+  const noLogoPrompt = buildFinalDetailPrompt({
+    pageAnalysis: analysis,
+    mappedSellingPoints,
+    productImageCount: 1,
+    ownBrandIdentity: { name: '苏泊尔' },
+    hasBrandLogoReference: false,
+  });
+  assert.match(noLogoPrompt, /不得凭印象添加圆点、圆环、方块、图标、上标或任何图形装饰/);
+
   const failedGeometry = classifyFinalDetailValidation({
     passed: false,
     copyExact: true,
@@ -713,6 +767,33 @@ test('快速模式仍可单阶段生成，锁定模式先隔离竞品再只吃�
     competitorProductBrandRemoved: true,
   }, { generationMode: 'same-mold-recolor' });
   assert.deepEqual(failedGeometry.blocking, ['productGeometryPreserved']);
+
+  // 剖视实例填 0 后必须真的不出现在板格指派里：硬绑一个整机格，
+  // 成图会照着外壳去改机芯，质检又会按外观不符退回同一张图。
+  const mixedCellPrompt = buildFinalDetailPrompt({
+    pageAnalysis: {
+      ...analysis,
+      productInstances: [
+        { instanceId: 'product-1', x: 0.3, y: 0.4, width: 0.3, height: 0.2, productSheetCell: 6 },
+        { instanceId: 'product-2', x: 0.7, y: 0.4, width: 0.3, height: 0.2, productSheetCell: 0 },
+      ],
+    },
+    mappedSellingPoints,
+    productImageCount: 1,
+    productSheet: {
+      rows: 2,
+      columns: 3,
+      cells: [
+        { index: 1, label: '正面整机' }, { index: 2, label: '左前 3/4 整机' },
+        { index: 3, label: '侧面折叠' }, { index: 4, label: '背面整机' },
+        { index: 5, label: '按键面板特写' }, { index: 6, label: '背部佩戴' },
+      ],
+    },
+    generationMode: 'same-mold-recolor',
+  });
+  assert.match(mixedCellPrompt, /"instanceId":"product-1","cell":6/);
+  assert.doesNotMatch(mixedCellPrompt, /"instanceId":"product-2","cell"/);
+  assert.match(mixedCellPrompt, /产品内部结构剖视、透视爆炸或机芯特写/);
 });
 
 test('真实多卖点映射严格收敛为一个槽位一条文案，不产生无位置重复文字', () => {

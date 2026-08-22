@@ -1330,7 +1330,7 @@ export function buildCompetitorPageInstruction({
       // Enumerate the legal cells instead of giving a range: unusable cells are
       // already dropped from the manifest, and a range would invite the planner
       // to assign one of them, leaving that instance with no binding at all.
-      ? `${describeDetailRemixProductSheet(productSheet, '我方已提供一张产品角度板，生成时它就是产品参考图')}为每个 productInstance 判断它最该照抄哪一格，把该格编号写入 productSheetCell。只能使用这些编号：${productSheet.cells.map(cell => cell.index).join('、')}；其它编号一律无效。同一格可以被多个实例引用；实在无法判断时填最接近整机角度的那一格，不要填 0。`
+      ? `${describeDetailRemixProductSheet(productSheet, '我方已提供一张产品角度板，生成时它就是产品参考图')}为每个 productInstance 判断它最该照抄哪一格，把该格编号写入 productSheetCell。只能使用这些编号：${productSheet.cells.map(cell => cell.index).join('、')}；其它编号一律无效。同一格可以被多个实例引用；角度不确定但仍是整机或外观特写时，填最接近的那一格，不要填 0。只有产品内部结构剖视、透视爆炸图或机芯特写这类角度板完全没有拍到的内部画面才填 0。`
       : '本次没有产品角度板，所有 productInstance 的 productSheetCell 一律填 0。',
     `页面序号：${pageIndex + 1}/${totalPages}。我方品牌：${JSON.stringify(brand)}。我方卖点库：${JSON.stringify(sellingPoints)}。我方精确事实库：${JSON.stringify(verifiedFacts)}。我方产品视角库：${JSON.stringify(productViews)}`,
     '只输出合法 JSON，不要 Markdown。格式：',
@@ -1865,17 +1865,17 @@ export function buildFinalDetailPrompt({
     identityLockMode
       ? '参考图1只包含场景、人物、版式骨架和清空后的商品空间，不包含任何可供借鉴的竞品产品。锁定它的画布、背景、人物姿势、区域边界、文字位置与视觉层级；仅允许为适配我方最近实拍角度，对商品朝向、接触阴影、邻近肢体接触点和局部留白做最小幅度调整。'
       : sameMoldRecolor
-        ? '【最高优先级：产品几何冻结】参考图1是唯一几何母版。产品的外轮廓、长宽厚比例、弧度、零件数量与位置、开孔位置、接缝路径、朝向、透视、尺度、页面坐标、接触点、手指/衣物前后遮挡和阴影脚印必须逐像素级保持。不得把产品抹掉后重画，不得生成无产品占位图，不得拉伸、缩放、旋转、挪动、增删部件或改变任何形状。'
+        ? '【最高优先级：产品几何冻结】参考图1是唯一几何母版。产品的外轮廓、长宽厚比例、弧度、零件数量与位置、开孔位置、接缝路径、朝向、透视、尺度、页面坐标、承托接触部位与阴影脚印必须逐像素级保持。不得把产品抹掉后重画，不得生成无产品占位图，不得拉伸、缩放、旋转、挪动、增删部件或改变任何形状。几何冻结只约束产品本身：换人后头发、衣物与手部的轮廓按人物参考重画，因此挡住或让出的产品面积会变化，这属于允许范围，不算改变产品几何；但产品不得随之移动、缩放、变形或整体被遮没。'
       : '参考图1是需要直接修改的竞品原图，不是只供自由发挥的风格参考。锁定它的画布、构图、背景、区域边界、人物姿势、商品位置、文字位置与视觉层级；除明确要求替换的区域外，不得重新设计页面。',
     sameMoldRecolor
-      ? `【只改产品表面】${sheet ? '参考图2 的各个分格' : productRange}是我方产品外观依据，只允许把其中可核验的基础色、分区配色、材质质感、皮革/织物纹路、压纹、细节纹理、缝线与包边颜色，以及产品表面真实存在的标识转移到参考图1同一部位。它们绝不是形状参考。以局部重着色和纹理迁移完成修改，产品表面参考里看不清或没有证明的细节保持参考图1的几何与中性结构，不得凭空发明。`
+      ? `【只改产品表面】${sheet ? '参考图2 的各个分格' : productRange}是我方产品外观依据，只允许把其中可核验的基础色、分区配色、材质质感、皮革/织物纹路、压纹、细节纹理、缝线与包边颜色，以及产品表面真实存在的标识转移到参考图1同一部位。它们绝不是形状参考。以局部重着色和纹理迁移完成修改，产品表面参考里看不清或没有证明的细节保持参考图1的几何与中性结构，不得凭空发明。产品内部结构剖视、透视爆炸或机芯特写等角度板根本没有覆盖的画面，内部机构保持参考图1的结构与中性金属/塑料配色，但其中可见的外壳、包边与织带部分仍要换成我方配色材质，并清除竞品品牌字样、竞品独有配色与表面标识。`
       : `${sheet ? '参考图2 的各个分格' : productRange}是同一款我方真实产品的唯一外观依据。逐个在 productInstances 指定的空位生成我方产品；${sheet ? '每个实例使用上面指定的板格' : '每个实例优先采用最接近的我方实拍角度'}。结构、轮廓、比例、材质、颜色、纹理、缝线、按钮、开孔和产品自身标识必须逐项服从我方产品参考。若没有完全相同的实拍角度，使用最近角度并轻微调整场景适配，禁止借用${identityLockMode ? '任何未提供素材' : '竞品产品'}补造不可见结构。`,
     sheet
       ? `参考图2 是角度索引板，不是版式参考：禁止把它的网格、分格线、编号数字、背景底色或多格并排的布局搬进详情页。${sameMoldRecolor ? '只从匹配板格采样产品表面外观，不得把板格中的轮廓覆盖到参考图1。' : '每个产品实例只呈现单一产品本身。'}`
       : '',
     hasBrandLogoReference
-      ? `参考图${brandReferenceIndex}只允许用于 page_graphic 页面品牌槽的 Logo 身份、拼写和图形结构，不得用于产品表面或包装。严禁复制 Logo 裁剪图周围的产品材质、压印底纹、深色背景、光影或矩形边界。只在 brandPlan.sourceSlots 指定的页面图形槽生成我方 Logo；brandPlan.removalOnlySlots 必须保持清空。`
-      : '只在 brandPlan.sourceSlots 指定的页面图形槽按 brandIdentity 生成准确品牌名；brandIdentity 为空时保持清空。brandPlan.removalOnlySlots 属于竞品产品表面或包装标识，绝不替换成我方 Logo。',
+      ? `参考图${brandReferenceIndex}只允许用于 page_graphic 页面品牌槽的 Logo 身份、拼写和图形结构，不得用于产品表面或包装。严禁复制 Logo 裁剪图周围的产品材质、压印底纹、深色背景、光影或矩形边界。只在 brandPlan.sourceSlots 指定的页面图形槽生成我方 Logo；brandPlan.removalOnlySlots 必须保持清空。页面 Logo 必须逐字形复刻该参考图：字母数量与拼写、字形骨架、字重、字间距、有无圆点/圆环/方块/图标/上标/装饰件都要与参考完全一致。参考图里没有的点、环、图形或装饰一律不得添加，参考图里有的也不得省略；禁止按对这个品牌的印象、常见商标写法或“更像 Logo”的美化冲动改动任何一个字形。`
+      : '只在 brandPlan.sourceSlots 指定的页面图形槽按 brandIdentity 生成准确品牌名；brandIdentity 为空时保持清空。没有 Logo 参考图时只允许写准确的纯文字品牌名，不得凭印象添加圆点、圆环、方块、图标、上标或任何图形装饰。brandPlan.removalOnlySlots 属于竞品产品表面或包装标识，绝不替换成我方 Logo。',
     '产品表面的 Logo、字样、图标、圆点、铭牌和压印完全由产品参考图决定：参考图相应位置没有就必须保持无标识，禁止因为页面品牌、独立 Logo 参考或常识而新增、补点、改字或复制到产品上。',
     ownEvidenceReferenceCount > 0
       ? `参考图${evidenceStart}${evidenceEnd > evidenceStart ? `至参考图${evidenceEnd}` : ''}是“我的详情”中与本页文案直接对应的事实证据页。参数、型号、数字、单位、正负号和大小写必须同时服从这些证据图与文案替换清单；不得从竞品原图抄回任何参数。`
@@ -1895,7 +1895,7 @@ export function buildFinalDetailPrompt({
     identityLockMode
       ? '人物身份与造型已经在场景底图阶段确定。保持参考图1里人物的脸、发型、服装、配饰、姿势和遮挡关系，不得在产品合成阶段重新设计或换人。'
       : useCharacterReference
-      ? `参考图${finalCharacterStart}${characterCount > 1 ? `至参考图${finalCharacterStart + characterCount - 1}` : ''}是人物完整外观的最高权威。必须把参考图1中的竞品人物完整替换成参考人物：脸型五官、肤色、发际线、发色、发型结构、服装款式、领口袖型、服装颜色材质、可见配饰和身体比例都以人物参考图为准。绝不允许只换脸后保留竞品人物的发型、衣服或配饰。只保留参考图1的人物位置、动作、姿势、视线、构图尺度、与产品的交互及前后遮挡；被产品遮住的衣物区域无需臆造，但所有可见衣物必须属于参考造型。${sameMoldRecolor ? '人物替换不得移动手指、手掌、衣物与产品的接触边界，也不得借换人之名重画产品几何。' : ''}若人物参考是多视图造型板，所有分栏代表同一个人物与同一套造型，应选取和本页角度最接近的分栏。`
+      ? `参考图${finalCharacterStart}${characterCount > 1 ? `至参考图${finalCharacterStart + characterCount - 1}` : ''}是人物完整外观的最高权威。必须把参考图1中的竞品人物完整替换成参考人物：脸型五官、肤色、发际线、发色、发型结构、服装款式、领口袖型、服装颜色材质、可见配饰和身体比例都以人物参考图为准。绝不允许只换脸后保留竞品人物的发型、衣服或配饰。只保留参考图1的人物位置、动作、姿势、视线、构图尺度、与产品的交互，以及人物与产品的前后层次关系——谁在前、谁在后不变，但头发与衣物按参考造型重画后，被它们挡住或让出的产品面积可以随之变化；被产品遮住的衣物区域无需臆造，但所有可见衣物必须属于参考造型。${sameMoldRecolor ? '同模换色下人物仍须整体换成参考人物：发长、束发/披发状态、发缝与发型轮廓一律按人物参考重做，即使这会改变头发、衣物与产品之间被遮挡面积的多少；保留竞品人物的盘发、发髻或衣服属于失败。人物替换只需保持产品本身的位置、尺度与形状不变，不得借换人之名移动或重画产品几何。' : ''}若人物参考是多视图造型板，所有分栏代表同一个人物与同一套造型，应选取和本页角度最接近的分栏。`
       : '不使用人物身份参考；若规格 hasPerson=false，禁止凭空增加人物；若原图有人物，也不得保留可识别的竞品人物身份。',
     '只允许出现替换清单中的我方文案、我方品牌/Logo，以及我方产品自身不可分离的真实标识；不得出现其它文字、乱码、商标或水印。',
     '输出单张完整最终图，不要解释，不要输出中间底图、无字底图、蒙版或排版稿。',
@@ -2082,19 +2082,22 @@ export function buildFinalDetailValidationInstruction({
   const removalOnlyBrandSlots = brandSlots.filter(slot => slot.placement !== 'page_graphic');
   return [
     sameMoldRecolor
-      ? '你是电商详情“同模换色”最终交付质检员。参考图1是待验收成图；参考图2是原始竞品页，也是产品几何母版：它的产品轮廓、比例、部件位置、朝向、透视、尺度、页面位置、接触点、遮挡和阴影脚印必须保留，但竞品颜色、材质、纹理、品牌、文案和商业身份绝不能保留。参考图3及之后才是我方产品外观、Logo、事实证据或人物完整造型。'
+      ? '你是电商详情“同模换色”最终交付质检员。参考图1是待验收成图；参考图2是原始竞品页，也是产品几何母版：它的产品轮廓、比例、部件位置、朝向、透视、尺度、页面位置、承托接触部位和阴影脚印必须保留，但竞品颜色、材质、纹理、品牌、文案和商业身份绝不能保留。参考图3及之后才是我方产品外观、Logo、事实证据或人物完整造型。'
       : '你是电商详情最终交付质检员。参考图1是待验收成图；参考图2是原始竞品页，只能用于比对画布、构图、品牌容器和文案版式，绝不能把其中的竞品品牌、产品或文案判为应保留内容。参考图3及之后才是我方产品、Logo、事实证据或人物完整造型。',
     characterCount > 0
-      ? `参考图${characterStart}${characterCount > 1 ? `至参考图${characterStart + characterCount - 1}` : ''}是人物完整造型参考；必须分别核对人脸身份、发型、服装和可见配饰，不能只核对脸。`
+      ? `参考图${characterStart}${characterCount > 1 ? `至参考图${characterStart + characterCount - 1}` : ''}是人物完整造型参考；必须分别核对人脸身份、发型、服装和可见配饰，不能只核对脸。多视图造型板的各分栏是同一个人、同一套造型的不同角度，应与本页人物角度最接近的分栏比对，分栏之间因角度造成的正常差异不算不符；但发长、束发/披发状态、发缝或发型结构与参考不同，必须判 characterHairstyleCorrect=false 并写入 characterIssues。`
       : '本页没有人物参考图；人物四项检查字段填 true，characterIssues 留空。',
+    hasBrandLogoReference
+      ? `参考图${brandReferenceIndex}是页面品牌槽 Logo 的唯一字形权威。逐字形比对成图里的页面 Logo：拼写、字母数量、字形骨架、字重、字间距，以及有无圆点、圆环、方块、图标、上标或装饰件。参考图里没有的装饰出现在成图上，或参考图里有的被省略，都必须判 logoCorrect=false 并写明多了或少了什么；这与竞品是否残留无关，凭印象把品牌“画得更像商标”同样算错。`
+      : '本页没有 Logo 参考图，页面品牌槽只应出现准确的纯文字品牌名；字母里多出圆点、圆环、方块、图标或任何图形装饰都判 logoCorrect=false。',
     sheet
       ? `${describeDetailRemixProductSheet(sheet, `参考图${productStart}`)}它只是角度索引，成图里本来就不该出现网格、分格线或编号；只有当成图真的把网格或编号画了进去，才判 productCorrect=false。核对产品时用各分格逐一比对成图中每一处产品的结构、比例与材质。`
       : '',
     `页面类型：${page.pageType}；运行模式：${page.pageMode}。必须逐字、逐位置出现的文案清单：${JSON.stringify(safeCopyPlan)}。营销页必须保留的核心文案层级槽：${JSON.stringify(marketingLayoutSlots)}。我方品牌：${JSON.stringify(object(ownBrandIdentity))}。页面品牌槽：${JSON.stringify(pageBrandSlots)}。竞品产品/包装清除槽：${JSON.stringify(removalOnlyBrandSlots)}。`,
     '所有不在上述我方文案与品牌白名单中的可读内容，都必须按竞品残留或模型臆造内容报告。',
     sameMoldRecolor
-      ? '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 参数名是否仍在 label 区、参数值是否仍在 value 区；3) 是否出现乱码、伪字、重复卖点、提示词或 JSON；4) 页面品牌与 Logo 身份是否正确且无竞品残留；5) 对照参考图2检查页面 Logo 容器和文案层级；6) 对照参考图2逐一检查每个产品的轮廓、长宽厚比例、部件数量与位置、开孔、接缝路径、朝向、透视、尺度、页面坐标、手部/衣物遮挡和阴影脚印，任一改变都令 productGeometryPreserved=false；7) 对照参考图3开始的我方产品参考，只检查基础色、分区配色、材质、皮革/织物纹路、压纹、缝线与包边颜色及真实表面标识，任一不符都令 productAppearanceMatched=false；8) 竞品产品表面 Logo、品牌字样、独有纹理或配色仍存在时 competitorProductBrandRemoved=false；保留相同模具几何本身不算竞品残留，competitorRemoved 只表示竞品商业身份、表面外观、包装、文案与水印已清除；9) 有人物参考时，分别核对脸、发型、服装和配饰，并确认换人没有移动人物与产品的接触/遮挡边界。productCorrect 只有在几何冻结与我方外观两项都通过时才能为 true。'
-      : '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 参数名是否仍在 label 区、参数值是否仍在 value 区，不能错栏、合并或串行；3) 是否出现乱码、伪字、重复卖点、提示词或 JSON；4) 页面品牌与 Logo 身份是否正确且无竞品残留；5) 对照参考图2，页面 Logo 是否只出现在 page_graphic 槽并保留原槽位容器，product_surface 与 packaging 槽必须清除而不是替换；6) 对照参考图2，营销页的胶囊标签、主标题、副标题/说明是否逐层保留，不能缺层、合并、缩成同字号小字或大幅漂移；7) 对照参考图3开始的我方产品参考，产品结构、轮廓、材质、纹理、缝线、按钮和所有产品表面标识是否一致；参考图没有的白色 Logo、圆点、铭牌或压印一律属于错误，productCorrect 与 logoPresentationCorrect 必须为 false；8) 有人物参考时，成图人物的脸型五官、发际线与发型结构、服装款式领口袖型与颜色材质、可见配饰是否都来自人物参考。只换脸、仍保留竞品发型或竞品衣服必须判失败，并在 characterIssues 写明。productGeometryPreserved 属于不适用字段，填 true；productAppearanceMatched 与 productCorrect 保持一致；competitorProductBrandRemoved 与 competitorRemoved 保持一致。',
+      ? '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 参数名是否仍在 label 区、参数值是否仍在 value 区；3) 是否出现乱码、伪字、重复卖点、提示词或 JSON；4) 页面品牌与 Logo 的身份、拼写和字形是否正确且无竞品残留，字形一律以上面指定的 Logo 权威参考图为准，不得拿竞品原图或印象中的商标写法当依据；5) 对照参考图2检查页面 Logo 容器位置和文案层级；6) 对照参考图2逐一检查每个产品的轮廓、长宽厚比例、部件数量与位置、开孔、接缝路径、朝向、透视、尺度、页面坐标与阴影脚印，任一改变都令 productGeometryPreserved=false；换人后头发、衣物、手部按人物参考重画，因此产品被挡住或让出的面积会变化，这不算几何改变，只有产品本身被移动、缩放、变形、增删部件或整体遮没时才判 false；7) 对照参考图3开始的我方产品参考，只检查基础色、分区配色、材质、皮革/织物纹路、压纹、缝线与包边颜色及真实表面标识，任一不符都令 productAppearanceMatched=false；产品内部结构剖视、透视爆炸或机芯特写等我方产品参考根本没有拍到的内部画面不参与外观比对，只要其中没有竞品品牌字样、竞品独有配色和表面标识，就不得因为它与我方外观参考不一致而判 productAppearanceMatched=false 或 competitorRemoved=false；8) 竞品产品表面 Logo、品牌字样、独有纹理或配色仍存在时 competitorProductBrandRemoved=false；保留相同模具几何本身不算竞品残留，competitorRemoved 只表示竞品商业身份、表面外观、包装、文案与水印已清除；9) 有人物参考时，分别核对脸、发型、服装和配饰，并确认换人没有移动或重画产品本身；头发与衣物的遮挡范围随参考造型变化属于正常。productCorrect 只有在几何冻结与我方外观两项都通过时才能为 true。'
+      : '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 参数名是否仍在 label 区、参数值是否仍在 value 区，不能错栏、合并或串行；3) 是否出现乱码、伪字、重复卖点、提示词或 JSON；4) 页面品牌与 Logo 的身份、拼写和字形是否正确且无竞品残留，字形一律以上面指定的 Logo 权威参考图为准，不得拿竞品原图或印象中的商标写法当依据；5) 对照参考图2，页面 Logo 是否只出现在 page_graphic 槽并保留原槽位容器，product_surface 与 packaging 槽必须清除而不是替换；6) 对照参考图2，营销页的胶囊标签、主标题、副标题/说明是否逐层保留，不能缺层、合并、缩成同字号小字或大幅漂移；7) 对照参考图3开始的我方产品参考，产品结构、轮廓、材质、纹理、缝线、按钮和所有产品表面标识是否一致；参考图没有的白色 Logo、圆点、铭牌或压印一律属于错误，productCorrect 与 logoPresentationCorrect 必须为 false；8) 有人物参考时，成图人物的脸型五官、发际线与发型结构、服装款式领口袖型与颜色材质、可见配饰是否都来自人物参考。只换脸、仍保留竞品发型或竞品衣服必须判失败，并在 characterIssues 写明。productGeometryPreserved 属于不适用字段，填 true；productAppearanceMatched 与 productCorrect 保持一致；competitorProductBrandRemoved 与 competitorRemoved 保持一致。',
     '视觉完成度检查：只有 Logo 清晰、字体层级明确、字距行距稳定、对齐与留白统一，并且没有贴图方块、脏底、廉价描边、滥用发光、粗糙阴影或明显 AI 排版破损时，visualPolishCorrect 才能为 true。不要因正常风格差异苛刻判错，但任何肉眼明显不专业的排版都必须判失败并写入 layoutIssues。',
     strictMode
       ? `这是 ${DETAIL_REMIX_STRICT_PARAMETER_MODE}。没有列入替换清单的型号、数字、单位、材质、认证、配件或清单内容必须完全不存在；发现一个即 unsupportedStrictFactsAbsent=false，并写入 unexpectedTexts。`
@@ -2138,8 +2141,8 @@ export function buildFinalDetailRepairPrompt({
       ? `参考图${evidenceStart}${evidenceEnd > evidenceStart ? `至参考图${evidenceEnd}` : ''}是我方事实证据，必须据此核对型号、数字、单位、符号和品牌。`
       : '没有额外事实证据图，严禁在清单之外猜测或新增文字。',
     hasBrandLogoReference
-      ? `参考图${brandReferenceIndex}只提供页面图形槽所需的我方 Logo 身份、拼写和图形结构；不得复制其产品材质、压印底纹、深色背景或矩形裁剪边界，也不得把它加到产品或包装上。`
-      : '没有独立 Logo 参考时只允许使用品牌清单中的准确名称，不得臆造 Logo 图形。',
+      ? `参考图${brandReferenceIndex}只提供页面图形槽所需的我方 Logo 身份、拼写和图形结构；不得复制其产品材质、压印底纹、深色背景或矩形裁剪边界，也不得把它加到产品或包装上。重画品牌槽时必须逐字形复刻该参考图：拼写、字形骨架、字重、字间距、有无圆点/圆环/方块/图标/装饰件都要一致，参考图里没有的装饰不得添加，有的不得省略。`
+      : '没有独立 Logo 参考时只允许使用品牌清单中的准确名称，不得臆造 Logo 图形，也不得在字母里添加圆点、圆环、方块或任何装饰。',
     characterCount > 0
       ? `参考图${characterStart}${characterCount > 1 ? `至参考图${characterStart + characterCount - 1}` : ''}是人物完整造型参考。若 characterIdentityCorrect、characterHairstyleCorrect、characterOutfitCorrect 或 characterAccessoriesCorrect 任一为 false，必须换掉参考图1中对应的脸、发型、服装或配饰，完整服从人物参考；只保留原人物的位置、动作、视线、与产品交互和遮挡关系，禁止只换脸。`
       : '本次没有人物造型参考，不要凭空改动人物。',

@@ -2177,6 +2177,7 @@ export function buildFinalDetailRepairPrompt({
   identityLocked = false,
 } = {}) {
   const page = safePageAnalysis(pageAnalysis);
+  const copyOnlyPage = isDetailRemixCopyOnlyPage(page);
   const safeCopyPlan = promptSafeCopyPlan(copyPlan);
   const productCount = Math.max(0, Number(productReferenceCount) || 0);
   const productStart = identityLocked ? 2 : 3;
@@ -2187,12 +2188,16 @@ export function buildFinalDetailRepairPrompt({
   const brandReferenceIndex = evidenceEnd + 1;
   const characterStart = brandReferenceIndex + (hasBrandLogoReference ? 1 : 0);
   return [
-    identityLocked
+    copyOnlyPage
+      ? '直接编辑参考图1，输出修复后的完整最终详情图。本页是“只换文案”页：参考图2是原始竞品页，它的画面就是正确画面。把参考图1里凭空多出来的产品、产品剪影或被重绘、换色、润色过的插画/剖视图/机芯，按参考图2逐像素还原回去；人物、背景、图表和所有非文字像素同样以参考图2为准。只保留并修正文案与页面品牌槽，绝不能借修复之名再画一次产品。'
+      : identityLocked
       ? '直接编辑参考图1，输出修复后的完整最终详情图。本次修复不提供竞品原图，任何产品细节都只能来自我方产品参考。只修复质检报告中失败的区域；正确文字、人物、背景和其它已通过区域保持不变。'
       : '直接编辑参考图1，输出修复后的完整最终详情图。参考图2是原始竞品页，只用于恢复画布、构图、品牌容器和文案层级，严禁恢复其中的竞品品牌、产品或文案。只修复质检报告中失败的区域；正确文字和其它已通过区域保持不变。',
     `页面类型：${page.pageType}；运行模式：${page.pageMode}。质检发现：${JSON.stringify(object(validation))}。`,
     `必须逐字生成的最终文案：${JSON.stringify(safeCopyPlan)}。我方品牌：${JSON.stringify(object(ownBrandIdentity))}。`,
-    productCount > 0
+    copyOnlyPage
+      ? '本页不需要任何产品参考：正确结果里本来就没有产品。修复后如果画面上还有产品，这一页仍然算失败。'
+      : productCount > 0
       ? `参考图${productStart}${productEnd > productStart ? `至参考图${productEnd}` : ''}是我方产品身份的最高权威。修复 productCorrect、productPlacementCorrect 或任何产品表面 Logo/圆点/纹理问题时，结构、材质、颜色、缝线、按钮和标识必须逐项服从这些参考；参考中没有的标识必须删除。`
       : '没有额外产品参考；不得在产品表面新增、猜测或修改任何 Logo、圆点、铭牌、纹理和结构。',
     evidenceReferenceCount > 0
@@ -2201,7 +2206,9 @@ export function buildFinalDetailRepairPrompt({
     hasBrandLogoReference
       ? `参考图${brandReferenceIndex}只提供页面图形槽所需的我方 Logo 身份、拼写和图形结构；不得复制其产品材质、压印底纹、深色背景或矩形裁剪边界，也不得把它加到产品或包装上。重画品牌槽时必须逐字形复刻该参考图：拼写、字形骨架、字重、字间距、有无圆点/圆环/方块/图标/装饰件都要一致，参考图里没有的装饰不得添加，有的不得省略。`
       : '没有独立 Logo 参考时只允许使用品牌清单中的准确名称，不得臆造 Logo 图形，也不得在字母里添加圆点、圆环、方块或任何装饰。',
-    characterCount > 0
+    copyOnlyPage
+      ? '本页不做人物替换：人物、姿势、造型和光影都以参考图2为准，原样还原。'
+      : characterCount > 0
       ? `参考图${characterStart}${characterCount > 1 ? `至参考图${characterStart + characterCount - 1}` : ''}是人物完整造型参考。若 characterIdentityCorrect、characterHairstyleCorrect、characterOutfitCorrect 或 characterAccessoriesCorrect 任一为 false，必须换掉参考图1中对应的脸、发型、服装或配饰，完整服从人物参考；只保留原人物的位置、动作、视线、与产品交互和遮挡关系，禁止只换脸。`
       : '本次没有人物造型参考，不要凭空改动人物。',
     '先擦除所有错误文字、乱码、重复文案、竞品参数和竞品品牌，再严格按 targetRegion/targetPart 在原槽位写入清单中的 replacementText。参数名不得进入 value 区，参数值不得进入 label 区；没有替换项的竞品文字区域保持干净。',

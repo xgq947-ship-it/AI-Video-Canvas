@@ -106,6 +106,36 @@ async function waitFor(jobId, context, predicate, message = 'job did not reach e
   throw new Error(`${message}: ${lastJob?.status || 'missing'} / ${lastJob?.stage || 'unknown'} / ${lastJob?.error || ''}`);
 }
 
+/** 一份全项通过的质检结果，供需要真实质检链路的用例复用。 */
+const passingValidation = () => ({
+  passed: true,
+  copyExact: true,
+  brandCorrect: true,
+  productCorrect: true,
+  productGeometryPreserved: true,
+  productAppearanceMatched: true,
+  competitorProductBrandRemoved: true,
+  logoCorrect: true,
+  logoPresentationCorrect: true,
+  layoutHierarchyCorrect: true,
+  visualPolishCorrect: true,
+  layoutIssues: [],
+  productPlacementCorrect: true,
+  parameterAlignmentCorrect: true,
+  unsupportedStrictFactsAbsent: true,
+  characterIdentityCorrect: true,
+  characterHairstyleCorrect: true,
+  characterOutfitCorrect: true,
+  characterAccessoriesCorrect: true,
+  characterIssues: [],
+  competitorRemoved: true,
+  gibberishDetected: false,
+  missingTexts: [],
+  wrongTexts: [],
+  unexpectedTexts: [],
+  summary: '通过',
+});
+
 const completeRecognition = ({ hasPerson = true } = {}) => async (_request, meta) => {
   if (meta.kind === 'own-selling-points') {
     return JSON.stringify({
@@ -919,11 +949,17 @@ test('机芯剖视或纯文案切片只换文案：不发产品与人物参考�
   const env = setup();
   t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
   const calls = [];
+  const recognitionCalls = [];
   const context = {
     ...env.context,
+    skipFinalValidation: false,
     runRecognition: async (request, meta) => {
+      recognitionCalls.push({ request, meta });
       if (meta.kind === 'own-selling-points') {
         return completeRecognition({ hasPerson: true })(request, meta);
+      }
+      if (meta.kind === 'final-detail-validation') {
+        return JSON.stringify(passingValidation());
       }
       return JSON.stringify({
         page: {
@@ -959,6 +995,13 @@ test('机芯剖视或纯文案切片只换文案：不发产品与人物参考�
   // 产品替换那一整套说明一句都不该出现。
   assert.doesNotMatch(calls[0].request.prompt, /逐个在 productInstances 指定的空位生成我方产品/);
   assert.doesNotMatch(calls[0].request.prompt, /人物完整外观的最高权威/);
+  // 质检也不能拿到人物参考：拿到了就会按「必须换成参考人物」验收一张
+  // 本就该原样保留的图，而 characterIssues 是阻断项，这一页必挂。
+  const validation = recognitionCalls.find(entry => entry.meta.kind === 'final-detail-validation');
+  assert.ok(validation, 'final validation should run');
+  assert.match(validation.request.systemInstruction, /本页没有人物参考图/);
+  assert.match(validation.request.systemInstruction, /本页是“只换文案”页/);
+  assert.equal(validation.request.imageDataUrls.length, 2);
 });
 
 test('创建请求幂等；提交边界中断不会自动重复付费提交', async t => {

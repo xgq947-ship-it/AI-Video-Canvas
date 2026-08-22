@@ -2332,7 +2332,8 @@ async function repairFinalDetailPage(
   writeJob(job, context);
   const current = saveImageBuffer(rawBuffer, imageTarget, `${page.resultNodeId}-quality-failed-${repairAttempt}`);
   page.qualityFailedCandidateUrl = current.resultUrl;
-  const identityLocked = isIdentityLockedMode(job);
+  const copyOnlyPage = isDetailRemixCopyOnlyPage(page.analysis);
+  const identityLocked = effectiveGenerationModeForPage(job, page) === 'identity-locked';
   const baseReferences = identityLocked
     ? [current.resultUrl]
     : [current.resultUrl, page.sourceImage];
@@ -2664,11 +2665,12 @@ function prepareFinalPageGeneration(job, page) {
   if (identityLocked && !page.rawPlateUrl) {
     throw new Error('产品身份锁定底图尚未完成，不能进入产品合成阶段');
   }
-  const characterReferences = job.useCharacterReference && page.analysis?.hasPerson
+  // 文案替换页连人物都不换：画面整块保留，多发一张人物图只会诱导模型重画，
+  // 也会让质检按「必须换成参考人物」验收一张本就该原样保留的图。
+  const characterReferences = job.useCharacterReference && page.analysis?.hasPerson && !copyOnlyPage
     ? [...job.characterReferenceImages]
     : [];
-  // 文案替换页连人物都不换：画面整块保留，多发一张人物图只会诱导模型重画。
-  const generationCharacterReferences = identityLocked || copyOnlyPage ? [] : characterReferences;
+  const generationCharacterReferences = identityLocked ? [] : characterReferences;
   const brandReferences = job.brandLogoUrl ? [job.brandLogoUrl] : [];
   const imageProvider = getImageGenerationProvider(job.imageModel);
   let selectedProducts;

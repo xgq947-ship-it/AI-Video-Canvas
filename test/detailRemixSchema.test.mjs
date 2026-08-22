@@ -540,7 +540,10 @@ test('成图质检与 AI 定向修复保持全 AI 路径，不产生本地叠字
   assert.match(instruction, /只换脸、仍保留竞品发型或竞品衣服必须判失败/);
   assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('productGeometryPreserved'));
   const repair = buildFinalDetailRepairPrompt({
-    pageAnalysis: { pageType: 'specification' },
+    pageAnalysis: {
+      pageType: 'specification',
+      productInstances: [{ instanceId: 'product-1', x: 0.5, y: 0.5, width: 0.3, height: 0.3, renderKind: 'product' }],
+    },
     copyPlan: [{ replacementText: '额定功率\n16W' }],
     validation,
     productReferenceCount: 1,
@@ -559,7 +562,10 @@ test('成图质检与 AI 定向修复保持全 AI 路径，不产生本地叠字
   assert.match(repair, /禁止只换脸/);
   assert.doesNotMatch(repair, /本地|程序叠加/);
   const lockedRepair = buildFinalDetailRepairPrompt({
-    pageAnalysis: { pageType: 'marketing' },
+    pageAnalysis: {
+      pageType: 'marketing',
+      productInstances: [{ instanceId: 'product-1', x: 0.5, y: 0.5, width: 0.3, height: 0.3, renderKind: 'product' }],
+    },
     validation: { productCorrect: false, logoPresentationCorrect: false },
     productReferenceCount: 1,
     identityLocked: true,
@@ -1018,6 +1024,19 @@ test('机芯剖视实例只保留不重绘；整页没有产品外观时退化�
   assert.match(copyOnlyValidation, /productPlacementCorrect 属于不适用字段/);
   // 反向误判（把竞品产品当插画留下）比多画一个产品严重得多，必须也能被抓住。
   assert.match(copyOnlyValidation, /必须判 competitorRemoved=false/);
+
+  // 定向修复也会重画这一页。少了这条分支，质检报出「凭空多了一台产品」之后，
+  // 修复会拿着一份产品替换说明去把那台产品修得更精致。
+  const copyOnlyRepair = buildFinalDetailRepairPrompt({
+    pageAnalysis: { pageType: 'marketing', hasPerson: true, productInstances: [instance('m1', 'illustration')] },
+    productReferenceCount: 0,
+    characterReferenceCount: 0,
+    validation: { productCorrect: false },
+  });
+  assert.match(copyOnlyRepair, /本页是“只换文案”页/);
+  assert.match(copyOnlyRepair, /绝不能借修复之名再画一次产品/);
+  assert.match(copyOnlyRepair, /本页不做人物替换/);
+  assert.doesNotMatch(copyOnlyRepair, /我方产品身份的最高权威/);
 
   const instruction = buildCompetitorPageInstruction({ pageIndex: 0, pageCount: 3 });
   assert.match(instruction, /renderKind/);

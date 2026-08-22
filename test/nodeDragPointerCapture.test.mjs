@@ -38,6 +38,29 @@ test('画布平移与节点拖拽共用同一套捕获逻辑', () => {
   assert.match(source, /const startPanning = \(e: React\.PointerEvent\) => \{\s*isPanning\.current = true;\s*capturePointer\(e\);/);
 });
 
+test('框选也捕获指针，快速点击或移出画布不会把旧框选留给下一次拖拽', () => {
+  const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const selection = fs.readFileSync(new URL('../src/hooks/useSelectionBox.ts', import.meta.url), 'utf8');
+  assert.match(app, /if \(e\.button === 0\) \{\s*\/\/[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*capturePointer\(e\);\s*startSelection\(e\);/);
+  assert.match(app, /const selectedIds = endSelection\(nodes, viewport\);\s*if \(selectedIds !== null\)/);
+  assert.doesNotMatch(app, /if \(isSelecting\)/);
+  assert.match(selection, /selectionBoxRef\.current = next;\s*setSelectionBox\(next\);/);
+  assert.match(selection, /isNodeInSelectionBox\(node, selectionBoxRef\.current, viewport\)/);
+});
+
+test('节点首次按下、pointercancel 和窗口失焦都会清掉残留框选', () => {
+  const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /onNodePointerDown:[\s\S]*?current\.abortPointerInteractions\(\);\s*current\.clearSelectionBox\(\);\s*current\.resetConnectionDrag\(\);[\s\S]*?current\.handleNodePointerDown/);
+  assert.match(app, /handleGlobalPointerCancel[\s\S]*?abortPointerInteractions\(\);\s*clearSelectionBox\(\);\s*resetConnectionDrag\(\);/);
+  assert.match(app, /window\.addEventListener\('blur', handleWindowBlur\)/);
+});
+
+test('右键和次级触点不能覆盖正在开始的主指针拖拽', () => {
+  const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(source, /if \(e\.button !== 0 \|\| e\.isPrimary === false\) return;/);
+  assert.match(app, /onNodePointerDown: \(e: React\.PointerEvent, id: string\) => \{\s*if \(e\.button !== 0 \|\| e\.isPrimary === false\) return;/);
+});
+
 test('指针被系统收走时必须有兜底，否则捕获会永久残留把画布卡死', () => {
   const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   // 捕获挂在稳定容器上之后不会再因为子元素卸载被浏览器顺手释放；

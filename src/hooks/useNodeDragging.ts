@@ -119,6 +119,9 @@ export const useNodeDragging = () => {
         id: string,
         onSelect?: (id: string) => void
     ) => {
+        // 节点只响应主指针左键。右键菜单或第二根触点若也覆盖当前拖拽，
+        // 会提前结束真正的鼠标手势，表现成第一次按住后节点完全不动。
+        if (e.button !== 0 || e.isPrimary === false) return;
         // 输入控件上的按下不是拖拽意图。不拦住的话，点进文本框会同时开始拖节点，
         // 而且指针被捕获后连选中文字都做不了。
         if (isInteractiveTarget(e.target)) return;
@@ -291,6 +294,7 @@ export const useNodeDragging = () => {
         endPanning,
         isDragging,
         isPanning: isPanning.current,
+        capturePointer,
         releasePointerCapture,
         abortPointerInteractions
     };

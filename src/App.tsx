@@ -351,13 +351,13 @@ export default function App() {
     updatePanning,
     endPanning,
     isDragging,
+    capturePointer,
     releasePointerCapture,
     abortPointerInteractions
   } = useNodeDragging();
 
   const {
     selectionBox,
-    isSelecting,
     startSelection,
     updateSelection,
     endSelection,
@@ -3252,6 +3252,12 @@ export default function App() {
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if ((e.target as HTMLElement).id === 'canvas-background') {
+      // Every fresh background gesture owns the pointer exclusively. This also
+      // removes an interrupted node/connection gesture before it can intercept
+      // the new selection or pan.
+      abortPointerInteractions();
+      clearSelectionBox();
+      resetConnectionDrag();
       if (e.button === 0 && isSpacePressedRef.current) {
         e.preventDefault();
         startPanning(e);
@@ -3261,6 +3267,9 @@ export default function App() {
       }
       // Left-click (button 0): Start selection box
       if (e.button === 0) {
+        // 框选和节点拖拽一样必须捕获指针；否则光标在松手前移到侧栏或窗口外，
+        // canvas 收不到 pointerup，遗留的框选会吞掉下一次节点拖拽。
+        capturePointer(e);
         startSelection(e);
         clearSelection();
         setSelectedConnection(null);
@@ -3290,10 +3299,8 @@ export default function App() {
     // 3. Handle Connection Dragging
     if (updateConnectionDrag(e)) return;
 
-    // 4. Handle Canvas Panning (disabled when selection box is active)
-    if (!isSelecting) {
-      updatePanning(e, setViewport);
-    }
+    // 4. updateSelection 已经直接读取 ref；走到这里说明当前没有框选。
+    updatePanning(e, setViewport);
   };
 
   /**
@@ -3348,10 +3355,13 @@ export default function App() {
   }, [handleEdgeClick, setSelectedNodeIds]);
 
   const handleGlobalPointerUp = (e: React.PointerEvent) => {
-    // 1. Handle Selection Box End
-    if (isSelecting) {
-      const selectedIds = endSelection(nodes, viewport);
+    // 1. Handle Selection Box End. Do not gate this with a render-time boolean:
+    // a fast click can reach pointerup before React commits the pointerdown state.
+    const selectedIds = endSelection(nodes, viewport);
+    if (selectedIds !== null) {
       setSelectedNodeIds(selectedIds);
+      endPanning();
+      endNodeDrag();
       releasePointerCapture(e);
       return;
     }
@@ -3364,6 +3374,8 @@ export default function App() {
       handleConnectionMade,
       { x: e.clientX, y: e.clientY }
     )) {
+      endPanning();
+      endNodeDrag();
       releasePointerCapture(e);
       return;
     }
@@ -3386,8 +3398,33 @@ export default function App() {
    */
   const handleGlobalPointerCancel = () => {
     abortPointerInteractions();
+    clearSelectionBox();
     resetConnectionDrag();
   };
+
+  // Electron/Chrome usually emits pointercancel on focus loss, but native file
+  // dialogs and OS gestures are allowed to skip it. Always reset every pointer
+  // state when the window blurs so the next mouse-down starts cleanly.
+  const pointerAbortHandlersRef = useRef({
+    abortPointerInteractions,
+    clearSelectionBox,
+    resetConnectionDrag,
+  });
+  pointerAbortHandlersRef.current = {
+    abortPointerInteractions,
+    clearSelectionBox,
+    resetConnectionDrag,
+  };
+  useEffect(() => {
+    const handleWindowBlur = () => {
+      const current = pointerAbortHandlersRef.current;
+      current.abortPointerInteractions();
+      current.clearSelectionBox();
+      current.resetConnectionDrag();
+    };
+    window.addEventListener('blur', handleWindowBlur);
+    return () => window.removeEventListener('blur', handleWindowBlur);
+  }, []);
 
   // Context menu handlers provided by useContextMenuHandlers hook
   // handleDoubleClick, handleGlobalContextMenu, handleAddNext, handleNodeContextMenu,
@@ -3517,6 +3554,9 @@ export default function App() {
     handleRestoreDetailStitch,
     handleDuplicate,
     handleNodePointerDown,
+    abortPointerInteractions,
+    resetConnectionDrag,
+    clearSelectionBox,
     setSelectedNodeIds,
     selectedNodeIds
   };
@@ -3581,8 +3621,15 @@ export default function App() {
     onOpenDetailStitch: (id: string) => nodeCallbacksRef.current.handleOpenDetailStitch(id),
     onRestoreDetailStitch: (id: string) => nodeCallbacksRef.current.handleRestoreDetailStitch(id),
     onNodePointerDown: (e: React.PointerEvent, id: string) => {
+      if (e.button !== 0 || e.isPrimary === false) return;
       setSelectedConnection(null);
       const current = nodeCallbacksRef.current;
+      // A node press is an unambiguous new gesture. Clear any box selection left
+      // behind by a cancelled/too-fast canvas click before its move handler gets
+      // first refusal over this drag.
+      current.abortPointerInteractions();
+      current.clearSelectionBox();
+      current.resetConnectionDrag();
       const currentSelection = current.selectedNodeIds;
       if (e.altKey) {
         const sourceIds = currentSelection.includes(id) && currentSelection.length > 1

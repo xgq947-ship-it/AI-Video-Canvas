@@ -27,6 +27,7 @@ import {
   DETAIL_REMIX_MARKETING_MODE,
   DETAIL_REMIX_STRICT_FACT_MIN_CONFIDENCE,
   DETAIL_REMIX_STRICT_PARAMETER_MODE,
+  isDetailRemixCopyOnlyPage,
   normalizeDetailRemixGenerationMode,
   canonicalDetailRemixFactField,
   detailRemixAllowsStrictParameterMode,
@@ -61,8 +62,8 @@ export const DEFAULT_DETAIL_REMIX_RECOGNITION_PROVIDER = 'gemini-web';
 export const DEFAULT_DETAIL_REMIX_IMAGE_MODEL = 'google-flow-nano-banana-pro';
 export const DETAIL_REMIX_JOB_SCHEMA_VERSION = 9;
 const DETAIL_REMIX_KNOWLEDGE_SCHEMA_VERSION = 3;
-const DETAIL_REMIX_COMPETITOR_ANALYSIS_VERSION = 5;
-const DETAIL_REMIX_PIPELINE_VERSION = 'same-mold-character-swap-v3';
+const DETAIL_REMIX_COMPETITOR_ANALYSIS_VERSION = 6;
+const DETAIL_REMIX_PIPELINE_VERSION = 'copy-only-illustration-pages-v4';
 const MAX_AUTO_PRODUCT_VIEW_REFERENCES = 3;
 const MAX_FINAL_REPAIR_ATTEMPTS = 1;
 /** Cover-crop loss above this is visible content removal, not rounding. */
@@ -95,6 +96,16 @@ function isIdentityLockedMode(value = {}) {
 
 function isSameMoldRecolorMode(value = {}) {
   return generationModeFor(value) === 'same-mold-recolor';
+}
+
+/**
+ * 这一页实际是按哪种模式渲染的。
+ *
+ * 没有真实产品外观的页面一律退化成「只换文案」，质检必须按同一套标准验收——
+ * 否则会拿同模换色的几何/外观条款去评一张原样保留的剖视图。
+ */
+function effectiveGenerationModeForPage(job, page) {
+  return isDetailRemixCopyOnlyPage(page?.analysis) ? 'direct-replacement' : generationModeFor(job);
 }
 
 // A job can be started by POST and subsequently observed by GET. Keeping the
@@ -2198,7 +2209,7 @@ async function validateFinalDetailPage(
     evidenceReferenceCount: evidenceReferences.length,
     characterReferenceCount: characterReferences.length,
     productSheet: activeProductSheet(job, page),
-    generationMode: generationModeFor(job),
+    generationMode: effectiveGenerationModeForPage(job, page),
   });
   let parsed;
   for (let attempt = 0; attempt < MAX_VALIDATION_CALL_ATTEMPTS; attempt += 1) {
@@ -2243,7 +2254,7 @@ async function validateFinalDetailPage(
   }
   if (!parsed) throw new Error('最终详情质检没有返回可用结果');
   const { blocking, advisory, passed, advisoryOnly } = classifyFinalDetailValidation(parsed, {
-    generationMode: generationModeFor(job),
+    generationMode: effectiveGenerationModeForPage(job, page),
   });
   const validation = {
     ...parsed,
@@ -2533,6 +2544,9 @@ async function regenerateFinalDetailPage(job, page, basePrompt, references, vali
  */
 async function ensureIdentityLockedScenePlate(job, page, context, signal) {
   if (!isIdentityLockedMode(job)) return;
+  // 没有产品可隔离的页面不需要空场景底图。跑这一趟既白花一次付费生图，
+  // 又会把本该原样保留的剖视图/插画擦掉。
+  if (isDetailRemixCopyOnlyPage(page.analysis)) return;
   if (page.scenePlateStatus === 'completed' && page.rawPlateUrl) return;
   if (page.status === 'submitting'
       && !canResumeCodexSubmission(job, page, 'blank-plate', context)) {
@@ -2640,7 +2654,11 @@ function interruptedPhaseForPage(page) {
  * the following page while this one is being judged.
  */
 function prepareFinalPageGeneration(job, page) {
-  const generationMode = generationModeFor(job);
+  const requestedMode = generationModeFor(job);
+  // 本页没有任何真实产品外观时，三种模式都退化成同一件事：只换文案。
+  // 继续按原模式跑，同模换色会去「换色」一张剖视图，锁定模式会先把画面清空。
+  const copyOnlyPage = isDetailRemixCopyOnlyPage(page.analysis);
+  const generationMode = copyOnlyPage ? 'direct-replacement' : requestedMode;
   const identityLocked = generationMode === 'identity-locked';
   const sameMoldRecolor = generationMode === 'same-mold-recolor';
   if (identityLocked && !page.rawPlateUrl) {
@@ -2649,12 +2667,19 @@ function prepareFinalPageGeneration(job, page) {
   const characterReferences = job.useCharacterReference && page.analysis?.hasPerson
     ? [...job.characterReferenceImages]
     : [];
-  const generationCharacterReferences = identityLocked ? [] : characterReferences;
+  // 文案替换页连人物都不换：画面整块保留，多发一张人物图只会诱导模型重画。
+  const generationCharacterReferences = identityLocked || copyOnlyPage ? [] : characterReferences;
   const brandReferences = job.brandLogoUrl ? [job.brandLogoUrl] : [];
   const imageProvider = getImageGenerationProvider(job.imageModel);
   let selectedProducts;
   let evidenceReferences;
-  if (sameMoldRecolor) {
+  if (copyOnlyPage) {
+    selectedProducts = [];
+    evidenceReferences = resolvePageEvidenceReferences(job, page, Math.max(
+      0,
+      Number(imageProvider?.maxReferenceImages || 0) - 1 - brandReferences.length,
+    ));
+  } else if (sameMoldRecolor) {
     // Same-mold mode has a strict authority order: competitor geometry, own
     // product appearance, model, page Logo, then fact evidence. Product detail
     // references therefore claim every remaining slot before optional evidence.
@@ -2730,7 +2755,7 @@ function prepareFinalPageGeneration(job, page) {
     ownEvidenceReferenceCount: evidenceReferences.length,
     useCharacterReference: generationCharacterReferences.length > 0,
     characterReferenceCount: generationCharacterReferences.length,
-    productSheet: activeProductSheet(job, page),
+    productSheet: copyOnlyPage ? null : activeProductSheet(job, page),
     identityLocked,
     generationMode,
   });

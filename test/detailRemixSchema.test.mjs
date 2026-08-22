@@ -10,6 +10,7 @@ import {
   activeDetailRemixInputRefs,
   buildProductSheetInstruction,
   describeDetailRemixProductSheet,
+  isDetailRemixCopyOnlyPage,
   normalizeDetailRemixProductSheet,
   assignDetailRemixInputPort,
   buildCompetitorPageInstruction,
@@ -943,7 +944,12 @@ test('品牌 Logo 端口的连线必须在映射与回写中存活，否则保�
 test('没有我方详情时提示词不得声称角度来自「我的详情」', () => {
   const suppliedOnly = [{ id: 'supplement-1', viewAngle: 'user-supplied', supplemental: true }];
   const prompt = buildFinalDetailPrompt({
-    pageAnalysis: { pageType: 'marketing', hasPerson: false, copySlots: [], productInstances: [] },
+    pageAnalysis: {
+      pageType: 'marketing',
+      hasPerson: false,
+      copySlots: [],
+      productInstances: [{ instanceId: 'product-1', x: 0.5, y: 0.5, width: 0.3, height: 0.3, renderKind: 'product' }],
+    },
     selectedProductViews: suppliedOnly,
     productImageCount: 1,
   });
@@ -954,6 +960,69 @@ test('没有我方详情时提示词不得声称角度来自「我的详情」',
   const instruction = buildCompetitorPageInstruction({ ownProductViews: [], pageIndex: 0, pageCount: 3 });
   assert.match(instruction, /本次没有我方产品视角库/);
   assert.doesNotMatch(instruction, /必须只选给定 ID/);
+});
+
+test('机芯剖视实例只保留不重绘；整页没有产品外观时退化成只换文案', () => {
+  const instance = (id, renderKind, cell = 0) => ({
+    instanceId: id, x: 0.5, y: 0.5, width: 0.3, height: 0.3, renderKind, productSheetCell: cell,
+  });
+  const sheet = { rows: 1, columns: 2, cells: [{ index: 1, label: '正面整机' }, { index: 2, label: '背面整机' }] };
+
+  assert.equal(isDetailRemixCopyOnlyPage({ productInstances: [] }), true);
+  assert.equal(isDetailRemixCopyOnlyPage({ productInstances: [instance('a', 'illustration')] }), true);
+  assert.equal(isDetailRemixCopyOnlyPage({
+    productInstances: [instance('a', 'illustration'), instance('b', 'product', 1)],
+  }), false);
+  // 旧分析没有这个字段，只能按「是产品」处理——反向误判会把竞品外观留在成图里。
+  assert.equal(isDetailRemixCopyOnlyPage({ productInstances: [{ instanceId: 'a' }] }), false);
+
+  const copyOnly = buildFinalDetailPrompt({
+    pageAnalysis: { pageType: 'marketing', hasPerson: true, copySlots: [], productInstances: [instance('m1', 'illustration')] },
+    productImageCount: 0,
+    hasBrandLogoReference: true,
+    ownBrandIdentity: { name: '苏泊尔' },
+    generationMode: 'same-mold-recolor',
+  });
+  assert.match(copyOnly, /本页只换文案/);
+  assert.match(copyOnly, /严禁凭空新增任何产品/);
+  // 同模换色的开场白会说「替换产品表面外观」，和上面那句直接打架。
+  assert.doesNotMatch(copyOnly, /只能局部替换产品表面外观/);
+  assert.doesNotMatch(copyOnly, /【只改产品表面】/);
+  assert.doesNotMatch(copyOnly, /人物完整外观的最高权威/);
+  // 不发产品参考时 Logo 就是参考图2；向下取整成 1 张产品会让它错位到参考图3。
+  assert.match(copyOnly, /参考图2只允许用于 page_graphic/);
+
+  const mixed = buildFinalDetailPrompt({
+    pageAnalysis: {
+      pageType: 'marketing',
+      hasPerson: false,
+      copySlots: [],
+      productInstances: [instance('body-1', 'product', 1), instance('movement-1', 'illustration')],
+    },
+    productImageCount: 1,
+    productSheet: sheet,
+    generationMode: 'same-mold-recolor',
+  });
+  assert.doesNotMatch(mixed, /本页只换文案/);
+  assert.match(mixed, /"instanceId":"body-1","cell":1/);
+  assert.doesNotMatch(mixed, /"instanceId":"movement-1","cell"/);
+  assert.match(mixed, /\["movement-1"\]/);
+  assert.match(mixed, /这些区域整块原样保留/);
+
+  const copyOnlyValidation = buildFinalDetailValidationInstruction({
+    pageAnalysis: { productInstances: [instance('m1', 'illustration')] },
+    productReferenceCount: 0,
+    hasBrandLogoReference: true,
+  });
+  assert.match(copyOnlyValidation, /本页是“只换文案”页/);
+  assert.match(copyOnlyValidation, /productPlacementCorrect 属于不适用字段/);
+  // 反向误判（把竞品产品当插画留下）比多画一个产品严重得多，必须也能被抓住。
+  assert.match(copyOnlyValidation, /必须判 competitorRemoved=false/);
+
+  const instruction = buildCompetitorPageInstruction({ pageIndex: 0, pageCount: 3 });
+  assert.match(instruction, /renderKind/);
+  assert.match(instruction, /productInstances 直接给空数组/);
+  assert.match(instruction, /判不准时填 product/);
 });
 
 test('自动识板把含人脸的格子判为不可用，避免污染人物身份', () => {

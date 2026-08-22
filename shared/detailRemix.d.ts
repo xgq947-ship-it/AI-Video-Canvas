@@ -112,6 +112,10 @@ export interface DetailRemixNodeData {
 }
 
 export const DETAIL_REMIX_SCHEMA_VERSION: 1;
+export type DetailRemixInstanceRenderKind = 'product' | 'illustration';
+export const DETAIL_REMIX_INSTANCE_RENDER_KINDS: readonly DetailRemixInstanceRenderKind[];
+export function normalizeDetailRemixInstanceRenderKind(value?: any): DetailRemixInstanceRenderKind;
+export function isDetailRemixCopyOnlyPage(pageAnalysis?: any): boolean;
 export const DETAIL_REMIX_GENERATION_MODES: readonly DetailRemixGenerationMode[];
 export function normalizeDetailRemixGenerationMode(
   value?: any,

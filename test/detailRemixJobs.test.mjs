@@ -5,6 +5,21 @@ import path from 'node:path';
 import test from 'node:test';
 import sharp from 'sharp';
 
+// 识图现在会明确输出每个产品实例及其 renderKind；空数组是「这页没有产品」的
+// 正式信号，会走只换文案的分支。绝大多数用例要的是普通产品页，所以给一个实例。
+const PRODUCT_INSTANCE = {
+  instanceId: 'product-1',
+  x: 0.5,
+  y: 0.5,
+  width: 0.3,
+  height: 0.3,
+  viewAngle: 'front',
+  contactSurface: '',
+  foregroundOcclusion: '',
+  productSheetCell: 0,
+  renderKind: 'product',
+};
+
 import {
   __detailRemixTest,
   cancelDetailRemixJob,
@@ -480,7 +495,7 @@ test('营销页核心文案槽缺失会在付费生图前重试，完整保留�
       const complete = competitorCalls.length > 1;
       return JSON.stringify({ page: {
         pageType: 'marketing', hasPerson: false,
-        selectedProductViewIds: ['pv-1'], productInstances: [], copySlots,
+        selectedProductViewIds: ['pv-1'], productInstances: [PRODUCT_INSTANCE], copySlots,
         mappedSellingPoints: complete ? [
           { sellingPointId: 'sp-1', slotId: 'badge', slotRole: 'featureBadge', replacementText: '肩颈按摩器' },
           { sellingPointId: 'sp-2', slotId: 'headline', slotRole: 'headline', replacementText: '仿人手深层揉捏' },
@@ -505,7 +520,7 @@ test('营销页核心文案槽缺失会在付费生图前重试，完整保留�
 
   assert.equal(competitorCalls.length, 2);
   assert.equal(completed.pages[0].recognitionContractRetries, 1);
-  assert.equal(completed.pages[0].competitorAnalysisVersion, 5);
+  assert.equal(completed.pages[0].competitorAnalysisVersion, 6);
   assert.equal(generationCalls.length, 1);
   assert.match(generationCalls[0].request.prompt, /肩颈按摩器/);
   assert.match(generationCalls[0].request.prompt, /仿人手深层揉捏/);
@@ -536,7 +551,7 @@ test('前序页面即使被识别成型号页也强制按营销页生成，只�
       if (meta.pageIndex === 0) {
         return JSON.stringify({ page: {
           pageType: '型号页', pageMode: 'STRICT_PARAMETER_MODE', strictPageCategory: 'model',
-          hasPerson: false, selectedProductViewIds: ['pv-1'], productInstances: [],
+          hasPerson: false, selectedProductViewIds: ['pv-1'], productInstances: [PRODUCT_INSTANCE],
           copySlots: [{
             slotId: 'headline-1', role: 'headline', field: '', parameterPart: 'none',
             sourceText: '5203N按摩披肩', x: 0.1, y: 0.1, width: 0.8, height: 0.08,
@@ -550,7 +565,7 @@ test('前序页面即使被识别成型号页也强制按营销页生成，只�
       }
       return JSON.stringify({ page: {
         pageType: 'marketing', pageMode: 'MARKETING_MODE', strictPageCategory: 'none',
-        hasPerson: false, selectedProductViewIds: ['pv-1'], productInstances: [],
+        hasPerson: false, selectedProductViewIds: ['pv-1'], productInstances: [PRODUCT_INSTANCE],
         copySlots: [], mappedSellingPoints: [], mappedFacts: [],
       } });
     },
@@ -610,7 +625,7 @@ test('营销文案连续两次重复且超长时由程序确定性缩写和换�
       competitorCalls += 1;
       return JSON.stringify({ page: {
         pageType: 'marketing', pageMode: 'MARKETING_MODE', strictPageCategory: 'none',
-        hasPerson: false, selectedProductViewIds: ['pv-1'], productInstances: [], copySlots,
+        hasPerson: false, selectedProductViewIds: ['pv-1'], productInstances: [PRODUCT_INSTANCE], copySlots,
         mappedSellingPoints: copySlots.map(slot => ({
           sellingPointId: 'sp-1', slotId: slot.slotId, slotRole: slot.role,
           replacementText: '按摩热敷双效舒缓',
@@ -743,6 +758,7 @@ test('竞品页会从我的详情多角度库中选择匹配视角，而不是�
         hasPerson: false,
         targetProductView: { viewAngle: 'right-side' },
         selectedProductViewIds: ['pv-2'],
+        productInstances: [PRODUCT_INSTANCE],
         mappedSellingPoints: [{ sellingPointId: 'sp-1' }],
       } }),
     generateImage: async (request, meta) => {
@@ -897,6 +913,52 @@ test('人物开关关闭或竞品无人时，不把人物参考发送给最终�
   }), noPersonContext);
   const noPersonDone = await waitFor(noPerson.id, noPersonContext, job => job?.stage === 'completed');
   assert.deepEqual(calls[1].request.referenceImageInputs, [COMPETITOR, noPersonDone.productViews[0].imageUrl]);
+});
+
+test('机芯剖视或纯文案切片只换文案：不发产品与人物参考，也不新增产品', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const calls = [];
+  const context = {
+    ...env.context,
+    runRecognition: async (request, meta) => {
+      if (meta.kind === 'own-selling-points') {
+        return completeRecognition({ hasPerson: true })(request, meta);
+      }
+      return JSON.stringify({
+        page: {
+          hasPerson: true,
+          // 画面是机芯剖视图，不是产品外观：识图把它标成 illustration。
+          productInstances: [{ ...PRODUCT_INSTANCE, instanceId: 'movement-1', renderKind: 'illustration' }],
+          selectedProductViewIds: ['pv-1'],
+          copySlots: [{
+            slotId: 'headline-1', role: 'headline', field: '', parameterPart: 'none',
+            sourceText: '竞品标题', x: 0.1, y: 0.1, width: 0.8, height: 0.08,
+            align: 'left', color: '#111111', fontWeight: 700, maxChars: 10,
+          }],
+          mappedSellingPoints: [{
+            sellingPointId: 'sp-1', slotId: 'headline-1', slotRole: 'headline', replacementText: '深层舒缓',
+          }],
+        },
+      });
+    },
+    generateImage: async (request, meta) => {
+      calls.push({ request, meta });
+      return { buffer: Buffer.from('copy-only-final'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({ jobId: 'copy-only-page-job' }), context);
+  await waitFor(created.id, context, job => job?.stage === 'completed');
+
+  // 只发竞品原图。多发一张产品或人物参考，就是在请模型把画面重画一遍。
+  assert.deepEqual(calls[0].request.referenceImageInputs, [COMPETITOR]);
+  assert.deepEqual(calls[0].meta.referenceKinds, ['competitor-layout']);
+  assert.match(calls[0].request.prompt, /本页只换文案/);
+  assert.match(calls[0].request.prompt, /严禁凭空新增任何产品/);
+  assert.match(calls[0].request.prompt, /深层舒缓/);
+  // 产品替换那一整套说明一句都不该出现。
+  assert.doesNotMatch(calls[0].request.prompt, /逐个在 productInstances 指定的空位生成我方产品/);
+  assert.doesNotMatch(calls[0].request.prompt, /人物完整外观的最高权威/);
 });
 
 test('创建请求幂等；提交边界中断不会自动重复付费提交', async t => {
@@ -1266,7 +1328,7 @@ test('Codex 生图最多发送五张参考图，并由程序确定性保留版�
       : JSON.stringify({ page: {
         pageType: 'marketing', hasPerson: true,
         selectedProductViewIds: ['pv-1', 'pv-2', 'pv-3'],
-        productInstances: [], copySlots: [], mappedSellingPoints: [], mappedFacts: [],
+        productInstances: [PRODUCT_INSTANCE], copySlots: [], mappedSellingPoints: [], mappedFacts: [],
       } }),
     generateImage: async (request, meta) => {
       generationCalls.push({ request, meta });
@@ -1427,7 +1489,7 @@ test('成图质检失败时只追加一次 AI 修复，通过复检后才发布�
       if (meta.kind === 'competitor-page') {
         return JSON.stringify({ page: {
           pageType: 'specification', hasPerson: false,
-          selectedProductViewIds: ['pv-1'], productInstances: [],
+          selectedProductViewIds: ['pv-1'], productInstances: [PRODUCT_INSTANCE],
           copySlots: [
             { slotId: 'power-label', role: 'parameterLabel', field: 'power', parameterPart: 'label', sourceText: '功率', x: 0.1, y: 0.1, width: 0.3, height: 0.05 },
             { slotId: 'power-value', role: 'parameterValue', field: 'power', parameterPart: 'value', sourceText: '20W', x: 0.5, y: 0.1, width: 0.2, height: 0.05 },
@@ -1508,7 +1570,7 @@ test('文案层级或 Logo 容器破坏时不得误判通过，定向修复携�
       if (meta.kind === 'competitor-page') {
         return JSON.stringify({ page: {
           pageType: 'marketing', hasPerson: false,
-          selectedProductViewIds: ['pv-1'], productInstances: [],
+          selectedProductViewIds: ['pv-1'], productInstances: [PRODUCT_INSTANCE],
           copySlots: [
             { slotId: 'badge', role: 'featureBadge', sourceText: '竞品标签', x: 0.35, y: 0.1, width: 0.3, height: 0.04, maxChars: 8 },
             { slotId: 'headline', role: 'headline', sourceText: '竞品大标题', x: 0.1, y: 0.2, width: 0.8, height: 0.08, maxChars: 10 },
@@ -1599,7 +1661,7 @@ test('人物只换脸但发型服装不符时质检失败，定向修复继续�
       if (meta.kind === 'competitor-page') {
         return JSON.stringify({ page: {
           pageType: 'marketing', hasPerson: true,
-          selectedProductViewIds: ['pv-1'], productInstances: [], copySlots: [],
+          selectedProductViewIds: ['pv-1'], productInstances: [PRODUCT_INSTANCE], copySlots: [],
           mappedSellingPoints: [], mappedFacts: [],
         } });
       }
@@ -1776,7 +1838,7 @@ test('严格参数字段错配会被安全删除，页面继续生成且不泄�
       }
       return JSON.stringify({ page: {
         pageType: '电气参数页', hasPerson: false,
-        selectedProductViewIds: ['pv-1'], productInstances: [],
+        selectedProductViewIds: ['pv-1'], productInstances: [PRODUCT_INSTANCE],
         copySlots: [
           { slotId: 'power-label', role: 'parameterLabel', field: 'voltage', parameterPart: 'label', sourceText: '额定功率', x: 0.1, y: 0.1, width: 0.3, height: 0.05 },
           { slotId: 'power-value', role: 'parameterValue', field: 'voltage', parameterPart: 'value', sourceText: '24W', x: 0.5, y: 0.1, width: 0.2, height: 0.05 },
@@ -1836,7 +1898,7 @@ test('质检自称通过但仍报告无证据参数时不得放行，修复与�
       if (meta.kind === 'competitor-page') {
         return JSON.stringify({ page: {
           pageType: 'specification', hasPerson: false,
-          selectedProductViewIds: ['pv-1'], productInstances: [],
+          selectedProductViewIds: ['pv-1'], productInstances: [PRODUCT_INSTANCE],
           copySlots: [
             { slotId: 'power-label', role: 'parameterLabel', field: 'power', parameterPart: 'label', sourceText: '功率', x: 0.1, y: 0.1, width: 0.3, height: 0.05 },
             { slotId: 'power-value', role: 'parameterValue', field: 'power', parameterPart: 'value', sourceText: '24W', x: 0.5, y: 0.1, width: 0.2, height: 0.05 },
@@ -1898,7 +1960,7 @@ const marketingRecognition = async (_request, meta) => {
   }
   return JSON.stringify({ page: {
     pageType: 'marketing', hasPerson: false,
-    selectedProductViewIds: ['pv-1'], productInstances: [],
+    selectedProductViewIds: ['pv-1'], productInstances: [PRODUCT_INSTANCE],
     copySlots: [
       { slotId: 'badge', role: 'featureBadge', sourceText: '竞品标签', x: 0.35, y: 0.1, width: 0.3, height: 0.04, maxChars: 8 },
       { slotId: 'headline', role: 'headline', sourceText: '竞品大标题', x: 0.1, y: 0.2, width: 0.8, height: 0.08, maxChars: 10 },
@@ -2279,9 +2341,9 @@ test('Codex 生图时在质检期间预提交下一页，且每页各自记录�
   // Both analyses are already done; page 1 is mid-validation with its raw image saved.
   for (const page of job.pages) {
     page.recognitionStatus = 'completed';
-    page.competitorAnalysisVersion = 5;
+    page.competitorAnalysisVersion = 6;
     page.analysis = {
-      pageType: 'marketing', hasPerson: false, copySlots: [], productInstances: [],
+      pageType: 'marketing', hasPerson: false, copySlots: [], productInstances: [PRODUCT_INSTANCE],
       // analyzeCompetitorPage stamps the source size onto the analysis; the
       // prompt reads it from there, so a realistic stub must carry it too.
       sourceWidth: 600, sourceHeight: 800,
@@ -2383,9 +2445,9 @@ test('预提交的下一页会被直接等待并采用，绝不重复提交第�
   const job = __detailRemixTest.readJob(created.id, 'workflow-1', context.dirs);
   for (const page of job.pages) {
     page.recognitionStatus = 'completed';
-    page.competitorAnalysisVersion = 5;
+    page.competitorAnalysisVersion = 6;
     page.analysis = {
-      pageType: 'marketing', hasPerson: false, copySlots: [], productInstances: [],
+      pageType: 'marketing', hasPerson: false, copySlots: [], productInstances: [PRODUCT_INSTANCE],
       // analyzeCompetitorPage stamps the source size onto the analysis; the
       // prompt reads it from there, so a realistic stub must carry it too.
       sourceWidth: 600, sourceHeight: 800,
@@ -2554,7 +2616,7 @@ test('角度板会写进识图与生成提示词，并按实例绑定具体格�
   assert.match(competitorInstruction, /5=机芯抓捏机构/);
   assert.match(competitorInstruction, /productSheetCell/);
   // 角度板拍不到的剖视图必须能填 0；硬绑一个整机格会让成图和质检对同一块画面各执一词。
-  assert.match(competitorInstruction, /才填 0/);
+  assert.match(competitorInstruction, /renderKind=illustration 的实例一律填 0/);
   assert.doesNotMatch(competitorInstruction, /实在无法判断时填最接近整机角度的那一格/);
 
   // The renderer gets the same grid plus the resolved per-instance binding.
@@ -2903,7 +2965,7 @@ test('取消发生在预提交途中时不得再排入付费子任务', async t 
     competitorAnalysisVersion: 99,
     analysis: {
       pageType: 'marketing', hasPerson: false, copySlots: [],
-      productInstances: [], selectedProductViewIds: ['pv-1'],
+      productInstances: [PRODUCT_INSTANCE], selectedProductViewIds: ['pv-1'],
       sourceWidth: 600, sourceHeight: 800,
     },
     mappedSellingPoints: [],
@@ -3027,7 +3089,7 @@ const briefRecognition = async (request, meta) => {
   }
   return JSON.stringify({ page: {
     pageType: 'specification', hasPerson: false,
-    selectedProductViewIds: [], productInstances: [],
+    selectedProductViewIds: [], productInstances: [PRODUCT_INSTANCE],
     copySlots: [
       { slotId: 'power-label', role: 'parameterLabel', field: 'power', parameterPart: 'label', sourceText: '功率', x: 0.1, y: 0.1, width: 0.3, height: 0.05 },
       { slotId: 'power-value', role: 'parameterValue', field: 'power', parameterPart: 'value', sourceText: '20W', x: 0.5, y: 0.1, width: 0.2, height: 0.05 },

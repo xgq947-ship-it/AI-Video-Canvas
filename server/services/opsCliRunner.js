@@ -78,7 +78,7 @@ export function opsEnvironment() {
         EVAN_RUNTIME_DIR: RUNTIME_PATHS.runtimeDir,
         // 兼容旧版 Flow DOM provider：它曾把失败截图默认写到用户桌面的
         // “GoogleFlow诊断”。即使本机残留旧自动化运行时，也只能写进 Evan 日志目录。
-        GOOGLE_FLOW_DIAG_DIR: path.join(RUNTIME_PATHS.logsDir, 'google-flow-diagnostics'),
+        GOOGLE_FLOW_DIAG_DIR: RUNTIME_PATHS.googleFlowDiagnosticsDir,
         EVAN_BROWSER_PROFILE_DIR: RUNTIME_PATHS.browserProfileDir,
         EVAN_CHROME_EXECUTABLE: chrome.executable || '',
         EVAN_BROWSER_EXECUTABLE: chrome.executable || '',

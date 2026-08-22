@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
@@ -53,4 +54,13 @@ test('Python 与冻结 Ops CLI 始终收到 UTF-8 环境', () => {
         path.join(RUNTIME_PATHS.logsDir, 'google-flow-diagnostics')
     );
     assert.doesNotMatch(environment.GOOGLE_FLOW_DIAG_DIR, /Desktop[\\/]GoogleFlow诊断/);
+    assert.equal(environment.GOOGLE_FLOW_DIAG_DIR, RUNTIME_PATHS.googleFlowDiagnosticsDir);
+});
+
+test('共享浏览器 Hub 守护进程也要带上诊断目录重定向', () => {
+    // Hub 只在首次拉起时取一次环境。opsCliRunner 的重定向只覆盖自己的子进程，
+    // Hub 这条链路一旦裸传 process.env，旧 Flow provider 就会写回用户桌面。
+    const source = fs.readFileSync(new URL('../electron/browserHub.js', import.meta.url), 'utf8');
+    assert.match(source, /ensureHub\(payloadDir, \{/);
+    assert.match(source, /GOOGLE_FLOW_DIAG_DIR: RUNTIME_PATHS\.googleFlowDiagnosticsDir/);
 });

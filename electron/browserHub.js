@@ -2,6 +2,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { RUNTIME_PATHS } from '../server/runtime/paths.js';
+
 export function sharedBrowserHubHome(environment = process.env, {
     platform = process.platform,
     homeDir = os.homedir()
@@ -39,7 +41,15 @@ export function ensureBrowserHubRuntime({ isPackaged, resourcesPath, projectRoot
             const payloadDir = browserHubPayloadPath({ isPackaged, resourcesPath, projectRoot });
             const sdkUrl = pathToFileURL(path.join(payloadDir, 'server', 'sdk', 'node.mjs')).href;
             const sdk = await import(sdkUrl);
-            return sdk.ensureHub(payloadDir);
+            // Hub 守护进程只在首次拉起时取一次环境。旧版 Flow DOM provider 会把失败
+            // 截图写到用户桌面的「GoogleFlow诊断」；opsCliRunner 只给自己的子进程做了
+            // 重定向，Hub 这条链路一直是裸的 process.env。
+            return sdk.ensureHub(payloadDir, {
+                env: {
+                    ...process.env,
+                    GOOGLE_FLOW_DIAG_DIR: RUNTIME_PATHS.googleFlowDiagnosticsDir,
+                },
+            });
         })().catch(error => {
             clientPromise = null;
             throw error;

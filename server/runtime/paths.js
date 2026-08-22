@@ -85,6 +85,16 @@ export function resolveRuntimePaths(environment = process.env, {
             dataDir
         ),
         pythonRoot,
+        // 旧版 Flow DOM provider 会把失败截图写进用户桌面的「GoogleFlow诊断」。
+        // 任何可能拉起它的进程都必须带上这个重定向，否则用户桌面上就会多一个文件夹。
+        googleFlowDiagnosticsDir: absoluteFrom(
+            environment.GOOGLE_FLOW_DIAG_DIR,
+            path.join(
+                absoluteFrom(environment.EVAN_LOGS_DIR, path.join(dataDir, 'logs'), dataDir),
+                'google-flow-diagnostics',
+            ),
+            dataDir
+        ),
         distDir: path.join(resourcesDir, 'dist'),
         remotionDir: path.join(resourcesDir, 'remotion')
     });

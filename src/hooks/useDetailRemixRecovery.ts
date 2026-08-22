@@ -139,6 +139,7 @@ function detailStateFromJob(node: NodeData, job: DetailRemixJob) {
     jobStatus: job.status,
     stage: job.stage,
     stageLabel: job.stageLabel,
+    generationMode: job.generationMode,
     status: canvasWorkflowStatus(job),
     recognitionModel: recognitionLabel(job),
     productViewCount: job.ownRecognition?.productViewCount || job.productViews?.filter(view => view.imageUrl).length || 0,

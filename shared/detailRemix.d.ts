@@ -5,6 +5,11 @@ export type DetailRemixInputPort =
   | 'product-reference'
   | 'brand-logo';
 
+export type DetailRemixGenerationMode =
+  | 'identity-locked'
+  | 'direct-replacement'
+  | 'same-mold-recolor';
+
 export interface DetailRemixInputRefs {
   competitorDetailNodeIds: string[];
   ownDetailNodeIds: string[];
@@ -73,6 +78,8 @@ export interface DetailRemixNodeData {
   maxStructuralRegenerations: 0 | 1 | 2 | 3;
   /** Two-pass mode that prevents competitor product pixels from entering the own-product render. */
   lockProductIdentity: boolean;
+  /** Explicit contract used by the latest run; old projects derive it from lockProductIdentity. */
+  generationMode: DetailRemixGenerationMode;
   /** Rank the user's own product references ahead of auto-cropped views. */
   preferSuppliedProductReferences: boolean;
   /** 卖点与精确参数的自由文本；填了就不再必须导入我方详情图。 */
@@ -105,6 +112,11 @@ export interface DetailRemixNodeData {
 }
 
 export const DETAIL_REMIX_SCHEMA_VERSION: 1;
+export const DETAIL_REMIX_GENERATION_MODES: readonly DetailRemixGenerationMode[];
+export function normalizeDetailRemixGenerationMode(
+  value?: any,
+  lockProductIdentity?: boolean,
+): DetailRemixGenerationMode;
 export const DETAIL_REMIX_STRICT_PARAMETER_MODE: 'STRICT_PARAMETER_MODE';
 export const DETAIL_REMIX_MARKETING_MODE: 'MARKETING_MODE';
 export const DETAIL_REMIX_STRICT_FACT_MIN_CONFIDENCE: number;
@@ -120,7 +132,11 @@ export const DETAIL_REMIX_OWN_KNOWLEDGE_OUTPUT_SCHEMA: Readonly<Record<string, a
 export const DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA: Readonly<Record<string, any>>;
 export const DETAIL_REMIX_ADVISORY_VALIDATION_KEYS: readonly string[];
 export const DETAIL_REMIX_VALIDATION_FAILURE_LABELS: Readonly<Record<string, string>>;
-export function classifyFinalDetailValidation(validation?: any): {
+export function classifyFinalDetailValidation(validation?: any, options?: {
+  generationMode?: DetailRemixGenerationMode;
+  /** Compatibility fallback for callers that predate explicit generation modes. */
+  lockProductIdentity?: boolean;
+}): {
   blocking: string[];
   advisory: string[];
   passed: boolean;
@@ -142,7 +158,7 @@ export function assignDetailRemixInputPort(node: any, parent: any, requestedPort
 export function buildDetailRemixInputMapping(inputRefs?: any): Record<string, DetailRemixInputPort>;
 export function activeDetailRemixInputRefs(value?: any): DetailRemixInputRefs & { characterReference: { enabled: boolean; nodeIds: string[]; activeNodeIds: string[] } };
 export function detailRemixInputFingerprint(value?: any): string;
-export function validateDetailRemixPreflight(value: any, nodes: any[], options?: { phase?: 'final' | 'plates' | 'composition' }): { ok: boolean; error?: string; refs?: any };
+export function validateDetailRemixPreflight(value: any, nodes: any[], options?: { phase?: 'final' | 'plates' | 'composition'; generationMode?: DetailRemixGenerationMode }): { ok: boolean; error?: string; refs?: any };
 export function markDetailRemixDependentsStale(nodes: any[], changedNodeId: string): any[];
 export function parseOwnSellingPointsResponse(value: any): any;
 export function parseCompetitorPageResponse(value: any): any;

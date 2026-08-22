@@ -5,12 +5,20 @@
  * isolates the competitor in a scene-cleaning pass, then renders the final page
  * from that clean scene plus own-side references only. The optional fast mode
  * keeps the legacy one-pass edit for users who explicitly prefer lower cost.
+ * Same-mold recolor is a separate one-pass contract: competitor pixels remain
+ * the immutable geometry authority while own-side references may change only
+ * color, material, surface detail, model identity, copy and page branding.
  * Input roles are explicit ports. `parentIds` is only the graph edge list and
  * must never be used to guess whether an image is a competitor, own detail,
  * character, or product reference.
  */
 
 export const DETAIL_REMIX_SCHEMA_VERSION = 1;
+export const DETAIL_REMIX_GENERATION_MODES = Object.freeze([
+  'identity-locked',
+  'direct-replacement',
+  'same-mold-recolor',
+]);
 export const DETAIL_REMIX_STRICT_PARAMETER_MODE = 'STRICT_PARAMETER_MODE';
 export const DETAIL_REMIX_MARKETING_MODE = 'MARKETING_MODE';
 export const DETAIL_REMIX_STRICT_FACT_MIN_CONFIDENCE = 0.9;
@@ -23,6 +31,13 @@ export const DETAIL_REMIX_STRICT_PAGE_CATEGORIES = Object.freeze([
   'electrical',
   'packing_list',
 ]);
+
+/** Derive new explicit modes from the old boolean when opening saved projects/jobs. */
+export function normalizeDetailRemixGenerationMode(value, lockProductIdentity = true) {
+  const mode = String(value || '').trim();
+  if (DETAIL_REMIX_GENERATION_MODES.includes(mode)) return mode;
+  return lockProductIdentity === false ? 'direct-replacement' : 'identity-locked';
+}
 
 /**
  * Product detail folders are ordered. Parameter/specification content is only
@@ -477,6 +492,7 @@ export const DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA = Object.freeze({
   additionalProperties: false,
   required: [
     'passed', 'copyExact', 'brandCorrect', 'productCorrect',
+    'productGeometryPreserved', 'productAppearanceMatched', 'competitorProductBrandRemoved',
     'logoCorrect', 'logoPresentationCorrect', 'layoutHierarchyCorrect',
     'visualPolishCorrect', 'layoutIssues', 'productPlacementCorrect', 'parameterAlignmentCorrect',
     'unsupportedStrictFactsAbsent', 'characterIdentityCorrect', 'characterHairstyleCorrect',
@@ -489,6 +505,9 @@ export const DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA = Object.freeze({
     copyExact: { type: 'boolean' },
     brandCorrect: { type: 'boolean' },
     productCorrect: { type: 'boolean' },
+    productGeometryPreserved: { type: 'boolean' },
+    productAppearanceMatched: { type: 'boolean' },
+    competitorProductBrandRemoved: { type: 'boolean' },
     logoCorrect: { type: 'boolean' },
     logoPresentationCorrect: { type: 'boolean' },
     layoutHierarchyCorrect: { type: 'boolean' },
@@ -743,6 +762,10 @@ export function createDetailRemixNodeData(overrides = {}) {
   const source = object(overrides);
   const inputRefs = normalizeDetailRemixInputRefs(source.inputRefs);
   const status = DETAIL_REMIX_STATUSES.includes(source.status) ? source.status : 'idle';
+  const generationMode = normalizeDetailRemixGenerationMode(
+    source.generationMode,
+    source.lockProductIdentity,
+  );
   return {
     ...source,
     schemaVersion: DETAIL_REMIX_SCHEMA_VERSION,
@@ -770,6 +793,7 @@ export function createDetailRemixNodeData(overrides = {}) {
     // request, which prevents its leather grain, seams and marks from leaking
     // into the user's product. `false` is the explicit one-pass fast mode.
     lockProductIdentity: source.lockProductIdentity !== false,
+    generationMode,
     preferSuppliedProductReferences: source.preferSuppliedProductReferences === true,
     // `productSheet` is the user's optional override; `detectedProductSheet` is
     // what the last run actually read off the picture and is display-only.
@@ -906,6 +930,10 @@ const isUsableImageNode = node => (
 
 export function validateDetailRemixPreflight(value, nodes, options = {}) {
   const state = createDetailRemixNodeData(value);
+  const generationMode = normalizeDetailRemixGenerationMode(
+    options.generationMode || state.generationMode,
+    state.lockProductIdentity,
+  );
   const byId = new Map(array(nodes).map(node => [node.id, node]));
   const valid = ids => ids.filter(id => isUsableImageNode(byId.get(id)));
   const competitor = valid(state.inputRefs.competitorDetailNodeIds);
@@ -936,6 +964,9 @@ export function validateDetailRemixPreflight(value, nodes, options = {}) {
   // 产品长什么样只能靠图。旧画布若还连着我的详情，仍允许从中自动裁角度兜底。
   if (!product.length && !own.length) {
     return { ok: false, error: '请选择一张产品参考图' };
+  }
+  if (generationMode === 'same-mold-recolor' && !product.length) {
+    return { ok: false, error: '同模换色直出必须选择我方产品参考图，不能使用“我的详情”自动裁图代替' };
   }
   if (state.inputRefs.characterReference.enabled && !character.length) {
     return { ok: false, error: '已开启人物参考，请选择一张有效人物参考图' };
@@ -1745,11 +1776,16 @@ export function buildFinalDetailPrompt({
   hasBrandLogoReference = false,
   ownEvidenceReferenceCount = 0,
   useCharacterReference = false,
+  characterReferenceCount = 0,
   productSheet = null,
   identityLocked = false,
+  generationMode,
 } = {}) {
   const page = safePageAnalysis(pageAnalysis);
   const promptPage = promptSafePageAnalysis(page);
+  const resolvedGenerationMode = normalizeDetailRemixGenerationMode(generationMode, identityLocked);
+  const identityLockMode = resolvedGenerationMode === 'identity-locked';
+  const sameMoldRecolor = resolvedGenerationMode === 'same-mold-recolor';
   const productCount = Math.max(1, Number(productImageCount) || 1);
   const productRange = productCount === 1 ? '参考图2' : `参考图2至参考图${productCount + 1}`;
   const sheet = normalizeDetailRemixProductSheet(productSheet);
@@ -1764,10 +1800,16 @@ export function buildFinalDetailPrompt({
       }))
       .filter(binding => sheetCells.has(binding.cell))
     : [];
-  const brandReferenceIndex = productCount + 2;
+  const characterCount = useCharacterReference
+    ? Math.max(1, Number(characterReferenceCount) || 1)
+    : 0;
+  const characterStart = sameMoldRecolor ? productCount + 2 : 0;
+  const brandReferenceIndex = sameMoldRecolor
+    ? characterStart + characterCount
+    : productCount + 2;
   const evidenceStart = brandReferenceIndex + (hasBrandLogoReference ? 1 : 0);
   const evidenceEnd = evidenceStart + Math.max(0, Number(ownEvidenceReferenceCount) || 0) - 1;
-  const characterStart = evidenceEnd + 1;
+  const finalCharacterStart = sameMoldRecolor ? characterStart : evidenceEnd + 1;
   const copyPlan = buildDetailCopyReplacementPlan({
     pageAnalysis: page,
     mappedSellingPoints,
@@ -1775,7 +1817,7 @@ export function buildFinalDetailPrompt({
   });
   const strictMode = isDetailRemixStrictParameterPage(page);
   const safeCopyPlan = promptSafeCopyPlan(copyPlan).map(item => {
-    if (!identityLocked) return item;
+    if (!identityLockMode) return item;
     const { originalText: _competitorText, ...clean } = item;
     return clean;
   });
@@ -1793,37 +1835,43 @@ export function buildFinalDetailPrompt({
     logoReference: hasBrandLogoReference ? `参考图${brandReferenceIndex}` : '',
   };
   return [
-    identityLocked
+    identityLockMode
       ? `参考图1是已经隔离竞品产品后生成的无产品场景底图。以它为基础生成第 ${pageIndex + 1} 张可立即交付的电商详情页最终图。`
+      : sameMoldRecolor
+        ? `直接编辑参考图1，生成第 ${pageIndex + 1} 张“同模换色”最终详情图。竞品产品与我方产品使用完全相同的模具；这次只能局部替换产品表面外观，不能移除、重建或改变产品几何。模型本次输出就是最终成品，后续不会再叠加产品、文字或 Logo。`
       : `直接编辑参考图1，生成第 ${pageIndex + 1} 张可立即交付的电商详情页最终图。这次模型输出就是最终成品，后续不会再叠加产品、文字或 Logo。`,
     `目标尺寸继承竞品原图：${page.sourceWidth || '自动'} × ${page.sourceHeight || '自动'} 像素；不得改成统一画幅。`,
     `视觉反推规格（仅含版式坐标，不含任何竞品原文）：${JSON.stringify(promptPage)}`,
-    identityLocked
+    identityLockMode
       ? `精确逐位置生成清单（场景底图已经清空竞品文字，replacementText 是唯一允许写入的文字）：${JSON.stringify(safeCopyPlan)}`
       : `精确逐位置替换清单（originalText 只用于定位并擦除，replacementText 才是唯一允许写入的文字）：${JSON.stringify(safeCopyPlan)}`,
     `必须完成的品牌与 Logo 替换清单：${JSON.stringify(brandPlan)}`,
     sheet
-      ? describeDetailRemixProductSheet(sheet, '参考图2')
+      ? `${describeDetailRemixProductSheet(sheet, '参考图2')}${sameMoldRecolor ? '该板只提供颜色、材质、纹理、缝线颜色和真实表面标识，不提供也不得覆盖参考图1的产品形状。' : ''}`
       // 全部参考都由商家直接提供时，说成「从我的详情自动挑选」是假话——
       // 这时根本没有我的详情。一句自信的错误说明比不说明更有害。
       : array(selectedProductViews).length
         && array(selectedProductViews).every(view => object(view).supplemental === true)
-        ? `${productRange}是商家直接提供的我方产品实拍参考，没有其它角度库可选；产品外观完全以这些图为准。`
+        ? `${productRange}是商家直接提供的我方产品实拍参考，没有其它角度库可选；${sameMoldRecolor ? '只读取颜色、材质、表面纹理与真实标识，产品几何仍完全服从参考图1。' : '产品外观完全以这些图为准。'}`
         : `系统已从“我的详情”自动挑选与本页角度最匹配的产品参考：${JSON.stringify(selectedProductViews)}`,
     // Only the first supplied image carries a declared grid. Any further product
     // references must still be named, or they arrive as undescribed pixels.
     sheet && productCount > 1
-      ? `参考图3${productCount > 2 ? `至参考图${productCount + 1}` : ''}是同一台产品的补充实拍，用于补齐角度板没有拍到的结构；它们不是角度板，没有分格编号，也不改变上面的板格指派。`
+      ? `参考图3${productCount > 2 ? `至参考图${productCount + 1}` : ''}是同一台产品的补充实拍，${sameMoldRecolor ? '只用于补齐颜色、材质和局部纹理，不得据此重画结构' : '用于补齐角度板没有拍到的结构'}；它们不是角度板，没有分格编号，也不改变上面的板格指派。`
       : '',
     sheetBindings.length
-      ? `本页每个产品实例必须使用的板格已经指定，不得自行改用其它格：${JSON.stringify(sheetBindings)}。指定格里没有拍到的结构，从相邻格补全，禁止凭空发明。`
+      ? `本页每个产品实例必须使用的板格已经指定，不得自行改用其它格：${JSON.stringify(sheetBindings)}。${sameMoldRecolor ? '指定格只决定该实例采用的颜色、材质和表面细节；看不清的细节保持参考图1现状，禁止补造或改形。' : '指定格里没有拍到的结构，从相邻格补全，禁止凭空发明。'}`
       : '',
-    identityLocked
+    identityLockMode
       ? '参考图1只包含场景、人物、版式骨架和清空后的商品空间，不包含任何可供借鉴的竞品产品。锁定它的画布、背景、人物姿势、区域边界、文字位置与视觉层级；仅允许为适配我方最近实拍角度，对商品朝向、接触阴影、邻近肢体接触点和局部留白做最小幅度调整。'
+      : sameMoldRecolor
+        ? '【最高优先级：产品几何冻结】参考图1是唯一几何母版。产品的外轮廓、长宽厚比例、弧度、零件数量与位置、开孔位置、接缝路径、朝向、透视、尺度、页面坐标、接触点、手指/衣物前后遮挡和阴影脚印必须逐像素级保持。不得把产品抹掉后重画，不得生成无产品占位图，不得拉伸、缩放、旋转、挪动、增删部件或改变任何形状。'
       : '参考图1是需要直接修改的竞品原图，不是只供自由发挥的风格参考。锁定它的画布、构图、背景、区域边界、人物姿势、商品位置、文字位置与视觉层级；除明确要求替换的区域外，不得重新设计页面。',
-    `${sheet ? '参考图2 的各个分格' : productRange}是同一款我方真实产品的唯一外观依据。逐个在 productInstances 指定的空位生成我方产品；${sheet ? '每个实例使用上面指定的板格' : '每个实例优先采用最接近的我方实拍角度'}。结构、轮廓、比例、材质、颜色、纹理、缝线、按钮、开孔和产品自身标识必须逐项服从我方产品参考。若没有完全相同的实拍角度，使用最近角度并轻微调整场景适配，禁止借用${identityLocked ? '任何未提供素材' : '竞品产品'}补造不可见结构。`,
+    sameMoldRecolor
+      ? `【只改产品表面】${sheet ? '参考图2 的各个分格' : productRange}是我方产品外观依据，只允许把其中可核验的基础色、分区配色、材质质感、皮革/织物纹路、压纹、细节纹理、缝线与包边颜色，以及产品表面真实存在的标识转移到参考图1同一部位。它们绝不是形状参考。以局部重着色和纹理迁移完成修改，产品表面参考里看不清或没有证明的细节保持参考图1的几何与中性结构，不得凭空发明。`
+      : `${sheet ? '参考图2 的各个分格' : productRange}是同一款我方真实产品的唯一外观依据。逐个在 productInstances 指定的空位生成我方产品；${sheet ? '每个实例使用上面指定的板格' : '每个实例优先采用最接近的我方实拍角度'}。结构、轮廓、比例、材质、颜色、纹理、缝线、按钮、开孔和产品自身标识必须逐项服从我方产品参考。若没有完全相同的实拍角度，使用最近角度并轻微调整场景适配，禁止借用${identityLockMode ? '任何未提供素材' : '竞品产品'}补造不可见结构。`,
     sheet
-      ? '参考图2 是角度索引板，不是版式参考：禁止把它的网格、分格线、编号数字、背景底色或多格并排的布局搬进详情页，每个产品实例只呈现单一产品本身。'
+      ? `参考图2 是角度索引板，不是版式参考：禁止把它的网格、分格线、编号数字、背景底色或多格并排的布局搬进详情页。${sameMoldRecolor ? '只从匹配板格采样产品表面外观，不得把板格中的轮廓覆盖到参考图1。' : '每个产品实例只呈现单一产品本身。'}`
       : '',
     hasBrandLogoReference
       ? `参考图${brandReferenceIndex}只允许用于 page_graphic 页面品牌槽的 Logo 身份、拼写和图形结构，不得用于产品表面或包装。严禁复制 Logo 裁剪图周围的产品材质、压印底纹、深色背景、光影或矩形边界。只在 brandPlan.sourceSlots 指定的页面图形槽生成我方 Logo；brandPlan.removalOnlySlots 必须保持清空。`
@@ -1835,17 +1883,19 @@ export function buildFinalDetailPrompt({
     strictMode
       ? `本页已由程序锁定为 ${DETAIL_REMIX_STRICT_PARAMETER_MODE}：每个 replacementText 都是不可改写的事实，sourceField、targetPart、targetRegion、evidenceImageId、evidenceRegion 与 confidence 构成证据链。参数名只能写入 label 位置，参数值只能写入 value 位置。禁止把营销卖点填入参数栏；没有证据映射的竞品参数栏必须连标签和值一起删除并自然修复背景。`
       : `本页是营销/场景详情页：只能使用已经映射的我方卖点，不得擅自添加型号、功率、电压、认证或效果数据。以下槽位共同承担原页的核心文案层级，必须与替换清单逐槽对应、全部保留，任何一个都不得消失或合并：${JSON.stringify(marketingLayoutSlots)}。`,
-    identityLocked
+    identityLockMode
       ? '参考图1的文字槽已经清空；仅依据“文案替换清单”在对应 slot 原位置生成 replacementText。中文必须逐字一致，不得改写、缩写、增字、漏字、重复、错别字或乱码；保持槽位的字号层级、对齐、颜色和留白。没有分配文案的槽保持干净。'
       : '先彻底擦除参考图1的全部竞品文案，再依据“文案替换清单”在对应 slot 原位置直接生成 replacementText。中文必须逐字一致，不得改写、缩写、增字、漏字、重复、错别字或乱码；保持原槽位的字号层级、对齐、颜色和留白，不得让新旧文字重叠。没有分配替换文案的竞品文字槽必须删除并自然修复背景。',
     '保留参考图1原有的“眉题/胶囊标签—主标题—副标题/说明”视觉层级：主标题仍然是视觉中心，副标题不得抢级，胶囊标签不得变成散落小字；禁止把多级文案压成同字号的两行文字，也禁止随意改变字体区域宽度、基线、行距和组间距。',
     '在不改变原版式骨架的前提下完成高级感精修：Logo 边缘清晰、文字字形干净、字距行距稳定、光学对齐准确、留白克制、色彩和圆角一致；不得出现贴图感、脏底色、廉价描边、发光滥用、粗糙阴影或突兀矩形补丁。高级感只用于提高完成度，不允许自由改版。',
     '展示文案中禁止出现“图片显示”“图片明确标注”“文案提到”“证据表明”等分析过程用语。不得把 sellingPointId、坐标、JSON、提示词或任何内部说明画进图片。',
-    '必须彻底移除竞品产品、包装、品牌、Logo、文案、水印与竞品独有主张；不得残留、变形、混合或臆造竞品元素，也不得生成额外产品。',
-    identityLocked
+    sameMoldRecolor
+      ? '必须彻底移除竞品的颜色、材质纹理、产品表面品牌/Logo、包装、页面品牌、文案、水印与竞品独有主张；“移除竞品”只指移除竞品商业身份和表面外观，绝不包括参考图1中被冻结的产品几何。最终仍只能保留原数量、原位置的产品，禁止增加、删除或重构产品。'
+      : '必须彻底移除竞品产品、包装、品牌、Logo、文案、水印与竞品独有主张；不得残留、变形、混合或臆造竞品元素，也不得生成额外产品。',
+    identityLockMode
       ? '人物身份与造型已经在场景底图阶段确定。保持参考图1里人物的脸、发型、服装、配饰、姿势和遮挡关系，不得在产品合成阶段重新设计或换人。'
       : useCharacterReference
-      ? `参考图${characterStart}及之后是人物完整外观的最高权威。必须把参考图1中的竞品人物完整替换成参考人物：脸型五官、肤色、发际线、发色、发型结构、服装款式、领口袖型、服装颜色材质、可见配饰和身体比例都以人物参考图为准。绝不允许只换脸后保留竞品人物的发型、衣服或配饰。只保留参考图1的人物位置、动作、姿势、视线、构图尺度、与产品的交互及前后遮挡；被产品遮住的衣物区域无需臆造，但所有可见衣物必须属于参考造型。若人物参考是多视图造型板，所有分栏代表同一个人物与同一套造型，应选取和本页角度最接近的分栏。`
+      ? `参考图${finalCharacterStart}${characterCount > 1 ? `至参考图${finalCharacterStart + characterCount - 1}` : ''}是人物完整外观的最高权威。必须把参考图1中的竞品人物完整替换成参考人物：脸型五官、肤色、发际线、发色、发型结构、服装款式、领口袖型、服装颜色材质、可见配饰和身体比例都以人物参考图为准。绝不允许只换脸后保留竞品人物的发型、衣服或配饰。只保留参考图1的人物位置、动作、姿势、视线、构图尺度、与产品的交互及前后遮挡；被产品遮住的衣物区域无需臆造，但所有可见衣物必须属于参考造型。${sameMoldRecolor ? '人物替换不得移动手指、手掌、衣物与产品的接触边界，也不得借换人之名重画产品几何。' : ''}若人物参考是多视图造型板，所有分栏代表同一个人物与同一套造型，应选取和本页角度最接近的分栏。`
       : '不使用人物身份参考；若规格 hasPerson=false，禁止凭空增加人物；若原图有人物，也不得保留可识别的竞品人物身份。',
     '只允许出现替换清单中的我方文案、我方品牌/Logo，以及我方产品自身不可分离的真实标识；不得出现其它文字、乱码、商标或水印。',
     '输出单张完整最终图，不要解释，不要输出中间底图、无字底图、蒙版或排版稿。',
@@ -1860,6 +1910,9 @@ export function parseFinalDetailValidationResponse(value) {
     copyExact: parsed.copyExact === true,
     brandCorrect: parsed.brandCorrect === true,
     productCorrect: parsed.productCorrect === true,
+    productGeometryPreserved: parsed.productGeometryPreserved === true,
+    productAppearanceMatched: parsed.productAppearanceMatched === true,
+    competitorProductBrandRemoved: parsed.competitorProductBrandRemoved === true,
     logoCorrect: parsed.logoCorrect === true,
     logoPresentationCorrect: parsed.logoPresentationCorrect === true,
     layoutHierarchyCorrect: parsed.layoutHierarchyCorrect === true,
@@ -1904,6 +1957,12 @@ const DETAIL_REMIX_BLOCKING_VALIDATION_KEYS = Object.freeze([
   'competitorRemoved',
 ]);
 
+const DETAIL_REMIX_SAME_MOLD_BLOCKING_VALIDATION_KEYS = Object.freeze([
+  'productGeometryPreserved',
+  'productAppearanceMatched',
+  'competitorProductBrandRemoved',
+]);
+
 /**
  * Aesthetic judgments. These are real quality signals, but one picky judge call
  * should not permanently destroy a paid page over them, so they are confirmed by
@@ -1919,6 +1978,9 @@ export const DETAIL_REMIX_VALIDATION_FAILURE_LABELS = Object.freeze({
   copyExact: '文案未逐字一致',
   brandCorrect: '品牌不正确',
   productCorrect: '产品不正确',
+  productGeometryPreserved: '产品形状或结构发生变化',
+  productAppearanceMatched: '产品颜色、材质或纹理不符',
+  competitorProductBrandRemoved: '竞品产品品牌或表面特征残留',
   logoCorrect: 'Logo 身份不正确',
   logoPresentationCorrect: 'Logo 呈现方式不正确',
   productPlacementCorrect: '产品位置或透视不正确',
@@ -1944,11 +2006,18 @@ export const DETAIL_REMIX_VALIDATION_FAILURE_LABELS = Object.freeze({
  * Splits a judge report into what must block delivery and what merely warrants a
  * second look. `passed` keeps today's meaning: nothing at all was reported.
  */
-export function classifyFinalDetailValidation(validation = {}) {
+export function classifyFinalDetailValidation(validation = {}, options = {}) {
   const report = object(validation);
+  const generationMode = normalizeDetailRemixGenerationMode(
+    options.generationMode,
+    options.lockProductIdentity,
+  );
   const blocking = [];
   const advisory = [];
-  for (const key of DETAIL_REMIX_BLOCKING_VALIDATION_KEYS) {
+  const blockingKeys = generationMode === 'same-mold-recolor'
+    ? [...DETAIL_REMIX_BLOCKING_VALIDATION_KEYS, ...DETAIL_REMIX_SAME_MOLD_BLOCKING_VALIDATION_KEYS]
+    : DETAIL_REMIX_BLOCKING_VALIDATION_KEYS;
+  for (const key of blockingKeys) {
     if (report[key] !== true) blocking.push(key);
   }
   if (report.gibberishDetected === true) blocking.push('gibberishDetected');
@@ -1987,8 +2056,11 @@ export function buildFinalDetailValidationInstruction({
   evidenceReferenceCount = 0,
   characterReferenceCount = 0,
   productSheet = null,
+  generationMode,
 } = {}) {
   const page = safePageAnalysis(pageAnalysis);
+  const resolvedGenerationMode = normalizeDetailRemixGenerationMode(generationMode);
+  const sameMoldRecolor = resolvedGenerationMode === 'same-mold-recolor';
   const sheet = normalizeDetailRemixProductSheet(productSheet);
   const safeCopyPlan = promptSafeCopyPlan(copyPlan);
   const strictMode = isDetailRemixStrictParameterPage(page);
@@ -2009,7 +2081,9 @@ export function buildFinalDetailValidationInstruction({
   const pageBrandSlots = brandSlots.filter(slot => slot.placement === 'page_graphic');
   const removalOnlyBrandSlots = brandSlots.filter(slot => slot.placement !== 'page_graphic');
   return [
-    '你是电商详情最终交付质检员。参考图1是待验收成图；参考图2是原始竞品页，只能用于比对画布、构图、品牌容器和文案版式，绝不能把其中的竞品品牌、产品或文案判为应保留内容。参考图3及之后才是我方产品、Logo、事实证据或人物完整造型。',
+    sameMoldRecolor
+      ? '你是电商详情“同模换色”最终交付质检员。参考图1是待验收成图；参考图2是原始竞品页，也是产品几何母版：它的产品轮廓、比例、部件位置、朝向、透视、尺度、页面位置、接触点、遮挡和阴影脚印必须保留，但竞品颜色、材质、纹理、品牌、文案和商业身份绝不能保留。参考图3及之后才是我方产品外观、Logo、事实证据或人物完整造型。'
+      : '你是电商详情最终交付质检员。参考图1是待验收成图；参考图2是原始竞品页，只能用于比对画布、构图、品牌容器和文案版式，绝不能把其中的竞品品牌、产品或文案判为应保留内容。参考图3及之后才是我方产品、Logo、事实证据或人物完整造型。',
     characterCount > 0
       ? `参考图${characterStart}${characterCount > 1 ? `至参考图${characterStart + characterCount - 1}` : ''}是人物完整造型参考；必须分别核对人脸身份、发型、服装和可见配饰，不能只核对脸。`
       : '本页没有人物参考图；人物四项检查字段填 true，characterIssues 留空。',
@@ -2018,13 +2092,15 @@ export function buildFinalDetailValidationInstruction({
       : '',
     `页面类型：${page.pageType}；运行模式：${page.pageMode}。必须逐字、逐位置出现的文案清单：${JSON.stringify(safeCopyPlan)}。营销页必须保留的核心文案层级槽：${JSON.stringify(marketingLayoutSlots)}。我方品牌：${JSON.stringify(object(ownBrandIdentity))}。页面品牌槽：${JSON.stringify(pageBrandSlots)}。竞品产品/包装清除槽：${JSON.stringify(removalOnlyBrandSlots)}。`,
     '所有不在上述我方文案与品牌白名单中的可读内容，都必须按竞品残留或模型臆造内容报告。',
-    '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 参数名是否仍在 label 区、参数值是否仍在 value 区，不能错栏、合并或串行；3) 是否出现乱码、伪字、重复卖点、提示词或 JSON；4) 页面品牌与 Logo 身份是否正确且无竞品残留；5) 对照参考图2，页面 Logo 是否只出现在 page_graphic 槽并保留原槽位容器，product_surface 与 packaging 槽必须清除而不是替换；6) 对照参考图2，营销页的胶囊标签、主标题、副标题/说明是否逐层保留，不能缺层、合并、缩成同字号小字或大幅漂移；7) 对照参考图3开始的我方产品参考，产品结构、轮廓、材质、纹理、缝线、按钮和所有产品表面标识是否一致；参考图没有的白色 Logo、圆点、铭牌或压印一律属于错误，productCorrect 与 logoPresentationCorrect 必须为 false；8) 有人物参考时，成图人物的脸型五官、发际线与发型结构、服装款式领口袖型与颜色材质、可见配饰是否都来自人物参考。只换脸、仍保留竞品发型或竞品衣服必须判失败，并在 characterIssues 写明。',
+    sameMoldRecolor
+      ? '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 参数名是否仍在 label 区、参数值是否仍在 value 区；3) 是否出现乱码、伪字、重复卖点、提示词或 JSON；4) 页面品牌与 Logo 身份是否正确且无竞品残留；5) 对照参考图2检查页面 Logo 容器和文案层级；6) 对照参考图2逐一检查每个产品的轮廓、长宽厚比例、部件数量与位置、开孔、接缝路径、朝向、透视、尺度、页面坐标、手部/衣物遮挡和阴影脚印，任一改变都令 productGeometryPreserved=false；7) 对照参考图3开始的我方产品参考，只检查基础色、分区配色、材质、皮革/织物纹路、压纹、缝线与包边颜色及真实表面标识，任一不符都令 productAppearanceMatched=false；8) 竞品产品表面 Logo、品牌字样、独有纹理或配色仍存在时 competitorProductBrandRemoved=false；保留相同模具几何本身不算竞品残留，competitorRemoved 只表示竞品商业身份、表面外观、包装、文案与水印已清除；9) 有人物参考时，分别核对脸、发型、服装和配饰，并确认换人没有移动人物与产品的接触/遮挡边界。productCorrect 只有在几何冻结与我方外观两项都通过时才能为 true。'
+      : '逐项检查：1) replacementText 是否逐字正确，数字、型号、单位、正负号与大小写均一致；2) 参数名是否仍在 label 区、参数值是否仍在 value 区，不能错栏、合并或串行；3) 是否出现乱码、伪字、重复卖点、提示词或 JSON；4) 页面品牌与 Logo 身份是否正确且无竞品残留；5) 对照参考图2，页面 Logo 是否只出现在 page_graphic 槽并保留原槽位容器，product_surface 与 packaging 槽必须清除而不是替换；6) 对照参考图2，营销页的胶囊标签、主标题、副标题/说明是否逐层保留，不能缺层、合并、缩成同字号小字或大幅漂移；7) 对照参考图3开始的我方产品参考，产品结构、轮廓、材质、纹理、缝线、按钮和所有产品表面标识是否一致；参考图没有的白色 Logo、圆点、铭牌或压印一律属于错误，productCorrect 与 logoPresentationCorrect 必须为 false；8) 有人物参考时，成图人物的脸型五官、发际线与发型结构、服装款式领口袖型与颜色材质、可见配饰是否都来自人物参考。只换脸、仍保留竞品发型或竞品衣服必须判失败，并在 characterIssues 写明。productGeometryPreserved 属于不适用字段，填 true；productAppearanceMatched 与 productCorrect 保持一致；competitorProductBrandRemoved 与 competitorRemoved 保持一致。',
     '视觉完成度检查：只有 Logo 清晰、字体层级明确、字距行距稳定、对齐与留白统一，并且没有贴图方块、脏底、廉价描边、滥用发光、粗糙阴影或明显 AI 排版破损时，visualPolishCorrect 才能为 true。不要因正常风格差异苛刻判错，但任何肉眼明显不专业的排版都必须判失败并写入 layoutIssues。',
     strictMode
       ? `这是 ${DETAIL_REMIX_STRICT_PARAMETER_MODE}。没有列入替换清单的型号、数字、单位、材质、认证、配件或清单内容必须完全不存在；发现一个即 unsupportedStrictFactsAbsent=false，并写入 unexpectedTexts。`
       : '没有列入替换清单的新增参数或功效一律写入 unexpectedTexts。',
     '只要 missingTexts、wrongTexts、unexpectedTexts、characterIssues 或 layoutIssues 任一非空，passed 必须为 false。参数页只要有一个错误数字、单位、型号、参数错栏或乱码，passed 必须为 false。营销页核心文案层级缺失，或 Logo 出现深色纹理方块/裁剪贴片，必须为 false。',
-    'passed 只有在 copyExact、brandCorrect、productCorrect、logoCorrect、logoPresentationCorrect、layoutHierarchyCorrect、visualPolishCorrect、productPlacementCorrect、parameterAlignmentCorrect、unsupportedStrictFactsAbsent、characterIdentityCorrect、characterHairstyleCorrect、characterOutfitCorrect、characterAccessoriesCorrect、competitorRemoved 全为 true，gibberishDetected=false，且所有异常数组都为空时才能为 true。只输出符合 Schema 的 JSON。',
+    `passed 只有在 copyExact、brandCorrect、productCorrect、logoCorrect、logoPresentationCorrect、layoutHierarchyCorrect、visualPolishCorrect、productPlacementCorrect、parameterAlignmentCorrect、unsupportedStrictFactsAbsent、characterIdentityCorrect、characterHairstyleCorrect、characterOutfitCorrect、characterAccessoriesCorrect、competitorRemoved${sameMoldRecolor ? '、productGeometryPreserved、productAppearanceMatched、competitorProductBrandRemoved' : ''} 全为 true，gibberishDetected=false，且所有异常数组都为空时才能为 true。只输出符合 Schema 的 JSON。`,
   ].filter(Boolean).join('\n');
 }
 

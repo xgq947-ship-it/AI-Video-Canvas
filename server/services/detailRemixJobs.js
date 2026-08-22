@@ -27,6 +27,7 @@ import {
   DETAIL_REMIX_MARKETING_MODE,
   DETAIL_REMIX_STRICT_FACT_MIN_CONFIDENCE,
   DETAIL_REMIX_STRICT_PARAMETER_MODE,
+  normalizeDetailRemixGenerationMode,
   canonicalDetailRemixFactField,
   detailRemixAllowsStrictParameterMode,
   detailRemixPageMode,
@@ -58,10 +59,10 @@ import {
 
 export const DEFAULT_DETAIL_REMIX_RECOGNITION_PROVIDER = 'gemini-web';
 export const DEFAULT_DETAIL_REMIX_IMAGE_MODEL = 'google-flow-nano-banana-pro';
-export const DETAIL_REMIX_JOB_SCHEMA_VERSION = 8;
+export const DETAIL_REMIX_JOB_SCHEMA_VERSION = 9;
 const DETAIL_REMIX_KNOWLEDGE_SCHEMA_VERSION = 3;
 const DETAIL_REMIX_COMPETITOR_ANALYSIS_VERSION = 4;
-const DETAIL_REMIX_PIPELINE_VERSION = 'product-identity-lock-v1';
+const DETAIL_REMIX_PIPELINE_VERSION = 'explicit-generation-modes-v2';
 const MAX_AUTO_PRODUCT_VIEW_REFERENCES = 3;
 const MAX_FINAL_REPAIR_ATTEMPTS = 1;
 /** Cover-crop loss above this is visible content removal, not rounding. */
@@ -83,6 +84,18 @@ const VALIDATION_RETRY_DELAY_MS = 1_500;
 /** Only applies where the absence of a submission can be proven. See runImageGenerationSafely. */
 const MAX_UNSUBMITTED_GENERATION_RETRIES = 2;
 const GENERATION_RETRY_DELAY_MS = 2_000;
+
+function generationModeFor(value = {}) {
+  return normalizeDetailRemixGenerationMode(value?.generationMode, value?.lockProductIdentity);
+}
+
+function isIdentityLockedMode(value = {}) {
+  return generationModeFor(value) === 'identity-locked';
+}
+
+function isSameMoldRecolorMode(value = {}) {
+  return generationModeFor(value) === 'same-mold-recolor';
+}
 
 // A job can be started by POST and subsequently observed by GET. Keeping the
 // AbortController here lets cancel stop browser waits immediately; the durable
@@ -339,7 +352,10 @@ function requestFingerprint(normalized, config) {
     sizingMode: config.sizingMode,
     aspectRatio: config.aspectRatio,
     imageResolution: config.imageResolution,
-    lockProductIdentity: config.lockProductIdentity !== false,
+    generationMode: normalizeDetailRemixGenerationMode(
+      config.generationMode,
+      config.lockProductIdentity,
+    ),
     preferSuppliedProductReferences: config.preferSuppliedProductReferences === true,
     productSheet: config.productSheet || '',
     productBrief: config.productBrief || '',
@@ -2182,6 +2198,7 @@ async function validateFinalDetailPage(
     evidenceReferenceCount: evidenceReferences.length,
     characterReferenceCount: characterReferences.length,
     productSheet: activeProductSheet(job, page),
+    generationMode: generationModeFor(job),
   });
   let parsed;
   for (let attempt = 0; attempt < MAX_VALIDATION_CALL_ATTEMPTS; attempt += 1) {
@@ -2225,7 +2242,9 @@ async function validateFinalDetailPage(
     }
   }
   if (!parsed) throw new Error('最终详情质检没有返回可用结果');
-  const { blocking, advisory, passed, advisoryOnly } = classifyFinalDetailValidation(parsed);
+  const { blocking, advisory, passed, advisoryOnly } = classifyFinalDetailValidation(parsed, {
+    generationMode: generationModeFor(job),
+  });
   const validation = {
     ...parsed,
     passed,
@@ -2302,7 +2321,7 @@ async function repairFinalDetailPage(
   writeJob(job, context);
   const current = saveImageBuffer(rawBuffer, imageTarget, `${page.resultNodeId}-quality-failed-${repairAttempt}`);
   page.qualityFailedCandidateUrl = current.resultUrl;
-  const identityLocked = job.lockProductIdentity !== false;
+  const identityLocked = isIdentityLockedMode(job);
   const baseReferences = identityLocked
     ? [current.resultUrl]
     : [current.resultUrl, page.sourceImage];
@@ -2513,7 +2532,7 @@ async function regenerateFinalDetailPage(job, page, basePrompt, references, vali
  * pass 2 also makes each paid boundary independently resumable.
  */
 async function ensureIdentityLockedScenePlate(job, page, context, signal) {
-  if (job.lockProductIdentity === false) return;
+  if (!isIdentityLockedMode(job)) return;
   if (page.scenePlateStatus === 'completed' && page.rawPlateUrl) return;
   if (page.status === 'submitting'
       && !canResumeCodexSubmission(job, page, 'blank-plate', context)) {
@@ -2621,7 +2640,9 @@ function interruptedPhaseForPage(page) {
  * the following page while this one is being judged.
  */
 function prepareFinalPageGeneration(job, page) {
-  const identityLocked = job.lockProductIdentity !== false;
+  const generationMode = generationModeFor(job);
+  const identityLocked = generationMode === 'identity-locked';
+  const sameMoldRecolor = generationMode === 'same-mold-recolor';
   if (identityLocked && !page.rawPlateUrl) {
     throw new Error('产品身份锁定底图尚未完成，不能进入产品合成阶段');
   }
@@ -2631,15 +2652,42 @@ function prepareFinalPageGeneration(job, page) {
   const generationCharacterReferences = identityLocked ? [] : characterReferences;
   const brandReferences = job.brandLogoUrl ? [job.brandLogoUrl] : [];
   const imageProvider = getImageGenerationProvider(job.imageModel);
-  const evidenceCapacity = Math.max(
-    0,
-    Number(imageProvider?.maxReferenceImages || 0)
-      - 1
-      - generationCharacterReferences.length
-      - brandReferences.length
-      - 1,
-  );
-  const evidenceReferences = resolvePageEvidenceReferences(job, page, evidenceCapacity);
+  let selectedProducts;
+  let evidenceReferences;
+  if (sameMoldRecolor) {
+    // Same-mold mode has a strict authority order: competitor geometry, own
+    // product appearance, model, page Logo, then fact evidence. Product detail
+    // references therefore claim every remaining slot before optional evidence.
+    selectedProducts = resolvePageProductReferences(
+      job,
+      page,
+      generationCharacterReferences.length + brandReferences.length,
+    );
+    const evidenceCapacity = Math.max(
+      0,
+      Number(imageProvider?.maxReferenceImages || 0)
+        - 1
+        - selectedProducts.length
+        - generationCharacterReferences.length
+        - brandReferences.length,
+    );
+    evidenceReferences = resolvePageEvidenceReferences(job, page, evidenceCapacity);
+  } else {
+    const evidenceCapacity = Math.max(
+      0,
+      Number(imageProvider?.maxReferenceImages || 0)
+        - 1
+        - generationCharacterReferences.length
+        - brandReferences.length
+        - 1,
+    );
+    evidenceReferences = resolvePageEvidenceReferences(job, page, evidenceCapacity);
+    selectedProducts = resolvePageProductReferences(
+      job,
+      page,
+      generationCharacterReferences.length + brandReferences.length + evidenceReferences.length,
+    );
+  }
   page.effectiveMappedFacts = factsSupportedByEvidenceReferences(page.mappedFacts, evidenceReferences);
   const effectiveFactIds = new Set(page.effectiveMappedFacts.map(item => item.factId));
   page.omittedMappedFacts = (page.mappedFacts || [])
@@ -2651,22 +2699,25 @@ function prepareFinalPageGeneration(job, page) {
       value: item.value,
       reason: 'evidence_reference_limit',
     }));
-  const selectedProducts = resolvePageProductReferences(
-    job,
-    page,
-    generationCharacterReferences.length + brandReferences.length + evidenceReferences.length,
-  );
   // Locked mode receives the clean scene instead of competitor pixels. Only the
   // exact own-detail pages that prove mapped facts are included; unrelated
   // pages remain excluded to avoid confusing the image model.
   const productReferences = selectedProducts.map(item => item.imageUrl);
-  const references = [
-    identityLocked ? page.rawPlateUrl : page.sourceImage,
-    ...productReferences,
-    ...brandReferences,
-    ...evidenceReferences.map(item => item.imageUrl),
-    ...generationCharacterReferences,
-  ];
+  const references = sameMoldRecolor
+    ? [
+      page.sourceImage,
+      ...productReferences,
+      ...generationCharacterReferences,
+      ...brandReferences,
+      ...evidenceReferences.map(item => item.imageUrl),
+    ]
+    : [
+      identityLocked ? page.rawPlateUrl : page.sourceImage,
+      ...productReferences,
+      ...brandReferences,
+      ...evidenceReferences.map(item => item.imageUrl),
+      ...generationCharacterReferences,
+    ];
   const prompt = buildFinalDetailPrompt({
     pageAnalysis: page.analysis,
     mappedSellingPoints: page.mappedSellingPoints,
@@ -2678,8 +2729,10 @@ function prepareFinalPageGeneration(job, page) {
     hasBrandLogoReference: brandReferences.length > 0,
     ownEvidenceReferenceCount: evidenceReferences.length,
     useCharacterReference: generationCharacterReferences.length > 0,
+    characterReferenceCount: generationCharacterReferences.length,
     productSheet: activeProductSheet(job, page),
     identityLocked,
+    generationMode,
   });
   page.finalPrompt = prompt;
   page.prompt = prompt;
@@ -2691,13 +2744,23 @@ function prepareFinalPageGeneration(job, page) {
     brandReferences,
     evidenceReferences,
     characterReferences,
-    referenceKinds: [
-      identityLocked ? 'identity-locked-scene' : 'competitor-layout',
-      ...selectedProducts.map(item => item.supplemental ? 'own-product-supplement' : 'own-product-auto-angle'),
-      ...brandReferences.map(() => 'own-brand-logo'),
-      ...evidenceReferences.map(() => 'own-fact-evidence'),
-      ...generationCharacterReferences.map(() => 'character'),
-    ],
+    referenceKinds: sameMoldRecolor
+      ? [
+        'same-mold-geometry-original',
+        ...selectedProducts.map((item, index) => (
+          index === 0 ? 'own-product-appearance-primary' : 'own-product-appearance-detail'
+        )),
+        ...generationCharacterReferences.map(() => 'character'),
+        ...brandReferences.map(() => 'own-brand-logo'),
+        ...evidenceReferences.map(() => 'own-fact-evidence'),
+      ]
+      : [
+        identityLocked ? 'identity-locked-scene' : 'competitor-layout',
+        ...selectedProducts.map(item => item.supplemental ? 'own-product-supplement' : 'own-product-auto-angle'),
+        ...brandReferences.map(() => 'own-brand-logo'),
+        ...evidenceReferences.map(() => 'own-fact-evidence'),
+        ...generationCharacterReferences.map(() => 'character'),
+      ],
   };
 }
 
@@ -2711,10 +2774,10 @@ function prepareFinalPageGeneration(job, page) {
  * page, which is what makes it recoverable and cancellable.
  */
 async function presubmitNextPageGeneration(job, page, context, signal) {
-  // Locked pages need their own persisted clean scene before the final request
-  // can be constructed. Queueing the legacy one-pass request here would put the
-  // competitor back into the product-rendering boundary.
-  if (job.lockProductIdentity !== false) return;
+  // Identity-locked pages need their own persisted clean scene before the final
+  // request can be constructed. Direct-replacement and same-mold pages already
+  // have every required reference, so both remain eligible for pre-submission.
+  if (isIdentityLockedMode(job)) return;
   if (job.imageModel !== 'codex-imagegen' || !context.codexJobsDir) return;
   if (context.generateImage) return;
   if (signal?.aborted) return;
@@ -2785,6 +2848,7 @@ async function presubmitNextPageGeneration(job, page, context, signal) {
 
 async function generateFinalPage(job, page, context, signal) {
   if ((page.finalUrl || page.resultUrl) && page.status === 'completed') return;
+  const sameMoldRecolor = isSameMoldRecolorMode(job);
   await ensureIdentityLockedScenePlate(job, page, context, signal);
   if (page.status === 'recovery_required') return;
   if (page.status === 'submitting'
@@ -2797,7 +2861,9 @@ async function generateFinalPage(job, page, context, signal) {
   await ensurePageSourceDimensions(job, page, context);
   page.status = 'preparing';
   job.stage = 'generating_final';
-  job.stageLabel = `正在生成最终详情 ${page.index + 1} / ${job.pages.length}`;
+  job.stageLabel = sameMoldRecolor
+    ? `正在同模换色直出 ${page.index + 1} / ${job.pages.length}`
+    : `正在生成最终详情 ${page.index + 1} / ${job.pages.length}`;
   writeJob(job, context);
 
   const {
@@ -2865,6 +2931,9 @@ async function generateFinalPage(job, page, context, signal) {
       copyExact: true,
       brandCorrect: true,
       productCorrect: true,
+      productGeometryPreserved: true,
+      productAppearanceMatched: true,
+      competitorProductBrandRemoved: true,
       logoCorrect: true,
       logoPresentationCorrect: true,
       layoutHierarchyCorrect: true,
@@ -2915,7 +2984,13 @@ async function generateFinalPage(job, page, context, signal) {
       signal,
     );
   }
-  const maxStructuralRegenerations = resolveStructuralRegenerationBudget(job, context);
+  // Same-mold mode promises one paid render per page. Recognition/re-judging is
+  // free, but any image edit or structural retry must wait for an explicit user
+  // click so the cost contract remains truthful.
+  const automaticPaidRecoveryAllowed = !sameMoldRecolor;
+  const maxStructuralRegenerations = automaticPaidRecoveryAllowed
+    ? resolveStructuralRegenerationBudget(job, context)
+    : 0;
   const pendingRepairSubmission = () => Boolean(
     page.repairCodexImageJobId
       && !page.repairCompletedAt
@@ -2931,7 +3006,9 @@ async function generateFinalPage(job, page, context, signal) {
   };
   // repairFinalDetailPage returns the candidate untouched once its budget is
   // spent, so an unexpected attempt count must not be able to spin this loop.
-  const maxRecoveryRounds = MAX_FINAL_REPAIR_ATTEMPTS + maxStructuralRegenerations + 1;
+  const maxRecoveryRounds = automaticPaidRecoveryAllowed
+    ? MAX_FINAL_REPAIR_ATTEMPTS + maxStructuralRegenerations + 1
+    : 0;
   for (let round = 0; !validation.passed && round < maxRecoveryRounds; round += 1) {
     assertActive(job, context, signal);
     const canRepair = Number(page.repairAttempts || 0) < MAX_FINAL_REPAIR_ATTEMPTS
@@ -2990,6 +3067,7 @@ async function generateFinalPage(job, page, context, signal) {
   }
   const blockingFailures = validation.passed ? [] : (validation.blockingFailures || []);
   if (blockingFailures.length) {
+    if (sameMoldRecolor) page.qualityFailedCandidateUrl ||= page.rawResultUrl;
     const details = [
       ...validation.missingTexts,
       ...validation.wrongTexts,
@@ -3039,8 +3117,10 @@ async function generateFinalPage(job, page, context, signal) {
     sourceNodeId: page.sourceNodeId,
     sourcePageIndex: page.index,
     detailRemixPhase: 'final',
-    productIdentityLocked: job.lockProductIdentity !== false,
-    scenePlateUrl: job.lockProductIdentity !== false ? page.rawPlateUrl : undefined,
+    generationMode: generationModeFor(job),
+    productIdentityLocked: isIdentityLockedMode(job),
+    productGeometryLocked: isSameMoldRecolorMode(job),
+    scenePlateUrl: isIdentityLockedMode(job) ? page.rawPlateUrl : undefined,
     rawResultUrl: page.rawResultUrl,
     mappedSellingPoints: page.mappedSellingPoints,
     mappedFacts: page.effectiveMappedFacts,
@@ -3422,12 +3502,21 @@ function maybeResume(job, context) {
 export function createDetailRemixJob(payload, context) {
   if (!payload?.workflowId || !payload?.nodeId) throw new Error('缺少项目或商品详情复刻节点');
   const normalized = normalizePayload(payload);
+  const generationMode = normalizeDetailRemixGenerationMode(
+    payload.generationMode,
+    payload.lockProductIdentity,
+  );
+  const lockProductIdentity = generationMode === 'identity-locked';
+  const sameMoldRecolor = generationMode === 'same-mold-recolor';
   const productBrief = String(payload.productBrief || '').trim();
   if (!productBrief && !normalized.ownDetails.length) {
     throw new Error('请填写产品说明（卖点与参数），或连接至少一张我方详情图');
   }
   if (!normalized.productImages.length && !normalized.ownDetails.length) {
     throw new Error('请至少连接一张产品参考图');
+  }
+  if (sameMoldRecolor && !normalized.productImages.length) {
+    throw new Error('同模换色直出必须连接我方产品参考图，不能使用“我的详情”自动裁图代替');
   }
   if (!normalized.competitorDetails.length) throw new Error('请至少连接一张竞品详情图');
   if (normalized.useCharacterReference && !normalized.characterReferenceImages.length) {
@@ -3436,7 +3525,6 @@ export function createDetailRemixJob(payload, context) {
   const imageModel = String(payload.imageModel || DEFAULT_DETAIL_REMIX_IMAGE_MODEL);
   const imageProvider = getImageGenerationProvider(imageModel);
   if (!imageProvider?.supportsImageToImage) throw new Error('请选择支持参考图的图片模型');
-  const lockProductIdentity = payload.lockProductIdentity !== false;
   // Even without a standalone product upload, reserve one provider slot for
   // the angle-matched crop extracted automatically from the user's details.
   // Reserve one base (competitor in fast mode, clean scene in locked mode), at
@@ -3444,7 +3532,7 @@ export function createDetailRemixJob(payload, context) {
   // detected later from the user's details.
   const reservedReferences = 2 + Math.max(1, normalized.productImages.length);
   if (reservedReferences > imageProvider.maxReferenceImages) {
-    throw new Error(`${imageProvider.name} 每页保留${lockProductIdentity ? '场景底图' : '竞品版式图'}后，最多支持 ${imageProvider.maxReferenceImages - 1} 张产品补充图`);
+    throw new Error(`${imageProvider.name} 每页保留${lockProductIdentity ? '场景底图' : sameMoldRecolor ? '竞品几何母版' : '竞品版式图'}后，最多支持 ${imageProvider.maxReferenceImages - 1} 张产品补充图`);
   }
   const maximumCharacterReferences = Math.max(
     0,
@@ -3454,7 +3542,7 @@ export function createDetailRemixJob(payload, context) {
       && normalized.characterReferenceImages.length > maximumCharacterReferences) {
     throw new Error(lockProductIdentity
       ? `${imageProvider.name} 的场景隔离阶段除竞品图外，人物参考图最多支持 ${maximumCharacterReferences} 张`
-      : `${imageProvider.name} 每页需同时发送竞品版式图和自动产品角度，人物参考图最多支持 ${maximumCharacterReferences} 张`);
+      : `${imageProvider.name} 每页需同时发送${sameMoldRecolor ? '竞品几何母版和我方产品外观图' : '竞品版式图和自动产品角度'}，人物参考图最多支持 ${maximumCharacterReferences} 张`);
   }
   const recognitionProvider = ['gemini-web', 'codex-cli'].includes(payload.recognitionProvider)
     ? payload.recognitionProvider
@@ -3474,7 +3562,8 @@ export function createDetailRemixJob(payload, context) {
   const productSheet = normalizeDetailRemixProductSheet(payload.productSheet);
   // 没有我方详情就根本无法自动裁角度，供图是唯一来源。此时强制开启，
   // 否则 productViews 为空而提示词仍在说「已从我的详情自动挑选」。
-  const preferSuppliedProductReferences = payload.preferSuppliedProductReferences === true
+  const preferSuppliedProductReferences = sameMoldRecolor
+    || payload.preferSuppliedProductReferences === true
     || !normalized.ownDetails.length;
   if (preferSuppliedProductReferences && !normalized.productImages.length) {
     throw new Error('已选择“以我提供的产品参考图为准”，但没有连接任何产品参考图；请先连接产品参考图，或关闭该选项改用自动裁图');
@@ -3486,6 +3575,7 @@ export function createDetailRemixJob(payload, context) {
     sizingMode,
     aspectRatio,
     imageResolution,
+    generationMode,
     lockProductIdentity,
     // The sheet layout and the priority switch both change what the model sees,
     // so a change to either must produce a new job rather than resume the old one.
@@ -3519,7 +3609,8 @@ export function createDetailRemixJob(payload, context) {
         sizingMode: existing.sizingMode || 'match-competitor',
         aspectRatio: existing.aspectRatio,
         imageResolution: existing.imageResolution,
-        lockProductIdentity: existing.lockProductIdentity !== false,
+        generationMode: generationModeFor(existing),
+        lockProductIdentity: isIdentityLockedMode(existing),
         preferSuppliedProductReferences: existing.preferSuppliedProductReferences === true,
         productSheet: existing.productSheet ? JSON.stringify(existing.productSheet) : '',
         productBrief: String(existing.productBrief || '').trim(),
@@ -3572,7 +3663,7 @@ export function createDetailRemixJob(payload, context) {
     status: 'pending',
     phase: 'final',
     stage: 'queued',
-    stageLabel: '商品详情复刻任务已创建',
+    stageLabel: sameMoldRecolor ? '同模换色直出任务已创建' : '商品详情复刻任务已创建',
     ownDetails: normalized.ownDetails,
     competitorDetails: normalized.competitorDetails,
     productViews: [],
@@ -3588,6 +3679,7 @@ export function createDetailRemixJob(payload, context) {
     productSheetManual: Boolean(productSheet),
     preferSuppliedProductReferences,
     lockProductIdentity,
+    generationMode,
     characterReferenceImages: normalized.characterReferenceImages,
     characterReferenceNodeIds: normalized.characterReferenceNodeIds,
     useCharacterReference: normalized.useCharacterReference,
@@ -3598,7 +3690,9 @@ export function createDetailRemixJob(payload, context) {
     sizingMode,
     aspectRatio,
     imageResolution,
-    maxStructuralRegenerations: normalizeStructuralRegenerationBudget(payload.maxStructuralRegenerations),
+    maxStructuralRegenerations: sameMoldRecolor
+      ? 0
+      : normalizeStructuralRegenerationBudget(payload.maxStructuralRegenerations),
     pages,
     pageCount: pages.length,
     plannedResultNodeIds: pages.map(page => page.resultNodeId),

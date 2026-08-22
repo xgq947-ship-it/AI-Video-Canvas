@@ -1,6 +1,9 @@
 /** Frontend contract for the e-commerce detail remix job. */
 
-import type { DetailRemixProductSheet } from '../../shared/detailRemix';
+import type {
+  DetailRemixGenerationMode,
+  DetailRemixProductSheet,
+} from '../../shared/detailRemix';
 
 export type DetailRemixRecognitionProvider = 'auto' | 'codex-cli' | 'gemini-web';
 
@@ -137,6 +140,7 @@ export interface DetailRemixJob {
   imageResolution?: string;
   resolution?: string;
   lockProductIdentity?: boolean;
+  generationMode?: DetailRemixGenerationMode;
   aspectRatio?: string;
   sizingMode?: 'match-competitor' | string;
   brandIdentity?: Record<string, unknown>;
@@ -246,6 +250,8 @@ export interface CreateDetailRemixJobParams {
   maxStructuralRegenerations?: number;
   /** Isolate the competitor before rendering the user's product. */
   lockProductIdentity?: boolean;
+  /** Explicit generation contract; same-mold recolor is always one paid render per page. */
+  generationMode?: DetailRemixGenerationMode;
   /** Rank supplied product references ahead of auto-cropped views from the own detail pages. */
   preferSuppliedProductReferences?: boolean;
   /** Grid manifest describing the first supplied product reference. */

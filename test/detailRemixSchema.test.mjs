@@ -20,6 +20,7 @@ import {
   buildFinalDetailRepairPrompt,
   buildFinalDetailValidationInstruction,
   buildOwnSellingPointsInstruction,
+  classifyFinalDetailValidation,
   createDetailRemixNodeData,
   detailRemixAllowsStrictParameterMode,
   detailRemixInputFingerprint,
@@ -27,6 +28,7 @@ import {
   canonicalDetailRemixFactField,
   isDetailRemixStrictParameterPage,
   markDetailRemixDependentsStale,
+  normalizeDetailRemixGenerationMode,
   parseCompetitorPageResponse,
   parseFinalDetailValidationResponse,
   parseOwnSellingPointsResponse,
@@ -40,8 +42,15 @@ test('新节点人物参考默认关闭；关闭仍保留选择，active refs �
   const empty = createDetailRemixNodeData();
   assert.equal(empty.schemaVersion, 1);
   assert.equal(empty.lockProductIdentity, true);
+  assert.equal(empty.generationMode, 'identity-locked');
   assert.deepEqual(empty.inputRefs.characterReference, { enabled: false, nodeIds: [] });
   assert.equal(createDetailRemixNodeData({ lockProductIdentity: false }).lockProductIdentity, false);
+  assert.equal(createDetailRemixNodeData({ lockProductIdentity: false }).generationMode, 'direct-replacement');
+  assert.equal(
+    createDetailRemixNodeData({ generationMode: 'same-mold-recolor' }).generationMode,
+    'same-mold-recolor',
+  );
+  assert.equal(normalizeDetailRemixGenerationMode('invalid', false), 'direct-replacement');
 
   const off = createDetailRemixNodeData({
     inputRefs: { characterReference: { enabled: false, nodeIds: ['person-1'] } },
@@ -192,6 +201,14 @@ test('preflight 只要求两组详情，产品补充图可选，并兼容人物�
   }), nodes, { phase: 'final' });
   assert.equal(productMissing.ok, true);
   assert.deepEqual(productMissing.refs.productNodeIds, []);
+
+  const sameMoldMissingProduct = validateDetailRemixPreflight(createDetailRemixNodeData({
+    ...base,
+    generationMode: 'same-mold-recolor',
+    inputRefs: { ...base.inputRefs, productNodeIds: [] },
+  }), nodes, { phase: 'final', generationMode: 'same-mold-recolor' });
+  assert.equal(sameMoldMissingProduct.ok, false);
+  assert.match(sameMoldMissingProduct.error, /同模换色.*产品参考图/);
 
   const composeNeedsOnlyProduct = validateDetailRemixPreflight(createDetailRemixNodeData({
     inputRefs: {
@@ -477,6 +494,9 @@ test('成图质检与 AI 定向修复保持全 AI 路径，不产生本地叠字
     copyExact: false,
     brandCorrect: true,
     productCorrect: true,
+    productGeometryPreserved: false,
+    productAppearanceMatched: true,
+    competitorProductBrandRemoved: true,
     logoCorrect: true,
     logoPresentationCorrect: false,
     layoutHierarchyCorrect: false,
@@ -502,6 +522,7 @@ test('成图质检与 AI 定向修复保持全 AI 路径，不产生本地叠字
   assert.equal(validation.characterOutfitCorrect, false);
   assert.deepEqual(validation.characterIssues, ['仍保留竞品发型和服装']);
   assert.equal(validation.layoutHierarchyCorrect, false);
+  assert.equal(validation.productGeometryPreserved, false);
   assert.deepEqual(validation.layoutIssues, ['主标题层级丢失', 'Logo 出现深色裁剪贴片']);
   const instruction = buildFinalDetailValidationInstruction({
     pageAnalysis: { pageType: 'specification', forbiddenCompetitorElements: ['PHILIPS'] },
@@ -516,6 +537,7 @@ test('成图质检与 AI 定向修复保持全 AI 路径，不产生本地叠字
   assert.match(instruction, /参考图2是原始竞品页/);
   assert.match(instruction, /参考图6是人物完整造型参考/);
   assert.match(instruction, /只换脸、仍保留竞品发型或竞品衣服必须判失败/);
+  assert.ok(DETAIL_REMIX_FINAL_VALIDATION_OUTPUT_SCHEMA.required.includes('productGeometryPreserved'));
   const repair = buildFinalDetailRepairPrompt({
     pageAnalysis: { pageType: 'specification' },
     copyPlan: [{ replacementText: '额定功率\n16W' }],
@@ -608,7 +630,7 @@ test('快速模式仍可单阶段生成，锁定模式先隔离竞品再只吃�
   });
   assert.match(on, /参考图2至参考图3/);
   assert.match(on, /参考图4只允许用于 page_graphic 页面品牌槽/);
-  assert.match(on, /参考图5及之后是人物完整外观的最高权威/);
+  assert.match(on, /参考图5是人物完整外观的最高权威/);
   assert.match(on, /绝不允许只换脸后保留竞品人物的发型、衣服或配饰/);
 
   const scene = buildDetailScenePlatePrompt({
@@ -638,6 +660,59 @@ test('快速模式仍可单阶段生成，锁定模式先隔离竞品再只吃�
   assert.doesNotMatch(locked, /参考图1是需要直接修改的竞品原图/);
   assert.doesNotMatch(locked, /竞品鳄鱼皮纹理/);
   assert.doesNotMatch(locked, /竞品原标题|竞品说明/);
+
+  const sameMold = buildFinalDetailPrompt({
+    pageAnalysis: analysis,
+    mappedSellingPoints,
+    productImageCount: 1,
+    ownBrandIdentity: { name: 'SUPOR' },
+    hasBrandLogoReference: true,
+    useCharacterReference: true,
+    characterReferenceCount: 1,
+    generationMode: 'same-mold-recolor',
+  });
+  assert.match(sameMold, /同模换色/);
+  assert.match(sameMold, /产品几何冻结/);
+  assert.match(sameMold, /不得把产品抹掉后重画/);
+  assert.match(sameMold, /只改产品表面/);
+  assert.match(sameMold, /基础色、分区配色、材质质感/);
+  assert.match(sameMold, /参考图3是人物完整外观的最高权威/);
+  assert.match(sameMold, /参考图4只允许用于 page_graphic 页面品牌槽/);
+  assert.doesNotMatch(sameMold, /逐个在 productInstances 指定的空位生成我方产品/);
+
+  const sameMoldValidationInstruction = buildFinalDetailValidationInstruction({
+    pageAnalysis: analysis,
+    productReferenceCount: 1,
+    characterReferenceCount: 1,
+    hasBrandLogoReference: true,
+    generationMode: 'same-mold-recolor',
+  });
+  assert.match(sameMoldValidationInstruction, /产品几何母版/);
+  assert.match(sameMoldValidationInstruction, /productGeometryPreserved=false/);
+  assert.match(sameMoldValidationInstruction, /保留相同模具几何本身不算竞品残留/);
+
+  const failedGeometry = classifyFinalDetailValidation({
+    passed: false,
+    copyExact: true,
+    brandCorrect: true,
+    productCorrect: true,
+    logoCorrect: true,
+    logoPresentationCorrect: true,
+    layoutHierarchyCorrect: true,
+    visualPolishCorrect: true,
+    productPlacementCorrect: true,
+    parameterAlignmentCorrect: true,
+    unsupportedStrictFactsAbsent: true,
+    characterIdentityCorrect: true,
+    characterHairstyleCorrect: true,
+    characterOutfitCorrect: true,
+    characterAccessoriesCorrect: true,
+    competitorRemoved: true,
+    productGeometryPreserved: false,
+    productAppearanceMatched: true,
+    competitorProductBrandRemoved: true,
+  }, { generationMode: 'same-mold-recolor' });
+  assert.deepEqual(failedGeometry.blocking, ['productGeometryPreserved']);
 });
 
 test('真实多卖点映射严格收敛为一个槽位一条文案，不产生无位置重复文字', () => {

@@ -27,6 +27,7 @@ import {
   createDetailRemixNodeData,
   syncDetailRemixInputRefs,
   validateDetailRemixPreflight,
+  type DetailRemixGenerationMode,
   type DetailRemixInputPort,
   type DetailRemixNodeData,
 } from '../../../shared/detailRemix.js';
@@ -333,14 +334,22 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
     onUpdate(data.id, { ...nodeUpdates, detailRemix: nextState });
   };
 
-  const handleExecute = async () => {
+  const handleExecute = async (requestedMode?: DetailRemixGenerationMode) => {
     if (busy) return;
     if (!workflowId) {
       setLocalError('请先新建或打开一个项目');
       return;
     }
     const requestState = state;
-    const preflight = validateDetailRemixPreflight(requestState, allNodes, { phase: 'final' });
+    const generationMode: DetailRemixGenerationMode = requestedMode
+      || (requestState.lockProductIdentity !== false ? 'identity-locked' : 'direct-replacement');
+    const sameMoldRecolor = generationMode === 'same-mold-recolor';
+    const preferSuppliedProductReferences = sameMoldRecolor
+      || requestState.preferSuppliedProductReferences;
+    const preflight = validateDetailRemixPreflight(requestState, allNodes, {
+      phase: 'final',
+      generationMode,
+    });
     if (!preflight.ok || !preflight.refs) {
       setLocalError(preflight.error || '详情输入尚未准备好');
       return;
@@ -364,10 +373,11 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
       sizingMode: 'match-competitor',
       competitorDimensions: competitorNodes.map(node => [node.id, node.resultAspectRatio || '']),
       resolution,
-      lockProductIdentity: requestState.lockProductIdentity,
-      preferSuppliedProductReferences: requestState.preferSuppliedProductReferences,
+      generationMode,
+      lockProductIdentity: generationMode === 'identity-locked',
+      preferSuppliedProductReferences,
       productSheet: requestState.productSheet,
-      maxStructuralRegenerations: requestState.maxStructuralRegenerations,
+      maxStructuralRegenerations: sameMoldRecolor ? 0 : requestState.maxStructuralRegenerations,
     });
     const requestId = requestState.pendingRequestId
       && requestState.pendingRequestFingerprint === requestFingerprint
@@ -377,9 +387,10 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
       ...requestState,
       pendingRequestId: requestId,
       pendingRequestFingerprint: requestFingerprint,
+      generationMode,
       status: 'analyzing',
       stage: 'queued',
-      stageLabel: '正在创建商品详情复刻任务',
+      stageLabel: sameMoldRecolor ? '正在创建同模换色直出任务' : '正在创建商品详情复刻任务',
       errorMessage: undefined,
       needsRegeneration: false,
       compositionNeedsRegeneration: false,
@@ -430,10 +441,11 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
           ...sourcePixelDimensions(node),
         })),
         resolution,
-        maxStructuralRegenerations: requestState.maxStructuralRegenerations,
-        lockProductIdentity: requestState.lockProductIdentity,
-        preferSuppliedProductReferences: requestState.preferSuppliedProductReferences,
-        productSheet: requestState.preferSuppliedProductReferences ? requestState.productSheet : null,
+        maxStructuralRegenerations: sameMoldRecolor ? 0 : requestState.maxStructuralRegenerations,
+        generationMode,
+        lockProductIdentity: generationMode === 'identity-locked',
+        preferSuppliedProductReferences,
+        productSheet: preferSuppliedProductReferences ? requestState.productSheet : null,
       });
       const latest = stateRef.current;
       onUpdate(data.id, {
@@ -753,7 +765,20 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
           <div className="flex items-center gap-2 font-semibold">
             <WandSparkles size={18} className="text-violet-400" />商品详情一键复刻
           </div>
-          <span className="text-[11px] text-neutral-500">分析提示词 → 一次生成最终图</span>
+          <button
+            type="button"
+            aria-label="同模换色直出"
+            disabled={busy}
+            onPointerDown={event => event.stopPropagation()}
+            onClick={event => {
+              event.stopPropagation();
+              void handleExecute('same-mold-recolor');
+            }}
+            className={`flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1.5 text-[10px] font-semibold transition-colors ${dark ? 'border-amber-600/80 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20' : 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'} disabled:cursor-not-allowed disabled:opacity-45`}
+            title="仅适用于我方产品与竞品产品模具、轮廓和结构完全一致；固定产品形状，只替换颜色、材质、纹理、模特、文案和 Logo"
+          >
+            <WandSparkles size={12} />同模换色直出（1次/页）
+          </button>
         </div>
 
         <div
@@ -776,6 +801,9 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
           />
           <div className={`rounded-xl border px-3 py-2 text-[11px] leading-5 ${dark ? 'border-violet-500/20 bg-violet-500/5 text-neutral-400' : 'border-violet-200 bg-violet-50 text-neutral-600'}`}>
             竞品详情只提供版式骨架。产品长什么样、人是谁、品牌标识、以及每一句文案与每一个参数，全部来自你在下面直接提供的素材——不再需要导入自己的旧详情去反推。参数页自动进入严格模式，只逐字使用你写的值，清单之外的数字与型号一律删除。正式生成时把竞品原图、产品参考、可选人物与 Logo、以及逐位置替换清单一次性交给 AI，不做本地叠字或多轮拼图。
+          </div>
+          <div className={`rounded-lg border px-2.5 py-1.5 text-[10px] leading-4 ${dark ? 'border-amber-700/50 bg-amber-500/5 text-amber-300' : 'border-amber-300 bg-amber-50 text-amber-700'}`}>
+            同模换色入口固定在右上角。仅用于模具、轮廓和部件位置完全一致的产品；每页只生成一次，质检失败不会自动付费修复。
           </div>
 
           <div className="flex gap-2">
@@ -911,7 +939,9 @@ export const DetailRemixNode: React.FC<DetailRemixNodeProps> = ({
             )}
             {validationFailedPages.length > 0 && !generationBusy && (
               <div className="mt-1 text-[10px] leading-4 text-red-400">
-                第 {validationFailedPageNumbers.join('、')} 页已标记 FAILED_VALIDATION；定向修复与整页重生成都已用尽，不会自动再次付费生成。可用下方按钮单独重生成这些页，或连同候选一起导出后人工挑选。
+                {state.generationMode === 'same-mold-recolor'
+                  ? `第 ${validationFailedPageNumbers.join('、')} 页同模换色质检未通过；已按“1次/页”停止，不会自动付费修复。可用下方按钮手动重生成，或导出待确认候选。`
+                  : `第 ${validationFailedPageNumbers.join('、')} 页已标记 FAILED_VALIDATION；定向修复与整页重生成都已用尽，不会自动再次付费生成。可用下方按钮单独重生成这些页，或连同候选一起导出后人工挑选。`}
               </div>
             )}
             {croppedPages.length > 0 && !generationBusy && (

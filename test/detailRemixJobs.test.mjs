@@ -137,7 +137,7 @@ test('无需单独产品图：自动裁出我方详情产品角度并与竞品�
   const resultNodeId = created.pages[0].resultNodeId;
   const completed = await waitFor(created.id, context, job => job?.stage === 'completed');
 
-  assert.equal(completed.schemaVersion, 8);
+  assert.equal(completed.schemaVersion, 9);
   assert.equal(completed.phase, 'final');
   assert.equal(completed.pages[0].sourceNodeId, 'competitor-node');
   assert.equal(completed.pages[0].resultNodeId, resultNodeId);
@@ -224,6 +224,147 @@ test('产品身份锁定默认两阶段：竞品只进入场景隔离，最终�
   assert.match(generationCalls[1].request.prompt, /不包含任何可供借鉴的竞品产品/);
   assert.match(generationCalls[1].request.prompt, /参考图相应位置没有就必须保持无标识/);
   assert.equal(completed.pages[0].scenePlateStatus, 'completed');
+});
+
+test('同模换色直出只生成一次：竞品锁定几何，我方产品只提供表面外观，人物与 Logo 按优先级排列', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    runRecognition: completeRecognition({ hasPerson: true }),
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('same-mold-final'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'same-mold-one-pass-job',
+    generationMode: 'same-mold-recolor',
+    // Explicit mode must win over this legacy setting.
+    lockProductIdentity: true,
+    preferSuppliedProductReferences: false,
+    brandLogoImages: [PRODUCT_2],
+    brandLogoNodeIds: ['brand-logo-node'],
+    productSheet: { rows: 1, columns: 1, cells: [{ index: 1, label: '我方颜色与纹理' }] },
+    maxStructuralRegenerations: 3,
+  }), context);
+
+  assert.equal(created.schemaVersion, 9);
+  assert.equal(created.generationMode, 'same-mold-recolor');
+  assert.equal(created.lockProductIdentity, false);
+  assert.equal(created.preferSuppliedProductReferences, true);
+  assert.equal(created.maxStructuralRegenerations, 0);
+  assert.equal(created.pages[0].plateNodeId, undefined);
+
+  const completed = await waitFor(created.id, context, job => job?.stage === 'completed');
+  assert.equal(generationCalls.length, 1);
+  assert.equal(generationCalls[0].meta.phase, 'final-detail');
+  assert.deepEqual(generationCalls[0].request.referenceImageInputs, [
+    COMPETITOR, PRODUCT, CHARACTER, PRODUCT_2,
+  ]);
+  assert.deepEqual(generationCalls[0].meta.referenceKinds, [
+    'same-mold-geometry-original',
+    'own-product-appearance-primary',
+    'character',
+    'own-brand-logo',
+  ]);
+  assert.match(generationCalls[0].request.prompt, /同模换色/);
+  assert.match(generationCalls[0].request.prompt, /产品几何冻结/);
+  assert.match(generationCalls[0].request.prompt, /不得把产品抹掉后重画/);
+  assert.match(generationCalls[0].request.prompt, /参考图3是人物完整外观的最高权威/);
+  assert.match(generationCalls[0].request.prompt, /参考图4只允许用于 page_graphic 页面品牌槽/);
+  assert.doesNotMatch(generationCalls[0].request.prompt, /无产品场景底图/);
+  assert.equal(completed.pages[0].scenePlateStatus, undefined);
+  assert.equal(completed.pages[0].repairAttempts || 0, 0);
+  const metadata = JSON.parse(fs.readFileSync(path.join(
+    env.root,
+    'library',
+    'projects',
+    '详情复刻测试',
+    'images',
+    `${completed.pages[0].resultNodeId}.json`,
+  ), 'utf8'));
+  assert.equal(metadata.generationMode, 'same-mold-recolor');
+  assert.equal(metadata.productGeometryLocked, true);
+  assert.equal(metadata.productIdentityLocked, false);
+  assert.equal(metadata.scenePlateUrl, undefined);
+});
+
+test('同模换色质检发现产品改形时直接标记失败，不自动提交修复或整页重生成', async t => {
+  const env = setup();
+  t.after(() => fs.rmSync(env.root, { recursive: true, force: true }));
+  const generationCalls = [];
+  const context = {
+    ...env.context,
+    skipFinalValidation: false,
+    maxStructuralRegenerations: 3,
+    runRecognition: async (request, meta) => {
+      if (meta.kind !== 'final-detail-validation') {
+        return completeRecognition({ hasPerson: false })(request, meta);
+      }
+      return JSON.stringify({
+        passed: false,
+        copyExact: true,
+        brandCorrect: true,
+        productCorrect: false,
+        productGeometryPreserved: false,
+        productAppearanceMatched: true,
+        competitorProductBrandRemoved: true,
+        logoCorrect: true,
+        logoPresentationCorrect: true,
+        layoutHierarchyCorrect: true,
+        visualPolishCorrect: true,
+        layoutIssues: [],
+        productPlacementCorrect: true,
+        parameterAlignmentCorrect: true,
+        unsupportedStrictFactsAbsent: true,
+        characterIdentityCorrect: true,
+        characterHairstyleCorrect: true,
+        characterOutfitCorrect: true,
+        characterAccessoriesCorrect: true,
+        characterIssues: [],
+        competitorRemoved: true,
+        gibberishDetected: false,
+        missingTexts: [],
+        wrongTexts: [],
+        unexpectedTexts: [],
+        summary: '产品轮廓发生变化',
+      });
+    },
+    generateImage: async (request, meta) => {
+      generationCalls.push({ request, meta });
+      return { buffer: Buffer.from('same-mold-wrong-geometry'), extension: 'png' };
+    },
+  };
+  const created = createDetailRemixJob(basePayload({
+    jobId: 'same-mold-geometry-failed-job',
+    generationMode: 'same-mold-recolor',
+    useCharacterReference: false,
+    characterReferenceImages: [],
+    characterReferenceNodeIds: [],
+    productSheet: { rows: 1, columns: 1, cells: [{ index: 1, label: '我方产品外观' }] },
+    maxStructuralRegenerations: 3,
+  }), context);
+  const failed = await waitFor(created.id, context, job => job?.stage === 'failed_validation');
+
+  assert.deepEqual(generationCalls.map(call => call.meta.phase), ['final-detail']);
+  assert.equal(failed.pages[0].status, 'failed_validation');
+  assert.equal(failed.pages[0].validation.productGeometryPreserved, false);
+  assert.ok(failed.pages[0].validation.blockingFailures.includes('productGeometryPreserved'));
+  assert.equal(failed.pages[0].repairAttempts || 0, 0);
+  assert.equal(failed.pages[0].structuralRegenerationAttempts || 0, 0);
+  assert.match(failed.pages[0].qualityFailedCandidateUrl, /-raw\.png$/);
+
+  regenerateDetailRemixPages(created.id, 'workflow-1', { pageIndexes: [0] }, context);
+  const retried = await waitFor(
+    created.id,
+    context,
+    job => job?.stage === 'failed_validation' && job.pages[0].regenerationCount === 1,
+  );
+  assert.deepEqual(generationCalls.map(call => call.meta.phase), ['final-detail', 'final-detail']);
+  assert.equal(retried.generationMode, 'same-mold-recolor');
+  assert.equal(retried.pages[0].repairAttempts || 0, 0);
 });
 
 test('锁定模式产品质检失败时，修复继续携带我方产品且绝不重新引入竞品原图', async t => {
@@ -691,10 +832,25 @@ test('产品补充图非必填；若提供则属于不可变请求并占用参�
   assert.doesNotThrow(() => createDetailRemixJob(basePayload({
     jobId: 'product-required', productImages: [], productNodeIds: [],
   }), context));
+  assert.throws(() => createDetailRemixJob(basePayload({
+    jobId: 'same-mold-product-required',
+    generationMode: 'same-mold-recolor',
+    productImages: [],
+    productNodeIds: [],
+  }), context), /同模换色.*产品参考图/);
 
   createDetailRemixJob(basePayload({ jobId: 'immutable-product-job' }), context);
   assert.throws(() => createDetailRemixJob(basePayload({
     jobId: 'immutable-product-job', productImages: [PRODUCT_2], productNodeIds: ['product-2'],
+  }), context), error => error?.code === 'IDEMPOTENCY_CONFLICT');
+
+  createDetailRemixJob(basePayload({
+    jobId: 'immutable-generation-mode-job',
+    generationMode: 'same-mold-recolor',
+  }), context);
+  assert.throws(() => createDetailRemixJob(basePayload({
+    jobId: 'immutable-generation-mode-job',
+    generationMode: 'direct-replacement',
   }), context), error => error?.code === 'IDEMPOTENCY_CONFLICT');
 
   const tooManyProducts = Array.from({ length: 10 }, (_, index) => `/product-${index}.png`);

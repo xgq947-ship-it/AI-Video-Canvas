@@ -91,6 +91,8 @@ test('原生控制器统一调用项目启动器，并提供启动、重启、�
   assert.match(controller, /Task\.sleep\(nanoseconds: 3_000_000_000\)/);
   assert.match(controller, /phase != \.failed/);
   assert.match(controller, /applicationShouldTerminateAfterLastWindowClosed/);
+  assert.match(controller, /window\.styleMask\.insert\(\.fullSizeContentView\)/);
+  assert.match(controller, /\.ignoresSafeArea\(\.container, edges: \.top\)/);
   assert.match(controllerBuild, /xcrun swiftc/);
   assert.match(controllerBuild, /codesign --force --deep --sign -/);
   assert.match(controllerBuild, /project_root}\/Evan 项目控制器\.app/);

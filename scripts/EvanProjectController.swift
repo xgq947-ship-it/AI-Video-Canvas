@@ -295,6 +295,9 @@ private struct WindowConfigurator: NSViewRepresentable {
             window.title = "Evan 项目控制器"
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
+            // 让 SwiftUI 内容真正延伸到交通灯所在的标题栏区域。
+            // 仅使用 hiddenTitleBar 仍会为标题栏保留一条不可交互的空白安全区。
+            window.styleMask.insert(.fullSizeContentView)
             window.isMovableByWindowBackground = true
             // 固定标题栏底色，避免半透明区域透出控制器后方窗口的文字。
             window.isOpaque = true
@@ -510,6 +513,7 @@ private struct ControllerView: View {
                 .frame(width: 0, height: 0)
         }
         .frame(width: 560, height: 390)
+        .ignoresSafeArea(.container, edges: .top)
         .preferredColorScheme(.dark)
         .task {
             model.refresh()
